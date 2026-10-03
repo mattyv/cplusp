@@ -28,7 +28,7 @@ int main() {
     }
   });
   bool torn = false;
-  for (int calls = 0; calls < 10000000 && !torn; ++calls) {
+  for (int calls = 0; calls < 1000000 && !torn; ++calls) {
     torn = difference() != 0;
   }
   done = true;

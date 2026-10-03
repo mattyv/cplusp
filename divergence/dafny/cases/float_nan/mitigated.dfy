@@ -1,11 +1,17 @@
-// Model B: the C++ requires finite values and compares the difference against a tolerance. The model has no NaN, so it is exact for finite values.
-// The meaning is a real comparison, as in model A. The difference is in the C++, which now says that no NaN comes in and which tolerance it means.
+// Model B: the C++ requires finite values and compares the difference against a tolerance that is a double, 2^-30.
+// The difference is `fsub`, so it rounds once. The contract has slack for that rounding, and it is a bound, never an equality.
+// The model has no NaN, so it is exact for the finite values the C++ requires.
 include "../../Float.dfy"
 import opened Float
 
+const T: real := 1.0 / 1073741824.0  // 2^-30, a double
+
 method same(a: real, b: real) returns (result: bool)
-  ensures result == (abs(a - b) <= 0.000000001)
+  requires abs(a) <= MAX / 2.0 && abs(b) <= MAX / 2.0
+  ensures result ==> abs(a - b) <= T + 2.0 * EPS * T + 2.0 * ETA
+  ensures abs(a - b) <= T - 2.0 * EPS * T - 2.0 * ETA ==> result
 {
-  var gap := a - b;
-  result := gap <= 0.000000001 && -gap <= 0.000000001;
+  var gap := fsub(a, b);
+  RoundError(a - b);
+  result := gap <= T && -gap <= T;
 }

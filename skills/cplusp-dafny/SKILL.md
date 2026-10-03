@@ -365,7 +365,9 @@ The model is `divergence/dafny/Float.dfy`. Write `include "Float.dfy"` with the 
 The model has no NaN and no infinity.
 Every float parameter requires `std::isfinite` in the C++ contract.
 Never compare floats with `==`. The gate refuses it.
-Compare against a tolerance, and state the tolerance in the contract.
+Compare against a tolerance `T` that is a double, and give the contract slack for the rounding of the difference.
+`result` implies `|a - b| <= T + 2 * eps * T + 2 * eta`, and `|a - b| <= T - 2 * eps * T - 2 * eta` implies `result`.
+Model the difference as `fsub(a, b)` with its `RoundError` call, never as the exact difference.
 
 ## float_to_int
 
@@ -435,4 +437,5 @@ The gate enforces it.
 A variable another thread may change has no value, only a fresh read each time.
 Model its getter as a method that does not constrain its result between calls.
 The contract of the getter says only what every writer keeps, for example a range.
+The getter is trusted code, and it must read an atomic. A plain read of a variable another thread writes is a data race.
 Never prove two reads equal.

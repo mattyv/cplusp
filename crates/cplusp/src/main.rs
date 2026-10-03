@@ -406,19 +406,34 @@ const FLOAT_FLAGS: &[&str] = &[
 /// The `-std` values at C++23 or later. The baseline is decision 0022.
 const STD_VALUES: &[&str] = &["c++23", "c++2b", "c++26", "c++2c", "gnu++23", "gnu++2b", "gnu++26", "gnu++2c"];
 
+/// What a flag sets contraction to. `-ffp-model=precise` is `on` and `-ffp-model=strict` is `off`.
+fn contraction(f: &str) -> Option<&str> {
+    match f {
+        "-ffp-model=precise" => Some("on"),
+        "-ffp-model=strict" => Some("off"),
+        _ => f.strip_prefix("-ffp-contract="),
+    }
+}
+
+/// The value of `-std=X`. `--std=X` is the same flag.
+fn std_value(f: &str) -> Option<&str> {
+    f.strip_prefix("-std=").or_else(|| f.strip_prefix("--std="))
+}
+
 /// One message for each trailing flag the proofs cannot follow, and for each flag the gate needs and does not find.
 /// `checks` is the check list of the generated config, so a `-Wno-{name}` is judged against the rows the policy enables.
 // ponytail: the flags are matched as written. A flag behind `-Xclang` or in a response file passes.
 // Upgrade: ask the compiler for its final flags.
 fn refused_flags(flags: &[String], checks: &[String]) -> Vec<String> {
     let mut refused = Vec::new();
-    // The last -ffp-contract on the line is the one the compiler follows.
-    let last_contract = flags.iter().rposition(|f| f.starts_with("-ffp-contract="));
+    // The last flag that sets contraction is the one the compiler follows.
+    let last_contract = flags.iter().rposition(|f| contraction(f).is_some());
     for (i, f) in flags.iter().enumerate() {
-        let contracts = Some(i) == last_contract && f != "-ffp-contract=off";
-        let why = if contracts || f.starts_with("-fdenormal-fp-math=") || FLOAT_FLAGS.contains(&f.as_str()) {
+        let contracts = Some(i) == last_contract && contraction(f) != Some("off");
+        let denormals = f.starts_with("-fdenormal-fp-math=") && f != "-fdenormal-fp-math=ieee";
+        let why = if contracts || denormals || FLOAT_FLAGS.contains(&f.as_str()) {
             "It changes floating-point results, and the proofs assume IEEE 754 round to nearest."
-        } else if f.strip_prefix("-std=").is_some_and(|v| !STD_VALUES.contains(&v)) {
+        } else if std_value(f).is_some_and(|v| !STD_VALUES.contains(&v)) {
             "The proofs assume C++23 or later."
         } else if f == "-w" || f == "-Wno-everything" {
             "It hides the compiler warnings the policy names."
@@ -429,10 +444,10 @@ fn refused_flags(flags: &[String], checks: &[String]) -> Vec<String> {
         };
         refused.push(format!("{f}: not allowed with the gate. {why}"));
     }
-    if !flags.iter().any(|f| f.starts_with("-std=")) {
+    if !flags.iter().any(|f| std_value(f).is_some()) {
         refused.push("no -std flag: the gate needs -std=c++23 or later, because the proofs assume C++23.".to_string());
     }
-    if !flags.iter().any(|f| f == "-ffp-contract=off") {
+    if !flags.iter().any(|f| contraction(f) == Some("off")) {
         refused.push("no -ffp-contract=off: the gate needs it, because the proofs assume no fused multiply-add.".to_string());
     }
     refused

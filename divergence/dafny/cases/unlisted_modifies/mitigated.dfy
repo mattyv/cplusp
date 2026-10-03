@@ -8,10 +8,12 @@ class State {
 
 method {:axiom} add(s: State, x: int32)
   requires -0x4000_0000 <= x < 0x4000_0000
+  requires -0x4000_0000 <= s.total < 0x4000_0000
   modifies s
   ensures s.total as int == old(s.total) as int + x as int
 
 method delta(s: State) returns (result: int32)
+  requires -0x4000_0000 <= s.total < 0x4000_0000
   modifies s
   ensures result == 1
 {
