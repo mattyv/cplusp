@@ -246,7 +246,7 @@ fn gate_treats_nolint_as_a_finding() {
     assert!(stdout(&o).lines().any(|l| l.starts_with("Not provable: ") && l.ends_with(expected)), "{}", stdout(&o));
 }
 
-/// The proofs assume C++20, IEEE 754 arithmetic as written, and the compiler warnings the policy names.
+/// The proofs assume C++23, IEEE 754 arithmetic as written, and the compiler warnings the policy names.
 /// The flags after `--` can break all three, so the gate reads them before clang-tidy does.
 #[test]
 fn gate_refuses_flags_the_proofs_cannot_follow() {
@@ -265,6 +265,8 @@ fn gate_refuses_flags_the_proofs_cannot_follow() {
         (vec!["-std=c++23", "-ffp-contract=off", "-m32"], format!("-m32: {float}")),
         (vec!["-std=c++23", "-ffp-contract=off", "-ffp-contract=on"], format!("-ffp-contract=on: {float}")),
         (vec!["-std=c++23", "-ffp-contract=off", "-ffp-model=precise"], format!("-ffp-model=precise: {float}")),
+        (vec!["-std=c++23", "-ffp-contract=off", "-ffp-eval-method=extended"], format!("-ffp-eval-method=extended: {float}")),
+        (vec!["-std=c++23", "-ffp-contract=off", "-ffp-eval-method=double"], format!("-ffp-eval-method=double: {float}")),
         (vec!["-std=c++23", "-ffp-contract=off", "--std=c++17"], "--std=c++17: not allowed with the gate. The proofs assume C++23 or later.".to_string()),
         (vec!["-std=c++20", "-ffp-contract=off"], "-std=c++20: not allowed with the gate. The proofs assume C++23 or later.".to_string()),
         (vec!["-ffp-contract=off"], "no -std flag: the gate needs -std=c++23 or later, because the proofs assume C++23.".to_string()),
@@ -281,7 +283,7 @@ fn gate_refuses_flags_the_proofs_cannot_follow() {
         assert!(stderr(&o).lines().any(|l| l == message), "{flags:?}: stderr {}", stderr(&o));
     }
     for std in ["-std=c++23", "-std=c++2b", "-std=c++26", "-std=gnu++23"] {
-        let o = cplusp(&["gate", "rules/goto/allowed.cpp", "--", std, "-ffp-contract=off", "-fdenormal-fp-math=ieee", "-ffp-model=strict", "-Wno-unused-variable"]);
+        let o = cplusp(&["gate", "rules/goto/allowed.cpp", "--", std, "-ffp-contract=off", "-fdenormal-fp-math=ieee", "-ffp-model=strict", "-ffp-eval-method=source", "-Wno-unused-variable"]);
         assert_eq!(o.status.code(), Some(0), "{std}: stdout {} stderr {}", stdout(&o), stderr(&o));
     }
 }
