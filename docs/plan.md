@@ -537,7 +537,9 @@ To remove a rule, remove its entry and its pair. To change a decision, edit one 
 | Pointer arithmetic, decay | `cppcoreguidelines-pro-bounds-pointer-arithmetic`, `cppcoreguidelines-pro-bounds-array-to-pointer-decay` | |
 | `new` / `delete`, `malloc` | `cppcoreguidelines-owning-memory`, `cppcoreguidelines-no-malloc` | |
 | `goto` | `cppcoreguidelines-avoid-goto` | |
-| Recursion | `misc-no-recursion` | |
+| Recursion | custom `cplusp-recursion` | `misc-no-recursion` flags every recursive call. The row only bans recursion without a `decreases` clause, so the check has to read the contract |
+| Use after move | `bugprone-use-after-move` | The gate half of the rvalue row |
+| Returning a reference to a local | `clang-diagnostic-return-stack-address` | A compiler warning, enabled through clang-tidy |
 | Inline asm | `hicpp-no-assembler` | |
 | Function-like macros | `cppcoreguidelines-macro-usage` | |
 | Implicit constructors | `google-explicit-constructor` | |
@@ -585,6 +587,7 @@ Provisional. Parked as "maybe" where the first slice does not need a decision, a
 | Spec syntax in C++ | `//@ requires` / `//@ ensures` comments with Dafny-flavoured expressions, carried through by the translator | Open |
 | Check tests | Rust runner over the sample pairs, reading `// CHECK-MESSAGES` lines | Preferred |
 | Bot integration | A skill tells the bot to run `cplusp verify` after writing C++ and to act on the messages. No automatic hook | Decided |
+| Ply | Not a dependency. Verus proves the source itself. Ply becomes interesting later for fuzzing the untrusted edges and for drawing the proved-versus-not picture of cplusp | Decided Oct 3, 2026 |
 
 ## Proofs about cplusp itself
 
@@ -644,6 +647,7 @@ Decided Oct 3, 2026: we prove as much of our own tooling as the tools allow. Few
 - Made the prover an open choice between Dafny and VeriFast, settled by the thin slice. Verus is plan C.
 - Added the Prover interface: the prover is a plug-in, the bot never writes prover-specific hints, and two provers can run as a cross-check.
 - Decided the driver is Rust written in Verus from the start. Added Proofs about cplusp itself: what we prove, what we cannot, and what we do instead.
+- Built the verified core: 28 behaviour tests and 43 Verus proofs. Decided against ply as a dependency. Changed the message grammar so the construct name is followed by a colon.
 - Added `cplusp policy show` and the generated subset table, see policy.md.
 - Added a provisional tech stack: C++ only for the clang-tidy module, Rust for the rest, no Python.
 - Rewrote the doc in STE-flavored mode with the asd-ste100 skill: no semicolons, sentences of 25 words or fewer, one word per action.

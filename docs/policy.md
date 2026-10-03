@@ -94,12 +94,14 @@ rules:
 | Field | Required | Meaning |
 | --- | --- | --- |
 | `id` | Yes | Stable name for the construct, in snake_case. Overrides and reports use it. Also the folder name of the rule's sample pair |
+| `construct` | Yes | The construct as the table and the messages name it, for example `C-style casts` |
+| `canonical` | No | What MISRA, the Core Guidelines or eCv++ say. Documentation only. `cplusp policy doc` prints it |
 | `area` | Yes | The grouping from the table: types, arithmetic, memory, library, casts, classes, templates, control, concurrency, state, platform |
 | `decision` | Yes | One of `allow`, `restrict`, `trusted_only`, `ban` |
 | `limit` | For `restrict` | The limit in one sentence. The gate puts it in the message |
 | `why` | Yes | The reason from the table. The gate puts it in the message |
 | `use_instead` | For everything but `allow` | What the bot should write instead. The gate puts it in the message |
-| `stage` | No | `gate`, `prover` or `spec`. Documentation only. The gate acts only on entries that have `detect` and a decision other than `allow` |
+| `stage` | No | `gate`, `prover`, `spec` or `none`. Default `gate` when `detect` is present, else `none`. The gate enforces only `gate` entries. A `prover`, `spec` or `none` entry needs no `detect` and no `use_instead`, and the gate treats it as `allow`, whatever its decision says. The decision still matters for overrides: a team may not loosen it without a reason |
 | `detect` | For everything but `allow` | The checks that find the construct. Each has a `check` name and optional `options` |
 
 A `detect` list on an `allow` entry is dormant. It exists so that flipping the decision to `ban` is a one-word edit. If a construct has no check that fits, write a new `cplusp-*` check and name it here. That is the "add a rule" recipe from the plan.
@@ -133,19 +135,25 @@ CheckOptions:
   cplusp-multiple-inheritance.AllowPureInterfaces: true
 ```
 
-The message has one shape per decision. The gate fills the braces from the entry.
+The message has one shape per decision. The gate fills the braces from the entry. The construct name is followed by a colon, so the sentence reads the same for singular and plural constructs.
 
 ```
-ban:           Not provable: {function}, line {line}: {construct} is not allowed in verified code. {why} Use {use_instead}
-trusted_only:  Not provable: {function}, line {line}: {construct} is allowed only in trusted code. {why} Use {use_instead}
-restrict:      Not provable: {function}, line {line}: {construct} is outside its limit. Limit: {limit} Use {use_instead}
+ban:           Not provable: {file}:{line}: {construct}: not allowed in verified code. {why} Use {use_instead}
+trusted_only:  Not provable: {file}:{line}: {construct}: allowed only in trusted code. {why} Use {use_instead}
+restrict:      Not provable: {file}:{line}: {construct}: outside its limit. Limit: {limit} Use {use_instead}
 ```
 
 For example, the `iterators` entry above produces:
 
 ```
-Not provable: find_gap, line 12: iterators are outside their limit. Limit: Range-for only. No iterator arithmetic, no stored iterators. Use a range-for loop, or an index the prover can check.
+Not provable: src/scan.cpp:12: Iterators: outside its limit. Limit: Range-for only. Use a range-for loop, or an index the prover can check.
 ```
+
+The function name joins the location once the clang-tidy plugin's `cplusp-index` check exists. Until then the gate treats every finding as inside a verified function.
+
+## Checking the policy
+
+`cplusp policy check` prints `ok: 52 rules, 36 enforced by the gate` or one line per problem on stderr, in the form `{id}: {problem}`. `cplusp policy emit` prints the generated clang-tidy config. Both take `--policy FILE` for a team policy.
 
 ## Reading the policy as a table
 
