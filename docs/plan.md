@@ -166,6 +166,59 @@ Not provable: sent_so_far, line 2: reads g_bytes_sent, which is not in the contr
 
 This is the State row of the table. The gate checks the listing. The prover checks the claims.
 
+### Variables other threads may change
+
+A per-function proof assumes that nothing changes under it. A variable another thread can write breaks that assumption twice. A plain read of it is a data race, which is UB. And two reads of it may return different values, so "nothing else changed" is false.
+
+The rule, proposed: **shared state enters verified code only as a value.** Either a parameter, or the result of a trusted getter. Never a direct read or write.
+
+```cpp
+// Shared with other threads. Lives behind trusted functions.
+static std::atomic<int32_t> g_level{0};
+
+CPLUSP_TRUSTED("atomic load. Every writer keeps 0 <= level <= 100")
+//@ ensures 0 <= result <= 100
+int32_t current_level();
+
+CPLUSP_TRUSTED("atomic store")
+//@ requires 0 <= level <= 100
+void set_level(int32_t level);
+```
+
+Verified code calls the getter and uses the bound:
+
+```cpp
+//@ ensures 0 <= result <= 200
+int32_t doubled_level() {
+  return 2 * current_level();
+}
+```
+
+What the getter's contract may say:
+
+1. **Only what is true of every value ever stored.** A range, a non-null promise, a format. That is a promise every writer keeps, in trusted or plain code. The getter's reason names it.
+2. **Nothing that relates two calls.** Each call may return a different value. The prover treats the getter as a fresh input every time, like reading a clock.
+3. **Nothing inside another contract.** `ensures result == current_level()` is not allowed, because the getter is not a pure function of anything the prover can see.
+
+The trap this prevents:
+
+```cpp
+bool stable() {
+  return current_level() == current_level();
+}
+```
+
+```
+Not proved: stable, line 2: cannot show the two results of current_level() are equal. Each call may return a different value.
+```
+
+Two limits to know:
+
+- **Lost updates are not caught.** `set_level(current_level() + 1)` has no UB and keeps the invariant, so it passes. Another thread can still write between the two calls. For a read-then-write pair, use a trusted function such as a `fetch_add` wrapper with its own contract.
+- **Mutex-protected plain variables follow the same rule.** Mutexes are trusted only, so the lock and the data it protects live in trusted functions. Verified code sees only the getters and setters.
+
+Prefer parameters when you can. A trusted caller reads the shared value once and passes it in. The verified function then has one value, its proof is simpler, and the "two reads differ" question never comes up.
+
 ## Canonical safe-C++ subsets
 
 There is no single canonical subset. Five matter, and each one serves a different goal. Ours differs from all of them: the prover checks bounds and arithmetic, so we ban less than safety standards do.
@@ -239,6 +292,7 @@ Stage says which part guarantees the row. **Gate** rejects the construct. **Prov
 | Control | Function pointers, `std::function` | eCv++ allows with contracts | Indirect calls need contracts on the target | Trusted only | Gate |
 | Control | Varargs, coroutines | Banned by Core Guidelines (varargs) | Not provable | Ban | Gate |
 | Concurrency | Threads, atomics, mutexes | Allowed in MISRA | Concurrent proofs are far harder. Isolate them | Trusted only | Gate |
+| Concurrency | Variables other threads may change | Allowed in MISRA with care | Enter verified code only as values. See State | Restrict: through a parameter or a trusted getter, never a direct read or write | Gate, Spec |
 | Concurrency | `volatile` | MISRA restricts | Hardware access only | Trusted only | Gate |
 | State | Globals, statics, static members, function-local statics | MISRA restricts globals | Hidden state breaks modular proofs. Treated as inputs and outputs, see State | Restrict: listed in the contract's reads or modifies clause. Constants exempt | Gate, Spec |
 | Platform | Inline asm, SIMD intrinsics | MISRA restricts asm | Hot-path code goes behind a contract | Trusted only | Gate |
@@ -540,3 +594,4 @@ Provisional. Parked as "maybe" where the first slice does not need a decision, a
 - Added an Examples section with a verified function, a chained caller, both failure messages, and the marker kinds. It ends with an excerpt of the trusted `vector` contract.
 - Named the limit of every Restrict row in its Decision cell.
 - Added the State section: members are implicit, globals and statics are listed in `reads` or `modifies`, constants are exempt. Added the `-unlisted-state` check.
+- Added the rule for variables other threads may change. They enter verified code only as values, through a parameter or a trusted getter. The getter's contract is a per-value invariant.
