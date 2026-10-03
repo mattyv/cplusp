@@ -34,3 +34,17 @@ int32_t first_by_data(std::vector<int32_t>& v) {
 int32_t first_by_addressof(std::vector<int32_t>& v) {
   return read(std::addressof(v[0]));  // BANNED
 }
+
+#include <iterator>
+
+int32_t first_by_std_data(std::vector<int32_t>& v) {
+  return read(std::data(v));  // BANNED
+}
+
+int32_t first_by_ranges_data(std::vector<int32_t>& v) {
+  return read(std::ranges::data(v));  // BANNED
+}
+
+int32_t first_by_to_address(std::vector<int32_t>& v) {
+  return read(std::to_address(v.begin()));  // BANNED
+}

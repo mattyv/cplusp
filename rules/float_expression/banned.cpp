@@ -18,3 +18,11 @@ double accumulated(double x, double a, double b) {
 double negated_product(double a, double b, double c) {
   return -(a * b) + c;  // BANNED
 }
+
+double cast_product(double a, double b, double c) {
+  return static_cast<double>(a * b) + c;  // BANNED
+}
+
+double chosen_product(double a, double b, double c, double d, double e) {
+  return (c > 0.0 ? a * b : d) + e;  // BANNED
+}

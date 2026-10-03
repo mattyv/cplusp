@@ -1,5 +1,5 @@
 construct: "A function-local static variable"
-standard: "[stmt.dcl]: dynamic initialization of a block variable with static storage duration or thread storage duration is performed the first time control passes through its declaration."
+standard: "[basic.stc.static]: the storage for these entities lasts for the duration of the program."
 row: global_state
 gap: 3
 cpp: "`n` has static storage duration, so it is one object for the whole program, and it keeps its value between calls. The first call returns 1, and the second call returns 2."

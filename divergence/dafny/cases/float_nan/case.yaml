@@ -9,7 +9,7 @@ naive_is_wrong: true
 mitigated: verifies
 side: gate
 gate_rule: float_equality
-mitigation: "Gate row `float_equality`: no `==` or `!=` on floats. The C++ requires finite values, which closes the NaN divergence, and compares against a tolerance, `|a - b| <= 1e-9`. The model compares the exact difference, and the C++ the rounded one, so the two part only within one rounding of the tolerance."
+mitigation: "Gate row `float_equality`: no `==` or `!=` on floats. The C++ requires finite values, which closes the NaN divergence, and compares against a tolerance that is a double, 2^-30. The difference rounds once, so the contract carries that slack: `result` implies `|a - b| <= T + eps * T + eta`, and `|a - b| <= T - eps * T - eta` implies `result`."
 witness:
   fixed_prints: "0 1"
   input: "same(nan, nan) and same(1.0, 1.0)"
@@ -19,4 +19,5 @@ rule: |
   The model has no NaN and no infinity.
   Every float parameter requires `std::isfinite` in the C++ contract.
   Never compare floats with `==`. The gate refuses it.
-  Compare against a tolerance, and state the tolerance in the contract.
+  Compare against a tolerance `T` that is a double, and state it in the contract with the slack of one rounding: `result` implies `|a - b| <= T + eps * T + eta`, and `|a - b| <= T - eps * T - eta` implies `result`.
+  Model the difference as `fsub(a, b)` with its `RoundError` call, never as the exact difference.
