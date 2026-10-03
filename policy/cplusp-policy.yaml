@@ -253,7 +253,7 @@ rules:
     area: library
     canonical: Allowed
     decision: restrict
-    limit: Only algorithms on the trusted list, which starts short.
+    limit: Only algorithms on the trusted list, which is short at first.
     why: Each algorithm needs a trusted contract.
     stage: spec
 
@@ -349,7 +349,7 @@ rules:
     area: classes
     canonical: "eCv++: const, no side effects"
     decision: restrict
-    limit: A const member, or a free function with const or by-value parameters. No assignment, compound assignment, increment or decrement operator unless defaulted or deleted.
+    limit: A const member, or a free function with const or by-value parameters. No assignment, compound assignment, increment or decrement operator unless it is `= default` or `= delete`.
     why: Hidden side effects confuse contracts.
     use_instead: a const operator with no side effects, or a named function.
     stage: gate
