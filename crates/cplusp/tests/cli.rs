@@ -71,11 +71,18 @@ fn policy_emit_is_the_clang_tidy_config_for_the_default_policy() {
     assert!(out.contains("google-readability-casting"), "{out}");
     assert!(out.contains("cppcoreguidelines-avoid-goto"), "{out}");
     assert!(out.contains("WarningsAsErrors: '*'"), "{out}");
-    assert!(out.contains("cplusp-multiple-inheritance.AllowPureInterfaces: 'true'"), "{out}");
     // A dormant check on an allow row never reaches the config.
     assert!(!out.contains("cppcoreguidelines-pro-bounds-constant-array-index"), "{out}");
     // Every check once.
     assert_eq!(out.matches("google-readability-casting").count(), 1, "{out}");
+}
+
+#[test]
+fn policy_emit_carries_a_check_option_into_the_config() {
+    let f = fixture("with-option.yaml");
+    let o = cplusp(&["policy", "emit", "--policy", f.to_str().unwrap()]);
+    assert!(o.status.success(), "stderr: {}", stderr(&o));
+    assert!(stdout(&o).contains("CheckOptions:\n  google-readability-casting.WarnOnNarrowing: 'true'"), "{}", stdout(&o));
 }
 
 #[test]

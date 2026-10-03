@@ -1,0 +1,12 @@
+version: 1
+rules:
+  - id: narrowing_casts
+    construct: Narrowing casts
+    area: casts
+    decision: ban
+    why: Only here to prove an option reaches the config.
+    use_instead: nothing.
+    detect:
+      - check: google-readability-casting
+        options:
+          WarnOnNarrowing: "true"

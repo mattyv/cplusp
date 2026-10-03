@@ -332,8 +332,6 @@ rules:
     stage: gate
     detect:
       - check: cplusp-multiple-inheritance
-        options:
-          AllowPureInterfaces: "true"
 
   - id: virtual_inheritance
     construct: Virtual inheritance
@@ -351,7 +349,7 @@ rules:
     area: classes
     canonical: "eCv++: const, no side effects"
     decision: restrict
-    limit: A const member, or a free function with const or by-value parameters. No assignment, compound assignment, increment or decrement operator unless defaulted.
+    limit: A const member, or a free function with const or by-value parameters. No assignment, compound assignment, increment or decrement operator unless defaulted or deleted.
     why: Hidden side effects confuse contracts.
     use_instead: a const operator with no side effects, or a named function.
     stage: gate
@@ -368,7 +366,7 @@ rules:
     stage: gate
     detect:
       - check: google-explicit-constructor
-      - matcher: cxxConversionDecl(unless(isExplicit()))
+      - matcher: cxxConversionDecl(unless(isExplicit()), unless(isImplicit()))
 
   - id: mutable_members
     construct: "`mutable` members"
@@ -497,7 +495,7 @@ rules:
     use_instead: direct calls or a template parameter, or mark the function trusted with a reason.
     stage: gate
     detect:
-      - matcher: typeLoc(loc(qualType(anyOf(hasCanonicalType(pointerType(pointee(functionType()))), hasCanonicalType(memberPointerType(pointee(functionType())))))))
+      - matcher: typeLoc(loc(qualType(anyOf(hasCanonicalType(pointerType(pointee(functionType()))), hasCanonicalType(memberPointerType(pointee(functionType())))))), unless(hasAncestor(decl(isImplicit()))))
       - matcher: typeLoc(loc(qualType(hasDeclaration(cxxRecordDecl(hasName("::std::function"))))))
 
   - id: varargs_coroutines
