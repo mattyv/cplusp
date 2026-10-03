@@ -286,11 +286,12 @@ rules:
     area: casts
     canonical: Core Guidelines ban `static_cast` downcasts
     decision: ban
-    why: A downcast asserts a type the prover cannot see.
+    why: A downcast asserts a type the prover cannot see. Every dynamic_cast counts, including a cross-cast.
     use_instead: virtual dispatch.
     stage: gate
     detect:
       - check: cppcoreguidelines-pro-type-static-cast-downcast
+      - matcher: cxxDynamicCastExpr()
 
   # -------------------------------------------------------------- classes
   - id: classes_raii
@@ -394,8 +395,7 @@ rules:
       - matcher: classTemplateSpecializationDecl(isExplicitTemplateSpecialization())
       - matcher: classTemplatePartialSpecializationDecl()
       - matcher: functionDecl(isExplicitTemplateSpecialization())
-      - matcher: varTemplateSpecializationDecl(isExplicitTemplateSpecialization())
-      - matcher: varTemplatePartialSpecializationDecl()
+      - matcher: varDecl(isExplicitTemplateSpecialization())
       - matcher: nonTypeTemplateParmDecl()
       - matcher: templateTemplateParmDecl()
 
@@ -497,7 +497,7 @@ rules:
     use_instead: direct calls or a template parameter, or mark the function trusted with a reason.
     stage: gate
     detect:
-      - matcher: typeLoc(loc(qualType(hasCanonicalType(anyOf(pointerType(pointee(functionType())), memberPointerType(pointee(functionType())))))))
+      - matcher: typeLoc(loc(qualType(anyOf(hasCanonicalType(pointerType(pointee(functionType()))), hasCanonicalType(memberPointerType(pointee(functionType())))))))
       - matcher: typeLoc(loc(qualType(hasDeclaration(cxxRecordDecl(hasName("::std::function"))))))
 
   - id: varargs_coroutines
@@ -541,7 +541,7 @@ rules:
     area: concurrency
     canonical: MISRA restricts
     decision: trusted_only
-    why: Hardware access only.
+    why: Hardware access only. A volatile qualifier on a member function is not caught yet.
     use_instead: a trusted accessor with a contract.
     stage: gate
     detect:
