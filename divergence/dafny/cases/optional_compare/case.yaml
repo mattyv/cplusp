@@ -14,4 +14,5 @@ witness:
   prints: "0 1"
 rule: |
   A comparison of an optional with a value has a result when the optional is empty.
-  Write the empty case out: `o.Some? && o.value == v` for `==`, and `o.None? || o.value < v` for `<`.
+  An empty optional is less than every value and equal to none.
+  Write the empty case out: `o.None? ||` for `<`, `<=` and `!=`, and `o.Some? &&` for `==`, `>` and `>=`.

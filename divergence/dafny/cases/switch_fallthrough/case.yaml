@@ -9,13 +9,13 @@ naive_is_wrong: true
 mitigated: verifies
 side: gate
 gate_rule: switch_fallthrough
-mitigation: "Gate row `switch_fallthrough`: every case ends in a break or a return. The C++ writes `r = 3` where the fall-through was meant, and the model is exact."
+mitigation: "Gate row `switch_fallthrough`: no fall-through without `[[fallthrough]]`. The C++ adds the missing break, and the same model is then exact."
 witness:
-  fixed_prints: "3"
+  fixed_prints: "1"
   input: "k = 1"
   ubsan: false
   prints: "3"
 rule: |
   A `switch` falls through to the next case without a break, and a Dafny `match` never does.
-  Every case ends in a break or a return.
-  The gate enforces it.
+  No case runs into the next without `[[fallthrough]]`, and the gate enforces it.
+  Model a marked fall-through as one arm with both bodies.

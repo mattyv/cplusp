@@ -9,7 +9,7 @@ naive_is_wrong: true
 mitigated: verifies
 side: gate
 gate_rule: iterators
-mitigation: "Gate row `iterators`: the loop body never changes the range. The C++ sums in the loop and appends in a second loop over the count, and the model has the same two loops."
+mitigation: "Gate row `iterators`: the loop body never changes the range. The C++ sums in the loop and appends in a second loop over the count, and the model has the same two loops. The C++ contract carries the bounds the model needs: at most 1000 elements, each in 0 to 1000."
 witness:
   fixed_prints: "6"
   input: "a vector of three elements, with no spare capacity"
@@ -19,4 +19,4 @@ rule: |
   A Dafny loop over a `seq` reads a value.
   A C++ range-for holds iterators into the live container.
   The loop body never changes the range.
-  The gate enforces it.
+  The gate refuses a direct call on the range, and a call that passes the range by non-const reference.

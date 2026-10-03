@@ -23,3 +23,13 @@ int32_t sum_then_grow(std::vector<int32_t>& v) {
   v.push_back(s);
   return s;
 }
+
+int32_t peek(const std::vector<int32_t>& v);
+
+int32_t sum_with_peek(std::vector<int32_t>& v) {
+  int32_t s = 0;
+  for (const int32_t x : v) {
+    s += x + peek(v);
+  }
+  return s;
+}

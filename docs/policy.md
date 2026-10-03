@@ -211,7 +211,7 @@ Three more refusals, all exit 2:
 - `-p` together with trailing `--` flags. clang-tidy would quietly drop `-p`. The message is `Use -p or --, not both.`
 - No clang-tidy on the machine when running `policy check`. Without it the check names cannot be checked.
 
-Trailing `--` flags are trusted. `-w` or `-Wno-everything` there hides the compiler-warning rows such as `return_ref_to_local`.
+The gate reads the trailing `--` flags before clang-tidy does, and refuses three kinds, exit 2, with `{flag}: not allowed with the gate. {why}` on stderr. A flag that changes floating-point results: `-ffast-math`, `-Ofast`, `-ffp-contract=fast`, `-funsafe-math-optimizations`, `-ffinite-math-only`, `-fassociative-math`, `-freciprocal-math`, `-fno-signed-zeros`, `-fno-honor-nans` and `-fno-honor-infinities`, because the proofs assume IEEE 754 round to nearest. A `-std` below C++23, or no `-std` at all, because the baseline is C++23, decision 0022. No `-ffp-contract=off`, because GCC fuses a multiply and an add into one rounding otherwise, and the float model rounds once per operation. `-w`, `-Wno-everything`, or `-Wno-{name}` for a `clang-diagnostic-{name}` the policy names, because it hides a row. With `-p DIR` the flags come from the database, and the gate does not read them yet.
 
 Checks the plugin does not provide yet are names without a check behind them. Every `gate` run says so on stderr: `warning: not enforced, no such check: cplusp-recursion, cplusp-unlisted-state`. An "ok" from the gate is only as strong as that line is short. Without `--plugin`, the generic check is on that list too.
 

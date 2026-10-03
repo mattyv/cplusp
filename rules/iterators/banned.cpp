@@ -31,3 +31,14 @@ int32_t grow_in_loop(std::vector<int32_t>& v) {
   }
   return s;
 }
+
+void grow(std::vector<int32_t>& v, int32_t x);
+
+int32_t grow_through_call(std::vector<int32_t>& v) {
+  int32_t s = 0;
+  for (const int32_t x : v) {  // BANNED
+    s += x;
+    grow(v, x);
+  }
+  return s;
+}

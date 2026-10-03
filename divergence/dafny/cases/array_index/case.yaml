@@ -1,5 +1,5 @@
 construct: "Subscript of a std::array"
-standard: "[array.overview], [sequence.reqmts]: operator[] has the precondition n < size(), and a call that breaks it is undefined."
+standard: "[sequence.reqmts]: a[n] is *(a.begin() + n), and [iterator.requirements.general] says a past-the-end iterator is not dereferenceable."
 row: array_span
 gap: 3
 cpp: "`a[i]` with `i` equal to the size reads past the array. Nothing checks the index."

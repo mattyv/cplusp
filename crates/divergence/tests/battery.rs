@@ -93,7 +93,7 @@ const ASAN: &[&str] = &["-fsanitize=address", "-fsized-deallocation"];
 
 fn build(compiler: &str, sources: &[&Path], exe: &Path, flags: &[&str]) -> Output {
     let mut c = Command::new(compiler);
-    c.args(["-std=c++20", "-O0"]).args(flags);
+    c.args(["-std=c++23", "-ffp-contract=off", "-O0"]).args(flags);
     c.args(sources).arg("-o").arg(exe).output().unwrap_or_else(|e| panic!("{compiler} runs: {e}"))
 }
 
@@ -123,7 +123,7 @@ fn gate(file: &Path) -> Output {
         .args(["run", "-q", "-p", "cplusp", "--", "gate", "--json", "--plugin"])
         .arg(plugin)
         .arg(file)
-        .args(["--", "-std=c++20"])
+        .args(["--", "-std=c++23", "-ffp-contract=off"])
         .current_dir(root())
         .output()
         .expect("cargo runs")
@@ -144,12 +144,7 @@ fn every_case_says_what_it_claims() {
     }
     let out_dir = std::env::temp_dir().join(format!("cplusp-divergence-{}", std::process::id()));
     std::fs::create_dir_all(&out_dir).unwrap();
-    let mut seen = 0;
-    for entry in std::fs::read_dir(&cases).unwrap() {
-        let dir = entry.unwrap().path();
-        if !dir.is_dir() {
-            continue;
-        }
+    let check = |dir: &Path| {
         let id = dir.file_name().unwrap().to_string_lossy().into_owned();
         let case: Case = serde_yaml::from_str(&std::fs::read_to_string(dir.join("case.yaml")).unwrap()).unwrap_or_else(|e| panic!("{id}/case.yaml: {e}"));
         let code = dir.join("code.cpp");
@@ -244,10 +239,18 @@ fn every_case_says_what_it_claims() {
         for line in case.rule.lines().filter(|l| !l.trim().is_empty()) {
             assert!(skill.contains(line.trim()), "{id}: rule line missing from the skill: {line}");
         }
-        seen += 1;
-    }
+    };
+    // Dafny takes a second per file, so the cases run on a few threads. A panic in any of them fails the test.
+    let dirs: Vec<PathBuf> = std::fs::read_dir(&cases).unwrap().map(|e| e.unwrap().path()).filter(|d| d.is_dir()).collect();
+    assert!(!dirs.is_empty(), "no cases found");
+    let per_thread = dirs.len().div_ceil(4);
+    std::thread::scope(|s| {
+        for chunk in dirs.chunks(per_thread) {
+            let check = &check;
+            s.spawn(move || chunk.iter().for_each(|d| check(d)));
+        }
+    });
     let _ = std::fs::remove_dir_all(&out_dir);
-    assert!(seen >= 1, "no cases found");
 }
 
 /// docs/mitigations-dafny.md is generated from the cases. It must match what the generator says today.

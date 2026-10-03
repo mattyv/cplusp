@@ -7,11 +7,11 @@ naive_does: "The algorithm and the lambda are one recursive function `Count(v, k
 naive: verifies
 mitigated: verifies
 side: none
-mitigation: "None. The literal model is exact. A lambda with by-value captures is a pure function, and the algorithm and the lambda are one function over the `seq`."
+mitigation: "None. The literal model is exact. A lambda with by-value captures and no `mutable` is a pure function, and the algorithm and the lambda are one function over the `seq`."
 witness:
   input: "{1, 5, 3} and k = 2"
   ubsan: false
   prints: "2"
 rule: |
-  A lambda passed to a std algorithm with by-value captures is a pure function of its arguments and its captures.
+  A lambda passed to a std algorithm with by-value captures and no `mutable` is a pure function of its arguments and its captures.
   Model the algorithm and the lambda together as one function over the `seq`.

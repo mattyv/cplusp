@@ -8,12 +8,12 @@ naive: fails
 mitigated: verifies
 side: gate
 gate_rule: containers
-mitigation: "Gate row `containers`: no `operator[]` on a map. The C++ writes `int32_t v = m.contains(k) ? m.at(k) : 0;`, and the model is `k in m` and `m[k]`."
+mitigation: "Gate row `containers`: no `operator[]` on a map. The C++ writes `m.contains(k) ? m.at(k) : 0`, its contract says the map does not change, and the model is `k in m` and `m[k]`."
 witness:
-  fixed_prints: "0"
+  fixed_prints: "0 0"
   input: "an empty map, and the key 7"
   ubsan: false
-  prints: "1"
+  prints: "0 1"
 rule: |
   `m[k]` on a map writes.
   Never model it as a read.

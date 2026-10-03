@@ -352,13 +352,13 @@ rules:
     area: library
     canonical: Allowed
     decision: restrict
-    limit: "Range-for only. The loop body does not change the range. begin and end may appear only as direct arguments of a std:: call. No stored iterator, no std::next, prev, advance or distance."
+    limit: "Range-for only. The loop body does not change the range, by a call on it or through a function. begin and end may appear only as direct arguments of a std:: call. No stored iterator, no std::next, prev, advance or distance."
     why: Iterator arithmetic is pointer arithmetic in disguise.
     use_instead: a range-for loop, or an index the prover can check.
     stage: gate
     detect:
       - check: cplusp-iterator-arithmetic
-      - matcher: 'cxxForRangeStmt(hasRangeInit(declRefExpr(to(varDecl().bind("range")))), hasBody(hasDescendant(cxxMemberCallExpr(on(declRefExpr(to(varDecl(equalsBoundNode("range"))))), callee(cxxMethodDecl(unless(isConst())))))))'
+      - matcher: 'cxxForRangeStmt(hasRangeInit(declRefExpr(to(varDecl().bind("range")))), hasBody(hasDescendant(anyOf(cxxMemberCallExpr(on(declRefExpr(to(varDecl(equalsBoundNode("range"))))), callee(cxxMethodDecl(unless(isConst())))), callExpr(callee(functionDecl(hasAnyParameter(hasType(references(qualType(unless(isConstQualified()))))))), hasAnyArgument(ignoringParenImpCasts(declRefExpr(to(varDecl(equalsBoundNode("range")))))))))))'
 
   - id: optional_expected_variant
     construct: "`std::optional`, `std::expected`, `std::variant`"
@@ -687,7 +687,7 @@ rules:
     area: control
     canonical: Allowed
     decision: restrict
-    limit: "Passed directly to a std:: call, capturing by value only. No capture by reference and no capture of this."
+    limit: "Passed directly to a std:: call, capturing by value only. No capture by reference, no capture of this, and not mutable."
     why: Captured references can dangle.
     use_instead: a lambda passed straight to the algorithm, capturing by value.
     stage: gate

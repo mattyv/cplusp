@@ -19,3 +19,4 @@ rule: |
   Never state equality of two float results.
   The bound holds up to `MAX`, so require `abs(a) <= MAX / 4.0` and `abs(b) <= MAX / 4.0`.
   Dafny does not apply a lemma by itself, so call `RoundError(a + b)` in the body before `fadd`.
+  In the C++ contract, write the bound as `|result - (a + b)| <= eps * |a + b|`, with `eps` as 2^-53, and a magnitude bound such as `|a| <= DBL_MAX / 4` as a `requires`.

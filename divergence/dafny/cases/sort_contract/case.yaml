@@ -1,5 +1,5 @@
 construct: "std::sort on a vector of int32_t"
-standard: "[sort]: sorts the elements in the range, and [alg.sorting.general] says the result is a permutation."
+standard: "[sort]: sorts the elements in the range, and [alg.sorting.general] says comp shall induce a strict weak ordering on the values."
 row: algorithms
 gap: 3
 cpp: "`std::sort` with the default order puts the elements in ascending order. The result is a permutation of the old elements."
@@ -7,12 +7,14 @@ naive_does: "The model is a method with the contract of `std::sort`: sorted, and
 naive: verifies
 mitigated: verifies
 side: none
-mitigation: "None. The literal model is exact. A std algorithm on the trusted list has the model of its contract, not of its body."
+mitigation: "None. The literal model is exact. A std algorithm with a trusted contract is a bodyless `{:axiom}` method, and the model of the function calls it."
 witness:
   input: "{3, 1, 2}"
   ubsan: false
   prints: "1 2 3"
 rule: |
-  Model a std algorithm on the trusted list by its contract, not by its body.
+  Model a std algorithm with a trusted contract as a bodyless `{:axiom}` method with that contract, and call it from the model of your function.
+  Never mark the model of your own function `{:axiom}`.
+  The trusted algorithms so far are `std::sort` and `std::count_if`, each with its contract in this skill.
   `std::sort` gives a sorted permutation.
   The comparator must be a strict weak order, and the default one on integers is.

@@ -9,7 +9,7 @@ naive_is_wrong: true
 mitigated: verifies
 side: gate
 gate_rule: accumulate_init
-mitigation: "Gate row `accumulate_init`: the init value has the element type. The C++ writes `int64_t{0}`, and the model keeps the accumulator in `int64`."
+mitigation: "Gate row `accumulate_init`: the init value has the element type. The C++ writes `int64_t{0}`, and the model keeps the accumulator in `int64`. The fixed C++ requires fewer than 2^31 elements, each in the int32_t range, which the model needs."
 witness:
   fixed_prints: "4294967294"
   input: "two values of INT32_MAX as int64_t"
@@ -17,5 +17,5 @@ witness:
   prints: "-2"
 rule: |
   A fold runs in the type of its init value.
-  Write the init value in the element type.
+  Write the init value in the element type, or a wider one.
   The gate enforces it.

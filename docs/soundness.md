@@ -20,7 +20,7 @@ C++ as the bot writes it
 
 ## Gap 1: C++ as written versus as compiled
 
-Partly open. Compiler version, flags, optimisation, implementation-defined behaviour, the target. The gate already refuses mismatched flags in two cases. One result from the battery, case `plain_int`: the width of `int` is implementation-defined. So the gate bans the built-in integer types in verified code. One assumption remains, and the skill states it: `size_t` maps to `uint64`. That is true on a 64-bit target only. The `stack_depth` case adds a second: a recursion bound in a contract holds on the target's stack, and the standard sets no minimum. The other things the proof assumes about the build are not written down yet.
+Partly open. Compiler version, flags, optimisation, implementation-defined behaviour, the target. The gate already refuses mismatched flags in two cases. One result from the battery, case `plain_int`: the width of `int` is implementation-defined. So the gate bans the built-in integer types in verified code. One assumption remains, and the skill states it: `size_t` maps to `uint64`. That is true on a 64-bit target only. The `stack_depth` case adds a second: a recursion bound in a contract holds on the target's stack, and the standard sets no minimum. The float model adds a third set, decision 0020: IEEE 754 binary64, round to nearest even, no fast math, and no fused multiply-add. The gate refuses the flags that break them, decision 0021, and requires `-std=c++23` and `-ffp-contract=off`. With `-p` the flags come from the compile database, and the gate does not read them yet. The other things the proof assumes about the build are not written down yet.
 
 ## Gap 2: the gate's view
 
@@ -34,7 +34,7 @@ The count and the verdicts live in `docs/mitigations-dafny.md`, one row per case
 
 A mitigation lives in one of four places: the model, the contract, the C++, or a gate row.
 
-Still to cover, one row of the policy at a time. Floating point as opaque values. Object lifetime. Copies versus moves. Value and reference semantics. Inheritance and dispatch. Template instantiation. Containers and iterators. Algorithms with lambdas. Recursion. State. The test `every_supported_row_has_a_case` in `crates/divergence` keeps the list of rows without a case. That list shrinks to empty.
+Floating point has its model, a real after one rounding per operation, decisions 0019 and 0020. The battery proved bounds for a sum, a cancellation, an increment, a division and two conversions. It found three faults: the axiom's lower limit, the fused multiply-add, and the missing contract spelling. Still to cover, one row of the policy at a time. Object lifetime. Copies versus moves. Value and reference semantics. Inheritance and dispatch. Template instantiation. Containers and iterators. Algorithms with lambdas. Recursion. State. The test `every_supported_row_has_a_case` in `crates/divergence` keeps the list of rows without a case. That list shrinks to empty.
 
 ## Gap 4: the contract language
 
