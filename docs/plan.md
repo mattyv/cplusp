@@ -577,14 +577,36 @@ Provisional. Parked as "maybe" where the first slice does not need a decision, a
 | Piece | Choice | Status |
 | --- | --- | --- |
 | Gate checks and index | C++20 clang-tidy module. CMake and Ninja. LLVM 18 pinned, builds against 17 to 20 | Forced: a clang-tidy module can only be C++ |
-| Driver `cplusp` | Rust, one static binary. No Python anywhere. TypeScript not in the core | Decided |
-| Policy to clang-tidy conversion | A pure core inside the driver: policy in, config out, findings matched back to rules, filter by function kind. Plain Rust with golden tests first. Verus proves it later: every check of every non-allow rule is enabled, and nothing else | Decided. Proof deferred until the format settles |
+| Driver `cplusp` | Rust written in Verus from the start, one static binary. No Python anywhere. TypeScript not in the core. See Proofs about cplusp itself | Decided |
+| Policy to clang-tidy conversion | A pure core inside the driver: policy in, config out, findings matched back to rules, filter by function kind. Proved in Verus: every check of every non-allow rule is enabled, and nothing else | Decided |
 | Prover, candidate A | Dafny underneath, with the gated C++ translated to it and errors mapped back to C++ lines. Strong automation and the most LLM training data of any verifier. The translator is the new trusted component. We test it by compiling the Dafny and running both on the same inputs | Open. The thin slice decides which is built first |
 | Prover, candidate B | VeriFast. Native `//@` contract syntax, built-in overflow and bounds checks, and ownership gives frame and invalidation rules for free. Costs: its C++ frontend lacked templates in 2022. Release notes to Sept 2026 show the work going to Rust. So we would translate to its mature C mode. A 2026 study of ten LLMs found 31% verification success on VeriFast specs, with 94% of errors in separation-logic details | Open. The thin slice decides which is built first |
 | Prover, plan C | Verus, via translation to Rust. Exact machine ints and fast, but translated C++ must satisfy the borrow checker | Fallback |
 | Spec syntax in C++ | `//@ requires` / `//@ ensures` comments with Dafny-flavoured expressions, carried through by the translator | Open |
 | Check tests | Rust runner over the sample pairs, reading `// CHECK-MESSAGES` lines | Preferred |
 | Bot integration | A skill tells the bot to run `cplusp verify` after writing C++ and to act on the messages. No automatic hook | Decided |
+
+## Proofs about cplusp itself
+
+Decided Oct 3, 2026: we prove as much of our own tooling as the tools allow. Fewer bugs in the gate means fewer silent holes in the subset.
+
+**We write the driver in Verus from the start.** Verus proves Rust code directly. The proved code is ordinary Rust after the annotations are stripped. Writing in Verus from day one shapes the code so it can be proved. Retrofitting proofs onto plain Rust is harder. The specifications start light and deepen as each format settles.
+
+**What we prove**
+
+- **Policy to config.** Every check of every rule whose decision is not `allow` is enabled, with its options. No other check is enabled. A team override changes only the entries it names. A loosened entry always carries its reason.
+- **Finding to rule.** Every finding from an enabled check maps to exactly one rule. A finding inside a trusted function is dropped only if its rule is Trusted only.
+- **The verified set.** Every edited function is classified, each into exactly one kind. Callers of a function whose contract changed are included. No function is counted twice.
+- **The translator's shape.** Every function handed to the prover comes back with a verdict. Every contract line in the C++ appears in the prover input. Every location in a verdict maps back to a C++ line.
+
+**What we cannot prove, and what we do instead**
+
+- **Meaning.** That the translated code means the same as the C++ needs a formal semantics of both languages. Out of reach. Instead: differential tests that compile the prover's version and run both on the same inputs, and the two-prover cross-check from Prover interface.
+- **The edges.** Reading files, running clang-tidy and git, parsing YAML, writing the report. Verus treats these as trusted functions with contracts, the same way cplusp treats `memcpy`. We keep them thin and list them. Every build prints the size of this trusted surface, exactly as the gate prints it for user code.
+- **The clang-tidy module.** C++ has no prover we would use on it. The module stays small, mechanical, and covered by the sample pair of every rule.
+- **The trusted contract library.** Contracts for `vector`, `span` and the rest are axioms. Review and tests, not proofs.
+
+**Where this costs us.** Verus does not support all of Rust. No trait objects in proved code, limited closures, weak reasoning about string contents. So the proved core works on structured data. The final step that turns a structure into YAML text is one of the thin trusted edges. Verus also tracks a pinned Rust nightly, so the toolchain is pinned with it.
 
 ## Later phases and open questions
 
@@ -621,7 +643,8 @@ Provisional. Parked as "maybe" where the first slice does not need a decision, a
 - Recorded that the gate runs separately from, and never edits, a team's existing clang-tidy config, with its own pinned clang-tidy.
 - Made the prover an open choice between Dafny and VeriFast, settled by the thin slice. Verus is plan C.
 - Added the Prover interface: the prover is a plug-in, the bot never writes prover-specific hints, and two provers can run as a cross-check.
-- Decided the driver is Rust, with the policy conversion as a pure core that Verus can prove once the format settles.
+- Decided the driver is Rust written in Verus from the start. Added Proofs about cplusp itself: what we prove, what we cannot, and what we do instead.
+- Added `cplusp policy show` and the generated subset table, see policy.md.
 - Added a provisional tech stack: C++ only for the clang-tidy module, Rust for the rest, no Python.
 - Rewrote the doc in STE-flavored mode with the asd-ste100 skill: no semicolons, sentences of 25 words or fewer, one word per action.
 - Added an Examples section with a verified function, a chained caller, both failure messages, and the marker kinds. It ends with an excerpt of the trusted `vector` contract.

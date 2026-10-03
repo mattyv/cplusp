@@ -147,6 +147,12 @@ For example, the `iterators` entry above produces:
 Not provable: find_gap, line 12: iterators are outside their limit. Limit: Range-for only. No iterator arithmetic, no stored iterators. Use a range-for loop, or an index the prover can check.
 ```
 
+## Reading the policy as a table
+
+`cplusp policy show` prints the policy as the subset table from the plan: area, construct, decision, limit, stage. One screen, sorted by area. Team overrides show in their own column.
+
+The table in the plan is generated from the default policy by `cplusp policy doc`. Nobody edits it by hand. The file and the table cannot drift, because one is made from the other. Decided Oct 3, 2026.
+
 ## A team's own policy
 
 A repo may carry its own `cplusp-policy.yaml`. It extends the list that ships with the tool and overrides decisions by `id`. It does not repeat the fields it does not change.
