@@ -1,0 +1,9 @@
+[package]
+name = "divergence"
+version.workspace = true
+edition.workspace = true
+description = "Runs the divergence battery: every case's Dafny verdicts, witness, and skill rule"
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_yaml = "0.9"

@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["crates/cplusp-core", "crates/cplusp"]
+members = ["crates/cplusp-core", "crates/cplusp", "crates/divergence"]
 
 [workspace.package]
 version = "0.1.0"

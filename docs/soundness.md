@@ -26,13 +26,15 @@ Open. Compiler version, flags, optimisation, implementation-defined behaviour, t
 
 Open. The gate does not see everything. Headers it does not judge, macros, `[[assume]]`, a `volatile` qualifier on a member function, anything after a `#if` the flags switch off. A construct that slips the gate and that the translator does not model must be refused by the translator, never skipped. That rule is not yet decided.
 
-## Gap 3: the translator's model of C++
+## Gap 3: the model of C++
 
-Open. Integer widths and overflow. Integral promotion in mixed arithmetic. Evaluation order. Short-circuit. References and aliasing. Object lifetime, constructors and destructors. Copies versus moves. Template instantiation. Floating point as opaque values. For each: what the model says, what C++ says, and how we show they agree.
+Open. Filled case by case from the divergence battery, decision 0017. No translator exists yet. The model is written by hand under the rules the battery finds. Integer widths and overflow. Integral promotion in mixed arithmetic. Evaluation order. Short-circuit. References and aliasing. Object lifetime, constructors and destructors. Copies versus moves. Template instantiation. Floating point as opaque values. For each: what the model says, what C++ says, and how we show they agree.
 
 ## Gap 4: the contract language
 
-Open. The first experiment is here. `a + b` in a contract: machine arithmetic that can overflow, or mathematical arithmetic that cannot? The two give different proofs for the same code. `old(x)`, `result`, quantifiers over containers, `reads` and `modifies`: each needs one meaning, written down, and a test that the translator keeps it.
+First result, from case `signed_overflow` in the divergence battery. `a + b` in a contract is machine arithmetic. With `int32_t` modelled as Dafny's unbounded `int`, the function `add` verified and the C++ overflowed on INT32_MAX + 1 with undefined behaviour. With a bounded `int32`, Dafny refused the body and the contract. With the precondition the refusal demanded, it verified, and the caller carries the obligation. Rule: fixed-width types map to bounded types, never to `int`, so every arithmetic step in a contract is checked for overflow as the body is.
+
+Still open: `old(x)`, `result`, quantifiers over containers, `reads` and `modifies`. Each needs one meaning, written down, and a case in the battery.
 
 ## Gap 5: the trusted library contracts
 

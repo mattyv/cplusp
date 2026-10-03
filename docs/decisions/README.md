@@ -22,3 +22,4 @@ Status is `decided`, `proposed` (the default until someone objects or the thin s
 | [0014](0014-gate-refusals.md) | The gate refuses what it cannot judge: compile errors, NOLINT, bad build dirs, loose YAML | decided |
 | [0015](0015-scope-gate-only.md) | Build the gate and nothing past it until told otherwise | decided |
 | [0016](0016-data-driven-plugin.md) | One generic clang-tidy check driven by matcher patterns in the policy | decided |
+| [0017](0017-hand-written-dafny-and-divergence-battery.md) | No translator yet. Hand-written Dafny under rules found by a divergence battery | decided |
