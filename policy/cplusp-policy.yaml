@@ -46,8 +46,8 @@ rules:
     area: types
     canonical: Allowed by all
     decision: restrict
-    limit: Values are opaque to the prover. It proves no NaN or inf only where the contract says so.
-    why: Solvers are slow on floats.
+    limit: Finite values only, stated in the contract. A contract gives an error bound, never an equality. One operation per expression.
+    why: The model is a real after one rounding per operation, with the error bound of IEEE 754 binary64 as an axiom. It has no NaN and no infinity, so the contract must keep them out.
     stage: prover
 
   - id: unions
@@ -152,6 +152,30 @@ rules:
     stage: gate
     detect:
       - matcher: 'binaryOperator(hasOperatorName("<<"), hasLHS(ignoringImpCasts(integerLiteral(hasType(asString("int"))))))'
+
+  - id: float_equality
+    construct: "`==` or `!=` on floating-point values"
+    area: arithmetic
+    canonical: "MISRA 2023 and Core Guidelines warn, -Wfloat-equal"
+    decision: ban
+    why: Two computations of one value differ in the last bit, so equality is not a fact the model can state.
+    use_instead: "a comparison against a tolerance, written in the contract as an error bound."
+    stage: gate
+    detect:
+      - matcher: binaryOperator(hasAnyOperatorName("==", "!="), hasLHS(hasType(realFloatingPointType())))
+
+  - id: float_expression
+    construct: Two floating-point operations in one expression
+    area: arithmetic
+    canonical: "-ffp-contract, MISRA advisory"
+    decision: restrict
+    limit: One floating-point operation per expression. A comparison compares values, not results of arithmetic.
+    why: The compiler may fuse two operations into one rounding, and the model rounds once per operation.
+    use_instead: "a named local for each intermediate result."
+    stage: gate
+    detect:
+      - matcher: binaryOperator(hasType(realFloatingPointType()), unless(hasOperatorName("=")), hasEitherOperand(ignoringParenImpCasts(binaryOperator(hasType(realFloatingPointType())))))
+      - matcher: binaryOperator(isComparisonOperator(), hasEitherOperand(ignoringParenImpCasts(binaryOperator(hasType(realFloatingPointType())))))
 
   - id: narrowing_static_cast
     construct: Narrowing `static_cast`
@@ -292,13 +316,14 @@ rules:
     area: library
     canonical: Allowed
     decision: restrict
-    limit: Only methods that have a trusted contract. No reference into a container. No iterator held across a mutation. No operator[] on a map.
+    limit: Only methods that have a trusted contract. No reference into a container. No iterator held across a mutation. No operator[] on a map. No pointer into a container.
     why: Trusted contracts carry the invalidation rules. A reference into a container dies at the next mutation, and the model has only values.
     use_instead: "a copy of the element. For a map, find, at or contains."
     stage: gate
     detect:
       - matcher: 'varDecl(hasType(referenceType()), unless(parmVarDecl()), unless(hasParent(declStmt(hasParent(cxxForRangeStmt())))), hasInitializer(hasDescendant(declRefExpr(to(varDecl(hasType(anyOf(hasCanonicalType(hasDeclaration(cxxRecordDecl(hasAncestor(namespaceDecl(hasName("std")))))), references(qualType(hasCanonicalType(hasDeclaration(cxxRecordDecl(hasAncestor(namespaceDecl(hasName("std"))))))))))))))), unless(hasType(references(qualType(hasCanonicalType(hasDeclaration(cxxRecordDecl(hasAncestor(namespaceDecl(hasName("std")))))))))))'
       - matcher: 'cxxOperatorCallExpr(hasOverloadedOperatorName("[]"), hasArgument(0, hasType(hasCanonicalType(hasDeclaration(cxxRecordDecl(hasAnyName("::std::map", "::std::unordered_map")))))))'
+      - matcher: 'unaryOperator(hasOperatorName("&"), hasUnaryOperand(ignoringParenImpCasts(anyOf(cxxOperatorCallExpr(hasOverloadedOperatorName("[]"), hasArgument(0, hasType(hasCanonicalType(hasDeclaration(cxxRecordDecl(hasAncestor(namespaceDecl(hasName("std"))))))))), cxxMemberCallExpr(on(hasType(hasCanonicalType(hasDeclaration(cxxRecordDecl(hasAncestor(namespaceDecl(hasName("std")))))))), callee(cxxMethodDecl(hasAnyName("front", "back", "at", "data"))))))))'
 
   - id: variable_index
     construct: "`operator[]` with a variable index"

@@ -86,7 +86,8 @@ fn verdict(file: &Path) -> Verdict {
     if text.contains(", 0 errors") { Verdict::Verifies } else { Verdict::Fails }
 }
 
-const UBSAN: &[&str] = &["-fsanitize=undefined", "-fno-sanitize-recover=all"];
+/// UBSan, with float division by zero, which `undefined` leaves out.
+const UBSAN: &[&str] = &["-fsanitize=undefined,float-divide-by-zero", "-fno-sanitize-recover=all"];
 /// AddressSanitizer, with sized deallocation so a delete through the wrong type is caught.
 const ASAN: &[&str] = &["-fsanitize=address", "-fsized-deallocation"];
 
@@ -331,7 +332,7 @@ struct CaseRow {
 /// one case. The list of rows without a case shrinks with every round of the battery, to empty.
 #[test]
 fn every_supported_row_has_a_case() {
-    const NOT_YET: &[&str] = &["floating_point", "shared_variables", "global_state"];
+    const NOT_YET: &[&str] = &["shared_variables", "global_state"];
     let policy: PolicyRows = serde_yaml::from_str(&std::fs::read_to_string(root().join("policy/cplusp-policy.yaml")).unwrap()).unwrap();
     let mut covered = std::collections::BTreeSet::new();
     for entry in std::fs::read_dir(root().join("divergence/dafny/cases")).unwrap() {
@@ -368,6 +369,9 @@ fn the_battery_has_the_planned_cases() {
         // Round C3: library and control.
         "array_index", "span_dangling", "range_for_mutation", "count_if_lambda", "fold_init_type", "sort_contract", "map_subscript",
         "string_npos", "switch_fallthrough", "switch_missing_case", "optional_compare", "variant_get",
+        // Round C4: floating point as a real after rounding, and a pointer into a container.
+        "float_sum", "float_nan", "float_to_int", "float_cancellation", "float_increment", "float_division_zero", "int_to_float",
+        "pointer_into_container",
     ] {
         assert!(cases.join(id).join("case.yaml").exists(), "no case {id}");
     }

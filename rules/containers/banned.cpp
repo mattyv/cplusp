@@ -18,3 +18,9 @@ std::size_t read_count(std::map<int32_t, int32_t>& m, int32_t k) {
   int32_t v = m[k];  // BANNED
   return m.size() + static_cast<std::size_t>(v);
 }
+
+int32_t read(const int32_t* p);
+
+int32_t first_by_pointer(std::vector<int32_t>& v) {
+  return read(&v[0]);  // BANNED
+}
