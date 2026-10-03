@@ -249,6 +249,9 @@ fn gate_with_the_plugin_no_longer_warns_about_the_generic_check() {
     let err = stderr(&o);
     for line in err.lines().filter(|l| l.starts_with("warning: not enforced")) {
         assert!(!line.contains("cplusp-matcher"), "{line}");
+        for built in ["cplusp-mutable", "cplusp-multiple-inheritance", "cplusp-impure-operator", "cplusp-iterator-arithmetic", "cplusp-lambda-limits"] {
+            assert!(!line.contains(built), "{line}");
+        }
     }
 }
 
@@ -407,10 +410,11 @@ fn every_sample_pair_agrees_with_its_rule() {
         "unscoped_enum", "unions", "bitfields", "virtual_inheritance", "exceptions", "shared_ptr", "implicit_conversions",
         "function_pointers", "concurrency", "volatile", "inline_asm_intrinsics", "unreachable_assume", "longjmp",
         "raw_memory_ops", "launder_placement_new", "templates", "metaprogramming",
+        "mutable_members", "multiple_inheritance", "operator_overloading", "iterators", "lambdas",
     ] {
         assert!(rules_dir.join(id).is_dir(), "no sample pair for rule {id}");
     }
-    assert!(checked >= 29, "expected at least 29 sample pairs, found {checked}");
+    assert!(checked >= 34, "expected at least 34 sample pairs, found {checked}");
 }
 
 /// Pull `"key":"value"` or `"key":123` out of one JSON line without a JSON library.

@@ -233,7 +233,7 @@ rules:
     area: library
     canonical: Allowed
     decision: restrict
-    limit: Range-for only.
+    limit: Range-for only. begin and end may appear only as direct arguments of a std:: call. No stored iterator, no std::next, prev, advance or distance.
     why: Iterator arithmetic is pointer arithmetic in disguise.
     use_instead: a range-for loop, or an index the prover can check.
     stage: gate
@@ -326,7 +326,7 @@ rules:
     area: classes
     canonical: "eCv++: interfaces only"
     decision: restrict
-    limit: Extra bases must be pure interfaces.
+    limit: At most one base with data or non-pure functions. Every other base is a pure interface, with only pure virtual functions and a virtual destructor.
     why: Keep the object model simple.
     use_instead: one concrete base plus interfaces.
     stage: gate
@@ -351,7 +351,7 @@ rules:
     area: classes
     canonical: "eCv++: const, no side effects"
     decision: restrict
-    limit: Const and free of side effects.
+    limit: A const member, or a free function with const or by-value parameters. No assignment, compound assignment, increment or decrement operator unless defaulted.
     why: Hidden side effects confuse contracts.
     use_instead: a const operator with no side effects, or a named function.
     stage: gate
@@ -481,7 +481,7 @@ rules:
     area: control
     canonical: Allowed
     decision: restrict
-    limit: Passed directly to a trusted algorithm, no reference capture that escapes.
+    limit: Passed directly to a std:: call, capturing by value only. No capture by reference and no capture of this.
     why: Captured references can dangle.
     use_instead: a lambda passed straight to the algorithm, capturing by value.
     stage: gate
