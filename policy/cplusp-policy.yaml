@@ -164,6 +164,17 @@ rules:
     detect:
       - matcher: binaryOperator(hasAnyOperatorName("==", "!="), hasLHS(hasType(realFloatingPointType())))
 
+  - id: rounding_mode
+    construct: A call that changes the floating-point rounding mode
+    area: arithmetic
+    canonical: "MISRA 2023 bans <cfenv> writes"
+    decision: ban
+    why: The float model assumes round to nearest even for every operation in the process.
+    use_instead: "nothing. Verified code reads the mode at most."
+    stage: gate
+    detect:
+      - matcher: callExpr(callee(functionDecl(hasAnyName("::fesetround", "::std::fesetround", "::fesetenv", "::std::fesetenv", "::feupdateenv", "::std::feupdateenv"))))
+
   - id: float_expression
     construct: Two floating-point operations in one expression
     area: arithmetic
@@ -174,7 +185,7 @@ rules:
     use_instead: "a named local for each intermediate result."
     stage: gate
     detect:
-      - matcher: binaryOperator(hasType(realFloatingPointType()), unless(hasOperatorName("=")), hasEitherOperand(ignoringParenImpCasts(binaryOperator(hasType(realFloatingPointType())))))
+      - matcher: binaryOperator(hasType(realFloatingPointType()), unless(hasOperatorName("=")), hasEitherOperand(ignoringParenImpCasts(anyOf(binaryOperator(hasType(realFloatingPointType())), unaryOperator(hasUnaryOperand(ignoringParenImpCasts(binaryOperator(hasType(realFloatingPointType())))))))))
       - matcher: binaryOperator(isComparisonOperator(), hasEitherOperand(ignoringParenImpCasts(binaryOperator(hasType(realFloatingPointType())))))
 
   - id: narrowing_static_cast
@@ -316,7 +327,7 @@ rules:
     area: library
     canonical: Allowed
     decision: restrict
-    limit: Only methods that have a trusted contract. No reference into a container. No iterator held across a mutation. No operator[] on a map. No pointer into a container.
+    limit: Only methods that have a trusted contract. No reference into a container. No iterator held across a mutation. No operator[] on a map. No pointer into a container, by address-of, data() or std::addressof.
     why: Trusted contracts carry the invalidation rules. A reference into a container dies at the next mutation, and the model has only values.
     use_instead: "a copy of the element. For a map, find, at or contains."
     stage: gate
@@ -324,6 +335,8 @@ rules:
       - matcher: 'varDecl(hasType(referenceType()), unless(parmVarDecl()), unless(hasParent(declStmt(hasParent(cxxForRangeStmt())))), hasInitializer(hasDescendant(declRefExpr(to(varDecl(hasType(anyOf(hasCanonicalType(hasDeclaration(cxxRecordDecl(hasAncestor(namespaceDecl(hasName("std")))))), references(qualType(hasCanonicalType(hasDeclaration(cxxRecordDecl(hasAncestor(namespaceDecl(hasName("std"))))))))))))))), unless(hasType(references(qualType(hasCanonicalType(hasDeclaration(cxxRecordDecl(hasAncestor(namespaceDecl(hasName("std")))))))))))'
       - matcher: 'cxxOperatorCallExpr(hasOverloadedOperatorName("[]"), hasArgument(0, hasType(hasCanonicalType(hasDeclaration(cxxRecordDecl(hasAnyName("::std::map", "::std::unordered_map")))))))'
       - matcher: 'unaryOperator(hasOperatorName("&"), hasUnaryOperand(ignoringParenImpCasts(anyOf(cxxOperatorCallExpr(hasOverloadedOperatorName("[]"), hasArgument(0, hasType(hasCanonicalType(hasDeclaration(cxxRecordDecl(hasAncestor(namespaceDecl(hasName("std"))))))))), cxxMemberCallExpr(on(hasType(hasCanonicalType(hasDeclaration(cxxRecordDecl(hasAncestor(namespaceDecl(hasName("std")))))))), callee(cxxMethodDecl(hasAnyName("front", "back", "at", "data"))))))))'
+      - matcher: 'cxxMemberCallExpr(on(hasType(hasCanonicalType(hasDeclaration(cxxRecordDecl(hasAncestor(namespaceDecl(hasName("std")))))))), callee(cxxMethodDecl(hasName("data"))))'
+      - matcher: 'callExpr(callee(functionDecl(hasName("::std::addressof"))), hasArgument(0, ignoringParenImpCasts(anyOf(cxxOperatorCallExpr(hasOverloadedOperatorName("[]"), hasArgument(0, hasType(hasCanonicalType(hasDeclaration(cxxRecordDecl(hasAncestor(namespaceDecl(hasName("std"))))))))), cxxMemberCallExpr(on(hasType(hasCanonicalType(hasDeclaration(cxxRecordDecl(hasAncestor(namespaceDecl(hasName("std")))))))), callee(cxxMethodDecl(hasAnyName("front", "back", "at"))))))))'
 
   - id: variable_index
     construct: "`operator[]` with a variable index"
@@ -754,6 +767,17 @@ rules:
       - matcher: typeLoc(loc(qualType(isVolatileQualified())))
 
   # ---------------------------------------------------------------- state
+  - id: global_constructors
+    construct: Global with a dynamic initializer
+    area: state
+    canonical: "Core Guidelines I.22, -Wglobal-constructors"
+    decision: ban
+    why: Globals in different files initialize in an order the standard leaves open, so one may read another before it exists.
+    use_instead: "constexpr or constinit, or a function that computes the value on demand."
+    stage: gate
+    detect:
+      - check: clang-diagnostic-global-constructors
+
   - id: global_state
     construct: Globals, statics, static members, function-local statics
     area: state

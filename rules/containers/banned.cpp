@@ -24,3 +24,13 @@ int32_t read(const int32_t* p);
 int32_t first_by_pointer(std::vector<int32_t>& v) {
   return read(&v[0]);  // BANNED
 }
+
+#include <memory>
+
+int32_t first_by_data(std::vector<int32_t>& v) {
+  return read(v.data());  // BANNED
+}
+
+int32_t first_by_addressof(std::vector<int32_t>& v) {
+  return read(std::addressof(v[0]));  // BANNED
+}

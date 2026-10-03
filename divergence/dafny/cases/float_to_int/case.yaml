@@ -7,11 +7,11 @@ naive_does: "The model converts with `Floor`, and Dafny fails the range check, s
 naive: fails
 mitigated: verifies
 side: contract
-mitigation: "`trunc` rounds toward zero. The contract requires `-2147483648.0 < x < 2147483648.0`, in the C++ and in the model."
+mitigation: "`trunc` rounds toward zero. The contract requires `-2147483649.0 < x < 2147483648.0`, in the C++ and in the model."
 witness:
   input: "whole(3e10)"
   ubsan: true
 rule: |
   Model `static_cast<int32_t>(x)` as truncation toward zero, not `Floor`.
   Write `trunc(x)` as `if x >= 0.0 then x.Floor else -((-x).Floor)`.
-  The contract requires the value to fit: `requires -2147483648.0 < x < 2147483648.0`.
+  The contract requires the value to fit: `requires -2147483649.0 < x < 2147483648.0`.

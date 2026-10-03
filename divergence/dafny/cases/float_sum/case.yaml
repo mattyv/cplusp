@@ -1,22 +1,22 @@
 construct: "Addition of two doubles"
-standard: "[basic.fundamental]: the value representation of floating-point types is implementation-defined. On this target it is IEEE 754 binary64, where 0.1, 0.2 and 0.3 are not representable and every operation rounds."
+standard: "[basic.fundamental]: the value representation of floating-point types is implementation-defined."
 row: floating_point
 gap: 1
-cpp: "Each of 0.1, 0.2 and 0.3 is the nearest double. The sum of the first two rounds to a double that is not the third. `sum(0.1, 0.2) == 0.3` is false."
+cpp: "On this target the type is IEEE 754 binary64, and every operation rounds to the nearest double. Each of 0.1, 0.2 and 0.3 is the nearest double. The sum of the first two rounds to a double that is not the third. `sum(0.1, 0.2) == 0.3` is false."
 naive_does: "The model adds reals, and the sum is exact. The proof of `result == a + b` goes through, and the model says the sum of 0.1 and 0.2 is 0.3."
 naive: verifies
 naive_is_wrong: true
 mitigated: verifies
 side: model
-mitigation: "A double is a real after rounding. The sum is `fadd`, and the contract is the error bound `abs(result - (a + b)) <= EPS * abs(a + b)`, with a magnitude limit on each operand."
+mitigation: "A double is a real after rounding. The sum is `fadd`, and the contract is the error bound `abs(result - (a + b)) <= EPS * abs(a + b) + ETA`, with an upper magnitude limit on each operand."
 witness:
   input: "sum(0.1, 0.2) == 0.3"
   ubsan: false
   prints: "0"
 rule: |
   A double is a real after rounding.
-  Model `a + b` as `fadd(a, b)`, and state the result as a bound, `abs(result - (a + b)) <= EPS * abs(a + b)`.
+  Model `a + b` as `fadd(a, b)`, and state the result as a bound, `abs(result - (a + b)) <= EPS * abs(a + b) + ETA`.
   Never state equality of two float results.
   The bound holds up to `MAX`, so require `abs(a) <= MAX / 4.0` and `abs(b) <= MAX / 4.0`.
   Dafny does not apply a lemma by itself, so call `RoundError(a + b)` in the body before `fadd`.
-  In the C++ contract, write the bound as `|result - (a + b)| <= eps * |a + b|`, with `eps` as 2^-53, and a magnitude bound such as `|a| <= DBL_MAX / 4` as a `requires`.
+  In the C++ contract, write the bound as `|result - (a + b)| <= eps * |a + b| + eta`, with `eps` as `DBL_EPSILON / 2` and `eta` as `DBL_TRUE_MIN / 2`, and the magnitude bound `|a| <= DBL_MAX / 4` as a `requires`.

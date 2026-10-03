@@ -32,3 +32,10 @@ int32_t first_by_copy(std::vector<int32_t>& v) {
   int32_t first = v[0];
   return read(&first);
 }
+
+#include <memory>
+
+int32_t first_by_addressof_copy(std::vector<int32_t>& v) {
+  int32_t first = v[0];
+  return read(std::addressof(first));
+}

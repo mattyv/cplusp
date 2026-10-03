@@ -14,3 +14,7 @@ double accumulated(double x, double a, double b) {
   x += a * b;  // BANNED
   return x;
 }
+
+double negated_product(double a, double b, double c) {
+  return -(a * b) + c;  // BANNED
+}

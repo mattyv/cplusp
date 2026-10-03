@@ -7,11 +7,11 @@ naive_does: "The model divides reals, and Dafny asks for `b != 0.0` and fails. T
 naive: fails
 mitigated: verifies
 side: contract
-mitigation: "`requires b != 0.0` in the C++ contract and the model, and `requires a == 0.0 || DBL_MIN <= |a / b| <= DBL_MAX`, because the error axiom holds in the normal range only."
+mitigation: "`requires b != 0.0` in the C++ contract and the model, and `|a / b| <= DBL_MAX`, because the error axiom holds up to the largest double."
 witness:
   input: "ratio(1.0, 0.0)"
   ubsan: true
 rule: |
   The model has no infinity, and C++ calls float division by zero undefined.
   The contract requires a non-zero divisor: `requires b != 0.0`.
-  The quotient must stay in the normal range, so the model needs `requires a == 0.0 || MIN_NORMAL <= abs(a / b) <= MAX`, and the C++ contract carries the same bound.
+  The quotient must stay below `MAX`, so the model needs `requires abs(a / b) <= MAX`, and the C++ contract carries `|a / b| <= DBL_MAX`.

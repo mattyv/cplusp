@@ -84,7 +84,7 @@ fn policy_emit_turns_on_the_warning_of_every_diagnostic_check() {
     let o = cplusp(&["policy", "emit"]);
     assert!(o.status.success(), "stderr: {}", stderr(&o));
     let out = stdout(&o);
-    assert!(out.contains("\nExtraArgs: ['-Wreturn-stack-address', '-Wreorder-ctor', '-Wimplicit-fallthrough', '-Wswitch', '-Wunsequenced']\n"), "{out}");
+    assert!(out.contains("\nExtraArgs: ['-Wreturn-stack-address', '-Wreorder-ctor', '-Wimplicit-fallthrough', '-Wswitch', '-Wunsequenced', '-Wglobal-constructors']\n"), "{out}");
 }
 
 /// A diagnostic name is a compiler flag once it is in the config. Three names must never get there:
@@ -246,6 +246,11 @@ fn gate_refuses_flags_the_proofs_cannot_follow() {
         (vec!["-std=c++23", "-ffp-contract=off", "-Ofast"], format!("-Ofast: {float}")),
         (vec!["-std=c++23", "-ffp-contract=off", "-ffp-contract=fast"], format!("-ffp-contract=fast: {float}")),
         (vec!["-std=c++23", "-ffp-contract=off", "-ffinite-math-only"], format!("-ffinite-math-only: {float}")),
+        (vec!["-std=c++23", "-ffp-contract=off", "-ffp-model=fast"], format!("-ffp-model=fast: {float}")),
+        (vec!["-std=c++23", "-ffp-contract=off", "-fdenormal-fp-math=preserve-sign"], format!("-fdenormal-fp-math=preserve-sign: {float}")),
+        (vec!["-std=c++23", "-ffp-contract=off", "-mfpmath=387"], format!("-mfpmath=387: {float}")),
+        (vec!["-std=c++23", "-ffp-contract=off", "-m32"], format!("-m32: {float}")),
+        (vec!["-std=c++23", "-ffp-contract=off", "-ffp-contract=on"], format!("-ffp-contract=on: {float}")),
         (vec!["-std=c++20", "-ffp-contract=off"], "-std=c++20: not allowed with the gate. The proofs assume C++23 or later.".to_string()),
         (vec!["-ffp-contract=off"], "no -std flag: the gate needs -std=c++23 or later, because the proofs assume C++23.".to_string()),
         (vec!["-std=c++23"], "no -ffp-contract=off: the gate needs it, because the proofs assume no fused multiply-add.".to_string()),
@@ -479,11 +484,11 @@ fn every_sample_pair_agrees_with_its_rule() {
         "implicit_narrowing", "sign_conversion", "widening_multiplication", "literal_shift",
         "member_init_order", "slicing", "virtual_call_in_constructor", "virtual_destructor", "raw_pointer", "containers",
         "switch_fallthrough", "switch_missing_case", "accumulate_init", "array_span",
-        "float_equality", "float_expression",
+        "float_equality", "float_expression", "rounding_mode", "global_constructors",
     ] {
         assert!(rules_dir.join(id).is_dir(), "no sample pair for rule {id}");
     }
-    assert!(checked >= 53, "expected at least 53 sample pairs, found {checked}");
+    assert!(checked >= 55, "expected at least 55 sample pairs, found {checked}");
 }
 
 /// Pull `"key":"value"` or `"key":123` out of one JSON line without a JSON library.

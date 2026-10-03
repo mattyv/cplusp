@@ -57,6 +57,8 @@ struct Witness {
     ubsan: bool,
     #[serde(default)]
     asan: bool,
+    #[serde(default)]
+    tsan: bool,
     prints: Option<String>,
     prints_gcc: Option<String>,
     fixed_prints: Option<String>,
@@ -97,11 +99,18 @@ fn build(compiler: &str, sources: &[&Path], exe: &Path, flags: &[&str]) -> Outpu
     c.args(sources).arg("-o").arg(exe).output().unwrap_or_else(|e| panic!("{compiler} runs: {e}"))
 }
 
+/// ThreadSanitizer, for a data race. It cannot run together with AddressSanitizer.
+const TSAN: &[&str] = &["-fsanitize=thread", "-pthread"];
+
 /// The sanitizers a case asks for, when it is built with clang.
-fn sanitizers(asan: bool) -> Vec<&'static str> {
+fn sanitizers(asan: bool, tsan: bool) -> Vec<&'static str> {
+    assert!(!(asan && tsan), "asan and tsan cannot run together");
     let mut flags = UBSAN.to_vec();
     if asan {
         flags.extend_from_slice(ASAN);
+    }
+    if tsan {
+        flags.extend_from_slice(TSAN);
     }
     flags
 }
@@ -178,7 +187,7 @@ fn every_case_says_what_it_claims() {
 
         // The witness, compiled with the sanitizer.
         let exe = out_dir.join(&id);
-        let b = build("clang++-18", &[&code, &witness], &exe, &sanitizers(case.witness.asan));
+        let b = build("clang++-18", &[&code, &witness], &exe, &sanitizers(case.witness.asan, case.witness.tsan));
         assert!(b.status.success(), "{id}: witness does not build:\n{}", String::from_utf8_lossy(&b.stderr));
         let (out, err) = run(&exe);
         if case.witness.ubsan {
@@ -188,6 +197,9 @@ fn every_case_says_what_it_claims() {
         }
         if case.witness.asan {
             assert!(err.contains("Sanitizer:"), "{id}: the witness should hit AddressSanitizer or LeakSanitizer, stderr:\n{err}");
+        }
+        if case.witness.tsan {
+            assert!(err.contains("ThreadSanitizer:"), "{id}: the witness should hit ThreadSanitizer, stderr:\n{err}");
         }
         if let Some(expected) = &case.witness.prints {
             assert_eq!(out.trim(), expected.trim(), "{id}: witness output");
@@ -204,7 +216,7 @@ fn every_case_says_what_it_claims() {
         // The C++ under the rule: no undefined behaviour, and the same output under both compilers.
         if needs_fixed {
             let expected = case.witness.fixed_prints.as_deref().unwrap_or_else(|| panic!("{id}: fixed.cpp needs witness.fixed_prints"));
-            for (compiler, flags) in [("clang++-18", sanitizers(case.witness.asan)), ("g++", Vec::new())] {
+            for (compiler, flags) in [("clang++-18", sanitizers(case.witness.asan, case.witness.tsan)), ("g++", Vec::new())] {
                 let exe = out_dir.join(format!("{id}-fixed-{compiler}"));
                 let b = build(compiler, &[&fixed, &witness], &exe, &flags);
                 assert!(b.status.success(), "{id}: fixed.cpp does not build with {compiler}:\n{}", String::from_utf8_lossy(&b.stderr));
@@ -335,7 +347,7 @@ struct CaseRow {
 /// one case. The list of rows without a case shrinks with every round of the battery, to empty.
 #[test]
 fn every_supported_row_has_a_case() {
-    const NOT_YET: &[&str] = &["shared_variables", "global_state"];
+    const NOT_YET: &[&str] = &[];
     let policy: PolicyRows = serde_yaml::from_str(&std::fs::read_to_string(root().join("policy/cplusp-policy.yaml")).unwrap()).unwrap();
     let mut covered = std::collections::BTreeSet::new();
     for entry in std::fs::read_dir(root().join("divergence/dafny/cases")).unwrap() {
@@ -375,6 +387,8 @@ fn the_battery_has_the_planned_cases() {
         // Round C4: floating point as a real after rounding, and a pointer into a container.
         "float_sum", "float_nan", "float_to_int", "float_cancellation", "float_increment", "float_division_zero", "int_to_float",
         "pointer_into_container",
+        // The float review: a product that underflows. The last round: state.
+        "float_underflow", "unlisted_modifies", "static_local", "global_constructors", "torn_read",
     ] {
         assert!(cases.join(id).join("case.yaml").exists(), "no case {id}");
     }
