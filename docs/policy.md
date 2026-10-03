@@ -229,7 +229,7 @@ rules/
     banned.cpp
 ```
 
-The test suite runs every pair against the default policy. A pair that disagrees with its entry fails the build. That is how we found that the check the plan first named for C-style casts let `(int)big` through.
+The test suite runs every pair against the default policy. A line marked `// BANNED` must fail under the row of its folder and no other. When a second row also refuses the line, the mark names it: `// BANNED also: inline_asm_intrinsics`. A pair that disagrees with its entry fails the build. That is how we found that the check the plan first named for C-style casts let `(int)big` through.
 
 ## Decided
 
