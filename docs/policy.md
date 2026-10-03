@@ -211,7 +211,7 @@ Three more refusals, all exit 2:
 
 Trailing `--` flags are trusted. `-w` or `-Wno-everything` there hides the compiler-warning rows such as `return_ref_to_local`.
 
-While the clang-tidy plugin does not exist, most `cplusp-*` checks are names without a check behind them. Every `gate` run says so on stderr: `warning: not enforced, no such check: cplusp-unscoped-enum, ...`. An "ok" from the gate is only as strong as that line is short.
+Checks the plugin does not provide yet are names without a check behind them. Every `gate` run says so on stderr: `warning: not enforced, no such check: cplusp-mutable, cplusp-recursion, ...`. An "ok" from the gate is only as strong as that line is short. Without `--plugin`, the generic check is on that list too.
 
 ## Where the sample pairs live
 

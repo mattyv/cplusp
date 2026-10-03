@@ -567,10 +567,10 @@ We deliberately do **not** enable `cppcoreguidelines-pro-bounds-constant-array-i
 **Delivery**
 
 - [ ] Phase 0 thin slice: one function verified end to end, two chained, one broken each way
-- [ ] Plugin skeleton: builds, loads and lists its checks. One custom check with its sample pair
+- [x] Plugin: builds, loads, lists its checks. One generic check driven by policy patterns, 29 sample pairs
 - [x] Policy YAML schema and the config it emits, with a golden test
 - [ ] `-markers` and `-index`. Driver maps edits to functions and filters by kind
-- [ ] Remaining custom checks, one sample pair each. Upstream checks compared with their rows, one by one
+- [ ] Remaining hand-written checks, one sample pair each: `-mutable`, `-recursion`, `-lambda-limits`, `-impure-operator`, `-multiple-inheritance`, `-iterator-arithmetic`, `-unlisted-state`
 - [x] Messages: what, why, use instead, in the shapes docs/policy.md fixes. Tuning on a real bot still to do
 - [ ] CI job running the same command: fail on violation, SARIF for PR annotations, verified / trusted / plain delta
 - [ ] Decide on the approval rule for new trusted and plain markers, and add it if yes
@@ -651,7 +651,7 @@ Decided Oct 3, 2026: we prove as much of our own tooling as the tools allow. Few
 - Made the prover an open choice between Dafny and VeriFast, settled by the thin slice. Verus is plan C.
 - Added the Prover interface: the prover is a plug-in, the bot never writes prover-specific hints, and two provers can run as a cross-check.
 - Decided the driver is Rust written in Verus from the start. Added Proofs about cplusp itself: what we prove, what we cannot, and what we do instead.
-- Built the verified core (28 behaviour tests, 43 Verus proofs) and the command (24 tests): policy check, emit, show, doc and gate. The subset table below is now generated from the policy file. Decided against ply as a dependency. Changed the message grammar so the construct name is followed by a colon.
+- Built the verified core (29 behaviour tests, 44 Verus proofs), the command (28 tests) and the clang-tidy plugin with its one generic check. Eighteen rules detect through matcher patterns in the policy file. 29 sample pairs. The subset table below is generated from the policy file. Decided against ply as a dependency. Changed the message grammar so the construct name is followed by a colon.
 - Added `cplusp policy show` and the generated subset table, see policy.md.
 - Added a provisional tech stack: C++ only for the clang-tidy module, Rust for the rest, no Python.
 - Rewrote the doc in STE-flavored mode with the asd-ste100 skill: no semicolons, sentences of 25 words or fewer, one word per action.
