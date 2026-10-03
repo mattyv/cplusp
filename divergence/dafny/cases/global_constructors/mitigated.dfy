@@ -10,6 +10,7 @@ class State {
 function derived_value(s: State): int32
   reads s
   requires s.base_value < 0x7FFF_FFFF
+  ensures derived_value(s) == s.base_value + 1
 { s.base_value + 1 }
 
 method read_derived(s: State) returns (result: int32)

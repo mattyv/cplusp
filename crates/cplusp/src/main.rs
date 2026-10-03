@@ -431,7 +431,8 @@ fn refused_flags(flags: &[String], checks: &[String]) -> Vec<String> {
     for (i, f) in flags.iter().enumerate() {
         let contracts = Some(i) == last_contract && contraction(f) != Some("off");
         let denormals = f.starts_with("-fdenormal-fp-math=") && f != "-fdenormal-fp-math=ieee";
-        let why = if contracts || denormals || FLOAT_FLAGS.contains(&f.as_str()) {
+        let eval = f.starts_with("-ffp-eval-method=") && f != "-ffp-eval-method=source";
+        let why = if contracts || denormals || eval || FLOAT_FLAGS.contains(&f.as_str()) {
             "It changes floating-point results, and the proofs assume IEEE 754 round to nearest."
         } else if std_value(f).is_some_and(|v| !STD_VALUES.contains(&v)) {
             "The proofs assume C++23 or later."
