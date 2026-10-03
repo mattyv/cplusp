@@ -1,6 +1,6 @@
 # Working on cplusp
 
-`docs/plan.md` is the design. `docs/policy.md` is the policy file format. Amend them rather than contradict them.
+`docs/plan.md` is the design. `docs/policy.md` is the policy file format. `docs/decisions/` is the decision log: one numbered file per decision, never edited after the fact, a new file to reverse one. Amend them rather than contradict them. A decision made in conversation is not made until it has a file.
 
 ## One proof after another
 

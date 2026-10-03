@@ -1,0 +1,23 @@
+# Decision log
+
+One file per decision, numbered in the order we made them. A file is short: the date, the status, the decision in one or two sentences, why, and what it changes. A reversed decision gets a new file that names the old one. Nothing is edited after the fact.
+
+Status is `decided`, `proposed` (the default until someone objects or the thin slice settles it) or `superseded by NNNN`.
+
+| No. | Decision | Status |
+| --- | --- | --- |
+| [0001](0001-llm-loop-first.md) | The tool serves the LLM coding loop first. CI is a backstop | decided |
+| [0002](0002-provable-and-proved.md) | Provable is the gate's word, proved is the prover's | decided |
+| [0003](0003-three-kinds-of-function.md) | Verified, trusted and plain functions. Verified code calls only contracted code | decided |
+| [0004](0004-no-undefined-behaviour.md) | No undefined behaviour in verified code, split between gate and prover | decided |
+| [0005](0005-gate-runs-separately.md) | The gate runs apart from a team's own clang-tidy, with its own pinned clang-tidy | decided |
+| [0006](0006-policy-file.md) | One policy file holding decisions and detection. Teams may loosen with a reason | decided |
+| [0007](0007-prover-is-a-plugin.md) | The prover is a plug-in. Dafny or VeriFast first, settled by the thin slice | decided |
+| [0008](0008-rust-with-verus.md) | The driver is Rust written in Verus. C++ only for the clang-tidy module. No Python | decided |
+| [0009](0009-no-ply.md) | Ply is not a dependency for now | decided |
+| [0010](0010-how-we-work.md) | Test first, proofs in, the ponytail ladder, Sonnet implements and Fable reviews | decided |
+| [0011](0011-state-in-contracts.md) | Members are implicit. Globals and statics are listed in reads or modifies | proposed |
+| [0012](0012-shared-variables.md) | Variables other threads may change enter verified code only as values | proposed |
+| [0013](0013-gate-flag.md) | A row is gate-enforced when its stage is gate, or it has detect and a decision other than allow | decided |
+| [0014](0014-gate-refusals.md) | The gate refuses what it cannot judge: compile errors, NOLINT, bad build dirs, loose YAML | decided |
+| [0015](0015-scope-gate-only.md) | Build the gate and nothing past it until told otherwise | decided |
