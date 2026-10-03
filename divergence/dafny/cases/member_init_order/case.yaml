@@ -9,7 +9,7 @@ naive_is_wrong: true
 mitigated: verifies
 side: gate
 gate_rule: member_init_order
-mitigation: "Gate row `member_init_order`: the mem-initializers are in declaration order. The model is written in that order too."
+mitigation: "Gate row `member_init_order`: the mem-initializers are in declaration order. The model is written in that order too. The contract follows the declaration order."
 witness:
   fixed_prints: "1 2"
   input: "make()"

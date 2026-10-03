@@ -1,5 +1,5 @@
 construct: "A pointer stored past the life of its object"
-standard: "[basic.life]: after the lifetime of an object has ended, a pointer to its storage may be used only in limited ways. A read through it is undefined."
+standard: "[basic.stc.general]: when the duration of a region of storage ends, pointers into it become invalid pointer values. Indirection through one is undefined."
 row: raw_pointer
 gap: 3
 cpp: "`local` dies at the closing brace, and `h.p` still holds its address. The read through `h.p` is undefined."
@@ -18,4 +18,4 @@ witness:
 rule: |
   Dafny objects live for ever, and C++ objects die.
   A pointer in verified code is a parameter only, never a member or a local.
-  So it cannot outlive its object.
+  So it cannot be stored past its object.

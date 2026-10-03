@@ -3,12 +3,12 @@ standard: "[over.match.oper]: for an operator with a class operand, the candidat
 row: operator_overloading
 gap: 3
 cpp: "`a + b` on two `Money` calls `operator+`. It returns 1000 when the sum is above 1000, so 600 and 600 give 1000."
-naive_does: "The model reads `a + b` as the built-in sum of the cents fields. It proves 1200 for 600 and 600."
+naive_does: "The model reads `a + b` as the built-in sum of the cents fields, with the contract written for the built-in sum. It proves 1200 for 600 and 600."
 naive: verifies
 naive_is_wrong: true
 mitigated: verifies
 side: model
-mitigation: "An overloaded operator is a function. The model calls it, and the caller uses its contract, never the built-in sum."
+mitigation: "An overloaded operator is a function. The model calls it, and the caller uses its contract, never the built-in sum. The contract of `total` then follows that of `operator+`."
 witness:
   input: "total(600, 600)"
   ubsan: false

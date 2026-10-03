@@ -8,7 +8,7 @@ naive: type_error
 mitigated: verifies
 side: gate
 gate_rule: implicit_narrowing
-mitigation: "Gate row `implicit_narrowing`, which reads inside instantiations too. The template casts on purpose, `static_cast<T>(2 * x)`, and the contract of twice8 says the value fits. The model has one method for each instantiation."
+mitigation: "Gate row `implicit_narrowing`, which reads inside instantiations too. The template casts on purpose, `static_cast<T>(2 * x)`, and the contract of twice8 says the value fits. The model has one method for each instantiation. The instantiation takes its precondition from the caller's contract."
 witness:
   fixed_prints: "-56"
   input: "twice8(100)"

@@ -13,11 +13,11 @@ struct Pair {
 
   //@ requires counter <= 0x7FFFFFF0
   //@ modifies counter
-  //@ ensures a == old(counter) + 1 && b == old(counter) + 2
+  //@ ensures b == old(counter) + 1 && a == old(counter) + 2
   explicit Pair(int32_t& counter) : b(next(counter)), a(next(counter)) {}
 };
 
-//@ ensures result.a == 1 && result.b == 2
+//@ ensures result.b == 1 && result.a == 2
 Pair make() {
   int32_t counter = 0;
   return Pair(counter);

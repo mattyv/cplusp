@@ -6,6 +6,7 @@
 int8_t twice8(int8_t x);
 
 int main() {
+  // This call breaks the precondition of fixed.cpp. The prover refuses such a caller. The output shows only that the cast is deterministic.
   std::printf("%d\n", twice8(100));
   return 0;
 }

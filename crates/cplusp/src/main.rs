@@ -290,11 +290,17 @@ fn load(path: Option<&Path>, listed: Option<&[String]>) -> Result<Loaded> {
     Ok(loaded)
 }
 
+/// The `name` of a `clang-diagnostic-{name}` check becomes `-W{name}` in the config, so it must be a warning flag.
+/// Not `error`, which makes every warning an error. Not `no-...`, which switches a warning off. No other characters.
+fn is_warning_flag(name: &str) -> bool {
+    name != "error" && !name.starts_with("no-") && !name.is_empty() && name.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-')
+}
+
 /// Run the core's validation. `listed` is the clang-tidy check list, if there is one.
 fn check(policy: &Policy, listed: Option<&[String]>) -> Result<()> {
-    let used = policy.rules.iter().flat_map(|r| &r.detect).map(|c| c.name.clone());
+    let used = policy.rules.iter().flat_map(|r| &r.detect).map(|c| c.name.clone()).filter(|n| n.strip_prefix(DIAGNOSTIC).is_none_or(is_warning_flag));
     let known: Vec<String> = match listed {
-        // ponytail: `--list-checks` omits compiler diagnostics, so any `clang-diagnostic-` name passes.
+        // ponytail: `--list-checks` omits compiler diagnostics, so any `clang-diagnostic-` name with the shape of a warning passes.
         // Upgrade: validate it against clang's warning list.
         Some(list) => list
             .iter()

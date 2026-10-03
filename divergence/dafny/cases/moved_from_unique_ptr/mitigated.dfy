@@ -9,7 +9,7 @@ class Cell {
 method take(p0: Cell?) returns (result: int32)
   requires p0 != null
   requires -0x4000_0000 <= p0.v < 0x4000_0000
-  ensures result as int == 2 * (p0.v as int)
+  ensures result as int == 2 * (old(p0.v) as int)
 {
   var p := p0;
   var q := p;

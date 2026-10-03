@@ -19,6 +19,7 @@ method keep(p: Point) returns (result: int32)
 }
 
 // The model proves 10 for p.x == 1. In C++ q is a copy, and the result is 6.
+// The Demo inlines the body, because after a call `modifies p` leaves p.x unknown. So the Demo shows the aliasing in the body itself.
 method Demo() {
   var p := new Point;
   p.x := 1;

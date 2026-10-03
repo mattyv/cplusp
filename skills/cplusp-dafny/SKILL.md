@@ -200,7 +200,7 @@ Use a Dafny `class` only for what the C++ reaches through a reference or pointer
 
 Dafny objects live for ever, and C++ objects die.
 A pointer in verified code is a parameter only, never a member or a local.
-So it cannot outlive its object.
+So it cannot be stored past its object.
 
 ## reference_into_container
 
@@ -277,3 +277,72 @@ A run-time call has the same contract as any function.
 A pure interface is a Dafny trait with the same functions.
 A class that implements several interfaces extends several traits.
 Dispatch through any of them is the same call.
+
+## array_index
+
+Model `std::array<T, N>` as a `seq<T>` with `|a| == N`.
+Every subscript needs `requires i < N` in the contract, as for a plain array.
+
+## span_dangling
+
+A span is a pointer and a length, and Dafny has only values.
+A span is a parameter only, never stored.
+The gate enforces it.
+
+## range_for_mutation
+
+A Dafny loop over a `seq` reads a value.
+A C++ range-for holds iterators into the live container.
+The loop body never changes the range.
+The gate enforces it.
+
+## count_if_lambda
+
+A lambda passed to a std algorithm with by-value captures is a pure function of its arguments and its captures.
+Model the algorithm and the lambda together as one function over the `seq`.
+
+## fold_init_type
+
+A fold runs in the type of its init value.
+Write the init value in the element type.
+The gate enforces it.
+
+## sort_contract
+
+Model a std algorithm on the trusted list by its contract, not by its body.
+`std::sort` gives a sorted permutation.
+The comparator must be a strict weak order, and the default one on integers is.
+
+## map_subscript
+
+`m[k]` on a map writes.
+Never model it as a read.
+Use `contains` and `at`, which the gate allows, and model them as `k in m` and `m[k]`.
+
+## string_npos
+
+`std::string::find` returns `npos` for no match, and arithmetic on it wraps.
+Model `find` as `Option<nat>`.
+Test for `npos` before you use the result.
+
+## switch_fallthrough
+
+A `switch` falls through to the next case without a break, and a Dafny `match` never does.
+Every case ends in a break or a return.
+The gate enforces it.
+
+## switch_missing_case
+
+A Dafny `match` must cover every value, and a C++ `switch` need not.
+Write a case for every enumerator, or a default.
+The gate enforces it.
+
+## optional_compare
+
+A comparison of an optional with a value has a result when the optional is empty.
+Write the empty case out: `o.Some? && o.value == v` for `==`, and `o.None? || o.value < v` for `<`.
+
+## variant_get
+
+Model `std::variant` as a datatype with one constructor per alternative.
+A read of an alternative needs `requires` that the variant holds it, in the C++ contract and in the model.

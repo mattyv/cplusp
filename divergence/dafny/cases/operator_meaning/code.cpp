@@ -14,7 +14,7 @@ Money operator+(Money a, Money b) {
 }
 
 //@ requires 0 <= a.cents <= 1000 && 0 <= b.cents <= 1000
-//@ ensures result.cents == (a.cents + b.cents > 1000 ? 1000 : a.cents + b.cents)
+//@ ensures result.cents == a.cents + b.cents
 Money total(Money a, Money b) {
   return a + b;
 }

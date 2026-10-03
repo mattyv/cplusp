@@ -1,5 +1,5 @@
 construct: "A constexpr function called at run time"
-standard: "[expr.const]: an operation that would have undefined behavior is not a core constant expression. So the compiler rejects square(100000) at compile time only, and at run time the function is ordinary."
+standard: "[expr.const]: an operation that would have undefined behavior is not a core constant expression. So a call in a constant expression is rejected, and a run-time call is an ordinary call."
 row: constexpr
 gap: 3
 cpp: "`square(100000)` in a constant expression is an error at compile time. The same call at run time is an ordinary call, and `x * x` overflows with undefined behavior."

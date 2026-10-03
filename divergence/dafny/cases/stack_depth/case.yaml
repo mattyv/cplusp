@@ -1,5 +1,5 @@
 construct: "Recursion to a great depth"
-standard: "[implimits]: the depth of recursion at run time is an implementation quantity, and the standard sets no minimum for it."
+standard: "[implimits]: implementations are limited by finite resources, and the list of quantities has no entry for the depth of recursion at run time."
 row: recursion
 gap: 1
 cpp: "`depth(10000000)` makes ten million nested calls. The stack overflows, and the program stops."
