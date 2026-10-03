@@ -1,12 +1,12 @@
 construct: "Implicit conversion of int32_t to bool"
-standard: "[conv.bool]: a zero value is converted to false; any other value is converted to true."
+standard: "[conv.bool]: a zero value is converted to false, and any other value is converted to true."
 gap: 3
 cpp: "Every value other than 0 converts to true. `nonzero(7)` returns true."
 naive_does: "The literal model `result := x` does not type-check. Dafny has no conversion from `int32` to `bool`, so it refuses the file."
 naive: type_error
 mitigated: verifies
 side: model
-mitigation: "Nothing to allow. The model writes the test out as `x != 0`."
+mitigation: "The model writes the test out as `x != 0`."
 witness:
   input: "7"
   ubsan: false

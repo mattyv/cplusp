@@ -6,7 +6,7 @@ naive_does: "Dafny does not wrap, so `n - 1` is a range error when `n == 0`. The
 naive: fails
 mitigated: verifies
 side: cpp
-mitigation: "Nothing to allow. The C++ counts down to zero without going below it: `for (size_t i = n; i > 0; --i)`."
+mitigation: "The C++ counts down to zero without going below it: `for (size_t i = n; i > 0; --i)`."
 witness:
   fixed_prints: "18446744073709551615 0"
   input: "n == 0"

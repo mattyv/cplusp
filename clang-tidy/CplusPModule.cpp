@@ -29,6 +29,10 @@ using clang::tidy::ClangTidyModule;
 
 namespace {
 
+// The patterns of the policy run on the full tree. clang-tidy 18 gives a check no traversal kind
+// unless it overrides getCheckTraversalKind, so a pattern sees implicit nodes. The `sign_compare`
+// pattern relies on that: it matches the cast the compiler adds. The hand-written checks below
+// override it and read the tree as spelled in the source.
 class MatcherCheck : public ClangTidyCheck {
 public:
   // The base class keeps the context private, so the check keeps its own pointer.
