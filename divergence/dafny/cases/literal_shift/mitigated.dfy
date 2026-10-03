@@ -1,5 +1,5 @@
-// Model B: the C++ writes the literal in the destination type, `int64_t{1} << n`. The shift is in int64,
-// the type of its left operand, and Dafny checks the product against the range of that type.
+// Model B: the C++ writes the literal in the destination type, `int64_t{1} << n`.
+// The model is 2^n in int64. It is the naive model, and it is right for the fixed C++.
 newtype int64 = x: int | -0x8000_0000_0000_0000 <= x < 0x8000_0000_0000_0000
 newtype uint32 = x: int | 0 <= x < 0x1_0000_0000
 
@@ -55,6 +55,12 @@ method bit(n: uint32) returns (result: int64)
   ensures result as int == pow2(n as int)
 {
   Pow2Fits(n as int);
-  var one: int64 := 1;
-  result := one * (pow2(n as int) as int64);
+  result := pow2(n as int) as int64;
+}
+
+// The model proves 2147483648, and so does the fixed C++.
+method Demo() {
+  Pow2Of31();
+  var r := bit(31);
+  assert r as int == 0x8000_0000;
 }

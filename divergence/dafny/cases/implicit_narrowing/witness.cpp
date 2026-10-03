@@ -5,6 +5,7 @@
 int32_t low(int64_t x);
 
 int main() {
+  // This call breaks the precondition of fixed.cpp. The prover refuses such a caller. The output shows only that the cast is deterministic.
   std::printf("%d\n", low((1LL << 32) | 5));
   return 0;
 }

@@ -1,5 +1,4 @@
-// The edge where the naive model and the C++ part ways, if they part at all: -7 >> 1 rounds toward negative infinity.
-// C++20 defines it, and Dafny `/` rounds the same way.
+// The edge for the model: -7 >> 1 rounds toward negative infinity. C++20 defines it, and Dafny `/` rounds the same way.
 #include <cstdint>
 #include <cstdio>
 

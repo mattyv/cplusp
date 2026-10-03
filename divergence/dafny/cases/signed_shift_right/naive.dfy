@@ -1,5 +1,5 @@
-// Model A: `x >> n` as `x / 2^n`. Dafny `/` rounds toward negative infinity, and so does a C++20 right shift.
-// The literal model is exact, so there is nothing to mitigate.
+// Model A: `x >> n` carried over on the bounded int32. Dafny has shifts on bit-vector types only.
+// The literal line is a type error. The contract is the C++ one, `floor(x / 2^n)`, in integers.
 newtype int32 = x: int | -0x8000_0000 <= x < 0x8000_0000
 newtype uint32 = x: int | 0 <= x < 0x1_0000_0000
 
@@ -13,11 +13,5 @@ method shr(x: int32, n: uint32) returns (result: int32)
   requires n < 32
   ensures result as int == (x as int) / pow2(n as int)
 {
-  result := ((x as int) / pow2(n as int)) as int32;
-}
-
-// The model proves -4, and so does C++.
-method Demo() {
-  var r := shr(-7, 1);
-  assert r == -4;
+  result := x >> n;
 }

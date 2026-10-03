@@ -9,7 +9,7 @@ method product(a: int32, b: int32) returns (result: int64)
   result := (a as int64) * (b as int64);
 }
 
-// The C++ keeps `a * b` in int32_t. Dafny asks for the fit, so the contract carries it.
+// The C++ result stays in int32_t, so `a * b` is an int32_t product. Dafny asks for the fit, so the contract carries it.
 method product32(a: int32, b: int32) returns (result: int32)
   requires -0x8000_0000 <= (a as int) * (b as int) < 0x8000_0000
   ensures result as int == (a as int) * (b as int)

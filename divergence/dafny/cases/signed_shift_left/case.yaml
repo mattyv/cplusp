@@ -15,3 +15,4 @@ witness:
 rule: |
   Model a signed shift through `bv32`.
   Convert a negative value by adding 2^32 first, and convert back by subtracting 2^32 when the top bit is 1.
+  State the postcondition on the bit pattern, `to_bv32(result) == to_bv32(x) << n`. Dafny proves the concrete values from it, not the general congruence.

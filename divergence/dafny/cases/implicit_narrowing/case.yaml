@@ -16,6 +16,6 @@ witness:
   prints: "5"
 rule: |
   Dafny refuses an implicit narrowing, and so does the gate.
-  Cast on purpose, and put the fit in the contract: `requires -0x8000_0000 <= x < 0x8000_0000`.
+  Cast on purpose, and put the fit in the C++ contract: `requires -0x80000000 <= x < 0x80000000`.
   The model is then `x as int32`.
   See `narrowing_cast`.

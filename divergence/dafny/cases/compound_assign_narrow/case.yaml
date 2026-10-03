@@ -1,5 +1,5 @@
 construct: "Compound assignment on uint8_t"
-standard: "[expr.ass]: E1 op= E2 is E1 = E1 op E2 with E1 evaluated once. The sum is computed in int and converted back modulo 2^N."
+standard: "[expr.ass], [conv.prom], [conv.integral]: E1 op= E2 is E1 = E1 op E2 with E1 evaluated once. The sum is computed in int and converted back modulo 2^N."
 row: arithmetic
 gap: 3
 cpp: "`a += 100` adds in `int` and converts back to `uint8_t`. For 200 the sum is 300, and the stored value is 44."

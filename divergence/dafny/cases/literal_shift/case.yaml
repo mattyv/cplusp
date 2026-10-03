@@ -9,7 +9,7 @@ naive_is_wrong: true
 mitigated: verifies
 side: gate
 gate_rule: literal_shift
-mitigation: "Gate row `literal_shift`: no shift of a literal of type `int`. The C++ writes the literal in the destination type, `int64_t{1} << n`. The model shifts in `int64`."
+mitigation: "Gate row `literal_shift`: no shift of a literal of type `int`. The C++ writes the literal in the destination type, `int64_t{1} << n`. The model is `pow2(n) as int64`. It is the naive model, and it is right for the fixed C++."
 witness:
   fixed_prints: "2147483648"
   input: "n = 31"

@@ -3,16 +3,16 @@ standard: "[expr.shift]: the value of E1 >> E2 is E1 / 2^E2, rounded towards neg
 row: arithmetic
 gap: 3
 cpp: "C++20 defines the right shift of a negative value, and it rounds toward negative infinity. `-7 >> 1` is -4."
-naive_does: "It models `x >> n` as `x / 2^n`. Dafny `/` rounds toward negative infinity too, so the model is exact."
-naive: verifies
+naive_does: "The literal model `x >> n` does not type-check. Dafny has shifts on bit-vector types only, so it refuses the file."
+naive: type_error
 mitigated: verifies
-side: none
-mitigation: "None. The literal model is exact. Model `x >> n` as a division by `2^n`."
+side: model
+mitigation: "The model is `x / pow2(n)`. Dafny `/` rounds toward negative infinity for a positive divisor, as the C++20 right shift does."
 witness:
   input: "-7 >> 1"
   ubsan: false
   prints: "-4"
 rule: |
-  A right shift of a signed value rounds toward negative infinity in C++20, and so does Dafny `/`.
-  Model it as a division by a power of two.
-  This is the one place where Dafny division is the C++ one.
+  Dafny `/` rounds toward negative infinity when the divisor is positive, and `2^n` is positive.
+  Model a right shift as a division by a power of two.
+  Dafny `/` matches the C++ shift here. It never matches C++ `/` on negative values, see `signed_division`.

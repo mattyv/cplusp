@@ -116,13 +116,13 @@ Every value other than 0 is true, including values other than 1.
 
 C++ does arithmetic in the type of the operands, not in the type of the destination.
 `a * b` on two `int32_t` is an `int32_t` product, and overflow in it gives undefined behaviour, even when the result goes into an `int64_t`.
-Model the product in `int32` first, with the contract that the product fits.
-Or widen an operand in the C++, `int64_t{a} * b`, and model the product in `int64`.
+When the result stays in `int32_t`, model the product in `int32` with the contract that it fits.
+When the result widens, the gate refuses `a * b`. Widen an operand in the C++, `int64_t{a} * b`, and model the product in `int64`.
 
 ## implicit_narrowing
 
 Dafny refuses an implicit narrowing, and so does the gate.
-Cast on purpose, and put the fit in the contract: `requires -0x8000_0000 <= x < 0x8000_0000`.
+Cast on purpose, and put the fit in the C++ contract: `requires -0x80000000 <= x < 0x80000000`.
 The model is then `x as int32`.
 See `narrowing_cast`.
 
@@ -158,12 +158,13 @@ For `++x` write `requires x < 0x7FFF_FFFF`.
 
 Model a signed shift through `bv32`.
 Convert a negative value by adding 2^32 first, and convert back by subtracting 2^32 when the top bit is 1.
+State the postcondition on the bit pattern, `to_bv32(result) == to_bv32(x) << n`. Dafny proves the concrete values from it, not the general congruence.
 
 ## signed_shift_right
 
-A right shift of a signed value rounds toward negative infinity in C++20, and so does Dafny `/`.
-Model it as a division by a power of two.
-This is the one place where Dafny division is the C++ one.
+Dafny `/` rounds toward negative infinity when the divisor is positive, and `2^n` is positive.
+Model a right shift as a division by a power of two.
+Dafny `/` matches the C++ shift here. It never matches C++ `/` on negative values, see `signed_division`.
 
 ## literal_shift
 
@@ -187,3 +188,92 @@ A cast from an integer needs a `requires` that the value is an enumerator, in th
 `size()` returns an unsigned value.
 `size() - 1` on an empty container is the largest `size_t`, and it is no error.
 The contract must require a non-empty container, or the C++ must test `empty()` first.
+
+## value_semantics
+
+A C++ value is a Dafny `datatype`.
+Model a struct or class held by value as a datatype, and a copy as the same value.
+A field update is `p.(x := 5)`, a new value.
+Use a Dafny `class` only for what the C++ reaches through a reference or pointer.
+
+## object_lifetime
+
+Dafny objects live for ever, and C++ objects die.
+A pointer in verified code is a parameter only, never a member or a local.
+So it cannot outlive its object.
+
+## reference_into_container
+
+A `seq` element is a value, and a C++ reference into a container dies at the next mutation.
+Copy the element out.
+Never hold a reference into a container.
+
+## member_init_order
+
+C++ initializes members in declaration order, whatever order the constructor writes them in.
+Write the mem-initializers in declaration order, and model the constructor in that order.
+
+## slicing
+
+A Dafny object never loses its class, and a C++ copy into a base type does.
+Never copy a derived object into a base by value.
+Bind a reference.
+
+## virtual_in_constructor
+
+A virtual call inside a constructor or destructor dispatches to the class under construction.
+Dafny dispatches to the class of the object.
+Do not call a virtual function from a constructor or destructor.
+
+## virtual_destructor
+
+Dafny has no destructor, so the model cannot see a wrong one.
+Every class with a virtual function has a virtual destructor.
+The gate enforces it.
+
+## use_after_move
+
+A moved-from value is unspecified, and Dafny has no move.
+Never read a variable after `std::move` of it.
+Model the move as a copy and the source as gone.
+
+## moved_from_unique_ptr
+
+A moved-from `unique_ptr` is null.
+Model `unique_ptr<T>` as a nullable reference, and a move as the source becoming null.
+Never read the source after the move.
+
+## null_pointer
+
+Model a pointer parameter as a nullable reference `T?`.
+Dafny then asks for `p != null` at every read.
+Put it in the contract.
+
+## operator_meaning
+
+An overloaded operator is a function.
+Model `a + b` on a class type as a call to that function with its own contract, never as the built-in operator.
+
+## generic_per_type
+
+A template has no model.
+Each instantiation is a function with its own types, and gets its own model.
+The gate reads inside instantiations too.
+
+## stack_depth
+
+Dafny proves that a recursion ends, not that the stack holds it.
+Bound the depth in the contract.
+The bound is an assumption about the target, and docs/soundness.md gap 1 records it.
+
+## constexpr_runtime
+
+`constexpr` changes nothing in the model.
+The compiler checks only the calls it evaluates at compile time.
+A run-time call has the same contract as any function.
+
+## interface_dispatch
+
+A pure interface is a Dafny trait with the same functions.
+A class that implements several interfaces extends several traits.
+Dispatch through any of them is the same call.

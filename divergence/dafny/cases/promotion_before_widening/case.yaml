@@ -17,5 +17,5 @@ witness:
 rule: |
   C++ does arithmetic in the type of the operands, not in the type of the destination.
   `a * b` on two `int32_t` is an `int32_t` product, and overflow in it gives undefined behaviour, even when the result goes into an `int64_t`.
-  Model the product in `int32` first, with the contract that the product fits.
-  Or widen an operand in the C++, `int64_t{a} * b`, and model the product in `int64`.
+  When the result stays in `int32_t`, model the product in `int32` with the contract that it fits.
+  When the result widens, the gate refuses `a * b`. Widen an operand in the C++, `int64_t{a} * b`, and model the product in `int64`.

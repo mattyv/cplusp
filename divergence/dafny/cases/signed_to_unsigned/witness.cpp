@@ -6,6 +6,7 @@
 std::size_t index_of(int32_t i);
 
 int main() {
+  // This call breaks the precondition of fixed.cpp. The prover refuses such a caller. The output shows only that the cast is deterministic.
   std::printf("%zu\n", index_of(-1));
   return 0;
 }

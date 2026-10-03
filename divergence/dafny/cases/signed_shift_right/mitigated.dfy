@@ -1,5 +1,5 @@
-// Model B: the same file as model A. No rule changes it.
-// This is the one place where Dafny division is the C++ one: both round toward negative infinity.
+// Model B: `x >> n` as `x / 2^n`. Dafny `/` rounds toward negative infinity when the divisor is positive,
+// and 2^n is positive. The C++20 right shift rounds the same way.
 newtype int32 = x: int | -0x8000_0000 <= x < 0x8000_0000
 newtype uint32 = x: int | 0 <= x < 0x1_0000_0000
 

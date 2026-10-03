@@ -1,5 +1,5 @@
 construct: "Unary minus on int32_t"
-standard: "[expr.unary.op], [expr.pre]: the negative of INT32_MIN is not representable, so the behavior is undefined."
+standard: "[expr.unary.op], [expr.pre]: the result is the negation of its operand. The behavior is undefined if the result is not in the range of representable values for its type."
 row: arithmetic
 gap: 3
 cpp: "`-x` is undefined for `INT32_MIN`, because 2147483648 does not fit in `int32_t`."

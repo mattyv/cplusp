@@ -24,3 +24,11 @@ method shl(x: int32, n: uint32) returns (result: int32)
   result := from_bv32(to_bv32(x) << n);
   BackAndForth(to_bv32(x) << n);
 }
+
+// The model proves the two values of the witness.
+method Demo() {
+  var a := shl(-1, 1);
+  assert a == -2;
+  var b := shl(-0x8000_0000, 1);
+  assert b == 0;
+}
