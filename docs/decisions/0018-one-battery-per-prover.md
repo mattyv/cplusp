@@ -12,4 +12,4 @@ A divergence is between C++ and one prover's model of it. Dafny's Euclidean divi
 
 ## What changes
 
-The paths above. The C++ side of a case, and a mitigation that lands on the gate as a policy row, is shared by every prover, so a case may be copied between batteries with only its model files changed.
+The paths above. The C++ side of a case is shared by every prover. So is a mitigation that lands on the gate as a policy row. A case may therefore be copied between batteries with only its model files changed.
