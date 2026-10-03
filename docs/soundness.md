@@ -24,7 +24,7 @@ Open. Compiler version, flags, optimisation, implementation-defined behaviour, t
 
 ## Gap 2: the gate's view
 
-Open. What the gate does not see: headers it does not judge, macros, `[[assume]]`, a `volatile` qualifier on a member function, anything after a `#if` the flags switch off. A construct that slips the gate and that the translator does not model must be refused by the translator, never skipped. That rule is not yet decided.
+Open. The gate does not see everything. Headers it does not judge, macros, `[[assume]]`, a `volatile` qualifier on a member function, anything after a `#if` the flags switch off. A construct that slips the gate and that the translator does not model must be refused by the translator, never skipped. That rule is not yet decided.
 
 ## Gap 3: the translator's model of C++
 
@@ -52,4 +52,4 @@ Open. The bot writes the contracts and can weaken them until the proof goes thro
 
 ## Principles that fall out
 
-To be filled as the gaps are closed. Candidates so far: the translator refuses what it does not model; every proof must be able to fail, so every proved function gets a mutant the prover must reject; contract arithmetic is machine arithmetic with a range obligation on every operation.
+To be filled as the gaps are closed. Three candidates so far. The translator refuses what it does not model. Every proof must be able to fail, so every proved function gets a mutant the prover must reject. Contract arithmetic is machine arithmetic, with a range obligation on every operation.
