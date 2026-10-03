@@ -1,0 +1,17 @@
+construct: "static_cast of an integer to an enum class"
+standard: "[dcl.enum]: for an enumeration with a fixed underlying type, the values of the enumeration are the values of the underlying type. static_cast<Mode>(7) is a valid value with no enumerator."
+row: fixed_width_ints
+gap: 3
+cpp: "`static_cast<Mode>(7)` is a valid value of `Mode` when the underlying type is fixed. It is none of the enumerators."
+naive_does: "It models `Mode` as a datatype of its enumerators, and the cast as a match with a case for 0 and for 1. Dafny does not accept a match that misses a value."
+naive: fails
+mitigated: verifies
+side: contract
+mitigation: "A precondition `v < 2` in the C++ contract and in the model, so the value is an enumerator. The caller proves it."
+witness:
+  input: "7"
+  ubsan: false
+  prints: "7"
+rule: |
+  Model an `enum class` as a datatype of its enumerators.
+  A cast from an integer needs a `requires` that the value is an enumerator, in the C++ contract and in the model.

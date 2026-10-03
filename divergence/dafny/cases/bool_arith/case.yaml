@@ -1,0 +1,18 @@
+construct: "Addition of two bool values"
+standard: "[conv.prom]: a prvalue of type bool can be converted to a prvalue of type int, with false becoming zero and true becoming one."
+row: fixed_width_ints
+gap: 3
+cpp: "Both `bool` operands become `int` before the addition. `true + true` is 2."
+naive_does: "The literal model `a + b` does not type-check. Dafny has no arithmetic on `bool`, so it refuses the file."
+naive: type_error
+mitigated: verifies
+side: model
+mitigation: "The model writes the promotion out as `if b then 1 else 0`."
+witness:
+  input: "true + true"
+  ubsan: false
+  prints: "2"
+rule: |
+  C++ promotes `bool` to `int` in arithmetic.
+  Dafny does not.
+  Write `if b then 1 else 0`.

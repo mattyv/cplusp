@@ -1,0 +1,20 @@
+construct: "Implicit conversion of int32_t to size_t"
+standard: "[conv.integral]: the result is the unique value of the destination type that is congruent to the source integer modulo 2^N. So -1 becomes 2^64 - 1."
+row: arithmetic
+gap: 3
+cpp: "A negative value becomes a large one, and the source shows no conversion. `index_of(-1)` returns 18446744073709551615."
+naive_does: "The literal model `result := i` does not type-check. Dafny has no implicit conversion from `int32` to `uint64`, so it refuses the file."
+naive: type_error
+mitigated: verifies
+side: gate
+gate_rule: sign_conversion
+mitigation: "Gate row `sign_conversion`: no implicit conversion of a signed integer to unsigned. The contract says `i >= 0`, and the C++ casts on purpose, `static_cast<std::size_t>(i)`. The model uses `i as uint64`."
+witness:
+  fixed_prints: "18446744073709551615"
+  input: "-1"
+  ubsan: false
+  prints: "18446744073709551615"
+rule: |
+  The model refuses a signed value where the code needs an unsigned one, and so does the gate.
+  Put the sign in the contract, `requires i >= 0`, and cast on purpose.
+  The model is then `i as uint64`.

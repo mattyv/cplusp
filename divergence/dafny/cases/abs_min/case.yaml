@@ -1,0 +1,16 @@
+construct: "std::abs on int32_t"
+standard: "[c.math.abs]: the behavior is undefined if the result cannot be represented, as ISO C says for abs."
+row: arithmetic
+gap: 3
+cpp: "`std::abs(INT32_MIN)` is undefined, because 2147483648 does not fit in `int32_t`."
+naive_does: "It models `std::abs` as `if x < 0 then -x else x`. Dafny finds no proof that `-x` fits for `-0x8000_0000`, so the model is stricter than the C++ source."
+naive: fails
+mitigated: verifies
+side: contract
+mitigation: "A precondition `x != -0x8000_0000` in the C++ contract and in the model. The caller proves it."
+witness:
+  input: "INT32_MIN"
+  ubsan: true
+rule: |
+  Model `std::abs` as `if x < 0 then -x else x`.
+  Exclude `INT32_MIN` in the contract: `requires x != -0x8000_0000`.

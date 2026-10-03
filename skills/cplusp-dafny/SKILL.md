@@ -111,3 +111,79 @@ Write `requires opt.Some?` in the model and `requires opt.has_value()` in the C+
 Dafny has no conversion from an integer to `bool`.
 Where C++ converts an integer to `bool`, write `x != 0` in the model.
 Every value other than 0 is true, including values other than 1.
+
+## promotion_before_widening
+
+C++ does arithmetic in the type of the operands, not in the type of the destination.
+`a * b` on two `int32_t` is an `int32_t` product, and overflow in it gives undefined behaviour, even when the result goes into an `int64_t`.
+Model the product in `int32` first, with the contract that the product fits.
+Or widen an operand in the C++, `int64_t{a} * b`, and model the product in `int64`.
+
+## implicit_narrowing
+
+Dafny refuses an implicit narrowing, and so does the gate.
+Cast on purpose, and put the fit in the contract: `requires -0x8000_0000 <= x < 0x8000_0000`.
+The model is then `x as int32`.
+See `narrowing_cast`.
+
+## compound_assign_narrow
+
+A compound assignment on a type narrower than `int` computes in `int` and narrows on the store.
+Write the narrowing as a cast: `a = static_cast<uint8_t>(a + 100)`.
+Model it with the wrap helper: `wrap8(((a as int32) + 100) as int)`.
+
+## signed_to_unsigned
+
+The model refuses a signed value where the code needs an unsigned one, and so does the gate.
+Put the sign in the contract, `requires i >= 0`, and cast on purpose.
+The model is then `i as uint64`.
+
+## unary_minus_min
+
+`-x` has one value that does not fit.
+The contract must exclude it: `requires x != -0x8000_0000`.
+
+## abs_min
+
+Model `std::abs` as `if x < 0 then -x else x`.
+Exclude `INT32_MIN` in the contract: `requires x != -0x8000_0000`.
+
+## increment_overflow
+
+`++` and `--` are arithmetic.
+They need the same contract as `+ 1` and `- 1`.
+For `++x` write `requires x < 0x7FFF_FFFF`.
+
+## signed_shift_left
+
+Model a signed shift through `bv32`.
+Convert a negative value by adding 2^32 first, and convert back by subtracting 2^32 when the top bit is 1.
+
+## signed_shift_right
+
+A right shift of a signed value rounds toward negative infinity in C++20, and so does Dafny `/`.
+Model it as a division by a power of two.
+This is the one place where Dafny division is the C++ one.
+
+## literal_shift
+
+A literal has its own type, and a shift takes the type of its left operand.
+`1 << n` is a shift in `int`, whatever the type of the destination.
+Write the literal in the destination type: `int64_t{1} << n`.
+
+## bool_arith
+
+C++ promotes `bool` to `int` in arithmetic.
+Dafny does not.
+Write `if b then 1 else 0`.
+
+## enum_cast
+
+Model an `enum class` as a datatype of its enumerators.
+A cast from an integer needs a `requires` that the value is an enumerator, in the C++ contract and in the model.
+
+## size_minus_one
+
+`size()` returns an unsigned value.
+`size() - 1` on an empty container is the largest `size_t`, and it is no error.
+The contract must require a non-empty container, or the C++ must test `empty()` first.

@@ -1,0 +1,21 @@
+construct: "Implicit conversion of int64_t to int32_t"
+standard: "[conv.integral]: the result is the unique value of the destination type that is congruent to the source integer modulo 2^N."
+row: arithmetic
+gap: 3
+cpp: "C++20 keeps the low 32 bits. `(1LL << 32) | 5` becomes 5, and the source shows no conversion."
+naive_does: "The literal model `result := x` does not type-check. Dafny has no implicit conversion between `int64` and `int32`, so it refuses the file."
+naive: type_error
+mitigated: verifies
+side: gate
+gate_rule: implicit_narrowing
+mitigation: "Gate row `implicit_narrowing`: no implicit narrowing. The C++ casts on purpose, `static_cast<int32_t>(x)`, and its contract says the value fits. The model uses `x as int32`."
+witness:
+  fixed_prints: "5"
+  input: "2^32 + 5"
+  ubsan: false
+  prints: "5"
+rule: |
+  Dafny refuses an implicit narrowing, and so does the gate.
+  Cast on purpose, and put the fit in the contract: `requires -0x8000_0000 <= x < 0x8000_0000`.
+  The model is then `x as int32`.
+  See `narrowing_cast`.

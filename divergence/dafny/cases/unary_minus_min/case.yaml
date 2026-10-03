@@ -1,0 +1,16 @@
+construct: "Unary minus on int32_t"
+standard: "[expr.unary.op], [expr.pre]: the negative of INT32_MIN is not representable, so the behavior is undefined."
+row: arithmetic
+gap: 3
+cpp: "`-x` is undefined for `INT32_MIN`, because 2147483648 does not fit in `int32_t`."
+naive_does: "Dafny checks that `-x` fits in `int32` and finds no proof for `-0x8000_0000`. The model is stricter than the C++ source."
+naive: fails
+mitigated: verifies
+side: contract
+mitigation: "A precondition `x != -0x8000_0000` in the C++ contract and in the model. The caller proves it."
+witness:
+  input: "INT32_MIN"
+  ubsan: true
+rule: |
+  `-x` has one value that does not fit.
+  The contract must exclude it: `requires x != -0x8000_0000`.

@@ -1,0 +1,18 @@
+construct: "size() - 1 on a std::vector"
+standard: "[basic.fundamental]: arithmetic for the unsigned type is performed modulo 2^N."
+row: containers
+gap: 3
+cpp: "`size()` is a `size_t`, and unsigned arithmetic wraps. For an empty vector, `size() - 1` is 18446744073709551615. It is defined, and it is no index."
+naive_does: "It models `size() - 1` as `|v| - 1` on `uint64`. Dafny finds no proof that `|v| >= 1`, so the model refuses code that is defined in C++."
+naive: fails
+mitigated: verifies
+side: contract
+mitigation: "A precondition `v.size() > 0` in the C++ contract, and `|v| > 0` in the model. The caller proves it. The C++ may test `empty()` first instead."
+witness:
+  input: "an empty vector"
+  ubsan: false
+  prints: "18446744073709551615"
+rule: |
+  `size()` returns an unsigned value.
+  `size() - 1` on an empty container is the largest `size_t`, and it is no error.
+  The contract must require a non-empty container, or the C++ must test `empty()` first.

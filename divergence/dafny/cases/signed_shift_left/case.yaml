@@ -1,0 +1,17 @@
+construct: "Left shift on int32_t"
+standard: "[expr.shift]: the value of E1 << E2 is the unique value congruent to E1 * 2^E2 modulo 2^N. N is the width of the result."
+row: arithmetic
+gap: 3
+cpp: "C++20 defines the shift of a negative value. `-1 << 1` is -2, and `INT32_MIN << 1` is 0. A shift by 32 or more is still undefined."
+naive_does: "The literal model `x << n` does not type-check. Dafny has shifts on bit-vector types only, so it refuses the file."
+naive: type_error
+mitigated: verifies
+side: model
+mitigation: "The model shifts a `bv32`. A helper converts an `int32` to `bv32`, and another converts back. The contract still says `n < 32`."
+witness:
+  input: "-1 << 1 and INT32_MIN << 1"
+  ubsan: false
+  prints: "-2 0"
+rule: |
+  Model a signed shift through `bv32`.
+  Convert a negative value by adding 2^32 first, and convert back by subtracting 2^32 when the top bit is 1.

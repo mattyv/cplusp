@@ -1,0 +1,21 @@
+construct: "Product of two int32_t stored in int64_t"
+standard: "[expr.arith.conv], [expr.pre]: the operands of * are converted to a common type before the multiplication. The product is computed in int32_t, and its overflow is undefined."
+row: arithmetic
+gap: 3
+cpp: "The product of two `int32_t` is an `int32_t`. It is converted to `int64_t` after it is computed. `100000 * 100000` overflows first."
+naive_does: "It multiplies in unbounded integers, and the product fits in `int64`. The model proves a value that C++ never computes."
+naive: verifies
+naive_is_wrong: true
+mitigated: verifies
+side: gate
+gate_rule: widening_multiplication
+mitigation: "Gate row `widening_multiplication`: no product in a narrow type whose result widens. The C++ widens an operand first, `int64_t{a} * b`. The model multiplies in `int64`."
+witness:
+  fixed_prints: "10000000000"
+  input: "100000 * 100000"
+  ubsan: true
+rule: |
+  C++ does arithmetic in the type of the operands, not in the type of the destination.
+  `a * b` on two `int32_t` is an `int32_t` product, and overflow in it gives undefined behaviour, even when the result goes into an `int64_t`.
+  Model the product in `int32` first, with the contract that the product fits.
+  Or widen an operand in the C++, `int64_t{a} * b`, and model the product in `int64`.

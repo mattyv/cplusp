@@ -1,0 +1,20 @@
+construct: "Compound assignment on uint8_t"
+standard: "[expr.ass]: E1 op= E2 is E1 = E1 op E2 with E1 evaluated once. The sum is computed in int and converted back modulo 2^N."
+row: arithmetic
+gap: 3
+cpp: "`a += 100` adds in `int` and converts back to `uint8_t`. For 200 the sum is 300, and the stored value is 44."
+naive_does: "It models `a += 100` as `a := a + 100` on `uint8`. The sum is a range error for `a > 155`, so the model refuses code that is fine in C++."
+naive: fails
+mitigated: verifies
+side: gate
+gate_rule: implicit_narrowing
+mitigation: "Gate row `implicit_narrowing`: a compound assignment on a type narrower than `int` narrows on the store. The C++ casts on purpose, `a = static_cast<uint8_t>(a + 100)`. The model adds in `int32` and wraps with `wrap8`."
+witness:
+  fixed_prints: "44"
+  input: "200 + 100"
+  ubsan: false
+  prints: "44"
+rule: |
+  A compound assignment on a type narrower than `int` computes in `int` and narrows on the store.
+  Write the narrowing as a cast: `a = static_cast<uint8_t>(a + 100)`.
+  Model it with the wrap helper: `wrap8(((a as int32) + 100) as int)`.

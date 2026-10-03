@@ -1,0 +1,21 @@
+construct: "Shift of the literal 1 stored in int64_t"
+standard: "[expr.shift], [conv.prom]: the type of the result is that of the promoted left operand, so 1 << n is computed in int."
+row: arithmetic
+gap: 3
+cpp: "The literal `1` is an `int`, so the shift is 32 bits wide. `1 << 31` is `INT32_MIN` in C++20, and it widens to -2147483648. A shift by 32 or more is undefined."
+naive_does: "It models `1 << n` as 2^n in `int64`, and that fits for every `n < 63`. The model proves a value that C++ does not compute for `n >= 31`."
+naive: verifies
+naive_is_wrong: true
+mitigated: verifies
+side: gate
+gate_rule: literal_shift
+mitigation: "Gate row `literal_shift`: no shift of a literal of type `int`. The C++ writes the literal in the destination type, `int64_t{1} << n`. The model shifts in `int64`."
+witness:
+  fixed_prints: "2147483648"
+  input: "n = 31"
+  ubsan: false
+  prints: "-2147483648"
+rule: |
+  A literal has its own type, and a shift takes the type of its left operand.
+  `1 << n` is a shift in `int`, whatever the type of the destination.
+  Write the literal in the destination type: `int64_t{1} << n`.
