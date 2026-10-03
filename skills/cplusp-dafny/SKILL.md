@@ -346,3 +346,54 @@ Write the empty case out: `o.Some? && o.value == v` for `==`, and `o.None? || o.
 
 Model `std::variant` as a datatype with one constructor per alternative.
 A read of an alternative needs `requires` that the variant holds it, in the C++ contract and in the model.
+
+## float_sum
+
+A double is a real after rounding.
+Model `a + b` as `fadd(a, b)`, and state the result as a bound, `abs(result - (a + b)) <= EPS * abs(a + b)`.
+Never state equality of two float results.
+The bound holds up to `MAX`, so require `abs(a) <= MAX / 4.0` and `abs(b) <= MAX / 4.0`.
+Dafny does not apply a lemma by itself, so call `RoundError(a + b)` in the body before `fadd`.
+The model is `divergence/dafny/Float.dfy`. Write `include "Float.dfy"` with the path to it, and `import opened Float`.
+
+## float_nan
+
+The model has no NaN and no infinity.
+Every float parameter requires `std::isfinite` in the C++ contract.
+Never compare floats with `==`.
+The gate refuses it.
+
+## float_to_int
+
+Model `static_cast<int32_t>(x)` as truncation toward zero, not `Floor`.
+Write `trunc(x)` as `if x >= 0.0 then x.Floor else -((-x).Floor)`.
+The contract requires the value to fit: `requires -2147483648.0 < x < 2147483648.0`.
+
+## float_cancellation
+
+Every operation rounds, and the errors add.
+State the bound from the magnitudes of the operands, not from the result the mathematics would give.
+Call `RoundError` once for each operation, on the exact value that the operation rounds.
+
+## float_increment
+
+A bound of `EPS * abs(x)` is 1.0 at 2^53, so above it the model promises nothing about the last digit.
+When the C++ needs exact counting, use an integer type.
+
+## float_division_zero
+
+The model has no infinity, and C++ calls float division by zero undefined.
+The contract requires a non-zero divisor: `requires b != 0.0`.
+The quotient must stay below `MAX`, so the model also needs `requires abs(a / b) <= MAX`.
+
+## int_to_float
+
+An integer converts to a double exactly up to 2^53 in magnitude.
+The contract requires that range, and `RoundExactInt` proves the equality.
+Model the conversion as `round(n as real)`.
+
+## pointer_into_container
+
+A pointer parameter and a container cannot alias in the model, and in C++ a pointer into the container dies at the next mutation.
+Never take the address of a container element.
+The gate refuses it.

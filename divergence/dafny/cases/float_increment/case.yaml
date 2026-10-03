@@ -1,0 +1,18 @@
+construct: "Adding 1.0 to a double above 2^53"
+standard: "[basic.fundamental]: the value representation of a floating-point type is implementation-defined. On this target it is IEEE 754 binary64: above 2^53 the representable values are 2 apart, so x + 1.0 rounds back to x."
+row: floating_point
+gap: 1
+cpp: "For x = 2^53 the exact sum 2^53 + 1 is halfway between two doubles, and it rounds to the even one, 2^53. The increment changes nothing."
+naive_does: "The model adds exactly, so `result == x + 1.0` for every x. The proof goes through, and a loop that adds 1.0 counts."
+naive: verifies
+naive_is_wrong: true
+mitigated: verifies
+side: model
+mitigation: "The sum is `fadd`, and the contract is the bound `abs(result - (x + 1.0)) <= EPS * abs(x + 1.0)`. The model can neither prove nor refute the equality. Exact counting needs an integer type in the C++."
+witness:
+  input: "next(2^53) == 2^53"
+  ubsan: false
+  prints: "1"
+rule: |
+  A bound of `EPS * abs(x)` is 1.0 at 2^53, so above it the model promises nothing about the last digit.
+  When the C++ needs exact counting, use an integer type.

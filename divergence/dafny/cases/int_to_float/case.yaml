@@ -1,0 +1,19 @@
+construct: "Conversion of int64_t to a double"
+standard: "[conv.fpint]: if the integer value cannot be represented exactly in the floating-point type, the result is implementation-defined. It is a choice of the next lower or higher representable value."
+row: floating_point
+gap: 3
+cpp: "`static_cast<double>(n)` rounds when n needs more than 53 bits. `widen(9007199254740993)` is 9007199254740992."
+naive_does: "The model converts with `n as real`, which is exact. The proof goes through for every n, and it is wrong above 2^53."
+naive: verifies
+naive_is_wrong: true
+mitigated: verifies
+side: contract
+mitigation: "The contract requires `-9007199254740992 <= n <= 9007199254740992`, in the C++ and in the model. `RoundExactInt` then proves the equality."
+witness:
+  input: "widen(2^53 + 1)"
+  ubsan: false
+  prints: "9007199254740992"
+rule: |
+  An integer converts to a double exactly up to 2^53 in magnitude.
+  The contract requires that range, and `RoundExactInt` proves the equality.
+  Model the conversion as `round(n as real)`.

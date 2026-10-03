@@ -1,0 +1,21 @@
+construct: "A pointer to a vector element across push_back"
+standard: "[vector.modifiers], [basic.stc.general]: push_back may invalidate every pointer to an element, and indirection through an invalid pointer is undefined."
+row: containers
+gap: 3
+cpp: "`push_back` on a vector at capacity moves the elements to new storage. The pointer `p`, taken as `&v[0]`, then points into freed memory, and `*p` reads it."
+naive_does: "A pointer parameter is a `Cell`, and the vector is a `seq`, two values that cannot alias. `&v[0]` becomes a cell with a copy of the element, so `v := v + [1]` cannot change it. The proof goes through."
+naive: verifies
+naive_is_wrong: true
+mitigated: verifies
+side: gate
+gate_rule: containers
+mitigation: "Gate row `containers`: no pointer into a container. The C++ copies the element out, `int32_t first = v[0];`, and passes `&first`. The model is exact."
+witness:
+  fixed_prints: "1"
+  input: "a vector of one element, at capacity"
+  ubsan: false
+  asan: true
+rule: |
+  A pointer parameter and a container cannot alias in the model, and in C++ a pointer into the container dies at the next mutation.
+  Never take the address of a container element.
+  The gate refuses it.

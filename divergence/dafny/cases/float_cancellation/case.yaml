@@ -1,0 +1,19 @@
+construct: "Subtraction after addition on doubles"
+standard: "[basic.fundamental]: the value representation of a floating-point type is implementation-defined. On this target it is IEEE 754 round to nearest: a + b rounds to the nearest double. When a is below the unit round-off of b, the sum is b, and the difference is 0, not a."
+row: float_expression
+gap: 1
+cpp: "The sum rounds to the nearest double. When a is below the unit round-off of b, the sum is b and `s - b` is 0. `shifted(1e-16, 1.0)` is 0, not 1e-16."
+naive_does: "The model computes in exact reals, so `(a + b) - b == a` for every a and b. The proof goes through."
+naive: verifies
+naive_is_wrong: true
+mitigated: verifies
+side: model
+mitigation: "Two roundings, `fadd` and `fsub`. The contract is a bound from the magnitudes of the operands, `abs(result - a) <= 4.0 * EPS * (abs(a) + abs(b))`, with `abs(a) <= 1.0` and `abs(b) <= 1.0`."
+witness:
+  input: "shifted(1e-16, 1.0)"
+  ubsan: false
+  prints: "0"
+rule: |
+  Every operation rounds, and the errors add.
+  State the bound from the magnitudes of the operands, not from the result the mathematics would give.
+  Call `RoundError` once for each operation, on the exact value that the operation rounds.
