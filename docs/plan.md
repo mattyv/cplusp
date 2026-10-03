@@ -23,7 +23,7 @@ We are learning as we go, so the design has to survive being wrong.
 
 - **The rule list is a living list.** Every row in the subset table is one entry in `cplusp-policy.yaml`. To add a construct, add an entry, point it at a check, and write its sample pair. To remove a construct, remove its entry. Nothing else changes.
 - **Rules are independent.** A rule is one policy entry, one check, one sample pair and one message. Rules do not know about each other, so you can add, change or drop any one alone.
-- **Pieces are swappable.** The gate, the driver, the translator and the prover have narrow interfaces. The gate emits findings. The driver emits the verified set. The translator emits prover input. The prover emits pass or fail with locations. You can replace any one without touching the others. We expect to swap the prover at least once.
+- **Pieces are swappable.** The gate, the driver, the translator and the prover have narrow interfaces. The gate emits findings. The driver emits the verified set. The translator emits prover input. The prover emits pass or fail with locations. You can replace any one without touching the others. The prover is a plug-in behind the interface in Prover interface. We expect to run more than one.
 - **Decisions are drafts.** Every Decision in the table and every default in this doc is the current best guess. The sample pairs are the regression net that makes changing them safe.
 
 ## Vocabulary
@@ -83,6 +83,35 @@ CI runs the same command on the PR and blocks on any verified function that is n
 - Changing a contract is the expensive edit. If a function's contract changes, the prover must re-prove every caller. The verified region for that run grows to include them. The tool tracks this.
 
 **Exceptions are visible, not blocked.** Every run lists the trusted and plain markers in the change, with their reasons. The PR summary shows the counts: "12 verified, 2 trusted, 1 plain". Whether new markers need a human approval before merge is an open question. The proposed default is report only.
+
+## Prover interface
+
+The prover is a plug-in. Any prover works as long as its adapter meets this interface. Decided Oct 3, 2026: design for several, build one first, add a second later as a cross-check.
+
+**What goes in**
+
+1. The functions to prove, each with its C+P body and its contract in our `//@` notation.
+2. The contracts of everything those functions call. Verified, trusted and library contracts alike. Never their bodies.
+3. The policy, for the rows the prover owns. For example, that float values are opaque.
+
+**What comes back**
+
+For each function, one of:
+
+- `proved`.
+- `not proved`, with a list of failures. Each failure has a location in the C++ source, the kind of obligation that failed, and a sentence the gate can print after `Not proved:`. The kinds are fixed: overflow, bounds, division, null or dangling reference, invalidated reference, callee precondition, own postcondition, invariant, termination, unlisted state. A counterexample with input values is optional.
+- `timeout`, with the time limit it hit.
+
+Plus the prover's name and version, so a report says which prover said what.
+
+**What an adapter must guarantee**
+
+- **The bot never writes prover-specific hints.** Contracts stay in our notation. Whatever the prover needs beyond them, such as Dafny assertions or VeriFast ownership steps, the adapter supplies or synthesises. If an adapter cannot do that for some construct, the construct's row moves to Restrict or Trusted only. It does not leak into the contract syntax.
+- **Same input, same verdict.** Pinned prover version, fixed time limit, no randomness. CI and the bot must see the same answer.
+- **Locations map back to C++ lines.** The bot never sees translated code.
+- **Two adapters agree.** In cross-check mode the gate runs two provers on the same function and reports `proved` only if both do. Disagreement is reported as a translator bug, not a code bug.
+
+The message layer above the interface does not change when the prover does. `Not proved:` reads the same whichever prover produced it.
 
 ## No undefined behaviour in verified code
 
@@ -549,8 +578,8 @@ Provisional. Parked as "maybe" where the first slice does not need a decision, a
 | --- | --- | --- |
 | Gate checks and index | C++20 clang-tidy module. CMake and Ninja. LLVM 18 pinned, builds against 17 to 20 | Forced: a clang-tidy module can only be C++ |
 | Driver `cplusp` | Rust. No Python anywhere. TypeScript not in the core | Preferred |
-| Prover, candidate A | Dafny underneath, with the gated C++ translated to it and errors mapped back to C++ lines. Strong automation and the most LLM training data of any verifier. The translator is the new trusted component. We test it by compiling the Dafny and running both on the same inputs | Open. The thin slice decides |
-| Prover, candidate B | VeriFast. Native `//@` contract syntax, built-in overflow and bounds checks, and ownership gives frame and invalidation rules for free. Costs: its C++ frontend lacked templates in 2022. Release notes to Sept 2026 show the work going to Rust. So we would translate to its mature C mode. A 2026 study of ten LLMs found 31% verification success on VeriFast specs, with 94% of errors in separation-logic details | Open. The thin slice decides |
+| Prover, candidate A | Dafny underneath, with the gated C++ translated to it and errors mapped back to C++ lines. Strong automation and the most LLM training data of any verifier. The translator is the new trusted component. We test it by compiling the Dafny and running both on the same inputs | Open. The thin slice decides which is built first |
+| Prover, candidate B | VeriFast. Native `//@` contract syntax, built-in overflow and bounds checks, and ownership gives frame and invalidation rules for free. Costs: its C++ frontend lacked templates in 2022. Release notes to Sept 2026 show the work going to Rust. So we would translate to its mature C mode. A 2026 study of ten LLMs found 31% verification success on VeriFast specs, with 94% of errors in separation-logic details | Open. The thin slice decides which is built first |
 | Prover, plan C | Verus, via translation to Rust. Exact machine ints and fast, but translated C++ must satisfy the borrow checker | Fallback |
 | Spec syntax in C++ | `//@ requires` / `//@ ensures` comments with Dafny-flavoured expressions, carried through by the translator | Open |
 | Check tests | Rust runner over the sample pairs, reading `// CHECK-MESSAGES` lines | Preferred |
@@ -590,6 +619,7 @@ Provisional. Parked as "maybe" where the first slice does not need a decision, a
 - Made the first step a thin end-to-end slice instead of the gate alone.
 - Recorded that the gate runs separately from, and never edits, a team's existing clang-tidy config, with its own pinned clang-tidy.
 - Made the prover an open choice between Dafny and VeriFast, settled by the thin slice. Verus is plan C.
+- Added the Prover interface: the prover is a plug-in, the bot never writes prover-specific hints, and two provers can run as a cross-check.
 - Added a provisional tech stack: C++ only for the clang-tidy module, Rust for the rest, no Python.
 - Rewrote the doc in STE-flavored mode with the asd-ste100 skill: no semicolons, sentences of 25 words or fewer, one word per action.
 - Added an Examples section with a verified function, a chained caller, both failure messages, and the marker kinds. It ends with an excerpt of the trusted `vector` contract.
