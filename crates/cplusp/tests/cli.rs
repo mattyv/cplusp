@@ -253,6 +253,18 @@ fn gate_with_the_plugin_no_longer_warns_about_the_generic_check() {
 }
 
 #[test]
+fn gate_refuses_a_plugin_that_does_not_load() {
+    if !clang_tidy_available() {
+        return;
+    }
+    let f = root().join("rules/goto/allowed.cpp");
+    let o = cplusp(&["gate", "--plugin", "/nonexistent/libcplusp.so", f.to_str().unwrap(), "--", "-std=c++20"]);
+    assert_eq!(o.status.code(), Some(2), "stdout: {} stderr: {}", stdout(&o), stderr(&o));
+    assert!(stderr(&o).contains("plugin"), "{}", stderr(&o));
+    assert_eq!(stdout(&o).trim(), "");
+}
+
+#[test]
 fn policy_emit_turns_matcher_patterns_into_options_of_the_generic_check() {
     let o = cplusp(&["policy", "emit"]);
     assert!(o.status.success(), "stderr: {}", stderr(&o));
@@ -388,15 +400,17 @@ fn every_sample_pair_agrees_with_its_rule() {
         assert_eq!(reported, expected, "{id}/banned.cpp");
         checked += 1;
     }
-    // Every rule the gate enforces today has a pair: the 8 upstream ones and the 18 matcher ones.
+    // Every rule the gate can enforce today has a pair: the upstream checks and the matcher patterns.
     for id in [
+        "c_style_casts", "goto", "pointer_arithmetic", "reinterpret_const_cast", "varargs_coroutines", "uninitialised_variables",
+        "missing_override", "function_like_macros", "downcasts", "raw_allocation", "return_ref_to_local", "rvalue_references",
         "unscoped_enum", "unions", "bitfields", "virtual_inheritance", "exceptions", "shared_ptr", "implicit_conversions",
-        "function_pointers", "varargs_coroutines", "concurrency", "volatile", "inline_asm_intrinsics", "unreachable_assume",
-        "longjmp", "raw_memory_ops", "launder_placement_new", "templates", "metaprogramming",
+        "function_pointers", "concurrency", "volatile", "inline_asm_intrinsics", "unreachable_assume", "longjmp",
+        "raw_memory_ops", "launder_placement_new", "templates", "metaprogramming",
     ] {
-        assert!(rules_dir.join(id).is_dir(), "no sample pair for matcher rule {id}");
+        assert!(rules_dir.join(id).is_dir(), "no sample pair for rule {id}");
     }
-    assert!(checked >= 26, "expected at least 26 sample pairs, found {checked}");
+    assert!(checked >= 29, "expected at least 29 sample pairs, found {checked}");
 }
 
 /// Pull `"key":"value"` or `"key":123` out of one JSON line without a JSON library.

@@ -134,7 +134,7 @@ rules:
     use_instead: std::copy, assignment, or std::bit_cast, or mark the function trusted with a reason.
     stage: gate
     detect:
-      - matcher: callExpr(callee(functionDecl(hasAnyName("memcpy", "memset", "memmove", "::std::memcpy", "::std::memset", "::std::memmove"))), unless(hasArgument(0, hasType(pointsTo(anyOf(isAnyCharacter(), hasDeclaration(enumDecl(hasName("::std::byte")))))))))
+      - matcher: callExpr(callee(functionDecl(hasAnyName("memcpy", "memset", "memmove", "::std::memcpy", "::std::memset", "::std::memmove", "__builtin_memcpy", "__builtin_memset", "__builtin_memmove"))), unless(hasArgument(0, anyOf(hasType(pointsTo(anyOf(isAnyCharacter(), hasDeclaration(enumDecl(hasName("::std::byte")))))), hasType(arrayType(hasElementType(anyOf(isAnyCharacter(), hasDeclaration(enumDecl(hasName("::std::byte")))))))))))
 
   - id: launder_placement_new
     construct: "`std::launder`, placement `new`"
@@ -165,7 +165,7 @@ rules:
     use_instead: std::unique_ptr with one clear owner, or mark the function trusted with a reason.
     stage: gate
     detect:
-      - matcher: declaratorDecl(hasType(hasUnqualifiedDesugaredType(recordType(hasDeclaration(cxxRecordDecl(hasName("::std::shared_ptr")))))))
+      - matcher: typeLoc(loc(qualType(hasDeclaration(cxxRecordDecl(hasName("::std::shared_ptr"))))))
       - matcher: callExpr(callee(functionDecl(hasName("::std::make_shared"))))
 
   - id: lvalue_references
@@ -394,6 +394,8 @@ rules:
       - matcher: classTemplateSpecializationDecl(isExplicitTemplateSpecialization())
       - matcher: classTemplatePartialSpecializationDecl()
       - matcher: functionDecl(isExplicitTemplateSpecialization())
+      - matcher: varTemplateSpecializationDecl(isExplicitTemplateSpecialization())
+      - matcher: varTemplatePartialSpecializationDecl()
       - matcher: nonTypeTemplateParmDecl()
       - matcher: templateTemplateParmDecl()
 
@@ -495,8 +497,8 @@ rules:
     use_instead: direct calls or a template parameter, or mark the function trusted with a reason.
     stage: gate
     detect:
-      - matcher: declaratorDecl(hasType(pointerType(pointee(functionType()))))
-      - matcher: declaratorDecl(hasType(hasUnqualifiedDesugaredType(recordType(hasDeclaration(cxxRecordDecl(hasName("::std::function")))))))
+      - matcher: typeLoc(loc(qualType(hasCanonicalType(anyOf(pointerType(pointee(functionType())), memberPointerType(pointee(functionType())))))))
+      - matcher: typeLoc(loc(qualType(hasDeclaration(cxxRecordDecl(hasName("::std::function"))))))
 
   - id: varargs_coroutines
     construct: Varargs, coroutines
@@ -522,7 +524,7 @@ rules:
     use_instead: a trusted function that owns the lock or the atomic, with a contract.
     stage: gate
     detect:
-      - matcher: declaratorDecl(hasType(hasUnqualifiedDesugaredType(recordType(hasDeclaration(cxxRecordDecl(hasAnyName("::std::thread", "::std::jthread", "::std::mutex", "::std::recursive_mutex", "::std::shared_mutex", "::std::timed_mutex", "::std::atomic", "::std::atomic_flag", "::std::condition_variable", "::std::lock_guard", "::std::unique_lock", "::std::scoped_lock", "::std::future", "::std::promise")))))))
+      - matcher: typeLoc(loc(qualType(hasDeclaration(cxxRecordDecl(hasAnyName("::std::thread", "::std::jthread", "::std::mutex", "::std::recursive_mutex", "::std::shared_mutex", "::std::timed_mutex", "::std::atomic", "::std::atomic_flag", "::std::condition_variable", "::std::lock_guard", "::std::unique_lock", "::std::scoped_lock", "::std::future", "::std::promise"))))))
       - matcher: callExpr(callee(functionDecl(hasAnyName("::std::async", "::std::atomic_load", "::std::atomic_store", "::std::atomic_exchange", "::std::atomic_fetch_add"))))
 
   - id: shared_variables
@@ -543,8 +545,7 @@ rules:
     use_instead: a trusted accessor with a contract.
     stage: gate
     detect:
-      - matcher: declaratorDecl(hasType(isVolatileQualified()))
-      - matcher: declaratorDecl(hasType(pointsTo(isVolatileQualified())))
+      - matcher: typeLoc(loc(qualType(isVolatileQualified())))
 
   # ---------------------------------------------------------------- state
   - id: global_state

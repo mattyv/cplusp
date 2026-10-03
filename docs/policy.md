@@ -48,8 +48,8 @@ rules:
     why: Type punning breaks the memory model.
     use_instead: std::variant.
     detect:
-      - check: cppcoreguidelines-pro-type-union-access   # fires on use
-      - check: cplusp-union-decl                         # fires on the declaration
+      - check: cppcoreguidelines-pro-type-union-access     # fires on use
+      - matcher: recordDecl(isUnion(), isDefinition())     # fires on the declaration
 
   - id: iterators
     area: library
@@ -201,7 +201,7 @@ The gate refuses to run on a policy that breaks any of these:
 
 The gate also refuses to judge a file that does not compile. It prints `does not compile: {file}:{line}: {message}` for each compiler error and exits 2. Code the compiler rejects is not provable, and a quiet "no findings" would say otherwise. Any `clang-diagnostic-` finding that no rule claims counts as a compiler error, because the generated config turns every other warning off.
 
-`cplusp gate --plugin PATH` loads the clang-tidy plugin from `clang-tidy/`, built with `cmake -S clang-tidy -B target/plugin -G Ninja && cmake --build target/plugin`. Without it the generic check and the hand-written checks are names without a check behind them, and the warning below says so.
+`cplusp gate --plugin PATH` loads the clang-tidy plugin from `clang-tidy/`. A plugin that fails to load is a refusal, exit 2, because clang-tidy itself would carry on without it. The plugin is built with `cmake -S clang-tidy -B target/plugin -G Ninja && cmake --build target/plugin`. Without it the generic check and the hand-written checks are names without a check behind them, and the warning below says so.
 
 Three more refusals, all exit 2:
 
