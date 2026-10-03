@@ -165,7 +165,7 @@ rules:
     loosened_because: Numerics team. Float values are checked by tests here, not proofs.
 ```
 
-Tightening is always allowed. Loosening needs `loosened_because`, and every run prints the loosened entries at the top of its report. Whether loosening should need a human approval as well is open, like the marker approval in the plan.
+Tightening is always allowed. Loosening needs `loosened_because`, and every run prints the loosened entries at the top of its report. Whether loosening should also need a human approval is open, like the marker approval in the plan.
 
 ## What the tool rejects
 
@@ -195,8 +195,11 @@ rules/
 
 The test suite runs every pair against the default policy. A pair that disagrees with its entry fails the build. That is how we found that the check the plan first named for C-style casts let `(int)big` through.
 
+## Decided
+
+- **One file.** Each entry holds both the decision and the detection. The table and the file stay one list. Decided Oct 3, 2026.
+- **Loosening.** A team policy may weaken a rule. It must give `loosened_because`, and every run prints the loosened entries at the top of its report. Decided Oct 3, 2026.
+
 ## Open choices
 
-- **One file or two.** This draft keeps decisions and detection in one file, so the table and the file stay one list. The alternative is a detection catalog inside the tool and a policy file of decisions only. The single file is simpler to extend. The split hides check names from teams who only want to set policy.
-- **Loosening.** Allowed with a reason and a report line, as drafted, or never allowed in a team policy.
 - **Granularity of a team policy.** One per repo, as drafted, or one per directory as clang-tidy itself allows.
