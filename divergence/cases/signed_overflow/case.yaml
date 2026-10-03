@@ -1,8 +1,12 @@
 construct: Signed addition on int32_t
+gap: 4
 cpp: Signed overflow is undefined behaviour. The compiler may assume it never happens.
+naive_does: Adds in unbounded integers, so the sum never overflows and the proof goes through.
 naive: verifies
 naive_is_wrong: true
 mitigated: verifies
+side: model
+mitigation: Bounded `int32` type, and a precondition on the sum written with `as int`.
 witness:
   input: INT32_MAX + 1
   ubsan: true
