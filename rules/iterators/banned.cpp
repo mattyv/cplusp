@@ -22,3 +22,12 @@ bool has_negative(const std::vector<int64_t>& values) {
   }
   return false;
 }
+
+int32_t grow_in_loop(std::vector<int32_t>& v) {
+  int32_t s = 0;
+  for (const int32_t x : v) {  // BANNED
+    s += x;
+    v.push_back(x);
+  }
+  return s;
+}

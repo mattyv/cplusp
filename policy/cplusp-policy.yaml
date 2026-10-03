@@ -278,21 +278,27 @@ rules:
     construct: "`std::array`, `std::span`"
     area: library
     canonical: Recommended
-    decision: allow
+    decision: restrict
+    limit: A span as a parameter only, never stored in a local or a member.
     why: Core trusted types.
-    stage: spec
+    use_instead: "a span parameter, or the container itself."
+    stage: gate
+    detect:
+      - matcher: varDecl(unless(parmVarDecl()), hasType(hasCanonicalType(hasDeclaration(cxxRecordDecl(hasName("::std::span"))))))
+      - matcher: fieldDecl(hasType(hasCanonicalType(hasDeclaration(cxxRecordDecl(hasName("::std::span"))))))
 
   - id: containers
     construct: "`std::vector`, `std::string`, maps"
     area: library
     canonical: Allowed
     decision: restrict
-    limit: Only methods that have a trusted contract. No reference into a container. No iterator held across a mutation.
+    limit: Only methods that have a trusted contract. No reference into a container. No iterator held across a mutation. No operator[] on a map.
     why: Trusted contracts carry the invalidation rules. A reference into a container dies at the next mutation, and the model has only values.
-    use_instead: "a copy of the element."
+    use_instead: "a copy of the element. For a map, find, at or contains."
     stage: gate
     detect:
       - matcher: 'varDecl(hasType(referenceType()), unless(parmVarDecl()), unless(hasParent(declStmt(hasParent(cxxForRangeStmt())))), hasInitializer(hasDescendant(declRefExpr(to(varDecl(hasType(anyOf(hasCanonicalType(hasDeclaration(cxxRecordDecl(hasAncestor(namespaceDecl(hasName("std")))))), references(qualType(hasCanonicalType(hasDeclaration(cxxRecordDecl(hasAncestor(namespaceDecl(hasName("std"))))))))))))))), unless(hasType(references(qualType(hasCanonicalType(hasDeclaration(cxxRecordDecl(hasAncestor(namespaceDecl(hasName("std")))))))))))'
+      - matcher: 'cxxOperatorCallExpr(hasOverloadedOperatorName("[]"), hasArgument(0, hasType(hasCanonicalType(hasDeclaration(cxxRecordDecl(hasAnyName("::std::map", "::std::unordered_map")))))))'
 
   - id: variable_index
     construct: "`operator[]` with a variable index"
@@ -305,17 +311,29 @@ rules:
     detect:
       - check: cppcoreguidelines-pro-bounds-constant-array-index
 
+  - id: accumulate_init
+    construct: Fold with an init value narrower than the elements
+    area: library
+    canonical: "Core Guidelines ES.102"
+    decision: ban
+    why: The fold runs in the type of the init value, so a sum of int64_t values in an int wraps.
+    use_instead: "an init value of the element type, such as int64_t{0}."
+    stage: gate
+    detect:
+      - check: bugprone-fold-init-type
+
   - id: iterators
     construct: Iterators
     area: library
     canonical: Allowed
     decision: restrict
-    limit: "Range-for only. begin and end may appear only as direct arguments of a std:: call. No stored iterator, no std::next, prev, advance or distance."
+    limit: "Range-for only. The loop body does not change the range. begin and end may appear only as direct arguments of a std:: call. No stored iterator, no std::next, prev, advance or distance."
     why: Iterator arithmetic is pointer arithmetic in disguise.
     use_instead: a range-for loop, or an index the prover can check.
     stage: gate
     detect:
       - check: cplusp-iterator-arithmetic
+      - matcher: 'cxxForRangeStmt(hasRangeInit(declRefExpr(to(varDecl().bind("range")))), hasBody(hasDescendant(cxxMemberCallExpr(on(declRefExpr(to(varDecl(equalsBoundNode("range"))))), callee(cxxMethodDecl(unless(isConst())))))))'
 
   - id: optional_expected_variant
     construct: "`std::optional`, `std::expected`, `std::variant`"
@@ -538,6 +556,37 @@ rules:
       - matcher: typeLoc(loc(templateSpecializationType(hasDeclaration(namedDecl(hasAnyName("::std::enable_if", "::std::enable_if_t", "::std::void_t", "::std::conditional", "::std::conditional_t"))))))
 
   # -------------------------------------------------------------- control
+  - id: control_flow
+    construct: "`if`, `switch`, `for`, `while`, early `return`"
+    area: control
+    canonical: Allowed by all
+    decision: allow
+    why: The prover follows them.
+    stage: prover
+
+  - id: switch_fallthrough
+    construct: Fall-through between switch cases
+    area: control
+    canonical: "MISRA 16.3, -Wimplicit-fallthrough"
+    decision: ban
+    why: Control runs into the next case with no sign in the source, and a match in the model has no fall-through.
+    use_instead: "a break or a return in every case, or [[fallthrough]] when it is meant."
+    stage: gate
+    detect:
+      - check: clang-diagnostic-implicit-fallthrough
+
+  - id: switch_missing_case
+    construct: Switch that does not cover every value
+    area: control
+    canonical: "MISRA 16.4 and 16.5"
+    decision: ban
+    why: A value with no case runs past the switch in silence, and the match in the model must cover every value.
+    use_instead: "a case for every enumerator, or a default."
+    stage: gate
+    detect:
+      - check: clang-diagnostic-switch
+      - check: bugprone-switch-missing-default-case
+
   - id: exceptions
     construct: Exceptions
     area: control

@@ -15,3 +15,13 @@ int32_t total(const std::vector<int32_t>& v) {
   }
   return t;
 }
+
+#include <map>
+
+bool has(const std::map<int32_t, int32_t>& m, int32_t k) {
+  return m.contains(k);
+}
+
+int32_t get_or_zero(const std::map<int32_t, int32_t>& m, int32_t k) {
+  return m.contains(k) ? m.at(k) : 0;
+}

@@ -331,7 +331,7 @@ struct CaseRow {
 /// one case. The list of rows without a case shrinks with every round of the battery, to empty.
 #[test]
 fn every_supported_row_has_a_case() {
-    const NOT_YET: &[&str] = &["floating_point", "array_span", "iterators", "algorithms", "lambdas", "shared_variables", "global_state"];
+    const NOT_YET: &[&str] = &["floating_point", "shared_variables", "global_state"];
     let policy: PolicyRows = serde_yaml::from_str(&std::fs::read_to_string(root().join("policy/cplusp-policy.yaml")).unwrap()).unwrap();
     let mut covered = std::collections::BTreeSet::new();
     for entry in std::fs::read_dir(root().join("divergence/dafny/cases")).unwrap() {
@@ -365,6 +365,9 @@ fn the_battery_has_the_planned_cases() {
         "value_semantics", "object_lifetime", "reference_into_container", "member_init_order", "slicing", "virtual_in_constructor",
         "virtual_destructor", "use_after_move", "moved_from_unique_ptr", "null_pointer", "operator_meaning", "generic_per_type",
         "stack_depth", "constexpr_runtime", "interface_dispatch",
+        // Round C3: library and control.
+        "array_index", "span_dangling", "range_for_mutation", "count_if_lambda", "fold_init_type", "sort_contract", "map_subscript",
+        "string_npos", "switch_fallthrough", "switch_missing_case", "optional_compare", "variant_get",
     ] {
         assert!(cases.join(id).join("case.yaml").exists(), "no case {id}");
     }

@@ -11,3 +11,10 @@ int32_t last(std::vector<int32_t>& v) {
   int32_t& b = v.back();  // BANNED
   return b;
 }
+
+#include <map>
+
+std::size_t read_count(std::map<int32_t, int32_t>& m, int32_t k) {
+  int32_t v = m[k];  // BANNED
+  return m.size() + static_cast<std::size_t>(v);
+}

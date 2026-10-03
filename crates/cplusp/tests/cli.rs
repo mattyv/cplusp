@@ -84,7 +84,7 @@ fn policy_emit_turns_on_the_warning_of_every_diagnostic_check() {
     let o = cplusp(&["policy", "emit"]);
     assert!(o.status.success(), "stderr: {}", stderr(&o));
     let out = stdout(&o);
-    assert!(out.contains("\nExtraArgs: ['-Wreturn-stack-address', '-Wreorder-ctor', '-Wunsequenced']\n"), "{out}");
+    assert!(out.contains("\nExtraArgs: ['-Wreturn-stack-address', '-Wreorder-ctor', '-Wimplicit-fallthrough', '-Wswitch', '-Wunsequenced']\n"), "{out}");
 }
 
 #[test]
@@ -431,10 +431,11 @@ fn every_sample_pair_agrees_with_its_rule() {
         "plain_int", "sign_compare", "evaluation_order",
         "implicit_narrowing", "sign_conversion", "widening_multiplication", "literal_shift",
         "member_init_order", "slicing", "virtual_call_in_constructor", "virtual_destructor", "raw_pointer", "containers",
+        "switch_fallthrough", "switch_missing_case", "accumulate_init", "array_span",
     ] {
         assert!(rules_dir.join(id).is_dir(), "no sample pair for rule {id}");
     }
-    assert!(checked >= 47, "expected at least 47 sample pairs, found {checked}");
+    assert!(checked >= 51, "expected at least 51 sample pairs, found {checked}");
 }
 
 /// Pull `"key":"value"` or `"key":123` out of one JSON line without a JSON library.
