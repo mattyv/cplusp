@@ -1,5 +1,6 @@
 construct: "Plain int, long, short and char"
 standard: "[basic.fundamental]: except as specified above, the width of a signed or unsigned integer type is implementation-defined. The minimum width of int is 16."
+row: fixed_width_ints
 gap: 1
 cpp: "The width of `int` is implementation-defined. The standard promises only 16 bits."
 naive_does: "It rests on a width the source does not state. The model uses `int32`, so the proof holds only where `int` has 32 bits."

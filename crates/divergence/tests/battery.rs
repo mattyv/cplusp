@@ -10,6 +10,7 @@ use serde::Deserialize;
 struct Case {
     construct: String,
     standard: String,
+    row: String,
     #[allow(dead_code)]
     gap: u32,
     #[allow(dead_code)]
@@ -144,6 +145,8 @@ fn every_case_says_what_it_claims() {
 
         // The standard decides the case, and the case says where.
         assert!(case.standard.starts_with('[') && case.standard.contains("]: "), "{id}: standard is `[section]: the sentence that decides the case`, got: {}", case.standard);
+        // The case exercises one row of the policy, which is how the battery covers the subset.
+        assert!(policy.contains(&format!("- id: {}\n", case.row)), "{id}: row {} is not a row in the policy", case.row);
 
         // Dafny verdicts.
         assert_eq!(verdict(&dir.join("naive.dfy")), case.naive, "{id}: naive.dfy ({})", case.construct);
@@ -290,4 +293,64 @@ fn the_report_refuses_a_case_it_cannot_print_right() {
     let no_yaml = scratch_prover("missing", "empty", None);
     let err = divergence::report(&no_yaml).expect_err("a folder without case.yaml").to_string();
     assert!(err.contains("empty/case.yaml"), "{err}");
+}
+
+/// The rows a case may claim: the policy's rules, with their decisions.
+#[derive(Deserialize)]
+struct PolicyRows {
+    rules: Vec<PolicyRow>,
+}
+
+#[derive(Deserialize)]
+struct PolicyRow {
+    id: String,
+    decision: String,
+}
+
+#[derive(Deserialize)]
+struct CaseRow {
+    row: String,
+}
+
+/// Every feature C+P supports has a case: each row the policy allows or restricts is the `row` of at least
+/// one case. The list of rows without a case shrinks with every round of the battery, to empty.
+#[test]
+fn every_supported_row_has_a_case() {
+    const NOT_YET: &[&str] = &[
+        "floating_point", "raw_pointer", "unique_ptr", "rvalue_references", "array_span", "iterators", "algorithms",
+        "classes_raii", "single_inheritance", "multiple_inheritance", "operator_overloading", "templates", "constexpr",
+        "recursion", "lambdas", "shared_variables", "global_state",
+    ];
+    let policy: PolicyRows = serde_yaml::from_str(&std::fs::read_to_string(root().join("policy/cplusp-policy.yaml")).unwrap()).unwrap();
+    let mut covered = std::collections::BTreeSet::new();
+    for entry in std::fs::read_dir(root().join("divergence/dafny/cases")).unwrap() {
+        let dir = entry.unwrap().path();
+        if dir.is_dir() {
+            let case: CaseRow = serde_yaml::from_str(&std::fs::read_to_string(dir.join("case.yaml")).unwrap()).unwrap();
+            covered.insert(case.row);
+        }
+    }
+    for rule in policy.rules.iter().filter(|r| r.decision == "allow" || r.decision == "restrict") {
+        if NOT_YET.contains(&rule.id.as_str()) {
+            assert!(!covered.contains(&rule.id), "{}: now has a case, take it off NOT_YET", rule.id);
+        } else {
+            assert!(covered.contains(&rule.id), "{}: a row the policy allows has no case in the battery", rule.id);
+        }
+    }
+}
+
+/// The cases each round of the battery planned. A missing one is work not done.
+#[test]
+fn the_battery_has_the_planned_cases() {
+    let cases = root().join("divergence/dafny/cases");
+    for id in [
+        // Round one: arithmetic and control.
+        "signed_overflow", "unsigned_wrap", "integral_promotion", "signed_division", "narrowing_cast", "shift", "sign_compare",
+        "plain_int", "reference_aliasing", "evaluation_order", "loop_underflow", "index_out_of_range", "optional_deref", "bool_from_int",
+        // Round C1: arithmetic and conversions.
+        "promotion_before_widening", "implicit_narrowing", "compound_assign_narrow", "signed_to_unsigned", "unary_minus_min", "abs_min",
+        "increment_overflow", "signed_shift_left", "signed_shift_right", "literal_shift", "bool_arith", "enum_cast", "size_minus_one",
+    ] {
+        assert!(cases.join(id).join("case.yaml").exists(), "no case {id}");
+    }
 }

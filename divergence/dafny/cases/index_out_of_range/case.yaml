@@ -1,5 +1,6 @@
 construct: "Array subscript a[i]"
 standard: "[expr.sub], [expr.add]: a[i] is *(a+i), and a+n points to a hypothetical element past the array, so the read is undefined."
+row: variable_index
 gap: 3
 cpp: "`a[i]` with `i` equal to the size is undefined. Nothing checks the index."
 naive_does: "Dafny asks for a proof that `i < |a|`. There is none. That is the right answer, so the model is stricter than C++."

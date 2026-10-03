@@ -1,5 +1,6 @@
 construct: "Narrowing static_cast to int8_t"
 standard: "[conv.integral]: the result is the unique value of the destination type that is congruent to the source integer modulo 2^N."
+row: narrowing_static_cast
 gap: 3
 cpp: "C++20 defines the conversion as modular. `static_cast<int8_t>(200)` is -56."
 naive_does: "Dafny `x as int8` needs a proof that the value fits. For 200 there is none."

@@ -1,5 +1,6 @@
 construct: Signed addition on int32_t
 standard: "[expr.pre]: the behavior of evaluating an arithmetic expression is undefined if the mathematical result is not in the range of representable values for its type."
+row: arithmetic
 gap: 4
 cpp: Signed overflow is undefined behaviour. The compiler may assume it never happens.
 naive_does: Adds in unbounded integers, so the sum never overflows and the proof goes through.

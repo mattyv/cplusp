@@ -15,6 +15,7 @@ The fields of `case.yaml`:
 
 - `construct`: what the case is about, for the report.
 - `standard`: the section of the C++ standard that decides the case, as `[label]: the sentence`. The labels are those of eel.is. A sentence may be shortened.
+- `row`: the id of the policy row the case exercises. Every row the policy allows or restricts has at least one case, which is how the battery covers the subset.
 - `gap`: the section of docs/soundness.md the case belongs to.
 - `cpp`: what the C++ does. `naive_does`: what the naive model does instead.
 - `naive`, `mitigated`: what Dafny must say about each file. `verifies`, `fails`, or `type_error` when Dafny refuses the file before it verifies anything. The mitigated model always verifies.

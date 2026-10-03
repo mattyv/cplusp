@@ -1,5 +1,6 @@
 construct: "Left shift on uint32_t"
 standard: "[expr.shift]: the behavior is undefined if the right operand is negative, or greater than or equal to the width of the promoted left operand."
+row: arithmetic
 gap: 3
 cpp: "A shift by 32 or more is undefined. Below 32 the result wraps modulo 2^32."
 naive_does: "Dafny has no shift on `int`, so the model uses `bv32`. It proves `1 << 32` is 0. C++ does not accept the shift."

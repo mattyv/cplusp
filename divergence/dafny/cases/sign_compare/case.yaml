@@ -1,5 +1,6 @@
 construct: "Comparison of int32_t with size_t"
 standard: "[expr.arith.conv]: when the unsigned operand has rank greater than or equal to the signed one, the signed operand converts to the unsigned type."
+row: arithmetic
 gap: 3
 cpp: "The signed operand converts to unsigned. `-1 < 1` becomes 18446744073709551615 < 1, which is false."
 naive_does: "Dafny needs `as int` on both sides, and that compares the true values. The model says -1 is below 1."

@@ -1,5 +1,6 @@
 construct: "Dereference of std::optional"
 standard: "[optional.observe]: operator* has the precondition has_value() is true, so *opt on an empty optional is undefined."
+row: optional_expected_variant
 gap: 3
 cpp: "`*opt` on an empty optional is undefined. Nothing checks it."
 naive_does: "Dafny asks for a proof that the datatype holds a value. There is none. The model is stricter than C++."

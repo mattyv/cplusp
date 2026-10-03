@@ -1,13 +1,16 @@
 construct: "Arithmetic on uint8_t"
 standard: "[conv.prom], [conv.integral]: a value whose rank is less than the rank of int converts to int, and the result converts back modulo 2^N."
+row: arithmetic
 gap: 3
 cpp: "Both operands become `int`. 255 + 1 is 256, and the conversion back to `uint8_t` wraps it to 0."
 naive_does: "It adds in `uint8`, so 255 + 1 is a range error. The model refuses code that is fine in C++."
 naive: fails
 mitigated: verifies
-side: model
-mitigation: "Add in the promoted type `int32`, then convert back with a `wrap8` helper."
+side: gate
+gate_rule: implicit_narrowing
+mitigation: "Gate row `implicit_narrowing`: the return of `a + b` as `uint8_t` narrows. The C++ casts on purpose, `static_cast<uint8_t>(a + b)`. The model adds in `int32` and wraps with `wrap8`."
 witness:
+  fixed_prints: "0"
   input: "255 + 1"
   ubsan: false
   prints: "0"

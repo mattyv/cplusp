@@ -103,7 +103,53 @@ rules:
     use_instead: "std::cmp_less and its siblings from <utility>, or a test of the sign and then a static_cast."
     stage: gate
     detect:
-      - matcher: binaryOperator(isComparisonOperator(), hasEitherOperand(implicitCastExpr(hasType(isUnsignedInteger()), hasSourceExpression(hasType(isSignedInteger())), unless(hasSourceExpression(integerLiteral())))))
+      - matcher: binaryOperator(isComparisonOperator(), hasEitherOperand(implicitCastExpr(hasType(isUnsignedInteger()), hasSourceExpression(hasType(isSignedInteger())), unless(hasSourceExpression(ignoringImplicit(integerLiteral()))))))
+
+  - id: implicit_narrowing
+    construct: Implicit narrowing conversion
+    area: arithmetic
+    canonical: "Core Guidelines ES.46"
+    decision: ban
+    why: The value changes with no sign in the source. C++20 wraps an integer, and a float loses its fraction.
+    use_instead: "a static_cast with a contract that the value fits, or a wider type."
+    stage: gate
+    detect:
+      - check: cppcoreguidelines-narrowing-conversions
+      - matcher: 'implicitCastExpr(hasType(hasCanonicalType(anyOf(asString("unsigned char"), asString("unsigned short")))), hasSourceExpression(hasType(hasCanonicalType(asString("int")))), unless(hasSourceExpression(ignoringImplicit(integerLiteral()))), unless(hasParent(explicitCastExpr())))'
+      - matcher: 'binaryOperator(isAssignmentOperator(), unless(hasOperatorName("=")), hasLHS(hasType(hasCanonicalType(anyOf(asString("unsigned char"), asString("unsigned short"), asString("signed char"), asString("short"))))))'
+
+  - id: sign_conversion
+    construct: Implicit conversion of a signed integer to unsigned
+    area: arithmetic
+    canonical: "MISRA 10.3, -Wsign-conversion"
+    decision: ban
+    why: A negative value becomes a large one with no sign in the source.
+    use_instead: "a test of the sign in the contract and then a static_cast."
+    stage: gate
+    detect:
+      - matcher: 'implicitCastExpr(hasType(isUnsignedInteger()), unless(hasType(hasCanonicalType(anyOf(asString("unsigned char"), asString("unsigned short"))))), unless(hasType(booleanType())), hasSourceExpression(hasType(isSignedInteger())), unless(hasSourceExpression(ignoringImplicit(integerLiteral()))), unless(hasParent(binaryOperator(isComparisonOperator()))), unless(hasParent(explicitCastExpr())))'
+
+  - id: widening_multiplication
+    construct: Multiplication in a narrow type whose result widens
+    area: arithmetic
+    canonical: "Core Guidelines ES.103"
+    decision: ban
+    why: The product overflows in the narrow type before it reaches the wide one.
+    use_instead: "a wide operand first, such as int64_t{a} * b."
+    stage: gate
+    detect:
+      - check: bugprone-implicit-widening-of-multiplication-result
+
+  - id: literal_shift
+    construct: Shift of a literal of type int
+    area: arithmetic
+    canonical: "MISRA 12.2"
+    decision: ban
+    why: The literal is an int, so the shift is 32 bits wide whatever the destination type.
+    use_instead: "a literal of the destination type, such as uint64_t{1} << n."
+    stage: gate
+    detect:
+      - matcher: 'binaryOperator(hasOperatorName("<<"), hasLHS(ignoringImpCasts(integerLiteral(hasType(asString("int"))))))'
 
   - id: narrowing_static_cast
     construct: Narrowing `static_cast`

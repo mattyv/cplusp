@@ -1,5 +1,6 @@
 construct: "Count-down loop on size_t"
 standard: "[basic.fundamental]: arithmetic for the unsigned type is performed modulo 2^N."
+row: arithmetic
 gap: 3
 cpp: "`n - 1` for `n == 0` wraps to the largest `size_t`. The test `i < n` then fails at once, and the loop runs zero times. It is defined."
 naive_does: "Dafny does not wrap, so `n - 1` is a range error when `n == 0`. The model refuses code that is fine in C++."

@@ -1,5 +1,6 @@
 construct: "Two reference parameters"
 standard: "[dcl.ref]: a reference can be thought of as a name of an object, and nothing forbids two parameters that name one object."
+row: lvalue_references
 gap: 3
 cpp: "Two references may name the same object. `add_both(x, x)` with x = 3 leaves x = 12."
 naive_does: "Each reference is a separate in value and out value, so the model says 6 and 9 for `add_both(x, x)`."

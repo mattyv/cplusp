@@ -1,5 +1,6 @@
 construct: "Calls with side effects in the arguments"
 standard: "[expr.call]: the initialization of a parameter, including every associated value computation and side effect, is indeterminately sequenced with respect to that of any other parameter."
+row: evaluation_order
 gap: 3
 cpp: "The order of evaluation of arguments is unspecified. clang goes left to right, and g++ goes right to left."
 naive_does: "Dafny has no call inside an expression, so the model fixes left to right and proves `rises(x)` true. g++ evaluates right to left and returns false."

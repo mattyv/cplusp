@@ -1,5 +1,6 @@
 construct: "Unsigned subtraction on uint32_t"
 standard: "[basic.fundamental]: arithmetic for the unsigned type is performed modulo 2^N."
+row: arithmetic
 gap: 3
 cpp: "Unsigned arithmetic wraps modulo 2^32, and it is defined. `1 - 2` is 4294967295."
 naive_does: "Dafny does not wrap, so `a - b` is a range error when `a < b`. The model refuses code that is fine in C++."

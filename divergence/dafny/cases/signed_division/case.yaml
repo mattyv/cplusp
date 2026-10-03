@@ -1,5 +1,6 @@
 construct: "Division and remainder on int32_t"
 standard: "[expr.mul]: the / operator yields the algebraic quotient with any fractional part discarded. If the second operand is zero, or a/b is not representable, the behavior is undefined."
+row: arithmetic
 gap: 3
 cpp: "`/` truncates toward zero. `%` takes the sign of the left operand. `-7 / 2` is -3 and `-7 % 2` is -1."
 naive_does: "Dafny `/` and `%` round toward negative infinity and give -4 and 1. The model proves facts the C++ does not meet."
