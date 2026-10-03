@@ -1,0 +1,21 @@
+construct: "Initializing a Base from a Derived"
+standard: "[class.copy.ctor], [class.virtual]: initializing a Base from a Derived calls Base's copy constructor, which copies the Base subobject only. The new object has dynamic type Base."
+row: single_inheritance
+gap: 3
+cpp: "`Base b = d;` copies the Base part of `d` into a new object of type Base. `b.value()` is the function of Base, and the result is 1."
+naive_does: "A Dafny object never loses its class. `var b: Base := d` keeps the object, `b.value()` goes to Derived, and the model proves 2."
+naive: verifies
+naive_is_wrong: true
+mitigated: verifies
+side: gate
+gate_rule: slicing
+mitigation: "Gate row `slicing`: no copy of a derived object into a base by value. The C++ binds a reference, `const Base& b = d;`, and the model is exact."
+witness:
+  fixed_prints: "2"
+  input: "value_of with a Derived"
+  ubsan: false
+  prints: "1"
+rule: |
+  A Dafny object never loses its class, and a C++ copy into a base type does.
+  Never copy a derived object into a base by value.
+  Bind a reference.

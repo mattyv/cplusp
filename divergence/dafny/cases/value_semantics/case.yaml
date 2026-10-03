@@ -1,0 +1,20 @@
+construct: "A struct passed and copied by value"
+standard: "[intro.object], [class.copy.ctor]: a definition creates a new object, and the copy constructor copies the members into it, so q and p are two objects."
+row: classes_raii
+gap: 3
+cpp: "`Point q = p;` makes a new object. `q.x = 5` leaves `p.x` as it was. `keep` with p.x = 1 gives 6."
+naive_does: "A Dafny `class` is a reference, so `var q := p` is a second name for one object. The update of `q.x` changes `p.x`, and the model says 10."
+naive: verifies
+naive_is_wrong: true
+mitigated: verifies
+side: model
+mitigation: "A struct or class held by value is a Dafny `datatype`. A copy is the same value, and a field update is `p.(x := 5)`, a new value."
+witness:
+  input: "keep with p.x = 1"
+  ubsan: false
+  prints: "6"
+rule: |
+  A C++ value is a Dafny `datatype`.
+  Model a struct or class held by value as a datatype, and a copy as the same value.
+  A field update is `p.(x := 5)`, a new value.
+  Use a Dafny `class` only for what the C++ reaches through a reference or pointer.

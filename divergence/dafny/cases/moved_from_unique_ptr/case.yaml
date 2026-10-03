@@ -1,0 +1,20 @@
+construct: "Read of a unique_ptr after std::move"
+standard: "[unique.ptr.single.ctor]: after the move constructor, the source holds nullptr, and [unique.ptr.single.observers] makes operator* on it undefined."
+row: unique_ptr
+gap: 3
+cpp: "`std::move(p)` leaves `p` null. `*p` reads through a null pointer, and that is undefined."
+naive_does: "The model copies the reference, so `p` and `q` are both the object. It reads `p.v` and proves `2 * p.v`."
+naive: verifies
+naive_is_wrong: true
+mitigated: verifies
+side: gate
+gate_rule: rvalue_references
+mitigation: "Gate row `rvalue_references`: no read of a variable after `std::move` of it. The model sets the source to null at the move, so Dafny refuses a later read."
+witness:
+  fixed_prints: "14"
+  input: "take with a value of 7"
+  ubsan: true
+rule: |
+  A moved-from `unique_ptr` is null.
+  Model `unique_ptr<T>` as a nullable reference, and a move as the source becoming null.
+  Never read the source after the move.

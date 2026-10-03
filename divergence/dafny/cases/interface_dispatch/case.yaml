@@ -1,0 +1,18 @@
+construct: "A call through a reference to each of two interfaces"
+standard: "[class.virtual]: a call through a reference to a base class invokes the final overrider in the dynamic type, whichever base the reference names."
+row: multiple_inheritance
+gap: 3
+cpp: "`r.read()` and `c.count()` go to the functions of Store, although the references name two different bases. The result is the sum."
+naive_does: "Each interface is a trait, and Store extends both. A call through either trait goes to the function of Store. The model is exact."
+naive: verifies
+mitigated: verifies
+side: none
+mitigation: "None. The literal model is exact. A pure interface is a trait, and a class that implements several interfaces extends several traits."
+witness:
+  input: "both with value 3 and items 4"
+  ubsan: false
+  prints: "7"
+rule: |
+  A pure interface is a Dafny trait with the same functions.
+  A class that implements several interfaces extends several traits.
+  Dispatch through any of them is the same call.

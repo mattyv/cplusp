@@ -1,0 +1,21 @@
+construct: "Virtual call in a constructor"
+standard: "[class.cdtor]: when a virtual function is called from a constructor, the function called is the final overrider in the constructor's class. An override in a derived class is not called."
+row: single_inheritance
+gap: 3
+cpp: "`kind()` in the constructor of Base is Base's `kind`, because the Derived part does not exist yet. `seen` is 1."
+naive_does: "A Dafny call dispatches on the class of the object, which is Derived. The model proves `seen == 2`."
+naive: verifies
+naive_is_wrong: true
+mitigated: verifies
+side: gate
+gate_rule: virtual_call_in_constructor
+mitigation: "Gate row `virtual_call_in_constructor`: no virtual call in a constructor or destructor. The caller sets `seen` after construction, and `kind()` then goes to Derived in C++ and in the model."
+witness:
+  fixed_prints: "2"
+  input: "seen_kind()"
+  ubsan: false
+  prints: "1"
+rule: |
+  A virtual call inside a constructor or destructor dispatches to the class under construction.
+  Dafny dispatches to the class of the object.
+  Do not call a virtual function from a constructor or destructor.

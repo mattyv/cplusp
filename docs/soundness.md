@@ -20,7 +20,7 @@ C++ as the bot writes it
 
 ## Gap 1: C++ as written versus as compiled
 
-Partly open. Compiler version, flags, optimisation, implementation-defined behaviour, the target. The gate already refuses mismatched flags in two cases. One result from the battery, case `plain_int`: the width of `int` is implementation-defined. So the gate bans the built-in integer types in verified code. One assumption remains, and the skill states it: `size_t` maps to `uint64`. That is true on a 64-bit target only. The other things the proof assumes about the build are not written down yet.
+Partly open. Compiler version, flags, optimisation, implementation-defined behaviour, the target. The gate already refuses mismatched flags in two cases. One result from the battery, case `plain_int`: the width of `int` is implementation-defined. So the gate bans the built-in integer types in verified code. One assumption remains, and the skill states it: `size_t` maps to `uint64`. That is true on a 64-bit target only. The `stack_depth` case adds a second: a recursion bound in a contract holds on the target's stack, and the standard sets no minimum. The other things the proof assumes about the build are not written down yet.
 
 ## Gap 2: the gate's view
 

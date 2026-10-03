@@ -1,0 +1,21 @@
+construct: "A pointer stored past the life of its object"
+standard: "[basic.life]: after the lifetime of an object has ended, a pointer to its storage may be used only in limited ways. A read through it is undefined."
+row: raw_pointer
+gap: 3
+cpp: "`local` dies at the closing brace, and `h.p` still holds its address. The read through `h.p` is undefined."
+naive_does: "A Dafny object lives for ever, so the pointer stays valid and the model proves 42."
+naive: verifies
+naive_is_wrong: true
+mitigated: verifies
+side: gate
+gate_rule: raw_pointer
+mitigation: "Gate row `raw_pointer`: a pointer is a parameter only, never a member or a local. `Holder` keeps an `int32_t`, and the model keeps a value."
+witness:
+  fixed_prints: "42"
+  input: "read_later()"
+  ubsan: false
+  asan: true
+rule: |
+  Dafny objects live for ever, and C++ objects die.
+  A pointer in verified code is a parameter only, never a member or a local.
+  So it cannot outlive its object.

@@ -1,0 +1,19 @@
+construct: "Recursion to a great depth"
+standard: "[implimits]: the depth of recursion at run time is an implementation quantity, and the standard sets no minimum for it."
+row: recursion
+gap: 1
+cpp: "`depth(10000000)` makes ten million nested calls. The stack overflows, and the program stops."
+naive_does: "Dafny proves that the recursion ends, and it proves `result == n` for every n. It never asks whether the stack holds the calls."
+naive: verifies
+naive_is_wrong: true
+mitigated: verifies
+side: contract
+mitigation: "A precondition `requires n <= 100000` in the C++ contract and in the model, a bound the target holds. It is an assumption about the target, and docs/soundness.md gap 1 records it."
+witness:
+  input: "depth(10000000)"
+  ubsan: false
+  asan: true
+rule: |
+  Dafny proves that a recursion ends, not that the stack holds it.
+  Bound the depth in the contract.
+  The bound is an assumption about the target, and docs/soundness.md gap 1 records it.

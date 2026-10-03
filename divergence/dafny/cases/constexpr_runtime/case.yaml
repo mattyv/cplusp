@@ -1,0 +1,17 @@
+construct: "A constexpr function called at run time"
+standard: "[expr.const]: an operation that would have undefined behavior is not a core constant expression. So the compiler rejects square(100000) at compile time only, and at run time the function is ordinary."
+row: constexpr
+gap: 3
+cpp: "`square(100000)` in a constant expression is an error at compile time. The same call at run time is an ordinary call, and `x * x` overflows with undefined behavior."
+naive_does: "Dafny refuses the product, because it may overflow int32. The model is stricter than the C++."
+naive: fails
+mitigated: verifies
+side: contract
+mitigation: "A precondition `requires -46340 <= x <= 46340` in the C++ contract and in the model. The caller proves it, as for any function."
+witness:
+  input: "square(100000) at run time"
+  ubsan: true
+rule: |
+  `constexpr` changes nothing in the model.
+  The compiler checks only the calls it evaluates at compile time.
+  A run-time call has the same contract as any function.

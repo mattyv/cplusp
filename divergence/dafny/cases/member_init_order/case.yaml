@@ -1,0 +1,20 @@
+construct: "Mem-initializers written out of declaration order"
+standard: "[class.base.init]: non-static data members are initialized in the order they were declared in the class definition, regardless of the order of the mem-initializers."
+row: classes_raii
+gap: 3
+cpp: "The constructor writes `b(next(counter)), a(next(counter))`. The members are initialized as a then b, so a is 1 and b is 2."
+naive_does: "The model follows the written order. It gives b the first value and a the second, and it proves b == 1 and a == 2."
+naive: verifies
+naive_is_wrong: true
+mitigated: verifies
+side: gate
+gate_rule: member_init_order
+mitigation: "Gate row `member_init_order`: the mem-initializers are in declaration order. The model is written in that order too."
+witness:
+  fixed_prints: "1 2"
+  input: "make()"
+  ubsan: false
+  prints: "1 2"
+rule: |
+  C++ initializes members in declaration order, whatever order the constructor writes them in.
+  Write the mem-initializers in declaration order, and model the constructor in that order.

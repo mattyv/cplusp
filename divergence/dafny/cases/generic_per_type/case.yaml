@@ -1,0 +1,20 @@
+construct: "A template instantiated with int8_t"
+standard: "[temp.inst], [conv.prom]: each set of template arguments instantiates its own function. In the int8_t one, 2 * x is computed in int and narrowed on return."
+row: templates
+gap: 3
+cpp: "`twice<int8_t>` computes `2 * x` in int and narrows it on return. `twice8(100)` is 200 narrowed to -56."
+naive_does: "A generic Dafny method cannot multiply a value of type T, so the model is a type error."
+naive: type_error
+mitigated: verifies
+side: gate
+gate_rule: implicit_narrowing
+mitigation: "Gate row `implicit_narrowing`, which reads inside instantiations too. The template casts on purpose, `static_cast<T>(2 * x)`, and the contract of twice8 says the value fits. The model has one method for each instantiation."
+witness:
+  fixed_prints: "-56"
+  input: "twice8(100)"
+  ubsan: false
+  prints: "-56"
+rule: |
+  A template has no model.
+  Each instantiation is a function with its own types, and gets its own model.
+  The gate reads inside instantiations too.

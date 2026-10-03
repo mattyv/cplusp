@@ -1,0 +1,21 @@
+construct: "Delete of a Derived through a Base without a virtual destructor"
+standard: "[expr.delete]: if the static type of the object to be deleted differs from its dynamic type, the static type shall have a virtual destructor. Otherwise the behavior is undefined."
+row: single_inheritance
+gap: 3
+cpp: "The `unique_ptr<Base>` deletes a Derived through a Base. Base has no virtual destructor, so the delete is undefined. The destructor of Derived does not run, and its string leaks."
+naive_does: "Dafny has no destructor, so the model has nothing to say about the delete. It verifies, and the C++ is undefined."
+naive: verifies
+naive_is_wrong: true
+mitigated: verifies
+side: gate
+gate_rule: virtual_destructor
+mitigation: "Gate row `virtual_destructor`: every class with a virtual function has a virtual destructor. The C++ adds `virtual ~Base() = default;`."
+witness:
+  fixed_prints: "2"
+  input: "value_of_new()"
+  ubsan: false
+  asan: true
+rule: |
+  Dafny has no destructor, so the model cannot see a wrong one.
+  Every class with a virtual function has a virtual destructor.
+  The gate enforces it.

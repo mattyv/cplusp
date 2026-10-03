@@ -1,0 +1,21 @@
+construct: "Read of a string after std::move"
+standard: "[lib.types.movedfrom]: a moved-from object of a standard library type is in a valid but unspecified state."
+row: rvalue_references
+gap: 3
+cpp: "`std::move(s)` empties `s` in practice, and the standard allows any valid state. `s.size()` is 0 for \"hi\", and the result is 2."
+naive_does: "The model treats the move as a copy and keeps `s` as it was. It says 4 for \"hi\"."
+naive: verifies
+naive_is_wrong: true
+mitigated: verifies
+side: gate
+gate_rule: rvalue_references
+mitigation: "Gate row `rvalue_references`: no read of a variable after `std::move` of it. The C++ reads `t` only, and the model gives the moved-from `s` an unspecified value."
+witness:
+  fixed_prints: "4"
+  input: "total(\"hi\")"
+  ubsan: false
+  prints: "2"
+rule: |
+  A moved-from value is unspecified, and Dafny has no move.
+  Never read a variable after `std::move` of it.
+  Model the move as a copy and the source as gone.
