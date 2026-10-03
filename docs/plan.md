@@ -577,7 +577,8 @@ Provisional. Parked as "maybe" where the first slice does not need a decision, a
 | Piece | Choice | Status |
 | --- | --- | --- |
 | Gate checks and index | C++20 clang-tidy module. CMake and Ninja. LLVM 18 pinned, builds against 17 to 20 | Forced: a clang-tidy module can only be C++ |
-| Driver `cplusp` | Rust. No Python anywhere. TypeScript not in the core | Preferred |
+| Driver `cplusp` | Rust, one static binary. No Python anywhere. TypeScript not in the core | Decided |
+| Policy to clang-tidy conversion | A pure core inside the driver: policy in, config out, findings matched back to rules, filter by function kind. Plain Rust with golden tests first. Verus proves it later: every check of every non-allow rule is enabled, and nothing else | Decided. Proof deferred until the format settles |
 | Prover, candidate A | Dafny underneath, with the gated C++ translated to it and errors mapped back to C++ lines. Strong automation and the most LLM training data of any verifier. The translator is the new trusted component. We test it by compiling the Dafny and running both on the same inputs | Open. The thin slice decides which is built first |
 | Prover, candidate B | VeriFast. Native `//@` contract syntax, built-in overflow and bounds checks, and ownership gives frame and invalidation rules for free. Costs: its C++ frontend lacked templates in 2022. Release notes to Sept 2026 show the work going to Rust. So we would translate to its mature C mode. A 2026 study of ten LLMs found 31% verification success on VeriFast specs, with 94% of errors in separation-logic details | Open. The thin slice decides which is built first |
 | Prover, plan C | Verus, via translation to Rust. Exact machine ints and fast, but translated C++ must satisfy the borrow checker | Fallback |
@@ -620,6 +621,7 @@ Provisional. Parked as "maybe" where the first slice does not need a decision, a
 - Recorded that the gate runs separately from, and never edits, a team's existing clang-tidy config, with its own pinned clang-tidy.
 - Made the prover an open choice between Dafny and VeriFast, settled by the thin slice. Verus is plan C.
 - Added the Prover interface: the prover is a plug-in, the bot never writes prover-specific hints, and two provers can run as a cross-check.
+- Decided the driver is Rust, with the policy conversion as a pure core that Verus can prove once the format settles.
 - Added a provisional tech stack: C++ only for the clang-tidy module, Rust for the rest, no Python.
 - Rewrote the doc in STE-flavored mode with the asd-ste100 skill: no semicolons, sentences of 25 words or fewer, one word per action.
 - Added an Examples section with a verified function, a chained caller, both failure messages, and the marker kinds. It ends with an excerpt of the trusted `vector` contract.
