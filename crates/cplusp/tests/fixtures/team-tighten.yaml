@@ -1,0 +1,5 @@
+version: 1
+extends: cplusp:default
+rules:
+  - id: variable_index
+    decision: ban

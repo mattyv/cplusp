@@ -1,0 +1,24 @@
+version: 1
+rules:
+  - id: iterators
+    construct: Iterators
+    area: library
+    decision: restrict
+    why: Iterator arithmetic is pointer arithmetic in disguise.
+    use_instead: a range-for loop.
+    detect:
+      - check: cplusp-iterator-arithmetic
+  - id: goto
+    construct: goto
+    area: control
+    decision: ban
+    why: No benefit.
+    use_instead: a loop.
+  - id: unions
+    construct: Unions
+    area: types
+    decision: ban
+    why: Type punning.
+    use_instead: std::variant.
+    detect:
+      - check: misspelt-check

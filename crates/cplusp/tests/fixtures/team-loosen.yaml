@@ -1,0 +1,6 @@
+version: 1
+extends: cplusp:default
+rules:
+  - id: goto
+    decision: allow
+    loosened_because: Legacy parser uses goto for its state machine.

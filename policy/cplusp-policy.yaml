@@ -1,0 +1,571 @@
+# cplusp-policy.yaml: the rule list. One entry per row of the subset table in docs/plan.md.
+# The gate reads this file. `cplusp policy doc` generates the plan's table from it.
+version: 1
+
+defaults:
+  new_functions: verified
+  edited_functions: keep
+  exceptions:
+    reason_required: true
+    approval: report
+
+rules:
+  # ---------------------------------------------------------------- types
+  - id: fixed_width_ints
+    construct: Fixed-width ints, `bool`, `enum class`
+    area: types
+    canonical: MISRA prefers sized types and scoped enums
+    decision: allow
+    why: Easy for the prover.
+    stage: none
+
+  - id: unscoped_enum
+    construct: Unscoped `enum`
+    area: types
+    canonical: "MISRA: use scoped"
+    decision: ban
+    why: Implicit int conversion.
+    use_instead: enum class.
+    stage: gate
+    detect:
+      - check: cplusp-unscoped-enum
+
+  - id: floating_point
+    construct: Floating point
+    area: types
+    canonical: Allowed by all
+    decision: restrict
+    limit: Values are opaque to the prover. It proves no NaN or inf only where the contract says so.
+    why: Solvers are slow on floats.
+    stage: prover
+
+  - id: unions
+    construct: Unions
+    area: types
+    canonical: Banned by MISRA and Core Guidelines
+    decision: ban
+    why: Type punning breaks the memory model.
+    use_instead: std::variant.
+    stage: gate
+    detect:
+      - check: cppcoreguidelines-pro-type-union-access
+      - check: cplusp-union-decl
+
+  - id: bitfields
+    construct: Bit-fields
+    area: types
+    canonical: MISRA advisory ban
+    decision: trusted_only
+    why: Layout is implementation-defined.
+    use_instead: explicit masks and shifts, or mark the function trusted with a reason.
+    stage: gate
+    detect:
+      - check: cplusp-bitfield
+
+  - id: uninitialised_variables
+    construct: Uninitialised variables
+    area: types
+    canonical: MISRA and Core Guidelines ban
+    decision: ban
+    why: Reading them is UB.
+    use_instead: an initialiser on every declaration.
+    stage: gate
+    detect:
+      - check: cppcoreguidelines-init-variables
+      - check: cppcoreguidelines-pro-type-member-init
+
+  # ----------------------------------------------------------- arithmetic
+  - id: arithmetic
+    construct: Signed/unsigned arithmetic, shifts, division
+    area: arithmetic
+    canonical: Allowed with care
+    decision: allow
+    why: The prover proves no overflow, bad shift or divide by zero.
+    stage: prover
+
+  - id: narrowing_static_cast
+    construct: Narrowing `static_cast`
+    area: arithmetic
+    canonical: Allowed if explicit
+    decision: allow
+    why: The prover proves the value fits.
+    stage: prover
+
+  # --------------------------------------------------------------- memory
+  - id: raw_pointer
+    construct: Non-owning raw pointer to one object
+    area: memory
+    canonical: Core Guidelines allow as observer
+    decision: restrict
+    limit: One object, no ownership, no arithmetic.
+    why: Nullability goes in the contract.
+    stage: spec
+
+  - id: pointer_arithmetic
+    construct: Pointer arithmetic, array-to-pointer decay
+    area: memory
+    canonical: Core Guidelines bounds profile ban
+    decision: ban
+    why: Pointer arithmetic has no bounds the prover can see.
+    use_instead: std::span.
+    stage: gate
+    detect:
+      - check: cppcoreguidelines-pro-bounds-pointer-arithmetic
+      - check: cppcoreguidelines-pro-bounds-array-to-pointer-decay
+
+  - id: raw_allocation
+    construct: "`new` / `delete`, `malloc` / `free`"
+    area: memory
+    canonical: MISRA advisory ban
+    decision: trusted_only
+    why: Allocation is trusted. Ownership goes through RAII types.
+    use_instead: std::unique_ptr or a container, or mark the function trusted with a reason.
+    stage: gate
+    detect:
+      - check: cppcoreguidelines-owning-memory
+      - check: cppcoreguidelines-no-malloc
+
+  - id: raw_memory_ops
+    construct: "`memcpy`, `memset`, `memmove` on anything but plain bytes"
+    area: memory
+    canonical: Core Guidelines discourage
+    decision: trusted_only
+    why: Bypasses the type model. UB on non-trivial types.
+    use_instead: std::copy, assignment, or std::bit_cast, or mark the function trusted with a reason.
+    stage: gate
+    detect:
+      - check: cplusp-raw-memory-ops
+
+  - id: launder_placement_new
+    construct: "`std::launder`, placement `new`"
+    area: memory
+    canonical: Rare in application code
+    decision: trusted_only
+    why: Object-lifetime games the prover cannot follow.
+    use_instead: std::optional or a container, or mark the function trusted with a reason.
+    stage: gate
+    detect:
+      - check: cplusp-launder-placement-new
+
+  - id: unique_ptr
+    construct: "`std::unique_ptr`"
+    area: memory
+    canonical: Recommended
+    decision: allow
+    why: Trusted contract. Simple single ownership.
+    stage: spec
+
+  - id: shared_ptr
+    construct: "`std::shared_ptr`"
+    area: memory
+    canonical: Allowed
+    decision: trusted_only
+    why: Shared ownership and refcounts are hard to reason about.
+    use_instead: std::unique_ptr with one clear owner, or mark the function trusted with a reason.
+    stage: gate
+    detect:
+      - check: cplusp-shared-ptr
+
+  - id: lvalue_references
+    construct: Lvalue references
+    area: memory
+    canonical: Allowed
+    decision: allow
+    why: The prover models them as pointers.
+    stage: prover
+
+  - id: rvalue_references
+    construct: Rvalue refs and `std::move`
+    area: memory
+    canonical: Allowed
+    decision: restrict
+    limit: Move locals and parameters only, no use after move.
+    why: Prover support to check in the first slice.
+    use_instead: a move of a local or parameter, and no read of the moved-from object.
+    stage: gate
+    detect:
+      - check: bugprone-use-after-move
+
+  - id: return_ref_to_local
+    construct: Returning a reference or pointer to a local
+    area: memory
+    canonical: MISRA mandatory ban
+    decision: ban
+    why: Always a bug.
+    use_instead: a return by value.
+    stage: gate
+    detect:
+      - check: clang-diagnostic-return-stack-address
+
+  # -------------------------------------------------------------- library
+  - id: array_span
+    construct: "`std::array`, `std::span`"
+    area: library
+    canonical: Recommended
+    decision: allow
+    why: Core trusted types.
+    stage: spec
+
+  - id: containers
+    construct: "`std::vector`, `std::string`, maps"
+    area: library
+    canonical: Allowed
+    decision: restrict
+    limit: Only methods that have a trusted contract, no reference or iterator held across a mutation.
+    why: Trusted contracts carry the invalidation rules.
+    stage: spec
+
+  - id: variable_index
+    construct: "`operator[]` with a variable index"
+    area: library
+    canonical: Core Guidelines bounds profile ban
+    decision: allow
+    why: The prover proves the index is in range.
+    stage: prover
+    detect:
+      - check: cppcoreguidelines-pro-bounds-constant-array-index
+
+  - id: iterators
+    construct: Iterators
+    area: library
+    canonical: Allowed
+    decision: restrict
+    limit: Range-for only.
+    why: Iterator arithmetic is pointer arithmetic in disguise.
+    use_instead: a range-for loop, or an index the prover can check.
+    stage: gate
+    detect:
+      - check: cplusp-iterator-arithmetic
+
+  - id: optional_expected_variant
+    construct: "`std::optional`, `std::expected`, `std::variant`"
+    area: library
+    canonical: Recommended
+    decision: allow
+    why: Trusted contracts. Replaces unions and exceptions.
+    stage: spec
+
+  - id: algorithms
+    construct: "`<algorithm>` with lambdas"
+    area: library
+    canonical: Allowed
+    decision: restrict
+    limit: Only algorithms on the trusted list, which starts short.
+    why: Each algorithm needs a trusted contract.
+    stage: spec
+
+  # ---------------------------------------------------------------- casts
+  - id: c_style_casts
+    construct: C-style casts
+    area: casts
+    canonical: Banned by MISRA and Core Guidelines
+    decision: ban
+    why: Hides what kind of cast it is. All forms, including plain numeric narrowing.
+    use_instead: static_cast, or std::bit_cast for a byte view.
+    stage: gate
+    detect:
+      - check: google-readability-casting
+
+  - id: reinterpret_const_cast
+    construct: "`reinterpret_cast`, `const_cast`"
+    area: casts
+    canonical: Banned
+    decision: trusted_only
+    why: Defeats the type model. Most forms are UB.
+    use_instead: std::bit_cast, or mark the function trusted with a reason.
+    stage: gate
+    detect:
+      - check: cppcoreguidelines-pro-type-reinterpret-cast
+      - check: cppcoreguidelines-pro-type-const-cast
+
+  - id: downcasts
+    construct: Downcasts (`static_cast`, `dynamic_cast`)
+    area: casts
+    canonical: Core Guidelines ban `static_cast` downcasts
+    decision: ban
+    why: A downcast asserts a type the prover cannot see.
+    use_instead: virtual dispatch.
+    stage: gate
+    detect:
+      - check: cppcoreguidelines-pro-type-static-cast-downcast
+
+  # -------------------------------------------------------------- classes
+  - id: classes_raii
+    construct: Classes, constructors, destructors, RAII
+    area: classes
+    canonical: Allowed
+    decision: allow
+    why: Core of the subset.
+    stage: prover
+
+  - id: single_inheritance
+    construct: Single inheritance, `virtual`, `override`, `final`
+    area: classes
+    canonical: eCv++ requires `override`, encourages `final`
+    decision: allow
+    why: The prover checks overrides for Liskov substitution.
+    stage: prover
+
+  - id: missing_override
+    construct: Overriding without `override`
+    area: classes
+    canonical: eCv++ requires `override`
+    decision: ban
+    why: An override the reader cannot see is a hidden contract change.
+    use_instead: the override keyword.
+    stage: gate
+    detect:
+      - check: modernize-use-override
+
+  - id: multiple_inheritance
+    construct: Multiple inheritance
+    area: classes
+    canonical: "eCv++: interfaces only"
+    decision: restrict
+    limit: Extra bases must be pure interfaces.
+    why: Keep the object model simple.
+    use_instead: one concrete base plus interfaces.
+    stage: gate
+    detect:
+      - check: cplusp-multiple-inheritance
+        options:
+          AllowPureInterfaces: "true"
+
+  - id: virtual_inheritance
+    construct: Virtual inheritance
+    area: classes
+    canonical: MISRA advisory ban
+    decision: ban
+    why: Not provable today.
+    use_instead: composition.
+    stage: gate
+    detect:
+      - check: cplusp-virtual-inheritance
+
+  - id: operator_overloading
+    construct: Operator overloading
+    area: classes
+    canonical: "eCv++: const, no side effects"
+    decision: restrict
+    limit: Const and free of side effects.
+    why: Hidden side effects confuse contracts.
+    use_instead: a const operator with no side effects, or a named function.
+    stage: gate
+    detect:
+      - check: cplusp-impure-operator
+
+  - id: implicit_conversions
+    construct: Implicit conversions (non-`explicit` ctors, conversion operators)
+    area: classes
+    canonical: eCv++ requires `explicit`
+    decision: ban
+    why: Hidden calls confuse contracts.
+    use_instead: explicit on the constructor or conversion operator.
+    stage: gate
+    detect:
+      - check: google-explicit-constructor
+      - check: cplusp-conversion-operator
+
+  - id: mutable_members
+    construct: "`mutable` members"
+    area: classes
+    canonical: eCv++ ban
+    decision: ban
+    why: Breaks const reasoning.
+    use_instead: a non-const member function, or a separate cache object.
+    stage: gate
+    detect:
+      - check: cplusp-mutable
+
+  # ------------------------------------------------------------ templates
+  - id: templates
+    construct: Function and class templates
+    area: templates
+    canonical: "eCv++: type params only, no specialisation"
+    decision: restrict
+    limit: Type parameters only, no specialisation.
+    why: Verified per instantiation.
+    use_instead: a template with type parameters only.
+    stage: gate
+    detect:
+      - check: cplusp-template-specialization
+
+  - id: constexpr
+    construct: "`constexpr`, `consteval`, concepts"
+    area: templates
+    canonical: Allowed
+    decision: allow
+    why: Compile-time only.
+    stage: none
+
+  - id: metaprogramming
+    construct: SFINAE, template metaprogramming
+    area: templates
+    canonical: Discouraged
+    decision: trusted_only
+    why: Nothing to prove at runtime, but unreadable contracts.
+    use_instead: concepts and plain overloads, or mark the function trusted with a reason.
+    stage: gate
+    detect:
+      - check: cplusp-metaprogramming
+
+  # -------------------------------------------------------------- control
+  - id: exceptions
+    construct: Exceptions
+    area: control
+    canonical: eCv++ ban. Common in safety code
+    decision: ban
+    why: Verified code is noexcept.
+    use_instead: std::expected.
+    stage: gate
+    detect:
+      - check: cplusp-exceptions
+
+  - id: goto
+    construct: "`goto`"
+    area: control
+    canonical: MISRA ban
+    decision: ban
+    why: No benefit.
+    use_instead: a loop.
+    stage: gate
+    detect:
+      - check: cppcoreguidelines-avoid-goto
+
+  - id: unreachable_assume
+    construct: "`[[assume]]`, `__builtin_unreachable`, `std::unreachable`"
+    area: control
+    canonical: New in C++23
+    decision: ban
+    why: UB if the claim is false. Claims belong in the contract, where the prover checks them.
+    use_instead: a precondition or an assertion in the contract.
+    stage: gate
+    detect:
+      - check: cplusp-unreachable-assume
+
+  - id: longjmp
+    construct: "`setjmp` / `longjmp`"
+    area: control
+    canonical: MISRA ban
+    decision: ban
+    why: Skips destructors. UB in C++.
+    use_instead: return values or std::expected.
+    stage: gate
+    detect:
+      - check: cplusp-longjmp
+
+  - id: recursion
+    construct: Recursion
+    area: control
+    canonical: MISRA ban
+    decision: restrict
+    limit: Needs a `decreases` clause in the contract.
+    why: The prover needs a termination measure. Loops are easier.
+    use_instead: a loop, or a decreases clause.
+    stage: gate
+    detect:
+      - check: cplusp-recursion
+
+  - id: lambdas
+    construct: Lambdas
+    area: control
+    canonical: Allowed
+    decision: restrict
+    limit: Passed directly to a trusted algorithm, no reference capture that escapes.
+    why: Captured references can dangle.
+    use_instead: a lambda passed straight to the algorithm, capturing by value.
+    stage: gate
+    detect:
+      - check: cplusp-lambda-limits
+
+  - id: function_pointers
+    construct: Function pointers, `std::function`
+    area: control
+    canonical: eCv++ allows with contracts
+    decision: trusted_only
+    why: Indirect calls need contracts on the target.
+    use_instead: direct calls or a template parameter, or mark the function trusted with a reason.
+    stage: gate
+    detect:
+      - check: cplusp-function-pointer
+
+  - id: varargs_coroutines
+    construct: Varargs, coroutines
+    area: control
+    canonical: Banned by Core Guidelines (varargs)
+    decision: ban
+    why: Not provable.
+    use_instead: std::span of arguments, or a plain loop.
+    stage: gate
+    detect:
+      - check: cppcoreguidelines-pro-type-vararg
+      - check: cplusp-coroutine
+
+  # ---------------------------------------------------------- concurrency
+  - id: concurrency
+    construct: Threads, atomics, mutexes
+    area: concurrency
+    canonical: Allowed in MISRA
+    decision: trusted_only
+    why: Concurrent proofs are far harder. Isolate them.
+    use_instead: a trusted function that owns the lock or the atomic, with a contract.
+    stage: gate
+    detect:
+      - check: cplusp-concurrency
+
+  - id: shared_variables
+    construct: Variables other threads may change
+    area: concurrency
+    canonical: Allowed in MISRA with care
+    decision: restrict
+    limit: Through a parameter or a trusted getter, never a direct read or write.
+    why: Each read may see a different value. See State in the plan.
+    stage: spec
+
+  - id: volatile
+    construct: "`volatile`"
+    area: concurrency
+    canonical: MISRA restricts
+    decision: trusted_only
+    why: Hardware access only.
+    use_instead: a trusted accessor with a contract.
+    stage: gate
+    detect:
+      - check: cplusp-volatile
+
+  # ---------------------------------------------------------------- state
+  - id: global_state
+    construct: Globals, statics, static members, function-local statics
+    area: state
+    canonical: MISRA restricts globals
+    decision: restrict
+    limit: Listed in the contract's reads or modifies clause. Constants exempt.
+    why: Hidden state breaks modular proofs. Treated as inputs and outputs, see State in the plan.
+    use_instead: a reads or modifies clause naming the variable, or a parameter.
+    stage: gate
+    detect:
+      - check: cplusp-unlisted-state
+
+  # ------------------------------------------------------------- platform
+  - id: inline_asm_intrinsics
+    construct: Inline asm, SIMD intrinsics
+    area: platform
+    canonical: MISRA restricts asm
+    decision: trusted_only
+    why: Hot-path code goes behind a contract.
+    use_instead: plain C++, or mark the function trusted with a reason.
+    stage: gate
+    detect:
+      - check: hicpp-no-assembler
+      - check: cplusp-intrinsics
+
+  - id: function_like_macros
+    construct: Function-like macros
+    area: platform
+    canonical: MISRA advisory ban
+    decision: ban
+    why: Hides code from the prover.
+    use_instead: a constexpr function or a template.
+    stage: gate
+    detect:
+      - check: cppcoreguidelines-macro-usage
