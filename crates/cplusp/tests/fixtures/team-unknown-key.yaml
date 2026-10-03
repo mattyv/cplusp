@@ -1,0 +1,7 @@
+version: 1
+extends: cplusp:default
+rules:
+  - id: goto
+    decision: ban
+    detect:
+      - check: nonsense

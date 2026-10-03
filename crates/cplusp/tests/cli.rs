@@ -172,6 +172,130 @@ fn gate_refuses_a_file_that_does_not_compile() {
     assert!(err.lines().any(|l| l.starts_with("does not compile: ") && l.contains("does-not-compile.cpp:1:")), "{err}");
 }
 
+#[test]
+fn gate_refuses_a_compile_error_named_after_a_warning() {
+    if !clang_tidy_available() {
+        return;
+    }
+    let f = fixture("narrowing.cpp");
+    let o = cplusp(&["gate", f.to_str().unwrap(), "--", "-std=c++20"]);
+    assert_eq!(o.status.code(), Some(2), "stdout: {} stderr: {}", stdout(&o), stderr(&o));
+    assert!(stderr(&o).lines().any(|l| l.starts_with("does not compile: ") && l.contains("narrowing.cpp:1:")), "{}", stderr(&o));
+}
+
+#[test]
+fn gate_treats_nolint_as_a_finding() {
+    if !clang_tidy_available() {
+        return;
+    }
+    let f = fixture("nolint.cpp");
+    let o = cplusp(&["gate", f.to_str().unwrap(), "--", "-std=c++20"]);
+    assert_eq!(o.status.code(), Some(1), "stdout: {} stderr: {}", stdout(&o), stderr(&o));
+    let expected = "nolint.cpp:3: NOLINT: not allowed in verified code. It silences the gate. Use CPLUSP_TRUSTED with a reason.";
+    assert!(stdout(&o).lines().any(|l| l.starts_with("Not provable: ") && l.ends_with(expected)), "{}", stdout(&o));
+}
+
+#[test]
+fn gate_refuses_a_build_dir_without_compile_commands() {
+    if !clang_tidy_available() {
+        return;
+    }
+    let f = root().join("rules/goto/allowed.cpp");
+    let o = cplusp(&["gate", "-p", root().to_str().unwrap(), f.to_str().unwrap()]);
+    assert_eq!(o.status.code(), Some(2), "stdout: {} stderr: {}", stdout(&o), stderr(&o));
+    assert!(stderr(&o).contains("compile_commands.json"), "{}", stderr(&o));
+}
+
+#[test]
+fn gate_refuses_a_build_dir_together_with_trailing_flags() {
+    if !clang_tidy_available() {
+        return;
+    }
+    let f = root().join("rules/goto/allowed.cpp");
+    let o = cplusp(&["gate", "-p", root().to_str().unwrap(), f.to_str().unwrap(), "--", "-std=c++20"]);
+    assert_eq!(o.status.code(), Some(2), "stdout: {} stderr: {}", stdout(&o), stderr(&o));
+    assert!(stderr(&o).contains("Use -p or --, not both."), "{}", stderr(&o));
+}
+
+#[test]
+fn gate_names_the_checks_that_do_not_exist_yet() {
+    if !clang_tidy_available() {
+        return;
+    }
+    let f = root().join("rules/goto/allowed.cpp");
+    let o = cplusp(&["gate", f.to_str().unwrap(), "--", "-std=c++20"]);
+    assert_eq!(o.status.code(), Some(0), "stdout: {} stderr: {}", stdout(&o), stderr(&o));
+    let err = stderr(&o);
+    let line = err.lines().find(|l| l.starts_with("warning: not enforced, no such check: ")).expect(&err);
+    assert!(line.contains("cplusp-unscoped-enum"), "{line}");
+    assert!(!line.contains("cppcoreguidelines-avoid-goto"), "{line}");
+}
+
+#[test]
+fn policy_emit_judges_project_headers_too() {
+    let o = cplusp(&["policy", "emit"]);
+    assert!(stdout(&o).contains("HeaderFilterRegex: '.*'"), "{}", stdout(&o));
+}
+
+#[test]
+fn a_team_policy_with_a_misspelt_rules_key_is_refused() {
+    let f = fixture("team-misspelt.yaml");
+    let o = cplusp(&["policy", "check", "--policy", f.to_str().unwrap()]);
+    assert_eq!(o.status.code(), Some(2), "stdout: {} stderr: {}", stdout(&o), stderr(&o));
+    assert!(stderr(&o).contains("rules"), "{}", stderr(&o));
+}
+
+#[test]
+fn an_override_with_a_field_it_may_not_set_is_refused() {
+    let f = fixture("team-unknown-key.yaml");
+    let o = cplusp(&["policy", "check", "--policy", f.to_str().unwrap()]);
+    assert_eq!(o.status.code(), Some(2), "stdout: {} stderr: {}", stdout(&o), stderr(&o));
+    assert!(stderr(&o).contains("detect"), "{}", stderr(&o));
+}
+
+#[test]
+fn gate_prints_each_finding_once() {
+    if !clang_tidy_available() {
+        return;
+    }
+    let f = fixture("twice.cpp");
+    let o = cplusp(&["gate", f.to_str().unwrap(), "--", "-std=c++20"]);
+    assert_eq!(o.status.code(), Some(1), "stdout: {} stderr: {}", stdout(&o), stderr(&o));
+    let lines: Vec<&str> = stdout(&o).lines().map(|l| l.trim()).filter(|l| !l.is_empty()).collect::<Vec<_>>().into_iter().map(|l| Box::leak(l.to_string().into_boxed_str()) as &str).collect();
+    let distinct: BTreeSet<&str> = lines.iter().copied().collect();
+    assert_eq!(lines.len(), distinct.len(), "duplicate lines: {:?}", lines);
+    assert!(lines.iter().any(|l| l.contains("twice.cpp:3:")), "{:?}", lines);
+}
+
+#[test]
+fn gate_prints_paths_relative_to_the_working_directory() {
+    if !clang_tidy_available() {
+        return;
+    }
+    let o = cplusp(&["gate", "rules/goto/banned.cpp", "--", "-std=c++20"]);
+    assert_eq!(o.status.code(), Some(1), "stdout: {} stderr: {}", stdout(&o), stderr(&o));
+    assert!(stdout(&o).lines().any(|l| l.starts_with("Not provable: rules/goto/banned.cpp:4: ")), "{}", stdout(&o));
+}
+
+#[test]
+fn gate_names_a_missing_input_file() {
+    if !clang_tidy_available() {
+        return;
+    }
+    let o = cplusp(&["gate", "nope.cpp", "--", "-std=c++20"]);
+    assert_eq!(o.status.code(), Some(2), "stdout: {} stderr: {}", stdout(&o), stderr(&o));
+    assert!(stderr(&o).contains("cannot read nope.cpp"), "{}", stderr(&o));
+}
+
+#[test]
+fn policy_show_marks_a_loosened_rule() {
+    let f = fixture("team-loosen.yaml");
+    let o = cplusp(&["policy", "show", "--policy", f.to_str().unwrap()]);
+    assert!(o.status.success(), "stderr: {}", stderr(&o));
+    let row = stdout(&o).lines().find(|l| l.contains("goto")).expect("row for goto").to_string();
+    assert!(row.contains("allow") && row.contains("loosened"), "{row}");
+}
+
 /// The invariant behind every sample pair: `allowed.cpp` is clean, and `banned.cpp`
 /// is reported on exactly the lines marked `// BANNED`, each by its own rule.
 #[test]

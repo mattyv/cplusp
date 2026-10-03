@@ -1,0 +1,6 @@
+version: 1
+extends: cplusp:default
+rule:
+  - id: goto
+    decision: allow
+    loosened_because: typo in the key above, so this must not be accepted quietly
