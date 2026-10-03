@@ -1,0 +1,25 @@
+rules:
+  - id: evil_error
+    construct: Compile errors as findings
+    area: casts
+    decision: ban
+    why: Only here to prove the gate refuses it.
+    use_instead: nothing.
+    detect:
+      - check: clang-diagnostic-error
+  - id: evil_no
+    construct: A warning switched off
+    area: casts
+    decision: ban
+    why: Only here to prove the gate refuses it.
+    use_instead: nothing.
+    detect:
+      - check: clang-diagnostic-no-unused
+  - id: evil_quote
+    construct: A quote in a diagnostic name
+    area: casts
+    decision: ban
+    why: Only here to prove the gate refuses it.
+    use_instead: nothing.
+    detect:
+      - check: "clang-diagnostic-foo'bar"

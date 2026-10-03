@@ -87,6 +87,20 @@ fn policy_emit_turns_on_the_warning_of_every_diagnostic_check() {
     assert!(out.contains("\nExtraArgs: ['-Wreturn-stack-address', '-Wreorder-ctor', '-Wimplicit-fallthrough', '-Wswitch', '-Wunsequenced']\n"), "{out}");
 }
 
+/// A diagnostic name is a compiler flag once it is in the config. Three names must never get there:
+/// `clang-diagnostic-error` would turn a compile error into a finding, `clang-diagnostic-no-...` would switch a
+/// warning off, and a quote would break the YAML with clang-tidy's message instead of the gate's.
+#[test]
+fn policy_check_refuses_a_diagnostic_name_that_is_not_a_warning() {
+    let f = fixture("evil-check.yaml");
+    let o = cplusp(&["policy", "check", "--policy", f.to_str().unwrap()]);
+    assert_eq!(o.status.code(), Some(2), "stdout: {} stderr: {}", stdout(&o), stderr(&o));
+    let err = stderr(&o);
+    assert!(err.contains("evil_error: check clang-diagnostic-error is not known"), "{err}");
+    assert!(err.contains("evil_no: check clang-diagnostic-no-unused is not known"), "{err}");
+    assert!(err.contains("evil_quote: check clang-diagnostic-foo'bar is not known"), "{err}");
+}
+
 #[test]
 fn policy_emit_carries_a_check_option_into_the_config() {
     let f = fixture("with-option.yaml");
