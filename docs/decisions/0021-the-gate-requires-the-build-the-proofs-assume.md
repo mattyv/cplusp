@@ -8,7 +8,7 @@ The gate reads the compiler flags before it judges a file, and refuses a build t
 
 ## Why
 
-The battery found constructs that C++20 defines and C++17 leaves undefined: a signed value shifted left, and a large value narrowed into a smaller signed type. The proofs rest on the C++20 answers. A team that compiles as C++17 could get a proven function that misbehaves there. The same holds for fast math, which lets the compiler change float results. A silenced warning turns a gate row off.
+The battery found constructs that C++20 defines and C++17 leaves undefined. A signed value shifted left. A large value narrowed into a smaller signed type. The proofs rest on the C++20 answers. A team that compiles as C++17 could get a proven function that misbehaves there. The same holds for fast math, which lets the compiler change float results. A silenced warning turns a gate row off.
 
 ## What changes
 
