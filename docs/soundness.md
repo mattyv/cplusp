@@ -30,15 +30,11 @@ Partly open. The gate does not see everything. Headers it does not judge, macros
 
 In progress. The divergence battery fills this gap case by case, decision 0017. No translator exists yet. A person writes the model by hand under the rules the battery finds. The rules are in `skills/cplusp-dafny/SKILL.md`. The record is `docs/mitigations-dafny.md`, one row per case, generated from the cases. Each case names the section of the C++ standard that decides it. A test runs Dafny, the gate and a witness under the sanitizer on every case.
 
-Fourteen cases so far.
-
-- Six naive models verified and were wrong. Signed division rounds the wrong way. A shift by the full width. A comparison of signed with unsigned. Plain `int`. Two references to one object. Two calls in one expression.
-- Seven naive models failed, so the model was only stricter than the C++. Unsigned wrap. Promotion of `uint8_t`. A narrowing cast. A count-down loop on `size_t`. An index out of range. An empty optional. Signed overflow.
-- One was a type error in Dafny. An integer used as a `bool`.
+The count and the verdicts live in `docs/mitigations-dafny.md`, one row per case. This document does not repeat them. The first round covered integer arithmetic, references, calls, loops, indexing and optionals. The second covered the conversions and the rest of arithmetic. Narrowing. Sign conversion. Promotion before widening. Shifts of a literal and of a signed value. Arithmetic on bool and enum class. Six naive models verified and were wrong in the first round. Most mitigations of the second round are gate rows, because the gate can refuse the form instead of the model carrying it.
 
 A mitigation lives in one of four places: the model, the contract, the C++, or a gate row.
 
-Still to cover, one row of the policy at a time. The rest of arithmetic and the conversions. Floating point as opaque values. Object lifetime. Copies versus moves. Value and reference semantics. Inheritance and dispatch. Template instantiation. Containers and iterators. Algorithms with lambdas. Recursion. State. The test `every_supported_row_has_a_case` in `crates/divergence` keeps the list of rows without a case. That list shrinks to empty.
+Still to cover, one row of the policy at a time. Floating point as opaque values. Object lifetime. Copies versus moves. Value and reference semantics. Inheritance and dispatch. Template instantiation. Containers and iterators. Algorithms with lambdas. Recursion. State. The test `every_supported_row_has_a_case` in `crates/divergence` keeps the list of rows without a case. That list shrinks to empty.
 
 ## Gap 4: the contract language
 
