@@ -395,6 +395,46 @@ fn doc(loaded: &Loaded) {
     }
 }
 
+// ------------------------------------------------------------------ build flags
+
+/// Flags that change floating-point results. The float model is a real after one IEEE 754 rounding.
+const FLOAT_FLAGS: &[&str] = &[
+    "-ffast-math", "-Ofast", "-ffp-contract=fast", "-funsafe-math-optimizations", "-ffinite-math-only", "-fassociative-math",
+    "-freciprocal-math", "-fno-signed-zeros", "-fno-honor-nans", "-fno-honor-infinities",
+];
+
+/// The `-std` values at C++23 or later. The baseline is decision 0022.
+const STD_VALUES: &[&str] = &["c++23", "c++2b", "c++26", "c++2c", "gnu++23", "gnu++2b", "gnu++26", "gnu++2c"];
+
+/// One message for each trailing flag the proofs cannot follow, and for each flag the gate needs and does not find.
+/// `checks` is the check list of the generated config, so a `-Wno-{name}` is judged against the rows the policy enables.
+// ponytail: the flags are matched as written. `-ffp-contract=on` after `-ffp-contract=off` passes.
+// Upgrade: read the last `-ffp-contract=` flag, or ask the compiler for its final flags.
+fn refused_flags(flags: &[String], checks: &[String]) -> Vec<String> {
+    let mut refused = Vec::new();
+    for f in flags {
+        let why = if FLOAT_FLAGS.contains(&f.as_str()) {
+            "It changes floating-point results, and the proofs assume IEEE 754 round to nearest."
+        } else if f.strip_prefix("-std=").is_some_and(|v| !STD_VALUES.contains(&v)) {
+            "The proofs assume C++23 or later."
+        } else if f == "-w" || f == "-Wno-everything" {
+            "It hides the compiler warnings the policy names."
+        } else if f.strip_prefix("-Wno-").is_some_and(|n| checks.iter().any(|c| c.strip_prefix(DIAGNOSTIC) == Some(n))) {
+            "It hides a compiler warning the policy names."
+        } else {
+            continue;
+        };
+        refused.push(format!("{f}: not allowed with the gate. {why}"));
+    }
+    if !flags.iter().any(|f| f.starts_with("-std=")) {
+        refused.push("no -std flag: the gate needs -std=c++23 or later, because the proofs assume C++23.".to_string());
+    }
+    if !flags.iter().any(|f| f == "-ffp-contract=off") {
+        refused.push("no -ffp-contract=off: the gate needs it, because the proofs assume no fused multiply-add.".to_string());
+    }
+    refused
+}
+
 // --------------------------------------------------------------------- clang-tidy
 
 /// `clang-tidy-18`, else `clang-tidy`, whichever runs.
@@ -477,6 +517,14 @@ fn gate(c: &Common, json: bool, build_dir: Option<&Path>, plugin: Option<&Path>,
     }
     let loaded = load(c.policy.as_deref(), Some(&listed))?;
     let config = emit(&loaded.policy);
+    // ponytail: with `-p` the flags come from the database, and the gate does not read them.
+    // Upgrade: read `compile_commands.json` and run `refused_flags` over each command.
+    if build_dir.is_none() {
+        let refused = refused_flags(clang_args, &config.checks);
+        if !refused.is_empty() {
+            bail!("{}", refused.join("\n"));
+        }
+    }
     let missing: Vec<&str> =
         config.checks.iter().map(String::as_str).filter(|k| !k.starts_with(DIAGNOSTIC) && !listed.iter().any(|l| l == k)).collect();
     if !missing.is_empty() {
@@ -511,8 +559,6 @@ fn gate(c: &Common, json: bool, build_dir: Option<&Path>, plugin: Option<&Path>,
         cmd.arg("-p").arg(d);
     }
     cmd.args(files);
-    // ponytail: the flags after `--` are trusted. `-w` or `-Wno-everything` hides the compiler-warning rows.
-    // Upgrade: refuse the flags that switch warnings off.
     if !clang_args.is_empty() {
         cmd.arg("--").args(clang_args);
     }

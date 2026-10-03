@@ -8,7 +8,7 @@ naive: verifies
 naive_is_wrong: true
 mitigated: verifies
 side: model
-mitigation: "Two roundings, `fadd` and `fsub`. The contract is a bound from the magnitudes of the operands, `abs(result - a) <= 4.0 * EPS * (abs(a) + abs(b))`, with `abs(a) <= 1.0` and `abs(b) <= 1.0`."
+mitigation: "Two roundings and a bound on the error from the magnitudes of the operands. The contract requires `|a| <= 1`, `|b| <= 1`, and `4 * eps <= |a|`, so the rounded difference stays in the normal range where the error axiom holds."
 witness:
   input: "shifted(1e-16, 1.0)"
   ubsan: false

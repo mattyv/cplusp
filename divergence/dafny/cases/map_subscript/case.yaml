@@ -3,7 +3,7 @@ standard: "[map.access]: operator[] inserts a value-initialized element when the
 row: containers
 gap: 3
 cpp: "`m[k]` on a map without `k` inserts the element `k` with the value 0, and the size grows by one. A read changes the map."
-naive_does: "The model is a Dafny `map` and `m[k]`, which needs `k in m`. Dafny cannot prove it and fails. The model is stricter, and the C++ changes the map."
+naive_does: "The model reads `m[k]` on a Dafny `map`, which needs `k in m`. Dafny cannot prove it and fails. The model is stricter, and the C++ inserts a key instead."
 naive: fails
 mitigated: verifies
 side: gate

@@ -1,5 +1,5 @@
 construct: "std::accumulate with an int init value over int64_t elements"
-standard: "[accumulate]: the result is computed as acc = acc + *i for each i, starting from init. Its type is the type of init, which is int for the literal 0."
+standard: "[accumulate]: the result is computed as acc = acc + *i for each i, from init. Its type is the type of init, which is int for the literal 0."
 row: algorithms
 gap: 3
 cpp: "The accumulator is an `int`. Each sum is computed in `int64_t` and narrowed to `int`, and C++20 defines the wrap. Two values of INT32_MAX give -2."

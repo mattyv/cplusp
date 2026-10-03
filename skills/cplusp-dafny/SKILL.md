@@ -294,22 +294,24 @@ The gate enforces it.
 A Dafny loop over a `seq` reads a value.
 A C++ range-for holds iterators into the live container.
 The loop body never changes the range.
-The gate enforces it.
+The gate refuses a direct call on the range, and a call that passes the range by non-const reference.
 
 ## count_if_lambda
 
-A lambda passed to a std algorithm with by-value captures is a pure function of its arguments and its captures.
+A lambda passed to a std algorithm with by-value captures and no `mutable` is a pure function of its arguments and its captures.
 Model the algorithm and the lambda together as one function over the `seq`.
 
 ## fold_init_type
 
 A fold runs in the type of its init value.
-Write the init value in the element type.
+Write the init value in the element type, or a wider one.
 The gate enforces it.
 
 ## sort_contract
 
-Model a std algorithm on the trusted list by its contract, not by its body.
+Model a std algorithm with a trusted contract as a bodyless `{:axiom}` method with that contract, and call it from the model of your function.
+Never mark the model of your own function `{:axiom}`.
+The trusted algorithms so far are `std::sort`, an axiom method with its contract in this skill, and `std::count_if`, modelled as a function over the `seq`.
 `std::sort` gives a sorted permutation.
 The comparator must be a strict weak order, and the default one on integers is.
 
@@ -328,8 +330,8 @@ Test for `npos` before you use the result.
 ## switch_fallthrough
 
 A `switch` falls through to the next case without a break, and a Dafny `match` never does.
-Every case ends in a break or a return.
-The gate enforces it.
+No case runs into the next without `[[fallthrough]]`, and the gate enforces it.
+Model a marked fall-through as one arm with both bodies.
 
 ## switch_missing_case
 
@@ -340,7 +342,8 @@ The gate enforces it.
 ## optional_compare
 
 A comparison of an optional with a value has a result when the optional is empty.
-Write the empty case out: `o.Some? && o.value == v` for `==`, and `o.None? || o.value < v` for `<`.
+An empty optional is less than every value and equal to none.
+Write the empty case out: `o.None? ||` for `<`, `<=` and `!=`, and `o.Some? &&` for `==`, `>` and `>=`.
 
 ## variant_get
 
@@ -354,6 +357,7 @@ Model `a + b` as `fadd(a, b)`, and state the result as a bound, `abs(result - (a
 Never state equality of two float results.
 The bound holds up to `MAX`, so require `abs(a) <= MAX / 4.0` and `abs(b) <= MAX / 4.0`.
 Dafny does not apply a lemma by itself, so call `RoundError(a + b)` in the body before `fadd`.
+In the C++ contract, write the bound as `|result - (a + b)| <= eps * |a + b|`, with `eps` as 2^-53, and a magnitude bound such as `|a| <= DBL_MAX / 4` as a `requires`.
 The model is `divergence/dafny/Float.dfy`. Write `include "Float.dfy"` with the path to it, and `import opened Float`.
 
 ## float_nan
@@ -384,7 +388,7 @@ When the C++ needs exact counting, use an integer type.
 
 The model has no infinity, and C++ calls float division by zero undefined.
 The contract requires a non-zero divisor: `requires b != 0.0`.
-The quotient must stay below `MAX`, so the model also needs `requires abs(a / b) <= MAX`.
+The quotient must stay in the normal range, so the model needs `requires a == 0.0 || MIN_NORMAL <= abs(a / b) <= MAX`, and the C++ contract carries the same bound.
 
 ## int_to_float
 

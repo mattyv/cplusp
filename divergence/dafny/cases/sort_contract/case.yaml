@@ -3,7 +3,7 @@ standard: "[sort]: sorts the elements in the range, and [alg.sorting.general] sa
 row: algorithms
 gap: 3
 cpp: "`std::sort` with the default order puts the elements in ascending order. The result is a permutation of the old elements."
-naive_does: "The model is a method with the contract of `std::sort`: sorted, and equal as a multiset to the old `seq`. The method has no body, so the contract is an axiom. The model is exact."
+naive_does: "The model calls a bodyless axiom method `std_sort` with the contract of `std::sort`: sorted, and equal as a multiset to the old `seq`. The model of the function has a body, and it is exact."
 naive: verifies
 mitigated: verifies
 side: none
@@ -15,6 +15,6 @@ witness:
 rule: |
   Model a std algorithm with a trusted contract as a bodyless `{:axiom}` method with that contract, and call it from the model of your function.
   Never mark the model of your own function `{:axiom}`.
-  The trusted algorithms so far are `std::sort` and `std::count_if`, each with its contract in this skill.
+  The trusted algorithms so far are `std::sort`, an axiom method with its contract in this skill, and `std::count_if`, modelled as a function over the `seq`.
   `std::sort` gives a sorted permutation.
   The comparator must be a strict weak order, and the default one on integers is.

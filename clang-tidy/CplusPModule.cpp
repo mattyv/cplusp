@@ -238,12 +238,16 @@ AST_MATCHER(LambdaExpr, capturesByReferenceOrThis) {
   });
 }
 
-// cplusp-lambda-limits: a lambda that is no direct argument of a std call, or that captures by reference or `this`.
+// A lambda marked `mutable`. Its call changes its own captures, so it carries state between calls.
+AST_MATCHER(LambdaExpr, isMutableLambda) { return Node.isMutable(); }
+
+// cplusp-lambda-limits: a lambda that is no direct argument of a std call, that captures by reference or `this`,
+// or that is `mutable`.
 class LambdaLimitsCheck : public SpelledCheck {
 public:
   using SpelledCheck::SpelledCheck;
   void registerMatchers(MatchFinder *Finder) override {
-    Finder->addMatcher(lambdaExpr(anyOf(unless(hasParent(stdCall())), capturesByReferenceOrThis())).bind("lambda"), this);
+    Finder->addMatcher(lambdaExpr(anyOf(unless(hasParent(stdCall())), capturesByReferenceOrThis(), isMutableLambda())).bind("lambda"), this);
   }
   void check(const MatchFinder::MatchResult &Result) override {
     diag(Result.Nodes.getNodeAs<LambdaExpr>("lambda")->getBeginLoc(), "lambda is outside its limits");

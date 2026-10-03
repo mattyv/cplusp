@@ -2,6 +2,8 @@
 #include <vector>
 
 //@ requires v.size() > 0
+//@ requires v.size() <= 1000
+//@ requires every element of v is in 0 to 1000
 //@ modifies v
 //@ ensures result == sum of old(v)
 int32_t sum_and_double(std::vector<int32_t>& v) {

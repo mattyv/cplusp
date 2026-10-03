@@ -14,4 +14,4 @@ witness:
 rule: |
   The model has no infinity, and C++ calls float division by zero undefined.
   The contract requires a non-zero divisor: `requires b != 0.0`.
-  The quotient must stay below `MAX`, so the model also needs `requires abs(a / b) <= MAX`.
+  The quotient must stay in the normal range, so the model needs `requires a == 0.0 || MIN_NORMAL <= abs(a / b) <= MAX`, and the C++ contract carries the same bound.
