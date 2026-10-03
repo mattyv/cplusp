@@ -7,8 +7,18 @@
 Every module lands with its proof or with a named reason why it has none.
 
 - `crates/cplusp-core` is written in Verus. `cargo verus verify` must pass with zero errors before a commit. Specs are the deliverable, not decoration: a function with a trivial `ensures` is unfinished.
-- Code that Verus cannot reach (file I/O, process launch, YAML parsing, text rendering) lives in `crates/cplusp` and nowhere else. It is the trusted edge. Keep it thin and keep it listed in `docs/plan.md`.
+- Code that Verus cannot reach lives in two places and nowhere else. File I/O, process launch, YAML parsing and text rendering live in `crates/cplusp`. The clang-tidy plugin lives in `clang-tidy/` and is C++ because clang-tidy allows nothing else. Both are trusted edges. Keep them thin and keep them listed in `docs/plan.md`. The plugin's evidence is the sample pairs.
 - Never move logic from the core to the shell to dodge a proof. Restructure the data until the proof goes through.
+
+## How a change happens
+
+Three roles, in order, for every change. The agent files are in `.claude/agents/`.
+
+1. **Fable writes the failing tests**, and the fixtures and sample pairs they need. Red step. Committed as such.
+2. **The `coder` agent (Sonnet) makes them green.** It never touches a test. If a test cannot be met it reports back instead of changing it.
+3. **The `reviewer` agent (Fable) reviews the diff.** Findings go back to the coder, with new failing tests for any behaviour change. Then Fable runs the suite and the proofs, commits the green step, and pushes.
+
+Fable also writes the Verus core and its proofs, and the docs. Sonnet does not touch the core.
 
 ## Test-driven, always
 
