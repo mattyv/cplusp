@@ -1,0 +1,17 @@
+construct: "Narrowing static_cast to int8_t"
+gap: 3
+cpp: "C++20 defines the conversion as modular. `static_cast<int8_t>(200)` is -56."
+naive_does: "Dafny `x as int8` needs a proof that the value fits. For 200 there is none."
+naive: fails
+mitigated: verifies
+side: cpp
+mitigation: "A precondition in the C++ contract that the value fits. The prover then checks the fit at every caller. A C++ that means to wrap must wrap in its own code."
+witness:
+  input: "200"
+  ubsan: false
+  prints: "-56"
+rule: |
+  Dafny `x as int8` needs a proof that `x` fits in `int8`.
+  The model never wraps, although C++20 does.
+  Put the fit in the C++ contract: `requires -0x80 <= x < 0x80`.
+  If the C++ means to wrap, it must wrap in its own code and then cast a value that fits.

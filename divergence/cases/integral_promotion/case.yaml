@@ -1,0 +1,18 @@
+construct: "Arithmetic on uint8_t"
+gap: 3
+cpp: "Both operands become `int`. 255 + 1 is 256, and the conversion back to `uint8_t` wraps it to 0."
+naive_does: "It adds in `uint8`, so 255 + 1 is a range error. The model refuses code that is fine in C++."
+naive: fails
+mitigated: verifies
+side: model
+mitigation: "Add in the promoted type `int32`, then convert back with a `wrap8` helper."
+witness:
+  input: "255 + 1"
+  ubsan: false
+  prints: "0"
+rule: |
+  C++ promotes types narrower than `int` to `int` before arithmetic.
+  Model the sum in `int32`: `(a as int32) + (b as int32)`.
+  Convert the result back with a wrap helper such as `wrap8(x: int) = (x % 0x100) as uint8`.
+  A conversion to an unsigned type wraps in C++, so the helper is exact.
+  For a signed target type, see `narrowing_cast`.

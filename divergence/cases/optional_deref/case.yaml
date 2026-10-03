@@ -1,0 +1,18 @@
+construct: "Dereference of std::optional"
+gap: 3
+cpp: "`*opt` on an empty optional is undefined. Nothing checks it."
+naive_does: "Dafny asks for a proof that the datatype holds a value. There is none. The model is stricter than C++."
+naive: fails
+mitigated: verifies
+side: none
+mitigation: "A precondition in the contract, `requires opt.has_value()` in the C++ and `requires opt.Some?` in the model. The caller proves it."
+witness:
+  input: "*opt on an empty optional"
+  ubsan: false
+  prints: |
+    0
+    went on
+rule: |
+  Model `std::optional<T>` as `datatype Option<T> = None | Some(value: T)`.
+  Model `*opt` as `opt.value`. Dafny then asks for a proof that `opt` is `Some`.
+  Write `requires opt.Some?` in the model and `requires opt.has_value()` in the C++ contract.

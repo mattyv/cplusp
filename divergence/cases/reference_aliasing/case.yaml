@@ -1,0 +1,19 @@
+construct: "Two reference parameters"
+gap: 3
+cpp: "Two references may name the same object. `add_both(x, x)` with x = 3 leaves x = 12."
+naive_does: "Each reference is a separate in value and out value, so the model says 6 and 9 for `add_both(x, x)`."
+naive: verifies
+naive_is_wrong: true
+mitigated: verifies
+side: model
+mitigation: "A reference becomes an object with one field, so two references can be the same object. The contract then adds `requires &a != &b`, or states the aliased result."
+witness:
+  input: "add_both(x, x) with x = 3"
+  ubsan: false
+  prints: "12 6 9"
+rule: |
+  Never model a reference parameter as an in value and an out value.
+  Model it as an object, `class Ref { var v: int32 }`, with a `modifies` clause.
+  Dafny then proves the contract for the case where two references are the same object.
+  When the contract is false for that case, add `requires a != b` to the model and `requires &a != &b` to the C++ contract.
+  Callers must then prove that the two are different.

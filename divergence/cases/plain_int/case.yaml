@@ -1,0 +1,19 @@
+construct: "Plain int, long, short and char"
+gap: 1
+cpp: "The width of `int` is implementation-defined. The standard promises only 16 bits."
+naive_does: "It rests on a width the source does not state. The model uses `int32`, so the proof holds only where `int` has 32 bits."
+naive: verifies
+naive_is_wrong: true
+mitigated: verifies
+side: gate
+mitigation: "A gate row is needed. It bans `int`, `long`, `short` and `char` in verified code. The C++ uses `int32_t` and the other fixed-width types."
+witness:
+  input: "twice(20000)"
+  ubsan: false
+  prints: "32 40000"
+rule: |
+  Map only fixed-width types, such as `int32_t` to `int32` and `uint8_t` to `uint8`.
+  The compiler sets the width of plain `int`, `long`, `short` and `char`, and the source does not.
+  Do not guess a width for them.
+  Change the C++ to a fixed-width type, and then model that.
+  Map `size_t` to `uint64`, which assumes a 64-bit target.

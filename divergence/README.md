@@ -10,6 +10,6 @@ Each case is a folder under `cases/` with:
 - `witness.cpp`: a `main` that drives `code.cpp` to the edge where the two part ways.
 - `case.yaml`: the expectations and the report fields. `gap` is the section of docs/soundness.md the case belongs to. `cpp` says what the C++ does, `naive_does` what the naive model does instead. `side` says where the mitigation lives: `model`, `cpp`, `gate` or `none` when the model is only stricter. `mitigation` is one line for the report. What Dafny must say about each file, `verifies` or `fails`. Whether the naive verdict is wrong. What the witness shows, `ubsan: true` for undefined behaviour or `prints` for an output. And the rule in words.
 
-`docs/mitigations.md` is generated from the cases by `cargo run -p divergence`. Do not edit it by hand. The rule of every case appears in `skills/cplusp-dafny/SKILL.md`, which is what the LLM reads when it writes Dafny for C+P. The test in `crates/divergence` runs every case and checks that the skill file carries its rule, so the two cannot drift.
+`cargo run -p divergence` generates `docs/mitigations.md` from the cases. Do not edit it by hand. The rule of every case appears in `skills/cplusp-dafny/SKILL.md`, which is what the LLM reads when it writes Dafny for C+P. The test in `crates/divergence` runs every case and checks that the skill file carries its rule, so the two cannot drift.
 
 Tools: Dafny at `$DAFNY`, else `/opt/dafny/dafny/dafny`, else `dafny` on PATH. clang++ 18 with the sanitizer runtime (`libclang-rt-18-dev`).

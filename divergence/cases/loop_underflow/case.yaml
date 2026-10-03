@@ -1,0 +1,18 @@
+construct: "Count-down loop on size_t"
+gap: 3
+cpp: "`n - 1` for `n == 0` wraps to the largest `size_t`. The test `i < n` then fails at once, and the loop runs zero times. It is defined."
+naive_does: "Dafny does not wrap, so `n - 1` is a range error when `n == 0`. The model refuses code that is fine in C++."
+naive: fails
+mitigated: verifies
+side: none
+mitigation: "Nothing to allow. The C++ counts down to zero without going below it: `for (size_t i = n; i > 0; --i)`."
+witness:
+  input: "n == 0"
+  ubsan: false
+  prints: "18446744073709551615 0"
+rule: |
+  Dafny refuses `n - 1` on an unsigned value when `n` may be 0.
+  Do not model code that relies on a wrap below zero.
+  Change the C++ to count down to zero without going below it: `for (size_t i = n; i > 0; --i)`, and use `i - 1` inside.
+  A test `i >= 0` on an unsigned counter is always true, and the loop never ends.
+  Give every loop an invariant and a `decreases` clause.

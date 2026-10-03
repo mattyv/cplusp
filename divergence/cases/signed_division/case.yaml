@@ -1,0 +1,19 @@
+construct: "Division and remainder on int32_t"
+gap: 3
+cpp: "`/` truncates toward zero. `%` takes the sign of the left operand. `-7 / 2` is -3 and `-7 % 2` is -1."
+naive_does: "Dafny `/` and `%` round toward negative infinity and give -4 and 1. The model proves facts the C++ does not meet."
+naive: verifies
+naive_is_wrong: true
+mitigated: verifies
+side: model
+mitigation: "Truncating helpers `trunc_div` and `trunc_rem` in the model. The contract requires `b != 0` and excludes `INT32_MIN / -1`."
+witness:
+  input: "-7 / 2 and -7 % 2"
+  ubsan: false
+  prints: "-3 -1"
+rule: |
+  Dafny `/` and `%` round toward negative infinity, and C++ rounds toward zero.
+  Never carry `/` or `%` over on signed values.
+  Use `trunc_div(a, b)` and `trunc_rem(a, b)`, which divide the absolute values and then set the sign.
+  The contract must require `b != 0`.
+  It must also exclude `a == INT32_MIN && b == -1`, because the quotient does not fit.

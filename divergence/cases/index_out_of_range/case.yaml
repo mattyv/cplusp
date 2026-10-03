@@ -1,0 +1,15 @@
+construct: "Array subscript a[i]"
+gap: 3
+cpp: "`a[i]` with `i` equal to the size is undefined. Nothing checks the index."
+naive_does: "Dafny asks for a proof that `i < |a|`. There is none. That is the right answer, so the model is stricter than C++."
+naive: fails
+mitigated: verifies
+side: none
+mitigation: "A precondition `i < 4` in the contract, in the C++ and in the model. The caller proves it."
+witness:
+  input: "a[4] on an array of 4"
+  ubsan: true
+rule: |
+  Model an array or a vector as a `seq`, and its size as a fact about `|a|`.
+  Every subscript becomes `a[i]`, and Dafny asks for a proof that the index is in range.
+  Do not weaken the proof. Write `requires i < |a|` in the contract, so the caller carries the obligation.
