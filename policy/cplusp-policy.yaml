@@ -221,6 +221,7 @@ rules:
     canonical: Core Guidelines bounds profile ban
     decision: allow
     why: The prover proves the index is in range.
+    use_instead: a constant index, or a range-for loop.
     stage: prover
     detect:
       - check: cppcoreguidelines-pro-bounds-constant-array-index

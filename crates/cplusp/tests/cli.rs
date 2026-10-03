@@ -158,6 +158,20 @@ fn gate_reports_a_trusted_only_construct_with_its_own_wording() {
     assert!(out.lines().any(|l| l.ends_with(expected)), "{out}");
 }
 
+#[test]
+fn gate_refuses_a_file_that_does_not_compile() {
+    if !clang_tidy_available() {
+        eprintln!("skipped: clang-tidy not installed");
+        return;
+    }
+    let f = fixture("does-not-compile.cpp");
+    let o = cplusp(&["gate", f.to_str().unwrap(), "--", "-std=c++20"]);
+    assert_eq!(o.status.code(), Some(2), "stdout: {} stderr: {}", stdout(&o), stderr(&o));
+    assert_eq!(stdout(&o).trim(), "", "nothing on stdout for a file that does not compile");
+    let err = stderr(&o);
+    assert!(err.lines().any(|l| l.starts_with("does not compile: ") && l.contains("does-not-compile.cpp:1:")), "{err}");
+}
+
 /// The invariant behind every sample pair: `allowed.cpp` is clean, and `banned.cpp`
 /// is reported on exactly the lines marked `// BANNED`, each by its own rule.
 #[test]

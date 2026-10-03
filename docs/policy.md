@@ -101,10 +101,10 @@ rules:
 | `limit` | For `restrict` | The limit in one sentence. The gate puts it in the message |
 | `why` | Yes | The reason from the table. The gate puts it in the message |
 | `use_instead` | For everything but `allow` | What the bot should write instead. The gate puts it in the message |
-| `stage` | No | `gate`, `prover`, `spec` or `none`. Default `gate` when `detect` is present, else `none`. The gate enforces only `gate` entries. A `prover`, `spec` or `none` entry needs no `detect` and no `use_instead`, and the gate treats it as `allow`, whatever its decision says. The decision still matters for overrides: a team may not loosen it without a reason |
+| `stage` | No | `gate`, `prover`, `spec` or `none`. Default `none` for an `allow` entry with no `detect`, else `gate`, so a ban without `detect` fails closed. The gate enforces an entry when its stage is `gate`, or when it has a `detect` list and a decision other than `allow`. That second case is how a dormant `detect` on a prover row wakes up when a team flips the row to `ban`. A `prover`, `spec` or `none` entry without `detect` needs no `use_instead`, and the gate treats it as `allow`. Its decision still matters for overrides: a team may not loosen it without a reason |
 | `detect` | For everything but `allow` | The checks that find the construct. Each has a `check` name and optional `options` |
 
-A `detect` list on an `allow` entry is dormant. It exists so that flipping the decision to `ban` is a one-word edit. If a construct has no check that fits, write a new `cplusp-*` check and name it here. That is the "add a rule" recipe from the plan.
+A `detect` list on an `allow` entry is dormant. It exists so that flipping the decision to `ban` is a one-word edit. Give such an entry a `use_instead` too, so the message is complete on the day it wakes up. If a construct has no check that fits, write a new `cplusp-*` check and name it here. That is the "add a rule" recipe from the plan.
 
 ## What the gate does with an entry
 
@@ -191,7 +191,9 @@ The gate refuses to run on a policy that breaks any of these:
 - Two entries with the same `id`.
 - An override whose `id` is not in the list it extends.
 - An override that loosens a decision without `loosened_because`.
-- A `check` name that the pinned clang-tidy plus our plugin does not know.
+- A `check` name that the pinned clang-tidy plus our plugin does not know. Names that start with `clang-diagnostic-` are compiler warnings and always count as known.
+
+The gate also refuses to judge a file that does not compile. It prints `does not compile: {file}:{line}: {message}` for each compiler error and exits 2. Code the compiler rejects is not provable, and a quiet "no findings" would say otherwise.
 
 ## Where the sample pairs live
 
