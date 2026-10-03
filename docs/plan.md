@@ -93,6 +93,79 @@ A verified function has no undefined behaviour, ever. The two stages split the w
 
 The Stage column in the table below records which stage guarantees each row.
 
+## State: members, statics and globals
+
+Hidden state is the enemy of a per-function proof. A function that reads a global depends on an input its signature does not show. A function that writes one has an output its signature does not show. So the contract treats state as inputs and outputs, and names it.
+
+Two clauses do this:
+
+- `//@ reads a, b` names the state the function may read beyond its parameters.
+- `//@ modifies a` names the state the function may write. Everything not listed is unchanged on exit. The prover relies on that in every caller.
+
+`old(a)` is the value on entry, so `ensures` can describe the change.
+
+The rules, proposed:
+
+1. **Members.** `this` is an implicit parameter. A member function may read and write its own fields without listing them. The contract talks about the fields by name. A class may carry an invariant: every public member function assumes it on entry and re-establishes it on exit. Constructors establish it. Private helpers may break it in between.
+2. **Globals, statics, static members, function-local statics.** A verified function must list each one it touches in `reads` or `modifies`. The gate rejects an unlisted access.
+3. **Constants.** `const` and `constexpr` globals are values, not state. No listing.
+4. **Threads.** Threads are trusted only, so verified code sees state as single-threaded. A trusted caller that runs verified code on several threads owns that risk, and says so in its reason.
+
+A class with an invariant:
+
+```cpp
+class Counter {
+  int32_t count_ = 0;
+  int32_t limit_;
+  //@ invariant 0 <= count_ <= limit_
+public:
+  //@ requires 0 <= limit
+  //@ ensures  count_ == 0 && limit_ == limit
+  explicit Counter(int32_t limit) : limit_(limit) {}
+
+  //@ modifies count_
+  //@ ensures  result ==> count_ == old(count_) + 1
+  //@ ensures  !result ==> count_ == old(count_)
+  bool tick() {
+    if (count_ == limit_) return false;
+    ++count_;
+    return true;
+  }
+};
+```
+
+The invariant is what lets `tick` prove `++count_` cannot overflow. It also lets every caller know the count is in range without reading the class.
+
+A global as an input and an output:
+
+```cpp
+static int64_t g_bytes_sent = 0;
+
+//@ requires 0 <= n
+//@ requires g_bytes_sent <= INT64_MAX - n
+//@ modifies g_bytes_sent
+//@ ensures  g_bytes_sent == old(g_bytes_sent) + n
+void account(int64_t n) {
+  g_bytes_sent += n;
+}
+```
+
+After a call to `account(n)`, a caller's proof knows two things. `g_bytes_sent` grew by `n`. Every other global is unchanged, because `account` did not list it. That second fact is what keeps proofs local once state exists.
+
+An unlisted access, and what the bot hears:
+
+```cpp
+int64_t sent_so_far() {
+  return g_bytes_sent;
+}
+```
+
+```
+Not provable: sent_so_far, line 2: reads g_bytes_sent, which is not in the contract's reads clause. Add `//@ reads g_bytes_sent`.
+```
+
+This is the State row of the table. The gate checks the listing. The prover checks the claims.
+
 ## Canonical safe-C++ subsets
 
 There is no single canonical subset. Five matter, and each one serves a different goal. Ours differs from all of them: the prover checks bounds and arithmetic, so we ban less than safety standards do.
@@ -167,7 +240,7 @@ Stage says which part guarantees the row. **Gate** rejects the construct. **Prov
 | Control | Varargs, coroutines | Banned by Core Guidelines (varargs) | Not provable | Ban | Gate |
 | Concurrency | Threads, atomics, mutexes | Allowed in MISRA | Concurrent proofs are far harder. Isolate them | Trusted only | Gate |
 | Concurrency | `volatile` | MISRA restricts | Hardware access only | Trusted only | Gate |
-| State | Globals, statics, member state | MISRA restricts globals | Hidden state breaks modular proofs | Restrict: listed in the contract's reads or modifies clause | Spec |
+| State | Globals, statics, static members, function-local statics | MISRA restricts globals | Hidden state breaks modular proofs. Treated as inputs and outputs, see State | Restrict: listed in the contract's reads or modifies clause. Constants exempt | Gate, Spec |
 | Platform | Inline asm, SIMD intrinsics | MISRA restricts asm | Hot-path code goes behind a contract | Trusted only | Gate |
 | Platform | Function-like macros | MISRA advisory ban | Hides code from the prover | Ban | Gate |
 
@@ -398,6 +471,7 @@ We deliberately do **not** enable `cppcoreguidelines-pro-bounds-constant-array-i
 - `-function-pointer`, `-coroutine`, `-concurrency` (`<thread>`, `<atomic>`, `<mutex>` use), `-volatile`, `-intrinsics`
 - `-unreachable-assume` (`[[assume]]`, `__builtin_unreachable`, `std::unreachable`), `-longjmp`, `-raw-memory-ops` (`memcpy` and friends on non-byte types), `-launder-placement-new`
 - `-template-specialization`
+- `-unlisted-state` (a verified function touches a global, static or static member that its contract does not list)
 - `-markers` (trusted has a contract, reasons non-empty, no verified-to-plain calls)
 - `-index` (emits every function's range and kind in the same run, so the driver needs no second parse)
 
@@ -465,3 +539,4 @@ Provisional. Parked as "maybe" where the first slice does not need a decision, a
 - Rewrote the doc in STE-flavored mode with the asd-ste100 skill: no semicolons, sentences of 25 words or fewer, one word per action.
 - Added an Examples section with a verified function, a chained caller, both failure messages, and the marker kinds. It ends with an excerpt of the trusted `vector` contract.
 - Named the limit of every Restrict row in its Decision cell.
+- Added the State section: members are implicit, globals and statics are listed in `reads` or `modifies`, constants are exempt. Added the `-unlisted-state` check.

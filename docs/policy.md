@@ -71,6 +71,15 @@ rules:
         options:
           AllowPureInterfaces: true
 
+  - id: global_state
+    area: state
+    decision: restrict
+    limit: Listed in the contract's reads or modifies clause. Constants exempt.
+    why: Hidden state breaks modular proofs.
+    use_instead: A reads or modifies clause naming the variable, or a parameter.
+    detect:
+      - check: cplusp-unlisted-state
+
   - id: variable_index
     area: library
     decision: allow
