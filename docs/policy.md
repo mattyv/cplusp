@@ -157,11 +157,11 @@ Two findings come from the gate itself, not from a policy row:
 
 ## Checking the policy
 
-`cplusp policy check` prints `ok: 52 rules, 36 enforced by the gate` or one line per problem on stderr, in the form `{id}: {problem}`. `cplusp policy emit` prints the generated clang-tidy config. Both take `--policy FILE` for a team policy. A file that lacks `rules`, or a rule or override with a field it may not carry, is a parse error, so a misspelt key cannot drop a team's overrides on the floor.
+`cplusp policy check` prints `ok: 52 rules, 36 enforced by the gate` or one line per problem on stderr, in the form `{id}: {problem}`. `cplusp policy emit` prints the generated clang-tidy config. Both take `--policy FILE` for a team policy. A file without `rules` is a parse error. So is a rule or override with a field it may not carry. A misspelt key therefore cannot drop a team's overrides on the floor.
 
 ## Reading the policy as a table
 
-`cplusp policy show` prints one row per rule in file order: area, id, decision, stage, limit, and a final note column that says `loosened` for a rule a team policy loosened. Loosened rules are also printed on stderr, one line each, by every command: `loosened: {id}. {reason}`.
+`cplusp policy show` prints one row per rule in file order: area, id, decision, stage, limit, note. The note column says `loosened` for a rule a team policy loosened. Every command also prints loosened rules on stderr, one line each: `loosened: {id}. {reason}`.
 
 The table in the plan is generated from the default policy by `cplusp policy doc`. Nobody edits it by hand. The file and the table cannot drift, because one is made from the other. Decided Oct 3, 2026.
 
