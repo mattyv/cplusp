@@ -469,7 +469,7 @@ The first thing to exist is the whole pipeline, tiny, end to end, the way `dafny
 2. Two functions, one calling the other. The caller's proof uses the callee's contract. Change the callee's contract and watch the prover re-prove the caller.
 3. Break one. Remove a precondition and get `Not proved: cannot show the result fits in int32_t`. Add a `goto` and get `Not provable: goto is not allowed in verified code`.
 
-Exit test: all three run from one command, with messages a bot can act on without reading anything else. This settles the prover choice, the spec syntax and the shape of the messages before we build any breadth.
+Before any translator exists, run step 1 through both prover candidates by hand. Write the one function in Dafny and in VeriFast C. Compare the contract the bot would have to write. Exit test: all three steps run from one command, with messages a bot can act on without reading anything else. This settles the prover choice, the spec syntax and the shape of the messages before we build any breadth.
 
 ## Phase 1: the gate
 
@@ -549,9 +549,9 @@ Provisional. Parked as "maybe" where the first slice does not need a decision, a
 | --- | --- | --- |
 | Gate checks and index | C++20 clang-tidy module. CMake and Ninja. LLVM 18 pinned, builds against 17 to 20 | Forced: a clang-tidy module can only be C++ |
 | Driver `cplusp` | Rust. No Python anywhere. TypeScript not in the core | Preferred |
-| Prover | Dafny underneath, with the gated C++ translated to it and errors mapped back to C++ lines. The translator is the new trusted component. We test it by compiling the Dafny and running both on the same inputs | Proposed, pending the thin slice |
-| Prover, plan B | Verus, via translation to Rust. Exact machine ints and fast, but translated C++ must satisfy the borrow checker | Fallback |
-| Prover, dropped | VeriFast directly on C++. Immature frontend, thin LLM familiarity | Not primary |
+| Prover, candidate A | Dafny underneath, with the gated C++ translated to it and errors mapped back to C++ lines. Strong automation and the most LLM training data of any verifier. The translator is the new trusted component. We test it by compiling the Dafny and running both on the same inputs | Open. The thin slice decides |
+| Prover, candidate B | VeriFast. Native `//@` contract syntax, built-in overflow and bounds checks, and ownership gives frame and invalidation rules for free. Costs: its C++ frontend lacked templates in 2022. Release notes to Sept 2026 show the work going to Rust. So we would translate to its mature C mode. A 2026 study of ten LLMs found 31% verification success on VeriFast specs, with 94% of errors in separation-logic details | Open. The thin slice decides |
+| Prover, plan C | Verus, via translation to Rust. Exact machine ints and fast, but translated C++ must satisfy the borrow checker | Fallback |
 | Spec syntax in C++ | `//@ requires` / `//@ ensures` comments with Dafny-flavoured expressions, carried through by the translator | Open |
 | Check tests | Rust runner over the sample pairs, reading `// CHECK-MESSAGES` lines | Preferred |
 | Bot integration | A skill tells the bot to run `cplusp verify` after writing C++ and to act on the messages. No automatic hook | Decided |
@@ -567,6 +567,7 @@ Provisional. Parked as "maybe" where the first slice does not need a decision, a
 
 **Open questions**
 
+- Dafny or VeriFast underneath? The thin slice runs the same function through both by hand before any translator is built.
 - Does the translator route work for templates and rvalue references? The thin slice decides the Templates and move rows.
 - Spec syntax: `//@` comments with Dafny-flavoured expressions, or macros that can later emit C++26 `pre` / `post`?
 - Must a human approve new trusted or plain markers before merge, or is reporting enough?
@@ -588,7 +589,7 @@ Provisional. Parked as "maybe" where the first slice does not need a decision, a
 - Swapped the C-style cast check to `google-readability-casting` after the named check let a narrowing cast through. Noted that the union check fires on access only.
 - Made the first step a thin end-to-end slice instead of the gate alone.
 - Recorded that the gate runs separately from, and never edits, a team's existing clang-tidy config, with its own pinned clang-tidy.
-- Replaced VeriFast as the primary prover with Dafny via translation, provisional on the thin slice. Verus is plan B.
+- Made the prover an open choice between Dafny and VeriFast, settled by the thin slice. Verus is plan C.
 - Added a provisional tech stack: C++ only for the clang-tidy module, Rust for the rest, no Python.
 - Rewrote the doc in STE-flavored mode with the asd-ste100 skill: no semicolons, sentences of 25 words or fewer, one word per action.
 - Added an Examples section with a verified function, a chained caller, both failure messages, and the marker kinds. It ends with an excerpt of the trusted `vector` contract.
