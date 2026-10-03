@@ -10,8 +10,8 @@ use std::process::{Command, ExitCode, Stdio};
 use anyhow::{anyhow, bail, Context, Result};
 use clap::{Args, Parser, Subcommand};
 use cplusp_core::{
-    apply_overrides, emit, is_active, keep_finding, rule_for_check, validate, CheckOption, CheckRef, Config, Decision, Kind,
-    Override, Policy, PolicyError, Rule,
+    apply_overrides, emit, is_active, keep_finding, rule_by_id, rule_for_check, validate, CheckOption, CheckRef, Config, Decision,
+    Kind, Override, Policy, PolicyError, Rule,
 };
 use serde::de::{DeserializeOwned, IgnoredAny};
 use serde::Deserialize;
@@ -22,14 +22,16 @@ const DEFAULT_POLICY: &str = include_str!("../../../policy/cplusp-policy.yaml");
 /// Compiler diagnostics are not in `clang-tidy --list-checks`. Their names start like this.
 const DIAGNOSTIC: &str = "clang-diagnostic-";
 
+/// What clang-tidy names the diagnostic of a check that is given a bad option.
+const CONFIG_ERROR: &str = "clang-tidy-config";
+
+/// The generic check of the plugin. A `matcher` entry of the policy becomes an option of this check.
+const MATCHER: &str = "cplusp-matcher";
+
 /// Checks that the clang-tidy plugin will add. The policy may name them today.
 // ponytail: a hand-kept list. Upgrade: load the plugin and read its `--list-checks`.
 const PLANNED_CHECKS: &[&str] = &[
-    "cplusp-unscoped-enum", "cplusp-union-decl", "cplusp-bitfield", "cplusp-mutable", "cplusp-virtual-inheritance",
-    "cplusp-multiple-inheritance", "cplusp-exceptions", "cplusp-shared-ptr", "cplusp-iterator-arithmetic",
-    "cplusp-conversion-operator", "cplusp-impure-operator", "cplusp-function-pointer", "cplusp-coroutine",
-    "cplusp-concurrency", "cplusp-volatile", "cplusp-intrinsics", "cplusp-unreachable-assume", "cplusp-longjmp",
-    "cplusp-raw-memory-ops", "cplusp-launder-placement-new", "cplusp-template-specialization", "cplusp-metaprogramming",
+    MATCHER, "cplusp-mutable", "cplusp-multiple-inheritance", "cplusp-iterator-arithmetic", "cplusp-impure-operator",
     "cplusp-recursion", "cplusp-lambda-limits", "cplusp-unlisted-state",
 ];
 
@@ -52,6 +54,9 @@ enum Cli {
         /// Build directory with compile_commands.json, passed to clang-tidy.
         #[arg(short = 'p')]
         build_dir: Option<PathBuf>,
+        /// The clang-tidy plugin, built from clang-tidy/. Loaded into clang-tidy for the run.
+        #[arg(long)]
+        plugin: Option<PathBuf>,
         #[arg(required = true)]
         files: Vec<PathBuf>,
         /// Compiler arguments, after `--`.
@@ -95,7 +100,7 @@ fn run(cli: Cli) -> Result<ExitCode> {
     match cli {
         Cli::Policy { cmd } => {
             let (PolicyCmd::Check(c) | PolicyCmd::Emit(c) | PolicyCmd::Show(c) | PolicyCmd::Doc(c)) = &cmd;
-            let listed = locate().map(|tool| list_checks(&tool)).transpose()?;
+            let listed = locate().map(|tool| list_checks(&tool, None)).transpose()?;
             if listed.is_none() && matches!(cmd, PolicyCmd::Check(_)) {
                 bail!("clang-tidy not found. Check names cannot be validated.");
             }
@@ -111,8 +116,8 @@ fn run(cli: Cli) -> Result<ExitCode> {
             }
             Ok(ExitCode::SUCCESS)
         }
-        Cli::Gate { common, json, build_dir, files, clang_args } => {
-            gate(&common, json, build_dir.as_deref(), &files, &clang_args)
+        Cli::Gate { common, json, build_dir, plugin, files, clang_args } => {
+            gate(&common, json, build_dir.as_deref(), plugin.as_deref(), &files, &clang_args)
         }
     }
 }
@@ -163,12 +168,14 @@ struct Entry {
     detect: Vec<Detect>,
 }
 
+/// One `detect` entry: `check` with optional `options`, or `matcher`.
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct Detect {
-    check: String,
+    check: Option<String>,
     #[serde(default)]
     options: BTreeMap<String, String>,
+    matcher: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -198,37 +205,49 @@ fn parse<T: DeserializeOwned>(text: &str, what: &str) -> Result<T> {
     serde_yaml::from_str(text).with_context(|| format!("cannot parse {what}"))
 }
 
-fn build(entries: Vec<Entry>) -> Loaded {
-    let (rules, docs) = entries
+/// The `detect` list of a rule, as the core reads it. A `matcher` becomes an option of `cplusp-matcher`,
+/// named `{id}/{n}` for the rule's n-th pattern. The plugin reads the rule id from that name.
+fn detect_refs(id: &str, detect: Vec<Detect>) -> Result<Vec<CheckRef>> {
+    let mut patterns = 0;
+    detect
         .into_iter()
-        .map(|e| {
-            // A row without a stage is the gate's, unless it is an allow row with no checks.
-            // A ban row that names no checks must reach `validate`, so it cannot default to `none`.
-            let stage = e.stage.unwrap_or(if e.decision == Decision::Allow && e.detect.is_empty() { Stage::None } else { Stage::Gate });
-            let rule = Rule {
-                // A row with checks is the gate's even if the prover owns it today. Its checks are
-                // dormant under `allow`, and a team override to `ban` turns them on.
-                gate: stage == Stage::Gate || !e.detect.is_empty(),
-                id: e.id,
-                area: e.area,
-                decision: e.decision,
-                limit: e.limit,
-                why: e.why,
-                use_instead: e.use_instead,
-                detect: e
-                    .detect
-                    .into_iter()
-                    .map(|d| CheckRef {
-                        name: d.check,
-                        options: d.options.into_iter().map(|(key, value)| CheckOption { key, value }).collect(),
-                    })
-                    .collect(),
-                loosened_because: None,
-            };
-            (rule, Doc { construct: e.construct, canonical: e.canonical, stage })
+        .map(|d| match d {
+            Detect { check: Some(name), options, matcher: None } => {
+                Ok(CheckRef { name, options: options.into_iter().map(|(key, value)| CheckOption { key, value }).collect() })
+            }
+            Detect { check: None, options, matcher: Some(value) } if options.is_empty() => {
+                patterns += 1;
+                Ok(CheckRef { name: MATCHER.to_string(), options: vec![CheckOption { key: format!("{id}/{patterns}"), value }] })
+            }
+            _ => bail!("{id}: a detect entry is a check with options, or a matcher alone"),
         })
-        .unzip();
-    Loaded { policy: Policy { rules }, docs }
+        .collect()
+}
+
+fn build(entries: Vec<Entry>) -> Result<Loaded> {
+    let (mut rules, mut docs) = (Vec::new(), Vec::new());
+    for e in entries {
+        // A row without a stage is the gate's, unless it is an allow row with no checks.
+        // A ban row that names no checks must reach `validate`, so it cannot default to `none`.
+        let stage = e.stage.unwrap_or(if e.decision == Decision::Allow && e.detect.is_empty() { Stage::None } else { Stage::Gate });
+        // A row with checks is the gate's even if the prover owns it today. Its checks are
+        // dormant under `allow`, and a team override to `ban` turns them on.
+        let gate = stage == Stage::Gate || !e.detect.is_empty();
+        let detect = detect_refs(&e.id, e.detect)?;
+        rules.push(Rule {
+            gate,
+            id: e.id,
+            area: e.area,
+            decision: e.decision,
+            limit: e.limit,
+            why: e.why,
+            use_instead: e.use_instead,
+            detect,
+            loosened_because: None,
+        });
+        docs.push(Doc { construct: e.construct, canonical: e.canonical, stage });
+    }
+    Ok(Loaded { policy: Policy { rules }, docs })
 }
 
 /// Load the policy file, or the default policy. The core validates it.
@@ -241,12 +260,12 @@ fn load(path: Option<&Path>, listed: Option<&[String]>) -> Result<Loaded> {
     };
     let loaded = match parse::<File<IgnoredAny>>(&text, &what)?.extends.as_deref() {
         None => {
-            let loaded = build(parse::<File<Entry>>(&text, &what)?.rules);
+            let loaded = build(parse::<File<Entry>>(&text, &what)?.rules)?;
             check(&loaded.policy, listed)?;
             loaded
         }
         Some("cplusp:default") => {
-            let base = build(parse::<File<Entry>>(DEFAULT_POLICY, "the default policy")?.rules);
+            let base = build(parse::<File<Entry>>(DEFAULT_POLICY, "the default policy")?.rules)?;
             // `apply_overrides` needs unique ids in its base, so the base is validated first.
             check(&base.policy, listed)?;
             let overrides: Vec<Override> = parse::<File<Ov>>(&text, &what)?
@@ -373,9 +392,18 @@ fn locate() -> Option<String> {
     ["clang-tidy-18", "clang-tidy"].into_iter().find(|b| runs(b)).map(String::from)
 }
 
-/// Every check clang-tidy has.
-fn list_checks(tool: &str) -> Result<Vec<String>> {
-    let out = Command::new(tool).args(["--list-checks", "-checks=*"]).output().with_context(|| format!("cannot run {tool}"))?;
+/// The clang-tidy option that loads the plugin, if there is one.
+fn load_arg(plugin: Option<&Path>) -> Option<String> {
+    plugin.map(|p| format!("--load={}", p.display()))
+}
+
+/// Every check clang-tidy has, with the plugin loaded when there is one.
+fn list_checks(tool: &str, plugin: Option<&Path>) -> Result<Vec<String>> {
+    let out = Command::new(tool)
+        .args(load_arg(plugin))
+        .args(["--list-checks", "-checks=*"])
+        .output()
+        .with_context(|| format!("cannot run {tool}"))?;
     if !out.status.success() {
         bail!("{tool} --list-checks failed:\n{}", String::from_utf8_lossy(&out.stderr));
     }
@@ -421,7 +449,7 @@ struct Finding {
     message: String,
 }
 
-fn gate(c: &Common, json: bool, build_dir: Option<&Path>, files: &[PathBuf], clang_args: &[String]) -> Result<ExitCode> {
+fn gate(c: &Common, json: bool, build_dir: Option<&Path>, plugin: Option<&Path>, files: &[PathBuf], clang_args: &[String]) -> Result<ExitCode> {
     if let Some(dir) = build_dir {
         if !clang_args.is_empty() {
             bail!("Use -p or --, not both.");
@@ -431,7 +459,11 @@ fn gate(c: &Common, json: bool, build_dir: Option<&Path>, files: &[PathBuf], cla
         }
     }
     let tool = locate().context("clang-tidy not found. Install clang-tidy-18.")?;
-    let listed = list_checks(&tool)?;
+    let listed = list_checks(&tool, plugin)?;
+    // clang-tidy ignores a plugin it cannot load, and then every `cplusp-matcher` rule goes quiet.
+    if let Some(p) = plugin.filter(|_| !listed.iter().any(|l| l == MATCHER)) {
+        bail!("plugin {} did not load. It must provide {MATCHER}.", p.display());
+    }
     let loaded = load(c.policy.as_deref(), Some(&listed))?;
     let config = emit(&loaded.policy);
     let missing: Vec<&str> =
@@ -462,6 +494,7 @@ fn gate(c: &Common, json: bool, build_dir: Option<&Path>, files: &[PathBuf], cla
     let (config_file, fixes_file) = (tmp.path().join("clang-tidy.yaml"), tmp.path().join("fixes.yaml"));
     fs::write(&config_file, config_text(&config))?;
     let mut cmd = Command::new(&tool);
+    cmd.args(load_arg(plugin));
     cmd.arg(format!("--config-file={}", config_file.display())).arg(format!("--export-fixes={}", fixes_file.display())).arg("--quiet");
     if let Some(d) = build_dir {
         cmd.arg("-p").arg(d);
@@ -489,8 +522,15 @@ fn gate(c: &Common, json: bool, build_dir: Option<&Path>, files: &[PathBuf], cla
         .diagnostics
         .into_iter()
         .map(|d| (Path::new(&d.dir).join(&d.at.file), d))
-        .filter(|(path, d)| seen.insert((d.name.clone(), path.clone(), d.at.offset)))
+        // The message is part of the key: the generic check reports two rules at one place with one name.
+        .filter(|(path, d)| seen.insert((d.name.clone(), path.clone(), d.at.offset, d.at.message.clone())))
         .collect();
+
+    // A check that reports a bad option means the policy gave the plugin something it cannot use.
+    let bad: Vec<&str> = diagnostics.iter().filter(|(_, d)| d.name == CONFIG_ERROR).map(|(_, d)| d.at.message.as_str()).collect();
+    if !bad.is_empty() {
+        bail!("{}", bad.join("\n"));
+    }
 
     // A source that does not compile cannot be judged, so this comes before any finding.
     // With `-*` every compiler warning outside the policy is off, so one that is left is an error.
@@ -512,7 +552,16 @@ fn gate(c: &Common, json: bool, build_dir: Option<&Path>, files: &[PathBuf], cla
     }
 
     for (path, d) in diagnostics {
-        let Some(i) = rule_for_check(&loaded.policy, &d.name) else { continue };
+        // The generic check puts the rule id in the message. Every other check maps by its name.
+        let i = if d.name == MATCHER {
+            match rule_by_id(&loaded.policy, &d.at.message) {
+                Some(i) if is_active(&loaded.policy.rules[i]) => Some(i),
+                _ => bail!("{MATCHER} reported {}, which is not a rule the gate enforces", d.at.message),
+            }
+        } else {
+            rule_for_check(&loaded.policy, &d.name)
+        };
+        let Some(i) = i else { continue };
         let (rule, doc) = (&loaded.policy.rules[i], &loaded.docs[i]);
         // ponytail: every finding counts as inside a verified function until the clang-tidy plugin
         // reports function kinds. Upgrade: read the kind from the plugin's `cplusp-markers` output.
