@@ -1,0 +1,20 @@
+construct: "operator[] on a std::map with a missing key"
+standard: "[map.access]: operator[] inserts a value-initialized element when the key is not present, and returns a reference to it."
+row: containers
+gap: 3
+cpp: "`m[k]` on a map without `k` inserts the element `k` with the value 0, and the size grows by one. A read changes the map."
+naive_does: "The model is a Dafny `map` and `m[k]`, which needs `k in m`. Dafny cannot prove it and fails. The model is stricter, and the C++ changes the map."
+naive: fails
+mitigated: verifies
+side: gate
+gate_rule: containers
+mitigation: "Gate row `containers`: no `operator[]` on a map. The C++ writes `int32_t v = m.contains(k) ? m.at(k) : 0;`, and the model is `k in m` and `m[k]`."
+witness:
+  fixed_prints: "0"
+  input: "an empty map, and the key 7"
+  ubsan: false
+  prints: "1"
+rule: |
+  `m[k]` on a map writes.
+  Never model it as a read.
+  Use `contains` and `at`, which the gate allows, and model them as `k in m` and `m[k]`.

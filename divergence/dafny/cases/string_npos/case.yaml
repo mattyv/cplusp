@@ -1,0 +1,18 @@
+construct: "std::string::find with no match"
+standard: "[string.find]: find returns npos when there is no match, and npos is size_type(-1), so npos + 1 wraps to 0."
+row: containers
+gap: 3
+cpp: "`find` returns `npos` for a string without 'z'. `npos + 1` wraps to 0, which is defined for an unsigned type."
+naive_does: "The model of `find` returns the index and needs `'z' in s`. The method leaves it out, so Dafny refuses the call and fails. The model is stricter."
+naive: fails
+mitigated: verifies
+side: model
+mitigation: "The model of `find` is an `Option<nat>`, with a case for `None`. The C++ tests `!= std::string::npos` before the arithmetic."
+witness:
+  input: "the string \"abc\""
+  ubsan: false
+  prints: "0"
+rule: |
+  `std::string::find` returns `npos` for no match, and arithmetic on it wraps.
+  Model `find` as `Option<nat>`.
+  Test for `npos` before you use the result.

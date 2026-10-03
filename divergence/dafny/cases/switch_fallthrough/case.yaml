@@ -1,0 +1,21 @@
+construct: "A switch case without a break"
+standard: "[stmt.switch]: control passes to the matching case label, and from there execution continues through the following statements until a break."
+row: control_flow
+gap: 3
+cpp: "`case 1` has no break, so control runs into `case 2`. `steps(1)` is `1 + 2`, which is 3."
+naive_does: "The model is a `match` with one arm per case, and an arm never runs into the next. `steps(1)` is 1. It proves the contract and is wrong."
+naive: verifies
+naive_is_wrong: true
+mitigated: verifies
+side: gate
+gate_rule: switch_fallthrough
+mitigation: "Gate row `switch_fallthrough`: every case ends in a break or a return. The C++ writes `r = 3` where the fall-through was meant, and the model is exact."
+witness:
+  fixed_prints: "3"
+  input: "k = 1"
+  ubsan: false
+  prints: "3"
+rule: |
+  A `switch` falls through to the next case without a break, and a Dafny `match` never does.
+  Every case ends in a break or a return.
+  The gate enforces it.

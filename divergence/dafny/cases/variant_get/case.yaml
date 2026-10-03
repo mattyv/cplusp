@@ -1,0 +1,16 @@
+construct: "std::get_if on a variant that holds another alternative"
+standard: "[variant.get]: get_if returns a null pointer when the variant does not hold the alternative, and indirection through it is undefined."
+row: optional_expected_variant
+gap: 3
+cpp: "`get_if<int32_t>` on a variant that holds a `bool` returns a null pointer, and `*` on it is undefined. Nothing checks it."
+naive_does: "The model is a datatype with one constructor per alternative, and `v.i` is the read. Dafny asks for a proof that `v` holds an int32 and fails. The model is stricter than C++."
+naive: fails
+mitigated: verifies
+side: contract
+mitigation: "A precondition in the contract, `requires std::holds_alternative<int32_t>(v)` in the C++ and `requires v.AnInt?` in the model. The caller proves it."
+witness:
+  input: "a variant that holds true"
+  ubsan: true
+rule: |
+  Model `std::variant` as a datatype with one constructor per alternative.
+  A read of an alternative needs `requires` that the variant holds it, in the C++ contract and in the model.

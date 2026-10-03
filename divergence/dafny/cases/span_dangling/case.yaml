@@ -1,0 +1,21 @@
+construct: "A span over a vector across push_back"
+standard: "[span.overview]: a span refers to a contiguous sequence of objects it does not own, and [vector.modifiers] says push_back may invalidate every reference to the elements."
+row: array_span
+gap: 3
+cpp: "`push_back` on a vector at capacity moves the elements to new storage. The span `s` then points into freed memory, and `s[0]` reads it."
+naive_does: "The span is a `seq` copied into `s`, so the model keeps the value. `v := v + [1]` cannot change `s`. The model proves `result == old(v[0])`."
+naive: verifies
+naive_is_wrong: true
+mitigated: verifies
+side: gate
+gate_rule: array_span
+mitigation: "Gate row `array_span`: a span is a parameter only, never a local or a member. The C++ copies the element out, `int32_t first = v[0];`, and the model is exact."
+witness:
+  fixed_prints: "1"
+  input: "a vector of one element, at capacity"
+  ubsan: false
+  asan: true
+rule: |
+  A span is a pointer and a length, and Dafny has only values.
+  A span is a parameter only, never stored.
+  The gate enforces it.

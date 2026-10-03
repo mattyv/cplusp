@@ -1,0 +1,17 @@
+construct: "std::count_if with a lambda that captures by value"
+standard: "[alg.count]: count_if returns the number of iterators i in the range for which pred(*i) is true."
+row: lambdas
+gap: 3
+cpp: "`count_if` calls the lambda on each element and counts the true results. The capture `k` is a copy, so the lambda depends on its argument and on `k` only."
+naive_does: "The algorithm and the lambda are one recursive function `Count(v, k)` over the `seq`. The model is exact."
+naive: verifies
+mitigated: verifies
+side: none
+mitigation: "None. The literal model is exact. A lambda with by-value captures is a pure function, and the algorithm and the lambda are one function over the `seq`."
+witness:
+  input: "{1, 5, 3} and k = 2"
+  ubsan: false
+  prints: "2"
+rule: |
+  A lambda passed to a std algorithm with by-value captures is a pure function of its arguments and its captures.
+  Model the algorithm and the lambda together as one function over the `seq`.

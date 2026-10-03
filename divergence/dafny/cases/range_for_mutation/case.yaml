@@ -1,0 +1,22 @@
+construct: "A range-for loop that appends to its own vector"
+standard: "[stmt.ranged]: the range-for holds `begin` and `end` iterators for the whole loop, and [vector.modifiers] says push_back may invalidate them."
+row: iterators
+gap: 3
+cpp: "`push_back` in the loop moves the elements when the vector is at capacity. The loop then reads through iterators into freed memory."
+naive_does: "The model loops over a copy of the `seq`, so appending to `v` cannot change the loop. It proves that the result is the sum of the old elements."
+naive: verifies
+naive_is_wrong: true
+mitigated: verifies
+side: gate
+gate_rule: iterators
+mitigation: "Gate row `iterators`: the loop body never changes the range. The C++ sums in the loop and appends in a second loop over the count, and the model has the same two loops."
+witness:
+  fixed_prints: "6"
+  input: "a vector of three elements, with no spare capacity"
+  ubsan: false
+  asan: true
+rule: |
+  A Dafny loop over a `seq` reads a value.
+  A C++ range-for holds iterators into the live container.
+  The loop body never changes the range.
+  The gate enforces it.

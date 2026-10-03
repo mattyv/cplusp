@@ -1,0 +1,18 @@
+construct: "std::sort on a vector of int32_t"
+standard: "[sort]: sorts the elements in the range, and [alg.sorting.general] says the result is a permutation."
+row: algorithms
+gap: 3
+cpp: "`std::sort` with the default order puts the elements in ascending order. The result is a permutation of the old elements."
+naive_does: "The model is a method with the contract of `std::sort`: sorted, and equal as a multiset to the old `seq`. The method has no body, so the contract is an axiom. The model is exact."
+naive: verifies
+mitigated: verifies
+side: none
+mitigation: "None. The literal model is exact. A std algorithm on the trusted list has the model of its contract, not of its body."
+witness:
+  input: "{3, 1, 2}"
+  ubsan: false
+  prints: "1 2 3"
+rule: |
+  Model a std algorithm on the trusted list by its contract, not by its body.
+  `std::sort` gives a sorted permutation.
+  The comparator must be a strict weak order, and the default one on integers is.

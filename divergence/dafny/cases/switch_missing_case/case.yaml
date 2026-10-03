@@ -1,0 +1,20 @@
+construct: "A switch with no case for one enumerator"
+standard: "[stmt.switch]: if no case matches and there is no default label, none of the statements in the switch is executed."
+row: control_flow
+gap: 3
+cpp: "`Mode::Slow` has no case and there is no default. The switch does nothing, and `pick(Mode::Slow)` returns 0 in silence."
+naive_does: "The model is a `match` on the datatype with one arm. Dafny reports a missing case and refuses it. The model is stricter, and the C++ returns 0."
+naive: fails
+mitigated: verifies
+side: gate
+gate_rule: switch_missing_case
+mitigation: "Gate row `switch_missing_case`: a case for every enumerator, or a default. The C++ adds a case for `Slow` that returns 2, and the model is exact."
+witness:
+  fixed_prints: "2"
+  input: "Mode::Slow"
+  ubsan: false
+  prints: "0"
+rule: |
+  A Dafny `match` must cover every value, and a C++ `switch` need not.
+  Write a case for every enumerator, or a default.
+  The gate enforces it.

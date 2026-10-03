@@ -1,0 +1,17 @@
+construct: "Comparison of an optional with a value"
+standard: "[optional.comp.with.t]: an optional compares to a value as its contained value when it has one. A disengaged optional compares less than any value and equal to none."
+row: optional_expected_variant
+gap: 3
+cpp: "`o == 5` and `o < 5` on an empty optional are defined. The first is false and the second is true."
+naive_does: "The model compares the field, `o.value == 5`. Dafny asks for a proof that `o` holds a value and fails. The model is stricter than C++."
+naive: fails
+mitigated: verifies
+side: model
+mitigation: "The model writes the empty case out: `o.Some? && o.value == 5` and `o.None? || o.value < 5`."
+witness:
+  input: "an empty optional"
+  ubsan: false
+  prints: "0 1"
+rule: |
+  A comparison of an optional with a value has a result when the optional is empty.
+  Write the empty case out: `o.Some? && o.value == v` for `==`, and `o.None? || o.value < v` for `<`.
