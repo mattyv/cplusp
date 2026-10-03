@@ -512,7 +512,7 @@ The gate has two parts. A clang-tidy module rejects any verified function that u
 - **A separate run, alongside existing team configs.** The gate invokes clang-tidy with its own generated config, its own loaded plugin, and the team's `compile_commands.json`. The gate never reads or edits the team's `.clang-tidy`. Their normal lint run does not change. The gate fails only on policy rows, so team settings cannot add noise or silently disable our checks.
 - **Versions decoupled.** The gate brings its own pinned clang-tidy. Teams on clang-tidy 16 through 20 see no change. The plugin also builds from source against LLVM 17 to 20, for teams that want it in their editor. A team's own loaded plugins coexist with ours.
 - **Function granularity.** The unit is a function, never a file. The driver maps uncommitted edits to enclosing functions and applies the membership default. It adds callers of any function whose contract changed.
-- **One generic check, driven by the policy.** The plugin's main check, `cplusp-matcher`, compiles clang AST matcher patterns from its options when clang-tidy loads it, as `clang-query` does. Eighteen rows are one pattern each in the policy file and need no C++. Only the rows that need real code have a hand-written check. Those are `mutable`, recursion, lambda limits, impure operators, multiple inheritance, unlisted state, and the function index with its markers. Decision 0016.
+- **One generic check, driven by the policy.** The plugin's main check, `cplusp-matcher`, compiles clang AST matcher patterns from its options, as `clang-query` does. Eighteen rows are one pattern each in the policy file and need no C++. Only the rows that need real code have a hand-written check. Those are `mutable`, recursion, lambda limits, impure operators, multiple inheritance, unlisted state, and the function index with its markers. Decision 0016.
 - **Policy file drives checks.** `cplusp-policy.yaml` mirrors the Decision column, one entry per row. The driver emits the clang-tidy config from it, so a changed decision needs no code change. The file format is in [policy.md](policy.md).
 - **Messages for the bot.** Every finding says what it is, why the row bans it, and what to use instead. The text comes from the table. The prefix is always `Not provable:`.
 - **Trusted scopes.** After the run, the driver drops diagnostics for Trusted only rows inside trusted functions. Everything else stands.
@@ -584,7 +584,7 @@ Provisional. Parked as "maybe" where the first slice does not need a decision, a
 | Piece | Choice | Status |
 | --- | --- | --- |
 | Gate checks and index | C++20 clang-tidy module. CMake and Ninja. LLVM 18 pinned, builds against 17 to 20 | Forced: a clang-tidy module can only be C++ |
-| Driver `cplusp` | Rust written in Verus from the start, one static binary. No Python anywhere. TypeScript not in the core. See Proofs about cplusp itself | Decided |
+| Driver `cplusp` | Rust written in Verus from day one, one static binary. No Python anywhere. TypeScript not in the core. See Proofs about cplusp itself | Decided |
 | Policy to clang-tidy conversion | A pure core inside the driver: policy in, config out, findings matched back to rules, filter by function kind. Proved in Verus: every check of every non-allow rule is enabled, and nothing else | Decided |
 | Prover, candidate A | Dafny underneath, with the gated C++ translated to it and errors mapped back to C++ lines. Strong automation and the most LLM training data of any verifier. The translator is the new trusted component. We test it by compiling the Dafny and running both on the same inputs | Open. The thin slice decides which is built first |
 | Prover, candidate B | VeriFast. Native `//@` contract syntax, built-in overflow and bounds checks, and ownership gives frame and invalidation rules for free. Costs: its C++ frontend lacked templates in 2022. Release notes to Sept 2026 show the work going to Rust. So we would translate to its mature C mode. A 2026 study of ten LLMs found 31% verification success on VeriFast specs, with 94% of errors in separation-logic details | Open. The thin slice decides which is built first |
@@ -598,7 +598,7 @@ Provisional. Parked as "maybe" where the first slice does not need a decision, a
 
 Decided Oct 3, 2026: we prove as much of our own tooling as the tools allow. Fewer bugs in the gate means fewer silent holes in the subset.
 
-**We write the driver in Verus from the start.** Verus proves Rust code directly. The proved code is ordinary Rust after the annotations are stripped. Writing in Verus from day one shapes the code so it can be proved. Retrofitting proofs onto plain Rust is harder. The specifications start light and deepen as each format settles.
+**We write the driver in Verus from day one.** Verus proves Rust code directly. The proved code is ordinary Rust after the annotations are stripped. Writing in Verus at the outset shapes the code so it can be proved. Retrofitting proofs onto plain Rust is harder. The specifications start light and deepen as each format settles.
 
 **What we prove**
 
