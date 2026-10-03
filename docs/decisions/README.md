@@ -23,3 +23,4 @@ Status is `decided`, `proposed` (the default until someone objects or the thin s
 | [0015](0015-scope-gate-only.md) | Build the gate and nothing past it until told otherwise | decided |
 | [0016](0016-data-driven-plugin.md) | One generic clang-tidy check driven by matcher patterns in the policy | decided |
 | [0017](0017-hand-written-dafny-and-divergence-battery.md) | No translator yet. Hand-written Dafny under rules found by a divergence battery | decided |
+| [0018](0018-one-battery-per-prover.md) | One divergence battery, one skill and one mitigation report per prover | decided |
