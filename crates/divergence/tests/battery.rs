@@ -55,6 +55,8 @@ struct Witness {
     input: String,
     #[serde(default)]
     ubsan: bool,
+    #[serde(default)]
+    asan: bool,
     prints: Option<String>,
     prints_gcc: Option<String>,
     fixed_prints: Option<String>,
@@ -84,13 +86,23 @@ fn verdict(file: &Path) -> Verdict {
     if text.contains(", 0 errors") { Verdict::Verifies } else { Verdict::Fails }
 }
 
-fn build(compiler: &str, sources: &[&Path], exe: &Path, sanitize: bool) -> Output {
+const UBSAN: &[&str] = &["-fsanitize=undefined", "-fno-sanitize-recover=all"];
+/// AddressSanitizer, with sized deallocation so a delete through the wrong type is caught.
+const ASAN: &[&str] = &["-fsanitize=address", "-fsized-deallocation"];
+
+fn build(compiler: &str, sources: &[&Path], exe: &Path, flags: &[&str]) -> Output {
     let mut c = Command::new(compiler);
-    c.args(["-std=c++20", "-O0"]);
-    if sanitize {
-        c.args(["-fsanitize=undefined", "-fno-sanitize-recover=all"]);
-    }
+    c.args(["-std=c++20", "-O0"]).args(flags);
     c.args(sources).arg("-o").arg(exe).output().unwrap_or_else(|e| panic!("{compiler} runs: {e}"))
+}
+
+/// The sanitizers a case asks for, when it is built with clang.
+fn sanitizers(asan: bool) -> Vec<&'static str> {
+    let mut flags = UBSAN.to_vec();
+    if asan {
+        flags.extend_from_slice(ASAN);
+    }
+    flags
 }
 
 fn run(exe: &Path) -> (String, String) {
@@ -170,7 +182,7 @@ fn every_case_says_what_it_claims() {
 
         // The witness, compiled with the sanitizer.
         let exe = out_dir.join(&id);
-        let b = build("clang++-18", &[&code, &witness], &exe, true);
+        let b = build("clang++-18", &[&code, &witness], &exe, &sanitizers(case.witness.asan));
         assert!(b.status.success(), "{id}: witness does not build:\n{}", String::from_utf8_lossy(&b.stderr));
         let (out, err) = run(&exe);
         if case.witness.ubsan {
@@ -178,13 +190,16 @@ fn every_case_says_what_it_claims() {
         } else {
             assert!(!err.contains("runtime error"), "{id}: unexpected undefined behaviour:\n{err}");
         }
+        if case.witness.asan {
+            assert!(err.contains("Sanitizer:"), "{id}: the witness should hit AddressSanitizer or LeakSanitizer, stderr:\n{err}");
+        }
         if let Some(expected) = &case.witness.prints {
             assert_eq!(out.trim(), expected.trim(), "{id}: witness output");
         }
         // Another compiler, where the standard leaves the result open.
         if let Some(expected) = &case.witness.prints_gcc {
             let exe = out_dir.join(format!("{id}-gcc"));
-            let b = build("g++", &[&code, &witness], &exe, false);
+            let b = build("g++", &[&code, &witness], &exe, &[]);
             assert!(b.status.success(), "{id}: witness does not build with g++:\n{}", String::from_utf8_lossy(&b.stderr));
             let (out, _) = run(&exe);
             assert_eq!(out.trim(), expected.trim(), "{id}: witness output under g++");
@@ -193,12 +208,12 @@ fn every_case_says_what_it_claims() {
         // The C++ under the rule: no undefined behaviour, and the same output under both compilers.
         if needs_fixed {
             let expected = case.witness.fixed_prints.as_deref().unwrap_or_else(|| panic!("{id}: fixed.cpp needs witness.fixed_prints"));
-            for (compiler, sanitize) in [("clang++-18", true), ("g++", false)] {
+            for (compiler, flags) in [("clang++-18", sanitizers(case.witness.asan)), ("g++", Vec::new())] {
                 let exe = out_dir.join(format!("{id}-fixed-{compiler}"));
-                let b = build(compiler, &[&fixed, &witness], &exe, sanitize);
+                let b = build(compiler, &[&fixed, &witness], &exe, &flags);
                 assert!(b.status.success(), "{id}: fixed.cpp does not build with {compiler}:\n{}", String::from_utf8_lossy(&b.stderr));
                 let (out, err) = run(&exe);
-                assert!(!err.contains("runtime error"), "{id}: fixed.cpp hits undefined behaviour:\n{err}");
+                assert!(!err.contains("runtime error") && !err.contains("Sanitizer:"), "{id}: fixed.cpp hits a sanitizer:\n{err}");
                 assert_eq!(out.trim(), expected.trim(), "{id}: fixed.cpp output under {compiler}");
             }
         }
@@ -316,11 +331,7 @@ struct CaseRow {
 /// one case. The list of rows without a case shrinks with every round of the battery, to empty.
 #[test]
 fn every_supported_row_has_a_case() {
-    const NOT_YET: &[&str] = &[
-        "floating_point", "raw_pointer", "unique_ptr", "rvalue_references", "array_span", "iterators", "algorithms",
-        "classes_raii", "single_inheritance", "multiple_inheritance", "operator_overloading", "templates", "constexpr",
-        "recursion", "lambdas", "shared_variables", "global_state",
-    ];
+    const NOT_YET: &[&str] = &["floating_point", "array_span", "iterators", "algorithms", "lambdas", "shared_variables", "global_state"];
     let policy: PolicyRows = serde_yaml::from_str(&std::fs::read_to_string(root().join("policy/cplusp-policy.yaml")).unwrap()).unwrap();
     let mut covered = std::collections::BTreeSet::new();
     for entry in std::fs::read_dir(root().join("divergence/dafny/cases")).unwrap() {
@@ -350,6 +361,10 @@ fn the_battery_has_the_planned_cases() {
         // Round C1: arithmetic and conversions.
         "promotion_before_widening", "implicit_narrowing", "compound_assign_narrow", "signed_to_unsigned", "unary_minus_min", "abs_min",
         "increment_overflow", "signed_shift_left", "signed_shift_right", "literal_shift", "bool_arith", "enum_cast", "size_minus_one",
+        // Round C2: objects and memory.
+        "value_semantics", "object_lifetime", "reference_into_container", "member_init_order", "slicing", "virtual_in_constructor",
+        "virtual_destructor", "use_after_move", "moved_from_unique_ptr", "null_pointer", "operator_meaning", "generic_per_type",
+        "stack_depth", "constexpr_runtime", "interface_dispatch",
     ] {
         assert!(cases.join(id).join("case.yaml").exists(), "no case {id}");
     }

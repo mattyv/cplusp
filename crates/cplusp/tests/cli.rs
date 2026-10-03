@@ -77,6 +77,16 @@ fn policy_emit_is_the_clang_tidy_config_for_the_default_policy() {
     assert_eq!(out.matches("google-readability-casting").count(), 1, "{out}");
 }
 
+/// A `clang-diagnostic-{name}` check reports only when the compiler has `-W{name}` on, and clang leaves
+/// some of them off. The config turns on every one the policy names.
+#[test]
+fn policy_emit_turns_on_the_warning_of_every_diagnostic_check() {
+    let o = cplusp(&["policy", "emit"]);
+    assert!(o.status.success(), "stderr: {}", stderr(&o));
+    let out = stdout(&o);
+    assert!(out.contains("\nExtraArgs: ['-Wreturn-stack-address', '-Wreorder-ctor', '-Wunsequenced']\n"), "{out}");
+}
+
 #[test]
 fn policy_emit_carries_a_check_option_into_the_config() {
     let f = fixture("with-option.yaml");
@@ -420,10 +430,11 @@ fn every_sample_pair_agrees_with_its_rule() {
         "mutable_members", "multiple_inheritance", "operator_overloading", "iterators", "lambdas",
         "plain_int", "sign_compare", "evaluation_order",
         "implicit_narrowing", "sign_conversion", "widening_multiplication", "literal_shift",
+        "member_init_order", "slicing", "virtual_call_in_constructor", "virtual_destructor", "raw_pointer", "containers",
     ] {
         assert!(rules_dir.join(id).is_dir(), "no sample pair for rule {id}");
     }
-    assert!(checked >= 41, "expected at least 41 sample pairs, found {checked}");
+    assert!(checked >= 47, "expected at least 47 sample pairs, found {checked}");
 }
 
 /// Pull `"key":"value"` or `"key":123` out of one JSON line without a JSON library.

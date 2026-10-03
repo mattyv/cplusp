@@ -16,6 +16,5 @@ int32_t edge_of(const Shape& s) {
 }
 
 int32_t edge_or_zero(const Shape* s) {
-  const Square* sq = dynamic_cast<const Square*>(s);  // BANNED
-  return sq != nullptr ? sq->edge() : 0;
+  return dynamic_cast<const Square*>(s) != nullptr ? dynamic_cast<const Square*>(s)->edge() : 0;  // BANNED
 }

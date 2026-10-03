@@ -115,6 +115,8 @@ rules:
     stage: gate
     detect:
       - check: cppcoreguidelines-narrowing-conversions
+        options:
+          WarnWithinTemplateInstantiation: "true"
       - matcher: 'implicitCastExpr(hasType(hasCanonicalType(anyOf(asString("unsigned char"), asString("unsigned short")))), hasSourceExpression(hasType(hasCanonicalType(asString("int")))), unless(hasSourceExpression(ignoringImplicit(integerLiteral()))), unless(hasParent(explicitCastExpr())))'
       - matcher: 'binaryOperator(isAssignmentOperator(), unless(hasOperatorName("=")), hasLHS(hasType(hasCanonicalType(anyOf(asString("unsigned char"), asString("unsigned short"), asString("signed char"), asString("short"))))))'
 
@@ -165,9 +167,13 @@ rules:
     area: memory
     canonical: Core Guidelines allow as observer
     decision: restrict
-    limit: One object, no ownership, no arithmetic.
-    why: Nullability goes in the contract.
-    stage: spec
+    limit: A parameter only. One object, no ownership, no arithmetic. No pointer member and no pointer local.
+    why: Nullability goes in the contract. A stored pointer can outlive its object, and the model has no object that dies.
+    use_instead: "a reference, or a value."
+    stage: gate
+    detect:
+      - matcher: fieldDecl(hasType(pointerType(unless(pointee(functionType())))), unless(isImplicit()))
+      - matcher: varDecl(hasType(pointerType(unless(pointee(functionType())))), unless(parmVarDecl()), unless(isImplicit()))
 
   - id: pointer_arithmetic
     construct: Pointer arithmetic, array-to-pointer decay
@@ -281,9 +287,12 @@ rules:
     area: library
     canonical: Allowed
     decision: restrict
-    limit: Only methods that have a trusted contract, no reference or iterator held across a mutation.
-    why: Trusted contracts carry the invalidation rules.
-    stage: spec
+    limit: Only methods that have a trusted contract. No reference into a container. No iterator held across a mutation.
+    why: Trusted contracts carry the invalidation rules. A reference into a container dies at the next mutation, and the model has only values.
+    use_instead: "a copy of the element."
+    stage: gate
+    detect:
+      - matcher: 'varDecl(hasType(referenceType()), unless(parmVarDecl()), unless(hasParent(declStmt(hasParent(cxxForRangeStmt())))), hasInitializer(hasDescendant(declRefExpr(to(varDecl(hasType(anyOf(hasCanonicalType(hasDeclaration(cxxRecordDecl(hasAncestor(namespaceDecl(hasName("std")))))), references(qualType(hasCanonicalType(hasDeclaration(cxxRecordDecl(hasAncestor(namespaceDecl(hasName("std"))))))))))))))), unless(hasType(references(qualType(hasCanonicalType(hasDeclaration(cxxRecordDecl(hasAncestor(namespaceDecl(hasName("std")))))))))))'
 
   - id: variable_index
     construct: "`operator[]` with a variable index"
@@ -377,6 +386,50 @@ rules:
     decision: allow
     why: The prover checks overrides for Liskov substitution.
     stage: prover
+
+  - id: member_init_order
+    construct: Mem-initializers out of declaration order
+    area: classes
+    canonical: "Core Guidelines C.47, -Wreorder"
+    decision: ban
+    why: C++ initializes the members in declaration order, whatever order the constructor writes. A member read before its turn is undefined.
+    use_instead: "the mem-initializers in declaration order."
+    stage: gate
+    detect:
+      - check: clang-diagnostic-reorder-ctor
+
+  - id: slicing
+    construct: Copy of a derived object into a base type
+    area: classes
+    canonical: "Core Guidelines ES.63 and C.145"
+    decision: ban
+    why: The copy keeps the base part only, and a virtual call on it goes to the base.
+    use_instead: "a reference, or a unique_ptr to the base."
+    stage: gate
+    detect:
+      - check: cppcoreguidelines-slicing
+
+  - id: virtual_call_in_constructor
+    construct: Virtual call in a constructor or destructor
+    area: classes
+    canonical: "Core Guidelines C.82"
+    decision: ban
+    why: The call goes to the class under construction, not to the derived class.
+    use_instead: "a call after construction, or a non-virtual function."
+    stage: gate
+    detect:
+      - check: clang-analyzer-optin.cplusplus.VirtualCall
+
+  - id: virtual_destructor
+    construct: Class with a virtual function and no virtual destructor
+    area: classes
+    canonical: "Core Guidelines C.35"
+    decision: ban
+    why: Deleting a derived object through a base pointer is undefined without one.
+    use_instead: "a virtual destructor, virtual ~Base() = default."
+    stage: gate
+    detect:
+      - check: cppcoreguidelines-virtual-class-destructor
 
   - id: missing_override
     construct: Overriding without `override`

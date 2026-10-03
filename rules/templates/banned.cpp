@@ -11,7 +11,7 @@ struct Holder {
   T value;
 };
 
-template <typename T> struct Holder<T*> { T* value = nullptr; };  // BANNED
+template <typename T> struct Holder<T*> { int32_t tag = 1; };  // BANNED
 
 template <typename T>
 T twice(T x) {
@@ -27,7 +27,7 @@ struct Fixed {
 
 template <template <typename> class C>  // BANNED
 struct Wrap {
-  C<int32_t>* inner = nullptr;
+  C<int32_t> inner{};
 };
 
 template <typename T>

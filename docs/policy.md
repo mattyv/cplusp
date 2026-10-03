@@ -104,7 +104,7 @@ rules:
 | `stage` | No | `gate`, `prover`, `spec` or `none`. Default `none` for an `allow` entry with no `detect`, else `gate`, so a ban without `detect` fails closed. The gate enforces an entry when its stage is `gate`, or when it has a `detect` list and a decision other than `allow`. That second case is how a dormant `detect` on a prover row wakes up when a team flips the row to `ban`. A `prover`, `spec` or `none` entry without `detect` needs no `use_instead`, and the gate treats it as `allow`. Its decision still matters for overrides: a team may not loosen it without a reason |
 | `detect` | For everything but `allow` | The checks that find the construct. Each entry is either `check: NAME` with optional `options`, or `matcher: PATTERN`, a clang AST matcher written as `clang-query` writes it |
 
-A `matcher` entry needs no C++. The gate hands the pattern to one generic check in the plugin, `cplusp-matcher`, as an option named after the rule: `cplusp-matcher.{id}/{n}: '{pattern}'`. Here `n` counts the rule's patterns from 1. The check compiles the pattern when clang-tidy starts and reports every match with the rule id as its message. A pattern that does not parse is a configuration error, and the gate exits 2 naming the rule. A pattern runs on the full tree, so it sees implicit nodes, such as the cast that `sign_compare` matches. Twenty-four rules use patterns today. The rules that need real code keep a hand-written check.
+A `matcher` entry needs no C++. The gate hands the pattern to one generic check in the plugin, `cplusp-matcher`, as an option named after the rule: `cplusp-matcher.{id}/{n}: '{pattern}'`. Here `n` counts the rule's patterns from 1. The check compiles the pattern when clang-tidy starts and reports every match with the rule id as its message. A pattern that does not parse is a configuration error, and the gate exits 2 naming the rule. A pattern runs on the full tree, so it sees implicit nodes, such as the cast that `sign_compare` matches. Twenty-six rules use patterns today. The rules that need real code keep a hand-written check.
 
 A `detect` list on an `allow` entry is dormant. It exists so that flipping the decision to `ban` is a one-word edit. Give such an entry a `use_instead` too, so the message is complete on the day it wakes up. If a construct has no check that fits, write a new `cplusp-*` check and name it here. That is the "add a rule" recipe from the plan.
 
@@ -124,12 +124,13 @@ The generated config is a build artifact. Nobody edits it. The gate writes it to
 Checks: '-*,cppcoreguidelines-avoid-goto,google-readability-casting,cppcoreguidelines-pro-type-reinterpret-cast,cppcoreguidelines-pro-type-union-access,cplusp-matcher,cplusp-iterator-arithmetic,cppcoreguidelines-init-variables,cppcoreguidelines-pro-type-member-init'
 WarningsAsErrors: '*'
 HeaderFilterRegex: '.*'
+ExtraArgs: ['-Wreorder-ctor']
 CheckOptions:
   cplusp-matcher.unions/1: 'recordDecl(isUnion(), isDefinition())'
   cppcoreguidelines-pro-type-member-init.IgnoreArrays: 'true'
 ```
 
-`HeaderFilterRegex` makes the gate judge project headers that the given files include. System headers stay out. To pass a header on its own, add `-x c++` after `--`.
+`ExtraArgs` turns on the compiler warning behind every `clang-diagnostic-` check the policy names, because clang leaves some of them off. `HeaderFilterRegex` makes the gate judge project headers that the given files include. System headers stay out. To pass a header on its own, add `-x c++` after `--`.
 
 The message has one shape per decision. The gate fills the braces from the entry. The construct name is followed by a colon, so the sentence reads the same for singular and plural constructs.
 
@@ -160,7 +161,7 @@ Two findings come from the gate itself, not from a policy row:
 
 ## Checking the policy
 
-`cplusp policy check` prints `ok: 59 rules, 43 enforced by the gate` or one line per problem on stderr, in the form `{id}: {problem}`. `cplusp policy emit` prints the generated clang-tidy config. Both take `--policy FILE` for a team policy. A file without `rules` is a parse error. So is a rule or override with a field it may not carry. A misspelt key therefore cannot drop a team's overrides on the floor.
+`cplusp policy check` prints `ok: 63 rules, 49 enforced by the gate` or one line per problem on stderr, in the form `{id}: {problem}`. `cplusp policy emit` prints the generated clang-tidy config. Both take `--policy FILE` for a team policy. A file without `rules` is a parse error. So is a rule or override with a field it may not carry. A misspelt key therefore cannot drop a team's overrides on the floor.
 
 ## Reading the policy as a table
 

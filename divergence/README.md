@@ -22,7 +22,7 @@ The fields of `case.yaml`:
 - `naive_is_wrong`: the naive model verifies, and the C++ can do otherwise. The report shows `verifies, wrong`.
 - `side`: where the mitigation lives. `model`: the Dafny differs from the literal model. `contract`: the `//@` contract gains a clause, in the C++ and in the model, and the caller carries it. `cpp`: the C++ body changes. `gate`: a policy row refuses the C++. `gate_rule` names the row, and the sample pair under `rules/` shows it. `none`: no mitigation, because the literal model is exact.
 - `mitigation`: one line for the report.
-- `witness`: `input` in words. `ubsan: true` when the witness hits undefined behaviour. `prints` for its output under clang. `prints_gcc` when g++ prints something else, which shows an unspecified result. `fixed_prints` for the output of `fixed.cpp`, the same under both compilers.
+- `witness`: `input` in words. `ubsan: true` when the witness hits undefined behaviour. `asan: true` when it hits AddressSanitizer or LeakSanitizer, for a lifetime bug or a leak. `prints` for its output under clang. `prints_gcc` when g++ prints something else, which shows an unspecified result. `fixed_prints` for the output of `fixed.cpp`, the same under both compilers.
 - `rule`: the rule in words. Every line appears in the skill file.
 
 `cargo run -p divergence -- dafny` generates `docs/mitigations-dafny.md` from the cases. Do not edit it by hand. The test in `crates/divergence` runs every case through Dafny, the gate, the witness under the sanitizer, and the skill file. So the cases, the report and the skill cannot drift.
