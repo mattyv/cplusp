@@ -598,7 +598,7 @@ Provisional. Parked as "maybe" where the first slice does not need a decision, a
 
 Decided Oct 3, 2026: we prove as much of our own tooling as the tools allow. Fewer bugs in the gate means fewer silent holes in the subset.
 
-**We write the driver in Verus from day one.** Verus proves Rust code directly. The proved code is ordinary Rust after the annotations are stripped. Writing in Verus at the outset shapes the code so it can be proved. Retrofitting proofs onto plain Rust is harder. The specifications start light and deepen as each format settles.
+**We write the driver in Verus from day one.** Verus proves Rust code directly. The proved code is ordinary Rust after the annotations are stripped. Writing in Verus at the outset shapes the code so it can be proved. Retrofitting proofs onto plain Rust is harder. The specifications are light at first and deepen as each format settles.
 
 **What we prove**
 
@@ -651,7 +651,7 @@ Decided Oct 3, 2026: we prove as much of our own tooling as the tools allow. Few
 - Recorded that the gate runs separately from, and never edits, a team's existing clang-tidy config, with its own pinned clang-tidy.
 - Made the prover an open choice between Dafny and VeriFast, settled by the thin slice. Verus is plan C.
 - Added the Prover interface: the prover is a plug-in, the bot never writes prover-specific hints, and two provers can run as a cross-check.
-- Decided the driver is Rust written in Verus from the start. Added Proofs about cplusp itself: what we prove, what we cannot, and what we do instead.
+- Decided the driver is Rust written in Verus from day one. Added Proofs about cplusp itself: what we prove, what we cannot, and what we do instead.
 - Built the verified core (29 behaviour tests, 44 Verus proofs), the command (28 tests) and the clang-tidy plugin with its one generic check. Eighteen rules detect through matcher patterns in the policy file. 29 sample pairs. The subset table below is generated from the policy file. Decided against ply as a dependency. Changed the message grammar so the construct name is followed by a colon.
 - Added `cplusp policy show` and the generated subset table, see policy.md.
 - Added a provisional tech stack: C++ only for the clang-tidy module, Rust for the rest, no Python.
