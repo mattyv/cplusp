@@ -1,9 +1,10 @@
+#include <cstdint>
 #include <cstddef>
 #include <cstring>
 
 struct Pair {
-  int a = 0;
-  int b = 0;
+  int32_t a = 0;
+  int32_t b = 0;
 };
 
 void copy_pair(Pair& dst, const Pair& src) {

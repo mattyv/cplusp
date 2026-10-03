@@ -1,0 +1,19 @@
+construct: Signed addition on int32_t
+standard: "[expr.pre]: the behavior of evaluating an arithmetic expression is undefined if the mathematical result is not in the range of representable values for its type."
+gap: 4
+cpp: Signed overflow is undefined behaviour. The compiler may assume it never happens.
+naive_does: Adds in unbounded integers, so the sum never overflows and the proof goes through.
+naive: verifies
+naive_is_wrong: true
+mitigated: verifies
+side: model
+mitigation: Bounded `int32` type, and a precondition on the sum written with `as int`.
+witness:
+  input: INT32_MAX + 1
+  ubsan: true
+rule: |
+  Map `int32_t` to `newtype int32 = x: int | -0x8000_0000 <= x < 0x8000_0000`, never to `int`.
+  Dafny then checks every arithmetic step for overflow, in the body and in the contract alike.
+  A sum that may overflow needs a precondition written with `as int`:
+  `requires -0x8000_0000 <= (a as int) + (b as int) < 0x8000_0000`.
+  The other mitigation is in the C++: add in `int64_t` and check the range before narrowing.

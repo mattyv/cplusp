@@ -1,8 +1,9 @@
+#include <cstdint>
 #include <coroutine>
 
-int sum_all(int count, ...);
+int32_t sum_all(int32_t count, ...);
 
-int three() {
+int32_t three() {
   return sum_all(2, 1, 2);  // BANNED
 }
 
@@ -28,11 +29,11 @@ Task returns() {  // BANNED
 
 struct Counter {
   struct promise_type {
-    int last = 0;
+    int32_t last = 0;
     Counter get_return_object() { return {}; }
     std::suspend_always initial_suspend() noexcept { return {}; }
     std::suspend_always final_suspend() noexcept { return {}; }
-    std::suspend_always yield_value(int v) {
+    std::suspend_always yield_value(int32_t v) {
       last = v;
       return {};
     }

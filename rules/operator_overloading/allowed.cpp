@@ -1,6 +1,7 @@
+#include <cstdint>
 struct Vec2 {
-  int x = 0;
-  int y = 0;
+  int32_t x = 0;
+  int32_t y = 0;
   Vec2& operator=(const Vec2&) = default;
   Vec2& operator=(Vec2&&) = delete;
   Vec2 operator+(const Vec2& o) const { return Vec2{x + o.x, y + o.y}; }

@@ -60,6 +60,7 @@ C++ converts the signed operand to unsigned first, so a negative value compares 
 Do not model a mixed comparison as it stands.
 Change the C++ to test the sign and cast on purpose, for example `i < 0 || static_cast<size_t>(i) < n`.
 Model the changed C++ as `i < 0 || (i as uint64) < n`.
+`std::cmp_less(i, n)` from `<utility>` is the same test, and its model is `(i as int) < (n as int)`.
 
 ## plain_int
 

@@ -1,11 +1,12 @@
+#include <cstdint>
 class Engine {
 public:
-  int power() const { return 100; }
+  int32_t power() const { return 100; }
 };
 
 class Car {
 public:
-  int power() const { return engine_.power(); }
+  int32_t power() const { return engine_.power(); }
 
 private:
   Engine engine_;

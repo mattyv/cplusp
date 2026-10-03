@@ -1,1 +1,1 @@
-int f(double d) { int x{d}; return x; }
+float f(double d) { float x{d}; return x; }

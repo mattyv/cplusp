@@ -1,12 +1,13 @@
+#include <cstdint>
 class Meters {
 public:
-  explicit Meters(int v) : value_(v) {}
-  explicit operator int() const { return value_; }
+  explicit Meters(int32_t v) : value_(v) {}
+  explicit operator int32_t() const { return value_; }
 
 private:
-  int value_;
+  int32_t value_;
 };
 
-int twice(const Meters& m) {
-  return static_cast<int>(m) * 2;
+int32_t twice(const Meters& m) {
+  return static_cast<int32_t>(m) * 2;
 }

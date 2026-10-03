@@ -1,12 +1,13 @@
+#include <cstdint>
 class Meters {
 public:
-  Meters(int v) : value_(v) {}  // BANNED
-  operator int() const { return value_; }  // BANNED
+  Meters(int32_t v) : value_(v) {}  // BANNED
+  operator int32_t() const { return value_; }  // BANNED
 
 private:
-  int value_;
+  int32_t value_;
 };
 
-int twice(const Meters& m) {
+int32_t twice(const Meters& m) {
   return m * 2;
 }

@@ -1,9 +1,10 @@
+#include <cstdint>
 enum Color { Red, Green };  // BANNED
 
-enum Mode : unsigned { Fast, Slow };  // BANNED
+enum Mode : uint32_t { Fast, Slow };  // BANNED
 
 enum { Mask = 3 };  // BANNED
 
-int code(Color c) {
+int32_t code(Color c) {
   return c == Red ? Mask : Fast;
 }

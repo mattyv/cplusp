@@ -1,3 +1,4 @@
+#include <cstdint>
 #include <csetjmp>
 #include <type_traits>
 
@@ -9,6 +10,6 @@ void bail(JmpPtr env) {
   std::longjmp(env, 1);  // BANNED
 }
 
-int enter(JmpPtr env) {
+int32_t enter(JmpPtr env) {
   return setjmp(env);  // BANNED
 }

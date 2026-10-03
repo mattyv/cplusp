@@ -1,0 +1,23 @@
+construct: "Calls with side effects in the arguments"
+standard: "[expr.call]: the initialization of a parameter, including every associated value computation and side effect, is indeterminately sequenced with respect to that of any other parameter."
+gap: 3
+cpp: "The order of evaluation of arguments is unspecified. clang goes left to right, and g++ goes right to left."
+naive_does: "Dafny has no call inside an expression, so the model fixes left to right and proves `rises(x)` true. g++ evaluates right to left and returns false."
+naive: verifies
+naive_is_wrong: true
+mitigated: verifies
+side: gate
+gate_rule: evaluation_order
+mitigation: "Gate row `evaluation_order`: at most one call that may change state in one expression. `clang-diagnostic-unsequenced` alone does not see two such calls. The C++ puts each call in its own statement."
+witness:
+  prints_gcc: "0"
+  fixed_prints: "1"
+  input: "rises(x) with x = 0"
+  ubsan: false
+  prints: "1"
+rule: |
+  Dafny has no method call inside an expression, so the model must choose an order.
+  C++ does not choose one for arguments, and compilers differ.
+  Never model two calls that change state in one expression.
+  Change the C++ to put each call in its own statement.
+  Then hoist the calls in the same order.

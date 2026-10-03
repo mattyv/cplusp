@@ -19,6 +19,17 @@ rules:
     why: Easy for the prover.
     stage: none
 
+  - id: plain_int
+    construct: Plain `int`, `long`, `short`, `char` and the other built-in integer types
+    area: types
+    canonical: "MISRA Dir 4.6: use typedefs that show size and signedness"
+    decision: ban
+    why: The compiler sets the width and the signedness of these types. The source does not say them, and the proof needs them.
+    use_instead: "int32_t, uint8_t and the other fixed-width types from <cstdint>, bool, and size_t for sizes."
+    stage: gate
+    detect:
+      - matcher: typeLoc(loc(qualType(builtinType(), isInteger(), unless(qualType(booleanType())))))
+
   - id: unscoped_enum
     construct: Unscoped `enum`
     area: types
@@ -82,6 +93,17 @@ rules:
     decision: allow
     why: The prover proves no overflow, bad shift or divide by zero.
     stage: prover
+
+  - id: sign_compare
+    construct: Comparison of a signed with an unsigned integer
+    area: arithmetic
+    canonical: "MISRA 10.4, -Wsign-compare"
+    decision: ban
+    why: The signed operand converts to unsigned, so a negative value compares as a large one.
+    use_instead: "std::cmp_less and its siblings from <utility>, or a test of the sign and then a static_cast."
+    stage: gate
+    detect:
+      - matcher: binaryOperator(isComparisonOperator(), hasEitherOperand(implicitCastExpr(hasType(isUnsignedInteger()), hasSourceExpression(hasType(isSignedInteger())), unless(hasSourceExpression(integerLiteral())))))
 
   - id: narrowing_static_cast
     construct: Narrowing `static_cast`
@@ -473,6 +495,19 @@ rules:
     stage: gate
     detect:
       - check: cplusp-recursion
+
+  - id: evaluation_order
+    construct: Two changes of state in one expression
+    area: control
+    canonical: "MISRA 13.2. Core Guidelines ES.43 and ES.44"
+    decision: restrict
+    limit: At most one change of state in one full expression. A call outside `std` may change state when a parameter is a non-const reference or pointer, or when it is a non-const member function.
+    why: C++ does not fix the order of two calls in one expression, and compilers differ. Two increments of one variable in one expression are undefined.
+    use_instead: one statement per call, in the order the contract needs.
+    stage: gate
+    detect:
+      - check: clang-diagnostic-unsequenced
+      - matcher: 'callExpr(callExpr(unless(callee(functionDecl(hasAncestor(namespaceDecl(hasName("std")))))), anyOf(callee(functionDecl(hasAnyParameter(hasType(qualType(anyOf(references(qualType(unless(isConstQualified()))), pointsTo(qualType(unless(isConstQualified()))))))))), allOf(cxxMemberCallExpr(), unless(cxxOperatorCallExpr()), callee(cxxMethodDecl(unless(isConst())))))), expr().bind("self"), hasAncestor(expr(hasDescendant(callExpr(callExpr(unless(callee(functionDecl(hasAncestor(namespaceDecl(hasName("std")))))), anyOf(callee(functionDecl(hasAnyParameter(hasType(qualType(anyOf(references(qualType(unless(isConstQualified()))), pointsTo(qualType(unless(isConstQualified()))))))))), allOf(cxxMemberCallExpr(), unless(cxxOperatorCallExpr()), callee(cxxMethodDecl(unless(isConst())))))), unless(equalsBoundNode("self")), unless(hasAncestor(expr(equalsBoundNode("self")))), unless(hasDescendant(expr(equalsBoundNode("self")))))))))'
 
   - id: lambdas
     construct: Lambdas

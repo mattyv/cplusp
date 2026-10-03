@@ -1,3 +1,4 @@
-constexpr int square(int x) { return x * x; }
+#include <cstdint>
+constexpr int32_t square(int32_t x) { return x * x; }
 
-int area(int side) { return square(side); }
+int32_t area(int32_t side) { return square(side); }

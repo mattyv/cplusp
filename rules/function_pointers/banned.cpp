@@ -1,40 +1,41 @@
+#include <cstdint>
 #include <functional>
 #include <vector>
 
 struct Widget {
-  int size(int scale);
+  int32_t size(int32_t scale);
 };
 
-using Handler = int (*)(int);  // BANNED
+using Handler = int32_t (*)(int32_t);  // BANNED
 
-int apply(int (*f)(int), int x) {  // BANNED
+int32_t apply(int32_t (*f)(int32_t), int32_t x) {  // BANNED
   return f(x);
 }
 
-int apply_alias(Handler f, int x) {  // BANNED
+int32_t apply_alias(Handler f, int32_t x) {  // BANNED
   return f(x);
 }
 
-int apply_member(int (Widget::*f)(int), Widget& w, int x) {  // BANNED
+int32_t apply_member(int32_t (Widget::*f)(int32_t), Widget& w, int32_t x) {  // BANNED
   return (w.*f)(x);
 }
 
-int count_pointers(const std::vector<int (*)(int)>& items) {  // BANNED
+int32_t count_pointers(const std::vector<int32_t (*)(int32_t)>& items) {  // BANNED
   return items.empty() ? 0 : 1;
 }
 
-int apply_boxed(std::function<int(int)> f, int x) {  // BANNED
+int32_t apply_boxed(std::function<int32_t(int32_t)> f, int32_t x) {  // BANNED
   return f(x);
 }
 
-int apply_boxed_ref(const std::function<int(int)>& f, int x) {  // BANNED
+int32_t apply_boxed_ref(const std::function<int32_t(int32_t)>& f, int32_t x) {  // BANNED
   return f(x);
 }
 
-int apply_boxed_ptr(const std::function<int(int)>* f, int x) {  // BANNED
+int32_t apply_boxed_ptr(const std::function<int32_t(int32_t)>* f, int32_t x) {  // BANNED
   return (*f)(x);
 }
 
-int count_boxed(const std::vector<std::function<int(int)>>& items) {  // BANNED
+int32_t count_boxed(const std::vector<std::function<int32_t(int32_t)>>& items) {  // BANNED
   return items.empty() ? 0 : 1;
 }

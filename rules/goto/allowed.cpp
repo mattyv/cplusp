@@ -1,6 +1,6 @@
-int first_positive(int a, int b) {
-  int v = a;
-  if (v <= 0) {
+bool first_true(bool a, bool b) {
+  bool v = a;
+  if (!v) {
     v = b;
   }
   return v;

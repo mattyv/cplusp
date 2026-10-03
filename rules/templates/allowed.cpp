@@ -1,3 +1,4 @@
+#include <cstdint>
 template <typename T>
 T twice(T x) {
   return x + x;
@@ -8,7 +9,7 @@ struct Box {
   T value;
 };
 
-int use() {
-  Box<int> b{twice(2)};
+int32_t use() {
+  Box<int32_t> b{twice(2)};
   return b.value;
 }

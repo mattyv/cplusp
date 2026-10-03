@@ -1,0 +1,23 @@
+construct: "Comparison of int32_t with size_t"
+standard: "[expr.arith.conv]: if the unsigned operand has rank greater than or equal to the rank of the signed operand, the signed operand is converted to the unsigned type."
+gap: 3
+cpp: "The signed operand converts to unsigned. `-1 < 1` becomes 18446744073709551615 < 1, which is false."
+naive_does: "Dafny needs `as int` on both sides, and that compares the true values. The model says -1 is below 1."
+naive: verifies
+naive_is_wrong: true
+mitigated: verifies
+side: gate
+gate_rule: sign_compare
+mitigation: "Gate row `sign_compare`: no comparison of a signed with an unsigned integer. `clang-diagnostic-sign-compare` alone is silent unless the build flags carry `-Wsign-compare`. The C++ tests the sign and casts on purpose: `i < 0 || static_cast<size_t>(i) < n`, or calls `std::cmp_less`."
+witness:
+  fixed_prints: "1"
+  input: "-1 < 1"
+  ubsan: false
+  prints: "0"
+rule: |
+  Dafny will not compare an `int32` with a `uint64`, and `as int` on both sides gives the true comparison, not the C++ one.
+  C++ converts the signed operand to unsigned first, so a negative value compares as a huge value.
+  Do not model a mixed comparison as it stands.
+  Change the C++ to test the sign and cast on purpose, for example `i < 0 || static_cast<size_t>(i) < n`.
+  Model the changed C++ as `i < 0 || (i as uint64) < n`.
+  `std::cmp_less(i, n)` from `<utility>` is the same test, and its model is `(i as int) < (n as int)`.

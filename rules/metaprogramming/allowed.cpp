@@ -1,3 +1,4 @@
+#include <cstdint>
 #include <concepts>
 
 template <std::integral T>
@@ -5,10 +6,10 @@ T twice(T x) {
   return x + x;
 }
 
-int half(int x) {
+int32_t half(int32_t x) {
   return x / 2;
 }
 
-long half(long x) {
+int64_t half(int64_t x) {
   return x / 2;
 }

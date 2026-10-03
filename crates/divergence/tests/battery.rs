@@ -1,22 +1,23 @@
-//! One invariant over every case in divergence/cases: Dafny says what case.yaml says it says,
-//! the witness shows what case.yaml says it shows, and the skill file carries the case's rule.
+//! One invariant over every case in divergence/dafny/cases: Dafny says what case.yaml says it says,
+//! the gate and the witness show what case.yaml says they show, and the skill file carries the case's rule.
 
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::process::{Command, Output};
 
 use serde::Deserialize;
 
 #[derive(Deserialize)]
 struct Case {
     construct: String,
+    standard: String,
     #[allow(dead_code)]
     gap: u32,
     #[allow(dead_code)]
     cpp: String,
     #[allow(dead_code)]
     naive_does: String,
-    #[allow(dead_code)]
     side: Side,
+    gate_rule: Option<String>,
     #[allow(dead_code)]
     mitigation: String,
     naive: Verdict,
@@ -27,17 +28,21 @@ struct Case {
     rule: String,
 }
 
+/// What Dafny says about a file. `TypeError` is a file Dafny refuses before it verifies anything.
 #[derive(Deserialize, PartialEq, Debug, Clone, Copy)]
-#[serde(rename_all = "lowercase")]
+#[serde(rename_all = "snake_case")]
 enum Verdict {
     Verifies,
     Fails,
+    TypeError,
 }
 
+/// Where the mitigation lives. See divergence/README.md.
 #[derive(Deserialize, PartialEq, Debug, Clone, Copy)]
 #[serde(rename_all = "lowercase")]
 enum Side {
     Model,
+    Contract,
     Cpp,
     Gate,
     None,
@@ -50,6 +55,8 @@ struct Witness {
     #[serde(default)]
     ubsan: bool,
     prints: Option<String>,
+    prints_gcc: Option<String>,
+    fixed_prints: Option<String>,
 }
 
 fn root() -> PathBuf {
@@ -69,14 +76,58 @@ fn dafny() -> String {
 fn verdict(file: &Path) -> Verdict {
     let out = Command::new(dafny()).arg("verify").arg(file).output().expect("dafny runs");
     let text = String::from_utf8_lossy(&out.stdout) + String::from_utf8_lossy(&out.stderr);
+    if text.contains("resolution/type errors detected") {
+        return Verdict::TypeError;
+    }
     assert!(text.contains("verifier finished"), "{}: dafny did not finish:\n{text}", file.display());
     if text.contains(", 0 errors") { Verdict::Verifies } else { Verdict::Fails }
 }
 
+fn build(compiler: &str, sources: &[&Path], exe: &Path, sanitize: bool) -> Output {
+    let mut c = Command::new(compiler);
+    c.args(["-std=c++20", "-O0"]);
+    if sanitize {
+        c.args(["-fsanitize=undefined", "-fno-sanitize-recover=all"]);
+    }
+    c.args(sources).arg("-o").arg(exe).output().unwrap_or_else(|e| panic!("{compiler} runs: {e}"))
+}
+
+fn run(exe: &Path) -> (String, String) {
+    let o = Command::new(exe).output().expect("witness runs");
+    (String::from_utf8_lossy(&o.stdout).into_owned(), String::from_utf8_lossy(&o.stderr).into_owned())
+}
+
+fn clang_tidy_available() -> bool {
+    ["clang-tidy-18", "clang-tidy"].iter().any(|b| Command::new(b).arg("--version").output().map(|o| o.status.success()).unwrap_or(false))
+}
+
+/// The gate on one file, through the cplusp binary. The plugin must be built, as for the cli tests.
+fn gate(file: &Path) -> Output {
+    let plugin = std::env::var_os("CPLUSP_PLUGIN").map(PathBuf::from).unwrap_or_else(|| root().join("target/plugin/libcplusp.so"));
+    assert!(plugin.exists(), "plugin not built: run `cmake -S clang-tidy -B target/plugin -G Ninja && cmake --build target/plugin`, or set CPLUSP_PLUGIN");
+    Command::new("cargo")
+        .args(["run", "-q", "-p", "cplusp", "--", "gate", "--json", "--plugin"])
+        .arg(plugin)
+        .arg(file)
+        .args(["--", "-std=c++20"])
+        .current_dir(root())
+        .output()
+        .expect("cargo runs")
+}
+
+fn text(o: &Output) -> (String, String) {
+    (String::from_utf8_lossy(&o.stdout).into_owned(), String::from_utf8_lossy(&o.stderr).into_owned())
+}
+
 #[test]
 fn every_case_says_what_it_claims() {
-    let cases = root().join("divergence/cases");
+    let cases = root().join("divergence/dafny/cases");
     let skill = std::fs::read_to_string(root().join("skills/cplusp-dafny/SKILL.md")).unwrap();
+    let policy = std::fs::read_to_string(root().join("policy/cplusp-policy.yaml")).unwrap();
+    let gate_available = clang_tidy_available();
+    if !gate_available {
+        eprintln!("skipped the gate: clang-tidy not installed");
+    }
     let out_dir = std::env::temp_dir().join(format!("cplusp-divergence-{}", std::process::id()));
     std::fs::create_dir_all(&out_dir).unwrap();
     let mut seen = 0;
@@ -87,6 +138,12 @@ fn every_case_says_what_it_claims() {
         }
         let id = dir.file_name().unwrap().to_string_lossy().into_owned();
         let case: Case = serde_yaml::from_str(&std::fs::read_to_string(dir.join("case.yaml")).unwrap()).unwrap_or_else(|e| panic!("{id}/case.yaml: {e}"));
+        let code = dir.join("code.cpp");
+        let witness = dir.join("witness.cpp");
+        let fixed = dir.join("fixed.cpp");
+
+        // The standard decides the case, and the case says where.
+        assert!(case.standard.starts_with('[') && case.standard.contains("]: "), "{id}: standard is `[section]: the sentence that decides the case`, got: {}", case.standard);
 
         // Dafny verdicts.
         assert_eq!(verdict(&dir.join("naive.dfy")), case.naive, "{id}: naive.dfy ({})", case.construct);
@@ -96,20 +153,23 @@ fn every_case_says_what_it_claims() {
             assert_eq!(case.naive, Verdict::Verifies, "{id}: a naive model can only be wrong if Dafny accepted it");
         }
 
+        // The side says what else the case must carry.
+        match case.side {
+            Side::Gate => {
+                let rule = case.gate_rule.as_deref().unwrap_or_else(|| panic!("{id}: a gate side names its gate_rule"));
+                assert!(root().join("rules").join(rule).join("banned.cpp").exists(), "{id}: gate_rule {rule} has no sample pair under rules/");
+                assert!(policy.contains(&format!("- id: {rule}\n")), "{id}: gate_rule {rule} is not a row in the policy");
+            }
+            _ => assert!(case.gate_rule.is_none(), "{id}: only a gate side names a gate_rule"),
+        }
+        let needs_fixed = matches!(case.side, Side::Cpp | Side::Gate);
+        assert_eq!(fixed.exists(), needs_fixed, "{id}: fixed.cpp is the C++ changed under the rule, for a cpp or gate side only");
+
         // The witness, compiled with the sanitizer.
         let exe = out_dir.join(&id);
-        let build = Command::new("clang++-18")
-            .args(["-std=c++20", "-O0", "-fsanitize=undefined", "-fno-sanitize-recover=all"])
-            .arg(dir.join("code.cpp"))
-            .arg(dir.join("witness.cpp"))
-            .arg("-o")
-            .arg(&exe)
-            .output()
-            .expect("clang++ runs");
-        assert!(build.status.success(), "{id}: witness does not build:\n{}", String::from_utf8_lossy(&build.stderr));
-        let run = Command::new(&exe).output().expect("witness runs");
-        let err = String::from_utf8_lossy(&run.stderr);
-        let out = String::from_utf8_lossy(&run.stdout);
+        let b = build("clang++-18", &[&code, &witness], &exe, true);
+        assert!(b.status.success(), "{id}: witness does not build:\n{}", String::from_utf8_lossy(&b.stderr));
+        let (out, err) = run(&exe);
         if case.witness.ubsan {
             assert!(err.contains("runtime error"), "{id}: the witness should hit undefined behaviour, stderr:\n{err}");
         } else {
@@ -117,6 +177,47 @@ fn every_case_says_what_it_claims() {
         }
         if let Some(expected) = &case.witness.prints {
             assert_eq!(out.trim(), expected.trim(), "{id}: witness output");
+        }
+        // Another compiler, where the standard leaves the result open.
+        if let Some(expected) = &case.witness.prints_gcc {
+            let exe = out_dir.join(format!("{id}-gcc"));
+            let b = build("g++", &[&code, &witness], &exe, false);
+            assert!(b.status.success(), "{id}: witness does not build with g++:\n{}", String::from_utf8_lossy(&b.stderr));
+            let (out, _) = run(&exe);
+            assert_eq!(out.trim(), expected.trim(), "{id}: witness output under g++");
+        }
+
+        // The C++ under the rule: no undefined behaviour, and the same output under both compilers.
+        if needs_fixed {
+            let expected = case.witness.fixed_prints.as_deref().unwrap_or_else(|| panic!("{id}: fixed.cpp needs witness.fixed_prints"));
+            for (compiler, sanitize) in [("clang++-18", true), ("g++", false)] {
+                let exe = out_dir.join(format!("{id}-fixed-{compiler}"));
+                let b = build(compiler, &[&fixed, &witness], &exe, sanitize);
+                assert!(b.status.success(), "{id}: fixed.cpp does not build with {compiler}:\n{}", String::from_utf8_lossy(&b.stderr));
+                let (out, err) = run(&exe);
+                assert!(!err.contains("runtime error"), "{id}: fixed.cpp hits undefined behaviour:\n{err}");
+                assert_eq!(out.trim(), expected.trim(), "{id}: fixed.cpp output under {compiler}");
+            }
+        }
+
+        // The gate: the case is about C+P code, so code.cpp passes, unless the gate row is the mitigation.
+        if gate_available {
+            let o = gate(&code);
+            let (out, err) = text(&o);
+            match (&case.side, &case.gate_rule) {
+                (Side::Gate, Some(rule)) => {
+                    assert_eq!(o.status.code(), Some(1), "{id}: code.cpp must fail the gate, that is the mitigation. stdout: {out} stderr: {err}");
+                    for line in out.lines() {
+                        assert!(line.contains(&format!("\"rule\":\"{rule}\"")), "{id}: the gate must report code.cpp under {rule}, got: {line}");
+                    }
+                }
+                _ => assert!(o.status.code() == Some(0) && out.trim().is_empty(), "{id}: code.cpp must pass the gate, or the case is not about C+P. stdout: {out} stderr: {err}"),
+            }
+            if needs_fixed {
+                let o = gate(&fixed);
+                let (out, err) = text(&o);
+                assert!(o.status.code() == Some(0) && out.trim().is_empty(), "{id}: fixed.cpp must pass the gate. stdout: {out} stderr: {err}");
+            }
         }
 
         // The rule is in the skill, word for word.
@@ -130,25 +231,29 @@ fn every_case_says_what_it_claims() {
     assert!(seen >= 1, "no cases found");
 }
 
-/// docs/mitigations.md is generated from the cases. It must match what the generator says today.
+/// docs/mitigations-dafny.md is generated from the cases. It must match what the generator says today.
 #[test]
 fn the_mitigation_report_is_up_to_date() {
-    let expected = divergence::report(&root().join("divergence/cases")).expect("report");
-    let actual = std::fs::read_to_string(root().join("docs/mitigations.md")).expect("docs/mitigations.md exists");
-    assert_eq!(actual, expected, "docs/mitigations.md is stale. Run: cargo run -p divergence > docs/mitigations.md");
+    let o = Command::new(env!("CARGO_BIN_EXE_divergence")).arg("dafny").current_dir(root()).output().expect("divergence runs");
+    assert!(o.status.success(), "stderr: {}", String::from_utf8_lossy(&o.stderr));
+    let expected = String::from_utf8_lossy(&o.stdout).into_owned();
+    let actual = std::fs::read_to_string(root().join("docs/mitigations-dafny.md")).expect("docs/mitigations-dafny.md exists");
+    assert_eq!(actual, expected, "docs/mitigations-dafny.md is stale. Run: cargo run -p divergence -- dafny > docs/mitigations-dafny.md");
 }
 
 /// The shape of the report, pinned so the docs reader can rely on it.
 #[test]
 fn the_mitigation_report_has_one_row_per_case_in_a_fixed_shape() {
-    let report = divergence::report(&root().join("divergence/cases")).expect("report");
+    let report = divergence::report(&root().join("divergence/dafny")).expect("report");
     let mut lines = report.lines();
-    assert_eq!(lines.next().unwrap(), "# Mitigations");
-    assert!(report.contains("Generated by `cargo run -p divergence` from `divergence/cases/*/case.yaml`. Do not edit by hand."), "{report}");
-    assert!(report.contains("| Case | Construct | Gap | C++ does | Naive model does | Naive verdict | Mitigation | Side |"), "{report}");
-    assert!(report.contains("| signed_overflow | Signed addition on int32_t | 4 |"), "{report}");
+    assert_eq!(lines.next().unwrap(), "# Mitigations: dafny");
+    assert!(report.contains("Generated by `cargo run -p divergence -- dafny` from `divergence/dafny/cases/*/case.yaml`. Do not edit by hand."), "{report}");
+    assert!(report.contains("| Case | Construct | Standard | Gap | C++ does | Naive model does | Naive verdict | Mitigation | Side |"), "{report}");
+    assert!(report.contains("| signed_overflow | Signed addition on int32_t | [expr.pre]: "), "{report}");
     assert!(report.contains("| verifies, wrong |"), "{report}");
-    let cases = std::fs::read_dir(root().join("divergence/cases")).unwrap().filter(|e| e.as_ref().unwrap().path().is_dir()).count();
+    assert!(report.contains("| type_error |"), "{report}");
+    assert!(report.contains("| contract |"), "{report}");
+    let cases = std::fs::read_dir(root().join("divergence/dafny/cases")).unwrap().filter(|e| e.as_ref().unwrap().path().is_dir()).count();
     let rows = report.lines().filter(|l| l.starts_with("| ") && !l.starts_with("| Case") && !l.starts_with("| ---")).count();
     assert_eq!(rows, cases, "one row per case");
 }

@@ -1,8 +1,8 @@
-int first(int a) {
-  if (a > 0) {
+bool first(bool a) {
+  if (a) {
     goto done;  // NOLINT
   }
-  a = 0;
+  a = false;
 done:
   return a;
 }

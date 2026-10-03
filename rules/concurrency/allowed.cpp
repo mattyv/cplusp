@@ -1,7 +1,8 @@
-int square(int x) {
+#include <cstdint>
+int32_t square(int32_t x) {
   return x * x;
 }
 
-int sum_of_squares(int a, int b) {
+int32_t sum_of_squares(int32_t a, int32_t b) {
   return square(a) + square(b);
 }

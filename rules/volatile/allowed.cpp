@@ -1,8 +1,9 @@
-int read_twice(const int* reg) {
+#include <cstdint>
+int32_t read_twice(const int32_t* reg) {
   return *reg + *reg;
 }
 
-int local() {
-  int v = 1;
+int32_t local() {
+  int32_t v = 1;
   return v;
 }

@@ -1,3 +1,4 @@
+#include <cstdint>
 template <typename T>
 struct Box {
   T value;
@@ -17,24 +18,24 @@ T twice(T x) {
   return x + x;
 }
 
-template <> int twice<int>(int x) { return x * 2; }  // BANNED
+template <> int32_t twice<int32_t>(int32_t x) { return x * 2; }  // BANNED
 
-template <int N>  // BANNED
+template <int32_t N>  // BANNED
 struct Fixed {
-  int data = N;
+  int32_t data = N;
 };
 
 template <template <typename> class C>  // BANNED
 struct Wrap {
-  C<int>* inner = nullptr;
+  C<int32_t>* inner = nullptr;
 };
 
 template <typename T>
-constexpr int kSize = 1;
+constexpr int32_t kSize = 1;
 
-template <> constexpr int kSize<bool> = 2;  // BANNED
+template <> constexpr int32_t kSize<bool> = 2;  // BANNED
 
 template <typename T>
-constexpr int kPtr = 1;
+constexpr int32_t kPtr = 1;
 
-template <typename T> constexpr int kPtr<T*> = 2;  // BANNED
+template <typename T> constexpr int32_t kPtr<T*> = 2;  // BANNED

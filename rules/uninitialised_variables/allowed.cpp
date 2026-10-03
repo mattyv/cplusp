@@ -1,4 +1,5 @@
-int doubled(int x) {
-  int y = x * 2;
+#include <cstdint>
+int32_t doubled(int32_t x) {
+  int32_t y = x * 2;
   return y;
 }

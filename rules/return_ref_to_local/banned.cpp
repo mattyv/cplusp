@@ -1,9 +1,10 @@
-int& first() {
-  int local = 1;
+#include <cstdint>
+int32_t& first() {
+  int32_t local = 1;
   return local;  // BANNED
 }
 
-int* address() {
-  int local = 1;
+int32_t* address() {
+  int32_t local = 1;
   return &local;  // BANNED
 }

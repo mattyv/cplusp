@@ -1,13 +1,14 @@
+#include <cstdint>
 #include <utility>
 #include <vector>
 
-std::vector<int> pass_on(std::vector<int> items) {
-  std::vector<int> moved = std::move(items);
+std::vector<int32_t> pass_on(std::vector<int32_t> items) {
+  std::vector<int32_t> moved = std::move(items);
   return moved;
 }
 
-int size_after_move() {
-  std::vector<int> a(3);
-  const std::vector<int> b = std::move(a);
-  return static_cast<int>(b.size());
+int32_t size_after_move() {
+  std::vector<int32_t> a(3);
+  const std::vector<int32_t> b = std::move(a);
+  return static_cast<int32_t>(b.size());
 }

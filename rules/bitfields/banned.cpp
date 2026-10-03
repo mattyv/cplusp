@@ -1,7 +1,8 @@
+#include <cstdint>
 struct Flags {
-  unsigned readable : 1 = 0;  // BANNED
-  unsigned writable : 1 = 0;  // BANNED
-  unsigned reserved : 6 = 0;  // BANNED
+  uint32_t readable : 1 = 0;  // BANNED
+  uint32_t writable : 1 = 0;  // BANNED
+  uint32_t reserved : 6 = 0;  // BANNED
 };
 
 bool can_write(const Flags& f) {
