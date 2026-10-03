@@ -1,0 +1,19 @@
+construct: "A function-local static variable"
+standard: "[stmt.dcl]: dynamic initialization of a block variable with static storage duration or thread storage duration is performed the first time control passes through its declaration."
+row: global_state
+gap: 3
+cpp: "`n` has static storage duration, so it is one object for the whole program, and it keeps its value between calls. The first call returns 1, and the second call returns 2."
+naive_does: "The model makes `n` a local variable that is 0 on every call, so every call returns 1. The proof of `result == 1` goes through."
+naive: verifies
+naive_is_wrong: true
+mitigated: verifies
+side: model
+mitigation: "`n` is a field of the state object. The method lists `modifies s`, and the contract is `n == old(n) + 1 && result == n`."
+witness:
+  input: "two calls of counter()"
+  ubsan: false
+  prints: "1 2"
+rule: |
+  A function-local static is a global with a narrow name.
+  Model it as a field of the state object, with `modifies` and `reads`.
+  Never model it as a local.

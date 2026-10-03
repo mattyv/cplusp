@@ -1,0 +1,21 @@
+construct: "A trusted function that changes a global its contract does not list"
+standard: "[basic.stc.static]: all variables which do not have thread storage duration and belong to a namespace scope have static storage duration. The storage for these entities lasts for the duration of the program."
+row: global_state
+gap: 5
+cpp: "`total` is one object for the whole program. `add` changes it, and `delta` reads it before and after the call. The contract of `add` has no `modifies total`, so the bot believes `total` does not change. `delta()` returns 1, not 0."
+naive_does: "The model of `add` is an axiom method with `ensures total == old(total) + x` and no `modifies`. Dafny then also assumes `total` unchanged, so the contract contradicts itself and the model proves anything. `delta` proves 0."
+naive: verifies
+naive_is_wrong: true
+mitigated: verifies
+side: contract
+mitigation: "`add` gets `modifies s` and the same `ensures`, and `delta` proves `result == 1`. The C++ contract of `add` gains `modifies total`."
+witness:
+  input: "delta()"
+  ubsan: false
+  prints: "1"
+rule: |
+  A global is a field of one state object.
+  Every function that changes it lists it in `modifies`.
+  A trusted contract that omits it is false.
+  The gate check `cplusp-unlisted-state` does not exist yet, so the gate passes a function that changes a global without listing it.
+  Until the check exists, a reviewer must read the trusted contracts for this.

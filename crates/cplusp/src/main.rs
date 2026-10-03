@@ -399,8 +399,8 @@ fn doc(loaded: &Loaded) {
 
 /// Flags that change floating-point results. The float model is a real after one IEEE 754 rounding.
 const FLOAT_FLAGS: &[&str] = &[
-    "-ffast-math", "-Ofast", "-ffp-contract=fast", "-funsafe-math-optimizations", "-ffinite-math-only", "-fassociative-math",
-    "-freciprocal-math", "-fno-signed-zeros", "-fno-honor-nans", "-fno-honor-infinities",
+    "-ffast-math", "-Ofast", "-funsafe-math-optimizations", "-ffinite-math-only", "-fassociative-math",
+    "-freciprocal-math", "-fno-signed-zeros", "-fno-honor-nans", "-fno-honor-infinities", "-ffp-model=fast", "-mfpmath=387", "-m32",
 ];
 
 /// The `-std` values at C++23 or later. The baseline is decision 0022.
@@ -408,12 +408,15 @@ const STD_VALUES: &[&str] = &["c++23", "c++2b", "c++26", "c++2c", "gnu++23", "gn
 
 /// One message for each trailing flag the proofs cannot follow, and for each flag the gate needs and does not find.
 /// `checks` is the check list of the generated config, so a `-Wno-{name}` is judged against the rows the policy enables.
-// ponytail: the flags are matched as written. `-ffp-contract=on` after `-ffp-contract=off` passes.
-// Upgrade: read the last `-ffp-contract=` flag, or ask the compiler for its final flags.
+// ponytail: the flags are matched as written. A flag behind `-Xclang` or in a response file passes.
+// Upgrade: ask the compiler for its final flags.
 fn refused_flags(flags: &[String], checks: &[String]) -> Vec<String> {
     let mut refused = Vec::new();
-    for f in flags {
-        let why = if FLOAT_FLAGS.contains(&f.as_str()) {
+    // The last -ffp-contract on the line is the one the compiler follows.
+    let last_contract = flags.iter().rposition(|f| f.starts_with("-ffp-contract="));
+    for (i, f) in flags.iter().enumerate() {
+        let contracts = Some(i) == last_contract && f != "-ffp-contract=off";
+        let why = if contracts || f.starts_with("-fdenormal-fp-math=") || FLOAT_FLAGS.contains(&f.as_str()) {
             "It changes floating-point results, and the proofs assume IEEE 754 round to nearest."
         } else if f.strip_prefix("-std=").is_some_and(|v| !STD_VALUES.contains(&v)) {
             "The proofs assume C++23 or later."

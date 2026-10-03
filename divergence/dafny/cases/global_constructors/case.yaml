@@ -1,0 +1,22 @@
+construct: "A global with a dynamic initializer that reads a global of another file"
+standard: "[basic.start.dynamic]: otherwise, the initializations of V and W are indeterminately sequenced."
+row: global_state
+gap: 1
+cpp: "`derived` and `base_value` are in different files, and the standard leaves their order of initialization open. When the initializer of `derived` runs first, `base_value` is still 0, and `read_derived()` returns 1, not 6."
+naive_does: "The model makes `base_value` the constant 5 and `derived` the constant 6, both set before any function runs. The proof of `result == base_value + 1` goes through."
+naive: verifies
+naive_is_wrong: true
+mitigated: verifies
+side: gate
+gate_rule: global_constructors
+mitigation: "Gate row `global_constructors`: no global with a dynamic initializer. The C++ computes the value in a function, `derived_value()`, and the model is exact."
+witness:
+  fixed_prints: "6"
+  input: "read_derived(), with base_value set in another file"
+  ubsan: false
+  prints: "1"
+rule: |
+  A global with a dynamic initializer runs in an order the standard leaves open across files.
+  Model no such global.
+  Compute the value in a function, or make it `constexpr` or `constinit`.
+  The gate enforces it.

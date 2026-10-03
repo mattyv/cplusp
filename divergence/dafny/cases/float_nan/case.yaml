@@ -9,7 +9,7 @@ naive_is_wrong: true
 mitigated: verifies
 side: gate
 gate_rule: float_equality
-mitigation: "Gate row `float_equality`: no `==` or `!=` on floats. The C++ requires finite values, which closes the NaN divergence, and compares against a tolerance, `|a - b| <= 1e-9`. The model is exact."
+mitigation: "Gate row `float_equality`: no `==` or `!=` on floats. The C++ requires finite values, which closes the NaN divergence, and compares against a tolerance, `|a - b| <= 1e-9`. The model compares the exact difference, and the C++ the rounded one, so the two part only within one rounding of the tolerance."
 witness:
   fixed_prints: "0 1"
   input: "same(nan, nan) and same(1.0, 1.0)"

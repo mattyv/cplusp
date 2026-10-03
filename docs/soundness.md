@@ -34,7 +34,7 @@ The count and the verdicts live in `docs/mitigations-dafny.md`, one row per case
 
 A mitigation lives in one of four places: the model, the contract, the C++, or a gate row.
 
-Floating point has its model, a real after one rounding per operation, decisions 0019 and 0020. The battery proved bounds for a sum, a cancellation, an increment, a division and two conversions. It found three faults: the axiom's lower limit, the fused multiply-add, and the missing contract spelling. Still to cover, one row of the policy at a time. Object lifetime. Copies versus moves. Value and reference semantics. Inheritance and dispatch. Template instantiation. Containers and iterators. Algorithms with lambdas. Recursion. State. The test `every_supported_row_has_a_case` in `crates/divergence` keeps the list of rows without a case. That list shrinks to empty.
+Floating point has its model, a real after one rounding per operation, decisions 0019 and 0020. The battery proved bounds for a sum, a cancellation, an increment, a division and two conversions. It found three faults: the axiom's lower limit, the fused multiply-add, and the missing contract spelling. Every row the policy allows or restricts now has at least one case, and the test `every_supported_row_has_a_case` keeps it so. The last round covered state. A trusted contract that omits `modifies` proves anything. A function-local static is a global. A global with a dynamic initializer runs in an open order across files. A torn read of a shared variable is a data race. Two gate checks the state rows name are not built yet, `cplusp-unlisted-state` and `cplusp-recursion`, because both need the contract comments parsed. Gap 4 is the next piece.
 
 ## Gap 4: the contract language
 
@@ -48,7 +48,7 @@ Open. A contract for `vector::push_back` is an axiom. If it is wrong, every proo
 
 ## Gap 6: the prover
 
-Open. Solver bugs. Timeouts. Axioms and `assume` in trusted contracts. A precondition that can never be true makes every proof of that function trivial: a vacuous proof. How we detect vacuity. Which prover versions are pinned.
+Partly open. Solver bugs. Timeouts. Axioms and `assume` in trusted contracts. A precondition that can never be true makes every proof of that function trivial: a vacuous proof. The battery's `unlisted_modifies` case shows the other vacuity. A trusted contract with an `ensures` on a variable it does not list in `modifies` contradicts Dafny's frame. The caller then proves anything. How we detect vacuity is still open. Dafny is pinned at 4.11.0.
 
 ## Gap 7: the verdict
 

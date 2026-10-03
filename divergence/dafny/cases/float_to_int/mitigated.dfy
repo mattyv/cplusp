@@ -9,7 +9,7 @@ lemma Demo()
 {}
 
 method whole(x: real) returns (result: int32)
-  requires -2147483648.0 < x < 2147483648.0
+  requires -2147483649.0 < x < 2147483648.0
   ensures result as int == trunc(x)
 {
   result := trunc(x) as int32;

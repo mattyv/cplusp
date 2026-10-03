@@ -353,31 +353,32 @@ A read of an alternative needs `requires` that the variant holds it, in the C++ 
 ## float_sum
 
 A double is a real after rounding.
-Model `a + b` as `fadd(a, b)`, and state the result as a bound, `abs(result - (a + b)) <= EPS * abs(a + b)`.
+Model `a + b` as `fadd(a, b)`, and state the result as a bound, `abs(result - (a + b)) <= EPS * abs(a + b) + ETA`.
 Never state equality of two float results.
 The bound holds up to `MAX`, so require `abs(a) <= MAX / 4.0` and `abs(b) <= MAX / 4.0`.
 Dafny does not apply a lemma by itself, so call `RoundError(a + b)` in the body before `fadd`.
-In the C++ contract, write the bound as `|result - (a + b)| <= eps * |a + b|`, with `eps` as 2^-53, and a magnitude bound such as `|a| <= DBL_MAX / 4` as a `requires`.
+In the C++ contract, write the bound as `|result - (a + b)| <= eps * |a + b| + eta`, with `eps` as `DBL_EPSILON / 2` and `eta` as `DBL_TRUE_MIN / 2`, and the magnitude bound `|a| <= DBL_MAX / 4` as a `requires`.
 The model is `divergence/dafny/Float.dfy`. Write `include "Float.dfy"` with the path to it, and `import opened Float`.
 
 ## float_nan
 
 The model has no NaN and no infinity.
 Every float parameter requires `std::isfinite` in the C++ contract.
-Never compare floats with `==`.
-The gate refuses it.
+Never compare floats with `==`. The gate refuses it.
+Compare against a tolerance, and state the tolerance in the contract.
 
 ## float_to_int
 
 Model `static_cast<int32_t>(x)` as truncation toward zero, not `Floor`.
 Write `trunc(x)` as `if x >= 0.0 then x.Floor else -((-x).Floor)`.
-The contract requires the value to fit: `requires -2147483648.0 < x < 2147483648.0`.
+The contract requires the value to fit: `requires -2147483649.0 < x < 2147483648.0`.
 
 ## float_cancellation
 
 Every operation rounds, and the errors add.
 State the bound from the magnitudes of the operands, not from the result the mathematics would give.
 Call `RoundError` once for each operation, on the exact value that the operation rounds.
+Each rounding adds `eta`, so a chain of roundings carries a small multiple of `eta` in its bound.
 
 ## float_increment
 
@@ -388,7 +389,7 @@ When the C++ needs exact counting, use an integer type.
 
 The model has no infinity, and C++ calls float division by zero undefined.
 The contract requires a non-zero divisor: `requires b != 0.0`.
-The quotient must stay in the normal range, so the model needs `requires a == 0.0 || MIN_NORMAL <= abs(a / b) <= MAX`, and the C++ contract carries the same bound.
+The quotient must stay below `MAX`, so the model needs `requires abs(a / b) <= MAX`, and the C++ contract carries `|a / b| <= DBL_MAX`.
 
 ## int_to_float
 
@@ -401,3 +402,37 @@ Model the conversion as `round(n as real)`.
 A pointer parameter and a container cannot alias in the model, and in C++ a pointer into the container dies at the next mutation.
 Never take the address of a container element.
 The gate refuses it.
+
+## float_underflow
+
+A product or quotient can fall below the smallest subnormal and round to 0.
+The `eta` term of the bound is what allows it.
+State `|a * b| <= DBL_MAX` in the C++ contract, and never a lower bound.
+
+## unlisted_modifies
+
+A global is a field of one state object.
+Every function that changes it lists it in `modifies`.
+A trusted contract that omits it is false.
+The gate check `cplusp-unlisted-state` does not exist yet, so the gate passes a function that changes a global without listing it.
+Until the check exists, a reviewer must read the trusted contracts for this.
+
+## static_local
+
+A function-local static is a global with a narrow name.
+Model it as a field of the state object, with `modifies` and `reads`.
+Never model it as a local.
+
+## global_constructors
+
+A global with a dynamic initializer runs in an order the standard leaves open across files.
+Model no such global.
+Compute the value in a function, or make it `constexpr` or `constinit`.
+The gate enforces it.
+
+## torn_read
+
+A variable another thread may change has no value, only a fresh read each time.
+Model its getter as a method that does not constrain its result between calls.
+The contract of the getter says only what every writer keeps, for example a range.
+Never prove two reads equal.

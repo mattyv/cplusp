@@ -1,0 +1,21 @@
+construct: "Two reads of a variable another thread writes"
+standard: "[intro.races]: two potentially concurrent conflicting actions, at least one of which is not atomic, and neither happens before the other. Any such data race results in undefined behavior."
+row: shared_variables
+gap: 3
+cpp: "Another thread writes `shared` while `difference()` runs. The two reads can see two values, and `difference()` is not 0. The plain read and the plain write are a data race."
+naive_does: "The model makes the getter a function of the state, so two reads are equal. `difference` proves `result == 0`."
+naive: verifies
+naive_is_wrong: true
+mitigated: verifies
+side: contract
+mitigation: "The getter is a method with `ensures` only a range, so two calls may differ. The contract of `difference` is a bound, `-999 <= result <= 999`, and not `result == 0`."
+witness:
+  input: "a second thread writes `shared` in a loop while the main thread calls difference()"
+  ubsan: false
+  tsan: true
+  prints: "1"
+rule: |
+  A variable another thread may change has no value, only a fresh read each time.
+  Model its getter as a method that does not constrain its result between calls.
+  The contract of the getter says only what every writer keeps, for example a range.
+  Never prove two reads equal.
