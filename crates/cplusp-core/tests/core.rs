@@ -278,6 +278,13 @@ fn a_finding_from_an_unknown_check_maps_to_nothing() {
 }
 
 #[test]
+fn a_finding_tagged_with_a_rule_id_maps_to_that_rule() {
+    let p = base();
+    assert_eq!(rule_by_id(&p, &"iterators".to_string()), Some(1));
+    assert_eq!(rule_by_id(&p, &"gotos".to_string()), None);
+}
+
+#[test]
 fn in_a_verified_function_every_finding_stands() {
     for d in [Decision::Ban, Decision::Restrict, Decision::TrustedOnly] {
         assert!(keep_finding(d, Kind::Verified), "{:?} in verified", d);

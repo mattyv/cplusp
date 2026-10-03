@@ -28,6 +28,13 @@ fn stderr(o: &Output) -> String {
     String::from_utf8_lossy(&o.stderr).into_owned()
 }
 
+/// The clang-tidy plugin, built by `cmake -S clang-tidy -B target/plugin -G Ninja && cmake --build target/plugin`.
+fn plugin() -> PathBuf {
+    let p = std::env::var_os("CPLUSP_PLUGIN").map(PathBuf::from).unwrap_or_else(|| root().join("target/plugin/libcplusp.so"));
+    assert!(p.exists(), "plugin not built: run `cmake -S clang-tidy -B target/plugin -G Ninja && cmake --build target/plugin`, or set CPLUSP_PLUGIN");
+    p
+}
+
 fn clang_tidy_available() -> bool {
     ["clang-tidy-18", "clang-tidy"]
         .iter()
@@ -227,8 +234,48 @@ fn gate_names_the_checks_that_do_not_exist_yet() {
     assert_eq!(o.status.code(), Some(0), "stdout: {} stderr: {}", stdout(&o), stderr(&o));
     let err = stderr(&o);
     let line = err.lines().find(|l| l.starts_with("warning: not enforced, no such check: ")).expect(&err);
-    assert!(line.contains("cplusp-unscoped-enum"), "{line}");
+    assert!(line.contains("cplusp-matcher"), "{line}");
     assert!(!line.contains("cppcoreguidelines-avoid-goto"), "{line}");
+}
+
+#[test]
+fn gate_with_the_plugin_no_longer_warns_about_the_generic_check() {
+    if !clang_tidy_available() {
+        return;
+    }
+    let f = root().join("rules/goto/allowed.cpp");
+    let o = cplusp(&["gate", "--plugin", plugin().to_str().unwrap(), f.to_str().unwrap(), "--", "-std=c++20"]);
+    assert_eq!(o.status.code(), Some(0), "stdout: {} stderr: {}", stdout(&o), stderr(&o));
+    let err = stderr(&o);
+    for line in err.lines().filter(|l| l.starts_with("warning: not enforced")) {
+        assert!(!line.contains("cplusp-matcher"), "{line}");
+    }
+}
+
+#[test]
+fn policy_emit_turns_matcher_patterns_into_options_of_the_generic_check() {
+    let o = cplusp(&["policy", "emit"]);
+    assert!(o.status.success(), "stderr: {}", stderr(&o));
+    let out = stdout(&o);
+    let checks = out.lines().find(|l| l.starts_with("Checks:")).expect("Checks line");
+    assert_eq!(checks.matches("cplusp-matcher").count(), 1, "{checks}");
+    assert!(out.contains("  cplusp-matcher.unscoped_enum/1: 'enumDecl(unless(isScoped()), unless(isImplicit()))'"), "{out}");
+    assert!(out.contains("  cplusp-matcher.exceptions/1: 'cxxThrowExpr()'"), "{out}");
+    assert!(out.contains("  cplusp-matcher.exceptions/2: 'cxxTryStmt()'"), "{out}");
+}
+
+#[test]
+fn gate_refuses_a_policy_whose_matcher_does_not_parse() {
+    if !clang_tidy_available() {
+        return;
+    }
+    let policy = fixture("bad-matcher.yaml");
+    let f = root().join("rules/goto/allowed.cpp");
+    let o = cplusp(&["gate", "--plugin", plugin().to_str().unwrap(), "--policy", policy.to_str().unwrap(), f.to_str().unwrap(), "--", "-std=c++20"]);
+    assert_eq!(o.status.code(), Some(2), "stdout: {} stderr: {}", stdout(&o), stderr(&o));
+    let err = stderr(&o);
+    assert!(err.contains("bad_rule") && err.contains("matcher"), "{err}");
+    assert_eq!(stdout(&o).trim(), "", "nothing on stdout for a broken policy");
 }
 
 #[test]
@@ -316,11 +363,12 @@ fn every_sample_pair_agrees_with_its_rule() {
         let banned = dir.join("banned.cpp");
         assert!(allowed.exists() && banned.exists(), "rule {id} needs allowed.cpp and banned.cpp");
 
-        let o = cplusp(&["gate", "--json", allowed.to_str().unwrap(), "--", "-std=c++20"]);
+        let plugin = plugin();
+        let o = cplusp(&["gate", "--json", "--plugin", plugin.to_str().unwrap(), allowed.to_str().unwrap(), "--", "-std=c++20"]);
         assert_eq!(o.status.code(), Some(0), "{id}/allowed.cpp: stdout {} stderr {}", stdout(&o), stderr(&o));
         assert_eq!(stdout(&o).trim(), "", "{id}/allowed.cpp must produce no findings");
 
-        let o = cplusp(&["gate", "--json", banned.to_str().unwrap(), "--", "-std=c++20"]);
+        let o = cplusp(&["gate", "--json", "--plugin", plugin.to_str().unwrap(), banned.to_str().unwrap(), "--", "-std=c++20"]);
         assert_eq!(o.status.code(), Some(1), "{id}/banned.cpp: stdout {} stderr {}", stdout(&o), stderr(&o));
         let reported: BTreeSet<(String, usize)> = stdout(&o)
             .lines()
@@ -340,7 +388,15 @@ fn every_sample_pair_agrees_with_its_rule() {
         assert_eq!(reported, expected, "{id}/banned.cpp");
         checked += 1;
     }
-    assert!(checked >= 8, "expected at least eight sample pairs, found {checked}");
+    // Every rule the gate enforces today has a pair: the 8 upstream ones and the 18 matcher ones.
+    for id in [
+        "unscoped_enum", "unions", "bitfields", "virtual_inheritance", "exceptions", "shared_ptr", "implicit_conversions",
+        "function_pointers", "varargs_coroutines", "concurrency", "volatile", "inline_asm_intrinsics", "unreachable_assume",
+        "longjmp", "raw_memory_ops", "launder_placement_new", "templates", "metaprogramming",
+    ] {
+        assert!(rules_dir.join(id).is_dir(), "no sample pair for matcher rule {id}");
+    }
+    assert!(checked >= 26, "expected at least 26 sample pairs, found {checked}");
 }
 
 /// Pull `"key":"value"` or `"key":123` out of one JSON line without a JSON library.

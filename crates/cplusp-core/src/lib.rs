@@ -779,11 +779,12 @@ pub fn emit(p: &Policy) -> (c: Config)
 
 // ---------------------------------------------------------------- overrides
 
-/// Index of the rule with this id, if any.
+/// Index of the first rule with this id, if any.
 fn find_rule(rules: &Vec<Rule>, id: &String) -> (res: Option<usize>)
     ensures
         match res {
-            Some(i) => i < rules.len() && rules@[i as int].id@ == id@,
+            Some(i) => i < rules.len() && rules@[i as int].id@ == id@
+                && forall|k: int| 0 <= k < i ==> #[trigger] rules@[k].id@ != id@,
             None => forall|k: int| 0 <= k < rules.len() ==> #[trigger] rules@[k].id@ != id@,
         },
 {
@@ -959,6 +960,18 @@ pub fn rule_for_check(p: &Policy, check: &String) -> (res: Option<usize>)
         }
     }
     None
+}
+
+/// The rule with this id. The generic matcher check tags its findings with the rule id.
+pub fn rule_by_id(p: &Policy, id: &String) -> (res: Option<usize>)
+    ensures
+        match res {
+            Some(i) => i < p.rules.len() && p.rules@[i as int].id@ == id@
+                && forall|k: int| 0 <= k < i ==> #[trigger] p.rules@[k].id@ != id@,
+            None => forall|k: int| 0 <= k < p.rules.len() ==> #[trigger] p.rules@[k].id@ != id@,
+        },
+{
+    find_rule(&p.rules, id)
 }
 
 /// Whether a finding of a rule with decision `d` stands in a function of kind `kind`.

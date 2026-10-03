@@ -48,4 +48,4 @@ Everything the bot reads follows Simplified Technical English: short sentences, 
 
 ## Toolchain
 
-Rust is pinned in `rust-toolchain.toml` to the version the Verus release needs. Verus itself is the release named in `docs/plan.md`. clang-tidy is 18 from Ubuntu 24.04 apt.
+Rust is pinned in `rust-toolchain.toml` to the version the Verus release needs. Verus itself is the release named in `docs/plan.md`. clang-tidy is 18 from Ubuntu 24.04 apt, with `libclang-18-dev` for the plugin headers. Build the plugin with `cmake -S clang-tidy -B target/plugin -G Ninja && cmake --build target/plugin`. The tests look for it at `target/plugin/libcplusp.so` or `$CPLUSP_PLUGIN`.

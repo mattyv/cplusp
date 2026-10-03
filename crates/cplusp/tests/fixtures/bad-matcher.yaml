@@ -1,0 +1,10 @@
+version: 1
+rules:
+  - id: bad_rule
+    construct: A rule with a broken matcher
+    area: control
+    decision: ban
+    why: Only here to prove a broken pattern is refused.
+    use_instead: nothing.
+    detect:
+      - matcher: enumDecl(

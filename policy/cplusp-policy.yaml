@@ -28,7 +28,7 @@ rules:
     use_instead: enum class.
     stage: gate
     detect:
-      - check: cplusp-unscoped-enum
+      - matcher: enumDecl(unless(isScoped()), unless(isImplicit()))
 
   - id: floating_point
     construct: Floating point
@@ -49,7 +49,7 @@ rules:
     stage: gate
     detect:
       - check: cppcoreguidelines-pro-type-union-access
-      - check: cplusp-union-decl
+      - matcher: recordDecl(isUnion(), isDefinition())
 
   - id: bitfields
     construct: Bit-fields
@@ -60,7 +60,7 @@ rules:
     use_instead: explicit masks and shifts, or mark the function trusted with a reason.
     stage: gate
     detect:
-      - check: cplusp-bitfield
+      - matcher: fieldDecl(isBitField())
 
   - id: uninitialised_variables
     construct: Uninitialised variables
@@ -134,7 +134,7 @@ rules:
     use_instead: std::copy, assignment, or std::bit_cast, or mark the function trusted with a reason.
     stage: gate
     detect:
-      - check: cplusp-raw-memory-ops
+      - matcher: callExpr(callee(functionDecl(hasAnyName("memcpy", "memset", "memmove", "::std::memcpy", "::std::memset", "::std::memmove"))), unless(hasArgument(0, hasType(pointsTo(anyOf(isAnyCharacter(), hasDeclaration(enumDecl(hasName("::std::byte")))))))))
 
   - id: launder_placement_new
     construct: "`std::launder`, placement `new`"
@@ -145,7 +145,8 @@ rules:
     use_instead: std::optional or a container, or mark the function trusted with a reason.
     stage: gate
     detect:
-      - check: cplusp-launder-placement-new
+      - matcher: callExpr(callee(functionDecl(hasName("::std::launder"))))
+      - matcher: cxxNewExpr(hasAnyPlacementArg(anything()))
 
   - id: unique_ptr
     construct: "`std::unique_ptr`"
@@ -164,7 +165,8 @@ rules:
     use_instead: std::unique_ptr with one clear owner, or mark the function trusted with a reason.
     stage: gate
     detect:
-      - check: cplusp-shared-ptr
+      - matcher: declaratorDecl(hasType(hasUnqualifiedDesugaredType(recordType(hasDeclaration(cxxRecordDecl(hasName("::std::shared_ptr")))))))
+      - matcher: callExpr(callee(functionDecl(hasName("::std::make_shared"))))
 
   - id: lvalue_references
     construct: Lvalue references
@@ -341,7 +343,7 @@ rules:
     use_instead: composition.
     stage: gate
     detect:
-      - check: cplusp-virtual-inheritance
+      - matcher: cxxRecordDecl(hasAnyBase(isVirtual()))
 
   - id: operator_overloading
     construct: Operator overloading
@@ -365,7 +367,7 @@ rules:
     stage: gate
     detect:
       - check: google-explicit-constructor
-      - check: cplusp-conversion-operator
+      - matcher: cxxConversionDecl(unless(isExplicit()))
 
   - id: mutable_members
     construct: "`mutable` members"
@@ -389,7 +391,11 @@ rules:
     use_instead: a template with type parameters only.
     stage: gate
     detect:
-      - check: cplusp-template-specialization
+      - matcher: classTemplateSpecializationDecl(isExplicitTemplateSpecialization())
+      - matcher: classTemplatePartialSpecializationDecl()
+      - matcher: functionDecl(isExplicitTemplateSpecialization())
+      - matcher: nonTypeTemplateParmDecl()
+      - matcher: templateTemplateParmDecl()
 
   - id: constexpr
     construct: "`constexpr`, `consteval`, concepts"
@@ -408,7 +414,7 @@ rules:
     use_instead: concepts and plain overloads, or mark the function trusted with a reason.
     stage: gate
     detect:
-      - check: cplusp-metaprogramming
+      - matcher: typeLoc(loc(templateSpecializationType(hasDeclaration(namedDecl(hasAnyName("::std::enable_if", "::std::enable_if_t", "::std::void_t", "::std::conditional", "::std::conditional_t"))))))
 
   # -------------------------------------------------------------- control
   - id: exceptions
@@ -420,7 +426,8 @@ rules:
     use_instead: std::expected.
     stage: gate
     detect:
-      - check: cplusp-exceptions
+      - matcher: cxxThrowExpr()
+      - matcher: cxxTryStmt()
 
   - id: goto
     construct: "`goto`"
@@ -438,11 +445,11 @@ rules:
     area: control
     canonical: New in C++23
     decision: ban
-    why: UB if the claim is false. Claims belong in the contract, where the prover checks them.
+    why: UB if the claim is false. Claims belong in the contract, where the prover checks them. The C++23 `[[assume]]` attribute is not caught yet.
     use_instead: a precondition or an assertion in the contract.
     stage: gate
     detect:
-      - check: cplusp-unreachable-assume
+      - matcher: callExpr(callee(functionDecl(hasAnyName("__builtin_unreachable", "::std::unreachable", "__builtin_assume"))))
 
   - id: longjmp
     construct: "`setjmp` / `longjmp`"
@@ -453,7 +460,7 @@ rules:
     use_instead: return values or std::expected.
     stage: gate
     detect:
-      - check: cplusp-longjmp
+      - matcher: callExpr(callee(functionDecl(hasAnyName("longjmp", "_longjmp", "siglongjmp", "setjmp", "_setjmp", "__sigsetjmp", "sigsetjmp"))))
 
   - id: recursion
     construct: Recursion
@@ -488,7 +495,8 @@ rules:
     use_instead: direct calls or a template parameter, or mark the function trusted with a reason.
     stage: gate
     detect:
-      - check: cplusp-function-pointer
+      - matcher: declaratorDecl(hasType(pointerType(pointee(functionType()))))
+      - matcher: declaratorDecl(hasType(hasUnqualifiedDesugaredType(recordType(hasDeclaration(cxxRecordDecl(hasName("::std::function")))))))
 
   - id: varargs_coroutines
     construct: Varargs, coroutines
@@ -500,7 +508,9 @@ rules:
     stage: gate
     detect:
       - check: cppcoreguidelines-pro-type-vararg
-      - check: cplusp-coroutine
+      - matcher: coawaitExpr()
+      - matcher: coyieldExpr()
+      - matcher: coreturnStmt()
 
   # ---------------------------------------------------------- concurrency
   - id: concurrency
@@ -512,7 +522,8 @@ rules:
     use_instead: a trusted function that owns the lock or the atomic, with a contract.
     stage: gate
     detect:
-      - check: cplusp-concurrency
+      - matcher: declaratorDecl(hasType(hasUnqualifiedDesugaredType(recordType(hasDeclaration(cxxRecordDecl(hasAnyName("::std::thread", "::std::jthread", "::std::mutex", "::std::recursive_mutex", "::std::shared_mutex", "::std::timed_mutex", "::std::atomic", "::std::atomic_flag", "::std::condition_variable", "::std::lock_guard", "::std::unique_lock", "::std::scoped_lock", "::std::future", "::std::promise")))))))
+      - matcher: callExpr(callee(functionDecl(hasAnyName("::std::async", "::std::atomic_load", "::std::atomic_store", "::std::atomic_exchange", "::std::atomic_fetch_add"))))
 
   - id: shared_variables
     construct: Variables other threads may change
@@ -532,7 +543,8 @@ rules:
     use_instead: a trusted accessor with a contract.
     stage: gate
     detect:
-      - check: cplusp-volatile
+      - matcher: declaratorDecl(hasType(isVolatileQualified()))
+      - matcher: declaratorDecl(hasType(pointsTo(isVolatileQualified())))
 
   # ---------------------------------------------------------------- state
   - id: global_state
@@ -558,7 +570,7 @@ rules:
     stage: gate
     detect:
       - check: hicpp-no-assembler
-      - check: cplusp-intrinsics
+      - matcher: callExpr(callee(functionDecl(matchesName("^::(_mm|_mm256|_mm512|__builtin_ia32|__builtin_neon|__builtin_arm)_"))))
 
   - id: function_like_macros
     construct: Function-like macros
