@@ -13,7 +13,16 @@ fn rule(id: &str, decision: Decision, checks: &[&str]) -> Rule {
         use_instead: if decision == Decision::Allow { None } else { Some("something else".to_string()) },
         detect: checks.iter().map(|c| CheckRef { name: c.to_string(), options: vec![] }).collect(),
         loosened_because: None,
+        gate: true,
     }
+}
+
+/// A row the prover or a trusted contract owns. The gate has nothing to detect.
+fn prover_rule(id: &str, decision: Decision) -> Rule {
+    let mut r = rule(id, decision, &[]);
+    r.gate = false;
+    r.use_instead = None;
+    r
 }
 
 fn policy(rules: Vec<Rule>) -> Policy {
@@ -71,6 +80,32 @@ fn a_trusted_only_rule_without_use_instead_is_rejected() {
 fn an_allow_rule_needs_neither_detect_nor_use_instead() {
     let errors = validate(&policy(vec![rule("constexpr", Decision::Allow, &[])]), &names(KNOWN));
     assert_eq!(errors, vec![]);
+}
+
+#[test]
+fn a_prover_stage_restrict_rule_needs_a_limit_but_no_detect() {
+    let ok = prover_rule("floating_point", Decision::Restrict);
+    assert_eq!(validate(&policy(vec![ok]), &names(KNOWN)), vec![]);
+    let mut bad = prover_rule("floating_point", Decision::Restrict);
+    bad.limit = None;
+    assert_eq!(
+        validate(&policy(vec![bad]), &names(KNOWN)),
+        vec![PolicyError::RestrictWithoutLimit { id: "floating_point".to_string() }]
+    );
+}
+
+#[test]
+fn emit_enables_nothing_for_a_prover_stage_rule() {
+    let mut r = prover_rule("floating_point", Decision::Restrict);
+    r.detect.push(CheckRef { name: "google-readability-casting".to_string(), options: vec![] });
+    assert_eq!(emit(&policy(vec![r])).checks, Vec::<String>::new());
+}
+
+#[test]
+fn a_finding_from_a_prover_stage_rule_check_maps_to_nothing() {
+    let mut r = prover_rule("floating_point", Decision::Restrict);
+    r.detect.push(CheckRef { name: "google-readability-casting".to_string(), options: vec![] });
+    assert_eq!(rule_for_check(&policy(vec![r]), &"google-readability-casting".to_string()), None);
 }
 
 #[test]

@@ -61,6 +61,9 @@ pub struct Rule {
     pub detect: Vec<CheckRef>,
     /// Set by `apply_overrides` when a team policy loosened this rule.
     pub loosened_because: Option<String>,
+    /// True when the gate enforces this row. False for rows the prover or a
+    /// trusted contract owns: the gate treats those as `allow`.
+    pub gate: bool,
 }
 
 #[derive(Debug, PartialEq)]
@@ -116,9 +119,9 @@ pub open spec fn has_check(detect: Seq<CheckRef>, name: Seq<char>) -> bool {
     exists|j: int| 0 <= j < detect.len() && #[trigger] detect[j].name@ == name
 }
 
-/// A rule enables its checks when its decision is anything but `allow`.
+/// A rule enables its checks when the gate owns it and its decision is anything but `allow`.
 pub open spec fn spec_active(r: Rule) -> bool {
-    r.decision != Decision::Allow
+    r.gate && r.decision != Decision::Allow
 }
 
 /// Strictness order: allow < restrict < trusted_only < ban.
@@ -150,6 +153,7 @@ pub open spec fn rule_eq(a: Rule, b: Rule) -> bool {
     &&& a.use_instead == b.use_instead
     &&& detect_eq(a.detect@, b.detect@)
     &&& a.loosened_because == b.loosened_because
+    &&& a.gate == b.gate
 }
 
 pub open spec fn rules_eq(a: Seq<Rule>, b: Seq<Rule>) -> bool {
@@ -163,6 +167,7 @@ pub open spec fn spec_same_identity(a: Rule, b: Rule) -> bool {
     &&& a.why == b.why
     &&& a.use_instead == b.use_instead
     &&& detect_eq(a.detect@, b.detect@)
+    &&& a.gate == b.gate
 }
 
 /// One rule meets the per-rule requirements of docs/policy.md.
@@ -368,7 +373,7 @@ pub fn detect_contains(detect: &Vec<CheckRef>, name: &String) -> (res: bool)
 pub fn is_active(r: &Rule) -> (res: bool)
     ensures res == spec_active(*r),
 {
-    r.decision != Decision::Allow
+    r.gate && r.decision != Decision::Allow
 }
 
 fn clone_opt_string(s: &Option<String>) -> (res: Option<String>)
@@ -431,6 +436,7 @@ fn rule_with(r: &Rule, decision: Decision, limit: Option<String>, loosened_becau
         use_instead: clone_opt_string(&r.use_instead),
         detect: clone_detect(&r.detect),
         loosened_because,
+        gate: r.gate,
     }
 }
 
