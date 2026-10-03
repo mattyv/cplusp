@@ -19,6 +19,19 @@ Write the failing test first. Watch it fail and read the message. If the message
 - Goldens are reviewed, never blind-accepted. When one changes, say why in the commit.
 - Every rule in the policy has a sample pair under `rules/<id>/`: `allowed.cpp` passes the gate, `banned.cpp` fails on the marked lines. The pair is the proof that the check means what the row says.
 
+## Lazy, in the senior-developer sense
+
+The ponytail ladder applies to every change. Stop at the first rung that holds:
+
+1. Does this need to exist at all? Speculative need: skip it and say so in one line.
+2. Already in this codebase? Reuse it. The core crate before the shell, the shell before a new module.
+3. Standard library does it? Use it.
+4. An installed dependency does it? Use it. Never add one for what a few lines can do.
+5. Can it be one line? One line.
+6. Only then: the minimum code that works.
+
+Fewest files. No interface with one implementation, no config for a value that never changes, no scaffolding for later. Mark a deliberate corner cut with a `ponytail:` comment that names the ceiling and the upgrade path. Never lazy about understanding the problem first, and never lazy about the two things this repo exists for: the failing test comes first, and the proof is part of the deliverable.
+
 ## Messages
 
 Everything the bot reads follows Simplified Technical English: short sentences, one meaning per word, no semicolons. The prefixes are fixed: `Not provable:` from the gate, `Not proved:` from the prover. Lint the docs with `ste-lint.py` from the asd-ste100 skill before committing them.
