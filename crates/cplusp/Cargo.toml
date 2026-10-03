@@ -1,0 +1,19 @@
+[package]
+name = "cplusp"
+version.workspace = true
+edition.workspace = true
+description = "cplusp command line: the gate the bot runs"
+
+[[bin]]
+name = "cplusp"
+path = "src/main.rs"
+
+[dependencies]
+cplusp-core = { path = "../cplusp-core" }
+clap = { version = "4", features = ["derive"] }
+serde = { version = "1", features = ["derive"] }
+serde_yaml = "0.9"
+anyhow = "1"
+
+[dev-dependencies]
+tempfile = "3"
