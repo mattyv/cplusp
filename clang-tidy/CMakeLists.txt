@@ -1,4 +1,4 @@
-# The clang-tidy plugin of cplusp. One module, one generic check. See docs/decisions/0016.
+# The clang-tidy plugin of cplusp. One module: one generic check and the hand-written checks. See docs/decisions/0016.
 # Build: cmake -S clang-tidy -B target/plugin -G Ninja && cmake --build target/plugin
 cmake_minimum_required(VERSION 3.20)
 project(cplusp_plugin CXX)
