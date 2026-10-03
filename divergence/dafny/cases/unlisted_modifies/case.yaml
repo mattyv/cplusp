@@ -8,7 +8,7 @@ naive: verifies
 naive_is_wrong: true
 mitigated: verifies
 side: contract
-mitigation: "`add` gets `modifies s` and the same `ensures`, and `delta` proves `result == 1`. The C++ contract of `add` gains `modifies total`."
+mitigation: "`add` gets `modifies s` and the same `requires` and `ensures` as the C++, and `delta` proves `result == 1`. The C++ contract of `add` gains `modifies total`."
 witness:
   input: "delta()"
   ubsan: false
