@@ -106,12 +106,14 @@ public:
 AST_MATCHER(FieldDecl, isMutableField) { return Node.isMutable(); }
 
 // The declaration is in namespace std, however deep. A member of a std class counts, and so does std::ranges.
-AST_MATCHER(Decl, isInStd) {
-  for (const DeclContext *Context = Node.getDeclContext(); Context; Context = Context->getParent())
+bool inStdNamespace(const Decl *Declaration) {
+  for (const DeclContext *Context = Declaration->getDeclContext(); Context; Context = Context->getParent())
     if (Context->isStdNamespace())
       return true;
   return false;
 }
+
+AST_MATCHER(Decl, isInStd) { return inStdNamespace(&Node); }
 
 // A call of a std function, or a construction of a std class. An operator other than () is no call here:
 // `v.rbegin() + 2` is arithmetic, and the operator is a member of std::reverse_iterator.
@@ -172,16 +174,23 @@ public:
 
 AST_MATCHER(FunctionDecl, isOperatorFunction) { return Node.isOverloadedOperator(); }
 
-// A function that may change state: a non-const member, or a function with a non-const reference or pointer parameter.
+// A parameter the function can write through: a non-const lvalue reference, a pointer to non-const, or a std::span of
+// non-const elements, which writes through like a pointer.
+bool isMutableParameter(const ParmVarDecl *Parameter) {
+  QualType Type = Parameter->getType().getCanonicalType();
+  const auto *Span = dyn_cast_or_null<ClassTemplateSpecializationDecl>(Type.getNonReferenceType()->getAsCXXRecordDecl());
+  if (Span && Span->getName() == "span" && inStdNamespace(Span))
+    return !Span->getTemplateArgs()[0].getAsType().isConstQualified();
+  return (Type->isLValueReferenceType() || Type->isPointerType()) && !Type->getPointeeType().isConstQualified();
+}
+
+bool hasMutableParameter(const FunctionDecl *Function) { return llvm::any_of(Function->parameters(), isMutableParameter); }
+
+// A function that may change state: a non-static non-const member, or any function with a parameter it can write through.
+// A static member has no object, so only its parameters count.
 bool mayChangeState(const FunctionDecl *Function) {
-  // A static member has no object, so it is judged like a free function.
   const auto *Method = dyn_cast<CXXMethodDecl>(Function);
-  if (Method && !Method->isStatic())
-    return !Method->isConst();
-  return llvm::any_of(Function->parameters(), [](const ParmVarDecl *Parameter) {
-    QualType Type = Parameter->getType();
-    return (Type->isReferenceType() || Type->isPointerType()) && !Type->getPointeeType().isConstQualified();
-  });
+  return (Method && !Method->isStatic() && !Method->isConst()) || hasMutableParameter(Function);
 }
 
 bool isAssignmentOrIncrement(OverloadedOperatorKind Operator) {
@@ -266,33 +275,42 @@ public:
   }
 };
 
-// Names that return an iterator, a reference or a cast and change nothing, though the object or the argument is non-const.
+// Names in std that return an iterator, a reference, a cast or a new value and change nothing, though the object or the argument
+// is non-const. A forwarding reference instantiates as a non-const reference, which is why `make_pair` and `get` are here.
 // So `std::sort(v.begin(), v.end())`, `v.front() + v.back()` and `f(std::move(a), std::move(b))` are no pair of changes.
+// A function of the same name outside std is a change.
 bool changesNothing(const FunctionDecl *Function) {
-  return Function->getDeclName().isIdentifier() &&
+  return inStdNamespace(Function) && Function->getDeclName().isIdentifier() &&
          llvm::is_contained({"begin", "end", "cbegin", "cend", "rbegin", "rend", "crbegin", "crend", "at", "front", "back", "move", "forward",
-                             "as_const"},
+                             "as_const", "make_pair", "make_tuple", "get", "tie"},
                             Function->getName());
 }
 
-// A node that changes state: an assignment, an increment, or a call of a function that may change state.
-// An operator call counts only as an assignment or an increment, so `v[i]` on a non-const vector is no change.
+// A node that changes state: an assignment, an increment, a call of a function that may change state, or a construction
+// with a parameter the constructor can write through. An operator call is judged by its callee only for `()`. Any other
+// operator counts as an assignment or an increment, so `v[i]` on a non-const vector is no change.
 bool isChange(const Stmt *S) {
   if (const auto *Unary = dyn_cast<UnaryOperator>(S))
     return Unary->isIncrementDecrementOp();
   if (const auto *Binary = dyn_cast<BinaryOperator>(S))
     return Binary->isAssignmentOp();
+  if (const auto *Construct = dyn_cast<CXXConstructExpr>(S))
+    return hasMutableParameter(Construct->getConstructor());
   if (const auto *Operator = dyn_cast<CXXOperatorCallExpr>(S))
-    return isAssignmentOrIncrement(Operator->getOperator());
+    if (Operator->getOperator() != OO_Call)
+      return isAssignmentOrIncrement(Operator->getOperator());
   if (const auto *Call = dyn_cast<CallExpr>(S))
     return Call->getDirectCallee() && !changesNothing(Call->getDirectCallee()) && mayChangeState(Call->getDirectCallee());
   return false;
 }
 
-// ponytail: a lambda changes nothing where it is written, and a capture initializer that does is missed.
-// A call through a function pointer or a member pointer has no declaration, so it is no change.
+// ponytail: three ceilings. A lambda changes nothing where it is written, so a capture initializer that does is missed.
+// A reference member lets a const method change state, and the check calls that method pure. A call through a template
+// parameter has no callee the check can read, and so has a call through a function pointer or a member pointer.
+// Upgrade: count the capture initializers, and visit instantiations.
+// An unevaluated operand changes nothing: `sizeof`, `alignof`, `noexcept` and `typeid` do not run it.
 bool changes(const Stmt *S) {
-  if (isa<LambdaExpr>(S))
+  if (isa<LambdaExpr, UnaryExprOrTypeTraitExpr, CXXNoexceptExpr, CXXTypeidExpr>(S))
     return false;
   return isChange(S) || llvm::any_of(S->children(), [](const Stmt *Child) { return Child && changes(Child); });
 }

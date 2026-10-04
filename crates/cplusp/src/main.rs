@@ -587,16 +587,17 @@ fn nolints(path: &Path, text: &str) -> Vec<Finding> {
     text.lines().enumerate().filter(|(_, l)| l.contains("NOLINT")).map(|(n, _)| ban(path.to_path_buf(), n + 1, "nolint", message)).collect()
 }
 
-/// A line marker of the preprocessor, `# N "path" flags`: the next line is line N of the path. Flag 3 is a system header.
-fn line_marker(text: &str) -> Option<(usize, &str, bool)> {
+/// A line marker of the preprocessor, `# N "path" flags`: the next line is line N of the path.
+/// Flag 1 enters an include, and flag 3 is a system header.
+fn line_marker(text: &str) -> Option<(usize, &str, Vec<&str>)> {
     let (n, rest) = text.strip_prefix("# ")?.split_once(' ')?;
     let (path, flags) = rest.strip_prefix('"')?.split_once('"')?;
-    Some((n.parse().ok()?, path, flags.split_whitespace().any(|f| f == "3")))
+    Some((n.parse().ok()?, path, flags.split_whitespace().collect()))
 }
 
-/// Run the preprocessor on a build and read its output. A diagnostic pragma and a `system_header` pragma are findings.
-/// Every spelling of a pragma comes out as one form, which a text scan cannot promise. Also returns the files the build
-/// includes outside the system paths, for the NOLINT scan.
+/// Run the preprocessor on a build and read its output. A diagnostic pragma, a `system_header` pragma and a `#line`
+/// directive are findings. Every spelling of a pragma comes out as one form, which a text scan cannot promise.
+/// Also returns the files the build includes outside the system paths, for the NOLINT scan.
 // ponytail: a line of a raw string literal that starts with `#pragma clang diagnostic` counts. A path with a quote in it
 // breaks the marker. Upgrade: read the tokens with the plugin.
 fn preprocess(clang: &str, (file, dir, flags): &Build, shown: impl Fn(&Path) -> String) -> Result<(Vec<Finding>, Vec<PathBuf>)> {
@@ -622,15 +623,25 @@ fn preprocess(clang: &str, (file, dir, flags): &Build, shown: impl Fn(&Path) -> 
     if !out.status.success() {
         bail!("cannot preprocess {}: {}", shown(file), String::from_utf8_lossy(&out.stderr).lines().next().unwrap_or_default());
     }
-    // `entered` says, for each file, whether the first marker for it had no flag 3.
-    let (mut found, mut entered, mut silenced) = (Vec::new(), BTreeMap::new(), HashSet::new());
+    // `seen` has every name a marker gave. `entered` has the files, with whether the first marker for each had no flag 3.
+    // A name that is no include and no first marker came from a directive in the source. It is no file, so it is only in `seen`.
+    let (mut found, mut seen, mut entered, mut silenced) = (Vec::new(), HashSet::new(), BTreeMap::new(), HashSet::new());
     let (mut at, mut line, mut system) = (PathBuf::new(), 0, true);
     for text in String::from_utf8_lossy(&out.stdout).lines() {
-        if let Some((n, name, sys)) = line_marker(text) {
+        if let Some((n, name, flags)) = line_marker(text) {
+            let (include, sys) = (flags.contains(&"1"), flags.contains(&"3"));
             // `<built-in>` and `<command line>` are not files.
-            let pseudo = name.starts_with('<');
+            let pseudo = matches!(name, "<built-in>" | "<command line>");
             let path = dir.join(name);
-            let user = !pseudo && *entered.entry(path.clone()).or_insert(!sys);
+            if seen.insert(path.clone()) {
+                if !include && !at.as_os_str().is_empty() {
+                    let message = "line directive: not allowed in verified code. It moves the gate's view.";
+                    found.push(ban(at.clone(), line, "line", message));
+                } else if !pseudo {
+                    entered.insert(path.clone(), !sys);
+                }
+            }
+            let user = entered.get(&path) == Some(&true);
             if sys && user && silenced.insert(path.clone()) {
                 let message = "pragma system_header: not allowed in verified code. It silences the gate.";
                 found.push(ban(path.clone(), n.saturating_sub(1), "pragma", message));
@@ -642,6 +653,10 @@ fn preprocess(clang: &str, (file, dir, flags): &Build, shown: impl Fn(&Path) -> 
             found.push(ban(at.clone(), line, "pragma", "pragma diagnostic: not allowed in verified code. It silences the gate."));
         }
         line += 1;
+    }
+    // `-P`, `-M`, `-dM` and the like print no markers. The gate cannot see where anything is.
+    if !seen.contains(file) {
+        bail!("cannot preprocess {}: the preprocessor output has no line marker for it", shown(file));
     }
     Ok((found, entered.into_iter().filter(|(_, user)| *user).map(|(path, _)| path).collect()))
 }
