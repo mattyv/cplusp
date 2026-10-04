@@ -7,7 +7,7 @@ double chained(double a, double b, double c) {
 }
 
 bool compared(double a, double b) {
-  return a - b < 1e-9;  // BANNED
+  return a - b < 0x1p-30;  // BANNED
 }
 
 double accumulated(double x, double a, double b) {

@@ -58,3 +58,19 @@ int32_t either(bool c, int32_t& x) {
 bool in_order(int32_t& x, int32_t& y) {
   return before(0, next(x)) && before(0, next(y));
 }
+
+#include <utility>
+
+void sink(std::vector<int32_t> a, std::vector<int32_t> b);
+
+void moved(std::vector<int32_t>& a, std::vector<int32_t>& b) {
+  sink(std::move(a), std::move(b));
+}
+
+int32_t ends(std::vector<int32_t>& v) {
+  return v.front() + v.back();
+}
+
+int32_t two_at(std::vector<int32_t>& v) {
+  return v.at(0) + v.at(1);
+}

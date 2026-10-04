@@ -10,7 +10,7 @@ double chained(double a, double b, double c) {
 
 bool compared(double a, double b) {
   double gap = a - b;
-  return gap < 1e-9;
+  return gap < 0x1p-30;
 }
 
 double accumulated(double x, double a, double b) {

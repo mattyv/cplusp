@@ -21,5 +21,5 @@ struct Scaler {
 };
 
 int64_t counted(const std::vector<int64_t>& values, int64_t k) {
-  return std::count_if(values.begin(), values.end(), [k, n = 0](int64_t v) mutable { return ++n > 1 && v > k; });  // BANNED
+  return std::count_if(values.begin(), values.end(), [k, n = 0](int64_t v) mutable { return ++n > 1 && v > k; });  // BANNED also: plain_int
 }
