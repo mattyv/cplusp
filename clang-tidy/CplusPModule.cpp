@@ -5,7 +5,7 @@
 // The check compiles the pattern and reports every match with the rule id as its message.
 // The Rust side turns the rule id into the message for the bot.
 //
-// Five hand-written checks, for the rules that a pattern cannot say. The gate maps a finding to its rule by
+// Seven hand-written checks, for the rules that a pattern cannot say. The gate maps a finding to its rule by
 // the name of the check, so their messages are short and plain. The sample pair of each rule is the evidence.
 
 #include "ClangTidyCheck.h"
@@ -15,7 +15,11 @@
 #include "clang/ASTMatchers/Dynamic/Diagnostics.h"
 #include "clang/ASTMatchers/Dynamic/Parser.h"
 #include "llvm/ADT/STLExtras.h"
+#include "llvm/ADT/SmallString.h"
+#include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/StringSet.h"
+#include "llvm/ADT/APFloat.h"
+#include "clang/Lex/Lexer.h"
 
 #include <optional>
 #include <string>
@@ -168,15 +172,8 @@ public:
 
 AST_MATCHER(FunctionDecl, isOperatorFunction) { return Node.isOverloadedOperator(); }
 
-bool isImpureOperator(const FunctionDecl *Function) {
-  switch (Function->getOverloadedOperator()) {
-  case OO_Equal: case OO_PlusEqual: case OO_MinusEqual: case OO_StarEqual: case OO_SlashEqual: case OO_PercentEqual:
-  case OO_AmpEqual: case OO_PipeEqual: case OO_CaretEqual: case OO_LessLessEqual: case OO_GreaterGreaterEqual:
-  case OO_PlusPlus: case OO_MinusMinus:
-    return true;
-  default:
-    break;
-  }
+// A function that may change state: a non-const member, or a function with a non-const reference or pointer parameter.
+bool mayChangeState(const FunctionDecl *Function) {
   // A static member has no object, so it is judged like a free function.
   const auto *Method = dyn_cast<CXXMethodDecl>(Function);
   if (Method && !Method->isStatic())
@@ -185,6 +182,21 @@ bool isImpureOperator(const FunctionDecl *Function) {
     QualType Type = Parameter->getType();
     return (Type->isReferenceType() || Type->isPointerType()) && !Type->getPointeeType().isConstQualified();
   });
+}
+
+bool isAssignmentOrIncrement(OverloadedOperatorKind Operator) {
+  switch (Operator) {
+  case OO_Equal: case OO_PlusEqual: case OO_MinusEqual: case OO_StarEqual: case OO_SlashEqual: case OO_PercentEqual:
+  case OO_AmpEqual: case OO_PipeEqual: case OO_CaretEqual: case OO_LessLessEqual: case OO_GreaterGreaterEqual:
+  case OO_PlusPlus: case OO_MinusMinus:
+    return true;
+  default:
+    return false;
+  }
+}
+
+bool isImpureOperator(const FunctionDecl *Function) {
+  return isAssignmentOrIncrement(Function->getOverloadedOperator()) || mayChangeState(Function);
 }
 
 // cplusp-impure-operator. An operator that the author defaulted or deleted is exempt, and so is every implicit one.
@@ -254,6 +266,112 @@ public:
   }
 };
 
+// Names that return an iterator, a reference or a cast and change nothing, though the object or the argument is non-const.
+// So `std::sort(v.begin(), v.end())`, `v.front() + v.back()` and `f(std::move(a), std::move(b))` are no pair of changes.
+bool changesNothing(const FunctionDecl *Function) {
+  return Function->getDeclName().isIdentifier() &&
+         llvm::is_contained({"begin", "end", "cbegin", "cend", "rbegin", "rend", "crbegin", "crend", "at", "front", "back", "move", "forward",
+                             "as_const"},
+                            Function->getName());
+}
+
+// A node that changes state: an assignment, an increment, or a call of a function that may change state.
+// An operator call counts only as an assignment or an increment, so `v[i]` on a non-const vector is no change.
+bool isChange(const Stmt *S) {
+  if (const auto *Unary = dyn_cast<UnaryOperator>(S))
+    return Unary->isIncrementDecrementOp();
+  if (const auto *Binary = dyn_cast<BinaryOperator>(S))
+    return Binary->isAssignmentOp();
+  if (const auto *Operator = dyn_cast<CXXOperatorCallExpr>(S))
+    return isAssignmentOrIncrement(Operator->getOperator());
+  if (const auto *Call = dyn_cast<CallExpr>(S))
+    return Call->getDirectCallee() && !changesNothing(Call->getDirectCallee()) && mayChangeState(Call->getDirectCallee());
+  return false;
+}
+
+// ponytail: a lambda changes nothing where it is written, and a capture initializer that does is missed.
+// A call through a function pointer or a member pointer has no declaration, so it is no change.
+bool changes(const Stmt *S) {
+  if (isa<LambdaExpr>(S))
+    return false;
+  return isChange(S) || llvm::any_of(S->children(), [](const Stmt *Child) { return Child && changes(Child); });
+}
+
+// The children of a node that the standard leaves unordered among themselves. Everything else is ordered,
+// so two changes in it are not a finding. A coroutine suspend orders its parts. A node kind that is not named here has unordered children.
+llvm::SmallVector<const Stmt *, 4> unorderedChildren(const Stmt *S) {
+  llvm::SmallVector<const Stmt *, 4> Children;
+  if (const auto *Operator = dyn_cast<CXXOperatorCallExpr>(S)) {
+    // The built-in order of an operator holds when it is overloaded, and for a call, the callee comes first.
+    switch (Operator->getOperator()) {
+    case OO_Equal: case OO_PlusEqual: case OO_MinusEqual: case OO_StarEqual: case OO_SlashEqual: case OO_PercentEqual:
+    case OO_AmpEqual: case OO_PipeEqual: case OO_CaretEqual: case OO_LessLessEqual: case OO_GreaterGreaterEqual:
+    case OO_LessLess: case OO_GreaterGreater: case OO_Subscript: case OO_ArrowStar:
+    case OO_AmpAmp: case OO_PipePipe: case OO_Comma:
+      return Children;
+    case OO_Call:
+      Children.assign(Operator->arg_begin() + 1, Operator->arg_end());
+      return Children;
+    default:
+      break;
+    }
+    Children.assign(Operator->arg_begin(), Operator->arg_end());
+  } else if (const auto *Call = dyn_cast<CallExpr>(S)) {
+    Children.assign(Call->arg_begin(), Call->arg_end());
+  } else if (const auto *Construct = dyn_cast<CXXConstructExpr>(S)) {
+    if (!Construct->isListInitialization())
+      Children.assign(Construct->arg_begin(), Construct->arg_end());
+  } else if (const auto *Binary = dyn_cast<BinaryOperator>(S)) {
+    if (!Binary->isAssignmentOp() && !Binary->isCommaOp() && !Binary->isLogicalOp() && !Binary->isShiftOp() && !Binary->isPtrMemOp())
+      Children = {Binary->getLHS(), Binary->getRHS()};
+  } else if (!isa<AbstractConditionalOperator>(S) && !isa<ArraySubscriptExpr>(S) && !isa<InitListExpr>(S) && !isa<MemberExpr>(S) &&
+             !isa<CoroutineSuspendExpr>(S)) {
+    Children.assign(S->child_begin(), S->child_end());
+  }
+  return Children;
+}
+
+// cplusp-evaluation-order: a node with two unordered children that each change state. The rule is decision 0026.
+class EvaluationOrderCheck : public SpelledCheck {
+public:
+  using SpelledCheck::SpelledCheck;
+  void registerMatchers(MatchFinder *Finder) override { Finder->addMatcher(expr().bind("expr"), this); }
+  void check(const MatchFinder::MatchResult &Result) override {
+    const auto *Node = Result.Nodes.getNodeAs<Expr>("expr");
+    auto Children = unorderedChildren(Node);
+    if (llvm::count_if(Children, [](const Stmt *Child) { return Child && changes(Child); }) > 1)
+      diag(Node->getBeginLoc(), "two changes of state without an order");
+  }
+};
+
+// cplusp-inexact-literal: a floating-point literal whose spelling does not convert to its own type without loss.
+// The compiler's float library decides. A hex float, 0.5 and 1e3 are exact. 0.1 is not.
+class InexactLiteralCheck : public SpelledCheck {
+public:
+  using SpelledCheck::SpelledCheck;
+  void registerMatchers(MatchFinder *Finder) override { Finder->addMatcher(floatLiteral().bind("literal"), this); }
+  void check(const MatchFinder::MatchResult &Result) override {
+    const auto *Literal = Result.Nodes.getNodeAs<FloatingLiteral>("literal");
+    SourceLocation Loc = Literal->getBeginLoc();
+    // The token as written, also when a macro such as DBL_EPSILON holds it.
+    llvm::SmallString<32> Buffer;
+    std::string Spelling =
+        Lexer::getSpelling(Result.SourceManager->getSpellingLoc(Loc), Buffer, *Result.SourceManager, Result.Context->getLangOpts()).str();
+    // A digit separator and a user suffix are no part of the number. Then the suffix f, F, l or L.
+    llvm::erase(Spelling, '\'');
+    Spelling = Spelling.substr(0, Spelling.find('_'));
+    StringRef Text = StringRef(Spelling).rtrim("fFlL");
+    llvm::APFloat Value(Result.Context->getFloatTypeSemantics(Literal->getType()));
+    auto Status = Value.convertFromString(Text, llvm::APFloat::rmNearestTiesToEven);
+    if (!Status) {
+      llvm::consumeError(Status.takeError());
+      return;
+    }
+    if (*Status & llvm::APFloat::opInexact)
+      diag(Result.SourceManager->getFileLoc(Loc), "floating-point literal is not exactly a double");
+  }
+};
+
 class CplusPModule : public ClangTidyModule {
 public:
   void addCheckFactories(ClangTidyCheckFactories &Factories) override {
@@ -263,6 +381,8 @@ public:
     Factories.registerCheck<ImpureOperatorCheck>("cplusp-impure-operator");
     Factories.registerCheck<IteratorArithmeticCheck>("cplusp-iterator-arithmetic");
     Factories.registerCheck<LambdaLimitsCheck>("cplusp-lambda-limits");
+    Factories.registerCheck<EvaluationOrderCheck>("cplusp-evaluation-order");
+    Factories.registerCheck<InexactLiteralCheck>("cplusp-inexact-literal");
   }
 };
 

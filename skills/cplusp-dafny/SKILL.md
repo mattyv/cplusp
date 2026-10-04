@@ -417,6 +417,13 @@ The model is of `double` and of no other type.
 Never write `float` or `long double` in verified code. The gate refuses them.
 A `float` from outside is converted to `double` in trusted code at the edge, and the contract there is about the `double`.
 
+
+## double_literal
+
+A literal in the C++ is the nearest double, not the real it spells. The model reads the real.
+Write only literals that are exactly a double: a hex float, or a decimal such as 0.5, 1e3 or the exact expansion of a double. The gate refuses the others.
+For a tenth, divide by `10.0` instead of multiplying by `0.1`.
+
 ## unlisted_modifies
 
 A global is a field of one state object.
