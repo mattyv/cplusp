@@ -78,3 +78,15 @@ int32_t two_at(std::vector<int32_t>& v) {
 int32_t unevaluated(int32_t& x) {
   return static_cast<int32_t>(sizeof(next(x))) + next(x);
 }
+
+#include <tuple>
+
+void take(std::pair<int32_t, int32_t> p, std::pair<int32_t, int32_t> q);
+
+void paired(int32_t a, int32_t b, int32_t c, int32_t d) {
+  take(std::make_pair(a, b), std::make_pair(c, d));
+}
+
+int32_t both_of(std::tuple<int32_t, int32_t>& t) {
+  return std::get<0>(t) + std::get<1>(t);
+}

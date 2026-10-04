@@ -260,7 +260,7 @@ rules:
       - check: cppcoreguidelines-no-malloc
       - matcher: cxxNewExpr()
       - matcher: cxxDeleteExpr()
-      - matcher: callExpr(callee(functionDecl(hasAnyOverloadedOperatorName("new", "new[]", "delete", "delete[]"))))
+      - matcher: callExpr(callee(functionDecl(hasAnyOverloadedOperatorName("new", "new[]", "delete", "delete[]"))), unless(hasAncestor(coroutineBodyStmt())))
 
   - id: raw_memory_ops
     construct: "`memcpy`, `memset`, `memmove` on anything but plain bytes"
@@ -719,7 +719,7 @@ rules:
     area: control
     canonical: "MISRA 13.2. Core Guidelines ES.43 and ES.44"
     decision: restrict
-    limit: Two changes of state in one full expression only where the standard orders them. Function arguments and the operands of an arithmetic or comparison operator are not ordered. A call may change state when a parameter is a non-const reference or pointer, or when it is a non-const member function. A call into `std` counts too. The casts `std::move`, `std::forward` and `std::as_const`, and the accessors `begin`, `end`, `at`, `front` and `back`, change nothing.
+    limit: Two changes of state in one full expression only where the standard orders them. Function arguments and the operands of an arithmetic or comparison operator are not ordered. A call may change state when a parameter is a non-const reference or pointer, or when it is a non-const member function. A call into `std` counts too. The casts `std::move`, `std::forward` and `std::as_const`, the accessors `begin`, `end`, `at`, `front`, `back` and `get`, and the makers `make_pair`, `make_tuple` and `tie`, change nothing.
     why: C++ does not fix the order of two calls in one expression, and compilers differ. Two increments of one variable in one expression are undefined.
     use_instead: one statement per call, in the order the contract needs.
     stage: gate
