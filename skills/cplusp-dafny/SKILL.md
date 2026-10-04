@@ -411,6 +411,12 @@ A product or quotient can fall below the smallest subnormal and round to 0.
 The `eta` term of the bound is what allows it.
 State `|a * b| <= DBL_MAX` in the C++ contract, and never a lower bound.
 
+## single_precision
+
+The model is of `double` and of no other type.
+Never write `float` or `long double` in verified code. The gate refuses them.
+A `float` from outside is converted to `double` in trusted code at the edge, and the contract there is about the `double`.
+
 ## unlisted_modifies
 
 A global is a field of one state object.
