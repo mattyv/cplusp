@@ -1,0 +1,9 @@
+rules:
+  - id: retired
+    construct: A check decision 0025 retired
+    area: state
+    decision: ban
+    why: Only here to prove the gate refuses it.
+    use_instead: nothing.
+    detect:
+      - check: cplusp-recursion

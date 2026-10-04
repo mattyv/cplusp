@@ -40,7 +40,7 @@ The ponytail ladder applies to every change. Stop at the first rung that holds:
 5. Can it be one line? One line.
 6. Only then: the minimum code that works.
 
-Fewest files. No interface with one implementation, no config for a value that never changes, no scaffolding for later. Mark a deliberate corner cut with a `ponytail:` comment that names the ceiling and the upgrade path. Never lazy about understanding the problem first, and never lazy about the two things this repo exists for: the failing test comes first, and the proof is part of the deliverable.
+Fewest files. No interface with one implementation, no config for a value that never changes, no scaffolding for later. Mark a deliberate corner cut with a `ponytail:` comment that names the ceiling and the upgrade path. Never lazy about understanding the problem first. Never lazy about the two things this repo exists for: the failing test comes first, and the proof is part of the deliverable.
 
 ## Messages
 
@@ -48,4 +48,4 @@ Everything the bot reads follows Simplified Technical English: short sentences, 
 
 ## Toolchain
 
-Rust is pinned in `rust-toolchain.toml` to the version the Verus release needs. Verus itself is the release named in `docs/plan.md`. clang-tidy is 18 from Ubuntu 24.04 apt, with `libclang-18-dev` and `llvm-18-dev` for the plugin headers and CMake files. Build the plugin with `cmake -S clang-tidy -B target/plugin -G Ninja && cmake --build target/plugin`. The tests look for it at `target/plugin/libcplusp.so` or `$CPLUSP_PLUGIN`.
+Rust is pinned in `rust-toolchain.toml` to the version the Verus release needs. Verus itself is the release named in `docs/plan.md`. clang-tidy is 18 from Ubuntu 24.04 apt, with `clang-18` for the preprocessor the gate runs. `libclang-18-dev` and `llvm-18-dev` give the plugin headers and CMake files. Build the plugin with `cmake -S clang-tidy -B target/plugin -G Ninja && cmake --build target/plugin`. The tests look for it at `target/plugin/libcplusp.so` or `$CPLUSP_PLUGIN`.

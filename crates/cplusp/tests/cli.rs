@@ -98,6 +98,15 @@ fn policy_emit_turns_on_the_warning_of_every_diagnostic_check() {
 /// A diagnostic name is a compiler flag once it is in the config. Three names must never get there:
 /// `clang-diagnostic-error` would turn a compile error into a finding, `clang-diagnostic-no-...` would switch a
 /// warning off, and a quote would break the YAML with clang-tidy's message instead of the gate's.
+/// Decision 0025 retired the two checks that were never built. A policy that names one is refused like any unknown check.
+#[test]
+fn policy_check_refuses_a_retired_check() {
+    let f = fixture("retired-check.yaml");
+    let o = cplusp(&["policy", "check", "--policy", f.to_str().unwrap()]);
+    assert_eq!(o.status.code(), Some(2), "stdout: {} stderr: {}", stdout(&o), stderr(&o));
+    assert!(stderr(&o).contains("retired: check cplusp-recursion is not known"), "{}", stderr(&o));
+}
+
 #[test]
 fn policy_check_refuses_a_diagnostic_name_that_is_not_a_warning() {
     let f = fixture("evil-check.yaml");
@@ -391,6 +400,98 @@ fn gate_treats_a_diagnostic_pragma_as_a_finding() {
         let expected = format!("pragma.cpp:{line}: pragma diagnostic: not allowed in verified code. It silences the gate.");
         assert!(out.lines().any(|l| l.starts_with("Not provable: ") && l.ends_with(&expected)), "{out}");
     }
+}
+
+/// The preprocessor accepts spellings a text scan misses: a line splice, a comment between tokens, a digraph,
+/// a macro from the command line, and the Microsoft form. The gate reads the preprocessor's view, so each is a finding.
+#[test]
+fn gate_sees_every_spelling_of_a_diagnostic_pragma() {
+    if !clang_tidy_available() {
+        return;
+    }
+    let pragma = "pragma diagnostic: not allowed in verified code. It silences the gate.";
+    let f = fixture("pragma-spellings.cpp");
+    let o = gated(&[f.to_str().unwrap(), "--", "-std=c++23", "-ffp-contract=off"]);
+    assert_eq!(o.status.code(), Some(1), "stdout: {} stderr: {}", stdout(&o), stderr(&o));
+    for line in [3, 4, 5] {
+        let expected = format!("pragma-spellings.cpp:{line}: {pragma}");
+        assert!(stdout(&o).lines().any(|l| l.ends_with(&expected)), "{}", stdout(&o));
+    }
+    let f = fixture("define-pragma.cpp");
+    let o = gated(&[f.to_str().unwrap(), "--", "-std=c++23", "-ffp-contract=off", r#"-DSILENCE=_Pragma("clang diagnostic ignored \"-Wreturn-stack-address\"")"#]);
+    assert_eq!(o.status.code(), Some(1), "stdout: {} stderr: {}", stdout(&o), stderr(&o));
+    assert!(stdout(&o).lines().any(|l| l.ends_with(&format!("define-pragma.cpp:2: {pragma}"))), "{}", stdout(&o));
+    let f = fixture("ms-pragma.cpp");
+    let o = gated(&[f.to_str().unwrap(), "--", "-std=c++23", "-ffp-contract=off", "-fms-extensions"]);
+    assert_eq!(o.status.code(), Some(1), "stdout: {} stderr: {}", stdout(&o), stderr(&o));
+    assert!(stdout(&o).lines().any(|l| l.ends_with(&format!("ms-pragma.cpp:2: {pragma}"))), "{}", stdout(&o));
+    let f = fixture("includes-spliced.cpp");
+    let o = gated(&[f.to_str().unwrap(), "--", "-std=c++23", "-ffp-contract=off"]);
+    assert_eq!(o.status.code(), Some(1), "stdout: {} stderr: {}", stdout(&o), stderr(&o));
+    assert!(stdout(&o).lines().any(|l| l.ends_with("spliced-system-header.h:2: pragma system_header: not allowed in verified code. It silences the gate.")), "{}", stdout(&o));
+    // A comment is not a pragma.
+    let f = fixture("comment-mentions-pragma.cpp");
+    let o = gated(&[f.to_str().unwrap(), "--", "-std=c++23", "-ffp-contract=off"]);
+    assert_eq!(o.status.code(), Some(0), "stdout: {} stderr: {}", stdout(&o), stderr(&o));
+}
+
+/// A file the preprocessor cannot read cannot be judged. The message has the shape of the other refusals.
+#[test]
+fn gate_names_a_missing_include() {
+    if !clang_tidy_available() {
+        return;
+    }
+    let f = fixture("missing-include.cpp");
+    let o = gated(&[f.to_str().unwrap(), "--", "-std=c++23", "-ffp-contract=off"]);
+    assert_eq!(o.status.code(), Some(2), "stdout: {} stderr: {}", stdout(&o), stderr(&o));
+    let err = stderr(&o);
+    let line = err.lines().find(|l| l.starts_with("cannot preprocess crates/cplusp/tests/fixtures/missing-include.cpp: ")).expect(&err);
+    assert!(line.contains("nope.h"), "{line}");
+}
+
+/// clang-tidy runs every database entry of a file, so the gate judges every one. A command with shell quoting
+/// is refused, because the gate cannot read it the way the shell would. A `--config` file is a response file by another name.
+#[test]
+fn gate_judges_every_database_entry_and_refuses_what_it_cannot_read() {
+    if !clang_tidy_available() {
+        return;
+    }
+    let root = root();
+    let file = root.join("rules/goto/allowed.cpp");
+    let file = file.to_str().unwrap();
+    let dir = root.to_str().unwrap();
+    let float = "not allowed with the gate. It changes floating-point results, and the proofs assume IEEE 754 round to nearest.";
+    let clean = format!(r#"{{"directory": "{dir}", "command": "clang++ -std=c++23 -ffp-contract=off -c {file}", "file": "{file}"}}"#);
+    for (entries, code, expected) in [
+        // The second entry carries the bad flag.
+        (format!("{clean}, {}", format!(r#"{{"directory": "{dir}", "command": "clang++ -std=c++23 -ffp-contract=off -ffast-math -c {file}", "file": "{file}"}}"#)), 2, format!("-ffast-math: {float}")),
+        (format!(r#"{{"directory": "{dir}", "command": "clang++ -std=c++23 -ffp-contract=off '-DFOO' '-ffast-math' -c {file}", "file": "{file}"}}"#), 2, format!("{file}: the command in compile_commands.json has shell quoting, which the gate cannot read. Use arguments.")),
+        (format!(r#"{{"directory": "{dir}", "command": "clang++ -std=c++23 -ffp-contract=off --config fast.cfg -c {file}", "file": "{file}"}}"#), 2, "--config: not allowed with the gate. The gate cannot read a config file.".to_string()),
+        // Dependency flags are the build's business, and a phony target is not a header.
+        (format!(r#"{{"directory": "{dir}", "command": "clang++ -std=c++23 -ffp-contract=off -MD -MP -MT allowed.o -MF /dev/null -c {file}", "file": "{file}"}}"#), 0, String::new()),
+    ] {
+        let build = tempfile::tempdir().unwrap();
+        std::fs::write(build.path().join("compile_commands.json"), format!("[{entries}]")).unwrap();
+        let o = gated(&["-p", build.path().to_str().unwrap(), file]);
+        assert_eq!(o.status.code(), Some(code), "{entries}: stdout {} stderr {}", stdout(&o), stderr(&o));
+        if code == 2 {
+            assert!(stderr(&o).lines().any(|l| l == expected), "{entries}: stderr {}", stderr(&o));
+        } else {
+            assert_eq!(stdout(&o).trim(), "ok: no findings", "{entries}");
+        }
+    }
+    // The same config file refusal after `--`, in both spellings.
+    for (flag, shown) in [("--config", "--config"), ("--config=fast.cfg", "--config=fast.cfg")] {
+        let o = gated(&["rules/goto/allowed.cpp", "--", "-std=c++23", "-ffp-contract=off", flag, "fast.cfg"]);
+        assert_eq!(o.status.code(), Some(2), "{flag}: stdout {} stderr {}", stdout(&o), stderr(&o));
+        let expected = format!("{shown}: not allowed with the gate. The gate cannot read a config file.");
+        assert!(stderr(&o).lines().any(|l| l == expected), "{flag}: stderr {}", stderr(&o));
+    }
+    // The given path may spell the file with `..`. The entry still matches.
+    let build = tempfile::tempdir().unwrap();
+    std::fs::write(build.path().join("compile_commands.json"), format!("[{clean}]")).unwrap();
+    let o = gated(&["-p", build.path().to_str().unwrap(), "rules/goto/../goto/allowed.cpp"]);
+    assert_eq!(o.status.code(), Some(0), "stdout: {} stderr: {}", stdout(&o), stderr(&o));
 }
 
 /// The gate judges the headers a file includes, outside the system paths, and scans them for suppressions too.
