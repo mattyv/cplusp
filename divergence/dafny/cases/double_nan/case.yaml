@@ -1,6 +1,6 @@
 construct: "Equality of two doubles"
 standard: "[expr.eq]: each of the operators yields true if the specified relationship is true and false if it is false."
-row: floating_point
+row: double
 gap: 3
 cpp: "IEEE 754 makes a NaN unordered, so no relationship with a NaN is true. `a == b` is false when an operand is a NaN, and a NaN is not equal to itself. `same(nan, nan)` is false."
 naive_does: "The model has no NaN, and `a == b` is the equality of reals. The proof goes through for every value the model has."
@@ -8,8 +8,8 @@ naive: verifies
 naive_is_wrong: true
 mitigated: verifies
 side: gate
-gate_rule: float_equality
-mitigation: "Gate row `float_equality`: no `==` or `!=` on floats. The C++ requires finite values, which closes the NaN divergence, and compares against a tolerance that is a double, 2^-30. The difference rounds once, so the contract carries slack for it: `result` implies `|a - b| <= T + 2 * eps * T + 2 * eta`, and `|a - b| <= T - 2 * eps * T - 2 * eta` implies `result`."
+gate_rule: double_equality
+mitigation: "Gate row `double_equality`: no `==` or `!=` on doubles. The C++ requires finite values, which closes the NaN divergence, and compares against a tolerance that is a double, 2^-30. The difference rounds once, so the contract carries slack for it: `result` implies `|a - b| <= T + 2 * eps * T + 2 * eta`, and `|a - b| <= T - 2 * eps * T - 2 * eta` implies `result`."
 witness:
   fixed_prints: "0 1"
   input: "same(nan, nan) and same(1.0, 1.0)"
@@ -17,8 +17,8 @@ witness:
   prints: "0 1"
 rule: |
   The model has no NaN and no infinity.
-  Every float parameter requires `std::isfinite` in the C++ contract.
-  Never compare floats with `==`. The gate refuses it.
+  Every `double` parameter requires `std::isfinite` in the C++ contract.
+  Never compare doubles with `==`. The gate refuses it.
   Compare against a tolerance `T` that is a double, and give the contract slack for the rounding of the difference.
   `result` implies `|a - b| <= T + 2 * eps * T + 2 * eta`, and `|a - b| <= T - 2 * eps * T - 2 * eta` implies `result`.
   Model the difference as `fsub(a, b)` with its `RoundError` call, never as the exact difference.

@@ -182,9 +182,9 @@ rules:
   - id: recursion
     decision: ban                # tighter than the default restrict
 
-  - id: floating_point
+  - id: double
     decision: allow              # looser than the default
-    loosened_because: Numerics team. Float values are checked by tests here, not proofs.
+    loosened_because: Numerics team. Double values are checked by tests here, not proofs.
 ```
 
 Tightening is always allowed. Loosening needs `loosened_because`, and every run prints the loosened entries at the top of its report. Whether loosening should also need a human approval is open, like the marker approval in the plan.
@@ -211,7 +211,7 @@ Three more refusals, all exit 2:
 - `-p` together with trailing `--` flags. clang-tidy would quietly drop `-p`. The message is `Use -p or --, not both.`
 - No clang-tidy on the machine when running `policy check`. Without it the check names cannot be checked.
 
-The gate reads the trailing `--` flags before clang-tidy does, and refuses three kinds, exit 2, with `{flag}: not allowed with the gate. {why}` on stderr. A flag that changes floating-point results: `-ffast-math`, `-Ofast`, `-funsafe-math-optimizations`, `-ffinite-math-only`, `-fassociative-math`, `-freciprocal-math`, `-fno-signed-zeros`, `-fno-honor-nans`, `-fno-honor-infinities`, `-ffp-model=fast`, `-mfpmath=387`, or `-m32`. Also `-fdenormal-fp-math=` other than `ieee`, `-ffp-eval-method=` other than `source`, and any `-ffp-contract` other than `off`. The last flag that sets contraction counts. `-ffp-model=precise` counts as `on`, and `-ffp-model=strict` counts as `off`. `-std` and `--std` are one flag. The proofs assume IEEE 754 round to nearest with gradual underflow and one rounding per operation. A `-std` below C++23, or no `-std` at all, because the baseline is C++23, decision 0022. No `-ffp-contract=off`, because GCC fuses a multiply and an add into one rounding otherwise, and the float model rounds once per operation. `-w`, `-Wno-everything`, or `-Wno-{name}` for a `clang-diagnostic-{name}` the policy names, because it hides a row. With `-p DIR` the flags come from the database, and the gate does not read them yet.
+The gate reads the trailing `--` flags before clang-tidy does, and refuses three kinds, exit 2, with `{flag}: not allowed with the gate. {why}` on stderr. A flag that changes floating-point results: `-ffast-math`, `-Ofast`, `-funsafe-math-optimizations`, `-ffinite-math-only`, `-fassociative-math`, `-freciprocal-math`, `-fno-signed-zeros`, `-fno-honor-nans`, `-fno-honor-infinities`, `-ffp-model=fast`, `-mfpmath=387`, or `-m32`. Also `-fdenormal-fp-math=` other than `ieee`, `-ffp-eval-method=` other than `source`, and any `-ffp-contract` other than `off`. The last flag that sets contraction counts. `-ffp-model=precise` counts as `on`, and `-ffp-model=strict` counts as `off`. `-std` and `--std` are one flag. The proofs assume IEEE 754 round to nearest with gradual underflow and one rounding per operation. A `-std` below C++23, or no `-std` at all, because the baseline is C++23, decision 0022. No `-ffp-contract=off`, because GCC fuses a multiply and an add into one rounding otherwise, and the double model rounds once per operation. `-w`, `-Wno-everything`, or `-Wno-{name}` for a `clang-diagnostic-{name}` the policy names, because it hides a row. With `-p DIR` the flags come from the database, and the gate does not read them yet.
 
 Checks the plugin does not provide yet are names without a check behind them. Every `gate` run says so on stderr: `warning: not enforced, no such check: cplusp-recursion, cplusp-unlisted-state`. An "ok" from the gate is only as strong as that line is short. Without `--plugin`, the generic check is on that list too.
 

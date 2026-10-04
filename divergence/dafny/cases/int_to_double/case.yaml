@@ -1,6 +1,6 @@
 construct: "Conversion of int64_t to a double"
 standard: "[conv.fpint]: if the integer value cannot be represented exactly in the floating-point type, the result is implementation-defined. It is a choice of the next lower or higher representable value."
-row: floating_point
+row: double
 gap: 3
 cpp: "`static_cast<double>(n)` rounds when n needs more than 53 bits. `widen(9007199254740993)` is 9007199254740992."
 naive_does: "The model converts with `n as real`, which is exact. The proof goes through for every n, and it is wrong above 2^53."

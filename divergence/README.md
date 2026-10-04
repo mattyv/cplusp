@@ -2,7 +2,7 @@
 
 A proof is about a model. These cases find where a naive model of a piece of C+P code means something different from the C++, and record the mitigation. Decision 0017. There is one battery per prover, decision 0018. `dafny/` holds the Dafny cases, `docs/mitigations-dafny.md` is its report, and `skills/cplusp-dafny/SKILL.md` is its skill.
 
-`dafny/Double.dfy` is the shared model of `double`: a real after one rounding per operation, with the IEEE 754 error bound as an axiom. A float case includes it. Its header lists what it assumes about the build.
+`dafny/Double.dfy` is the shared model of `double`: a real after one rounding per operation, with the IEEE 754 error bound as an axiom. A double case includes it. Its header lists what it assumes about the build.
 
 Each case is a folder under `<prover>/cases/` with:
 

@@ -385,10 +385,10 @@ fn the_battery_has_the_planned_cases() {
         "array_index", "span_dangling", "range_for_mutation", "count_if_lambda", "fold_init_type", "sort_contract", "map_subscript",
         "string_npos", "switch_fallthrough", "switch_missing_case", "optional_compare", "variant_get",
         // Round C4: floating point as a real after rounding, and a pointer into a container.
-        "float_sum", "float_nan", "float_to_int", "float_cancellation", "float_increment", "float_division_zero", "int_to_float",
+        "double_sum", "double_nan", "double_to_int", "double_cancellation", "double_increment", "double_division_zero", "int_to_double",
         "pointer_into_container",
         // The float review: a product that underflows. The last round: state.
-        "float_underflow", "unlisted_modifies", "static_local", "global_constructors", "torn_read", "single_precision",
+        "double_underflow", "unlisted_modifies", "static_local", "global_constructors", "torn_read", "single_precision",
     ] {
         assert!(cases.join(id).join("case.yaml").exists(), "no case {id}");
     }

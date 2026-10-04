@@ -84,26 +84,26 @@ fn an_allow_rule_needs_neither_detect_nor_use_instead() {
 
 #[test]
 fn a_prover_stage_restrict_rule_needs_a_limit_but_no_detect() {
-    let ok = prover_rule("floating_point", Decision::Restrict);
+    let ok = prover_rule("double", Decision::Restrict);
     assert_eq!(validate(&policy(vec![ok]), &names(KNOWN)), vec![]);
-    let mut bad = prover_rule("floating_point", Decision::Restrict);
+    let mut bad = prover_rule("double", Decision::Restrict);
     bad.limit = None;
     assert_eq!(
         validate(&policy(vec![bad]), &names(KNOWN)),
-        vec![PolicyError::RestrictWithoutLimit { id: "floating_point".to_string() }]
+        vec![PolicyError::RestrictWithoutLimit { id: "double".to_string() }]
     );
 }
 
 #[test]
 fn emit_enables_nothing_for_a_prover_stage_rule() {
-    let mut r = prover_rule("floating_point", Decision::Restrict);
+    let mut r = prover_rule("double", Decision::Restrict);
     r.detect.push(CheckRef { name: "google-readability-casting".to_string(), options: vec![] });
     assert_eq!(emit(&policy(vec![r])).checks, Vec::<String>::new());
 }
 
 #[test]
 fn a_finding_from_a_prover_stage_rule_check_maps_to_nothing() {
-    let mut r = prover_rule("floating_point", Decision::Restrict);
+    let mut r = prover_rule("double", Decision::Restrict);
     r.detect.push(CheckRef { name: "google-readability-casting".to_string(), options: vec![] });
     assert_eq!(rule_for_check(&policy(vec![r]), &"google-readability-casting".to_string()), None);
 }

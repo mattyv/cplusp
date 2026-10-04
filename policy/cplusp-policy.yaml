@@ -41,8 +41,8 @@ rules:
     detect:
       - matcher: enumDecl(unless(isScoped()), unless(isImplicit()))
 
-  - id: floating_point
-    construct: Floating point
+  - id: double
+    construct: "`double`"
     area: types
     canonical: Allowed by all
     decision: restrict
@@ -121,7 +121,7 @@ rules:
     area: arithmetic
     canonical: "Core Guidelines ES.46"
     decision: ban
-    why: The value changes with no sign in the source. C++20 wraps an integer, and a float loses its fraction.
+    why: The value changes with no sign in the source. C++20 wraps an integer, and a double loses its fraction.
     use_instead: "a static_cast with a contract that the value fits, or a wider type."
     stage: gate
     detect:
@@ -164,8 +164,8 @@ rules:
     detect:
       - matcher: 'binaryOperator(hasOperatorName("<<"), hasLHS(ignoringImpCasts(integerLiteral(hasType(asString("int"))))))'
 
-  - id: float_equality
-    construct: "`==` or `!=` on floating-point values"
+  - id: double_equality
+    construct: "`==` or `!=` on `double` values"
     area: arithmetic
     canonical: "MISRA 2023 and Core Guidelines warn, -Wfloat-equal"
     decision: ban
@@ -180,18 +180,18 @@ rules:
     area: arithmetic
     canonical: "MISRA 2023 bans <cfenv> writes"
     decision: ban
-    why: The float model assumes round to nearest even for every operation in the process.
+    why: The double model assumes round to nearest even for every operation in the process.
     use_instead: "nothing. Verified code reads the mode at most."
     stage: gate
     detect:
       - matcher: callExpr(callee(functionDecl(hasAnyName("::fesetround", "::std::fesetround", "::fesetenv", "::std::fesetenv", "::feupdateenv", "::std::feupdateenv", "::_mm_setcsr", "::__builtin_ia32_ldmxcsr"))))
 
-  - id: float_expression
-    construct: Two floating-point operations in one expression
+  - id: double_expression
+    construct: Two `double` operations in one expression
     area: arithmetic
     canonical: "-ffp-contract, MISRA advisory"
     decision: restrict
-    limit: One floating-point operation per expression. A comparison compares values, not results of arithmetic.
+    limit: One `double` operation per expression. A comparison compares values, not results of arithmetic.
     why: The compiler may fuse two operations into one rounding, and the model rounds once per operation.
     use_instead: "a named local for each intermediate result."
     stage: gate

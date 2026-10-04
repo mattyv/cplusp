@@ -4,7 +4,7 @@
 // with gradual underflow, and the compiler keeps every operation as written. The gate refuses -ffast-math and
 // its relatives, flush-to-zero, x87 arithmetic, and any -ffp-contract other than off, because GCC fuses
 // a * b + c into one rounding across statements otherwise. The rounding_mode row refuses a call that changes
-// the rounding mode at run time. The float_expression row keeps one operation per expression, so the model and
+// the rounding mode at run time. The double_expression row keeps one operation per expression, so the model and
 // the C++ round at the same places.
 //
 // What the model leaves out: NaN and infinity. A contract keeps them out with a finite precondition and an

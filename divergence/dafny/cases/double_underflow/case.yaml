@@ -1,6 +1,6 @@
 construct: "Product of two doubles that underflows"
 standard: "[basic.fundamental]: the value representation of a floating-point type is implementation-defined."
-row: floating_point
+row: double
 gap: 1
 cpp: "On this target, IEEE 754 binary64, a product below 2^-1075, half the smallest subnormal, rounds to 0. `scaled(1e-200, 1e-200)` is 0, not 1e-400."
 naive_does: "The model multiplies reals, and the product is exact. The proof of `result == a * b` goes through, and the model says `scaled(1e-200, 1e-200)` is 1e-400."

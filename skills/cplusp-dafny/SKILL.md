@@ -350,50 +350,50 @@ Write the empty case out: `o.None? ||` for `<`, `<=` and `!=`, and `o.Some? &&` 
 Model `std::variant` as a datatype with one constructor per alternative.
 A read of an alternative needs `requires` that the variant holds it, in the C++ contract and in the model.
 
-## float_sum
+## double_sum
 
 A double is a real after rounding.
 Model `a + b` as `fadd(a, b)`, and state the result as a bound, `abs(result - (a + b)) <= EPS * abs(a + b) + ETA`.
-Never state equality of two float results.
+Never state equality of two double results.
 The bound holds up to `MAX`, so require `abs(a) <= MAX / 4.0` and `abs(b) <= MAX / 4.0`.
 Dafny does not apply a lemma by itself, so call `RoundError(a + b)` in the body before `fadd`.
 In the C++ contract, write the bound as `|result - (a + b)| <= eps * |a + b| + eta`, with `eps` as `DBL_EPSILON / 2` and `eta` as `DBL_TRUE_MIN / 2`, and the magnitude bound `|a| <= DBL_MAX / 4` as a `requires`.
 The model is `divergence/dafny/Double.dfy`. Write `include "Double.dfy"` with the path to it, and `import opened Double`.
 
-## float_nan
+## double_nan
 
 The model has no NaN and no infinity.
-Every float parameter requires `std::isfinite` in the C++ contract.
-Never compare floats with `==`. The gate refuses it.
+Every `double` parameter requires `std::isfinite` in the C++ contract.
+Never compare doubles with `==`. The gate refuses it.
 Compare against a tolerance `T` that is a double, and give the contract slack for the rounding of the difference.
 `result` implies `|a - b| <= T + 2 * eps * T + 2 * eta`, and `|a - b| <= T - 2 * eps * T - 2 * eta` implies `result`.
 Model the difference as `fsub(a, b)` with its `RoundError` call, never as the exact difference.
 
-## float_to_int
+## double_to_int
 
 Model `static_cast<int32_t>(x)` as truncation toward zero, not `Floor`.
 Write `trunc(x)` as `if x >= 0.0 then x.Floor else -((-x).Floor)`.
 The contract requires the value to fit: `requires -2147483649.0 < x < 2147483648.0`.
 
-## float_cancellation
+## double_cancellation
 
 Every operation rounds, and the errors add.
 State the bound from the magnitudes of the operands, not from the result the mathematics would give.
 Call `RoundError` once for each operation, on the exact value that the operation rounds.
 Each rounding adds `eta`, so a chain of roundings carries a small multiple of `eta` in its bound.
 
-## float_increment
+## double_increment
 
 A bound of `EPS * abs(x)` is 1.0 at 2^53, so above it the model promises nothing about the last digit.
 When the C++ needs exact counting, use an integer type.
 
-## float_division_zero
+## double_division_zero
 
-The model has no infinity, and C++ calls float division by zero undefined.
+The model has no infinity, and C++ calls division of a double by zero undefined.
 The contract requires a non-zero divisor: `requires b != 0.0`.
 The quotient must stay below `MAX`, so the model needs `requires abs(a / b) <= MAX`, and the C++ contract carries `|a / b| <= DBL_MAX`.
 
-## int_to_float
+## int_to_double
 
 An integer converts to a double exactly up to 2^53 in magnitude.
 The contract requires that range, and `RoundExactInt` proves the equality.
@@ -405,7 +405,7 @@ A pointer parameter and a container cannot alias in the model, and in C++ a poin
 Never take the address of a container element.
 The gate refuses it.
 
-## float_underflow
+## double_underflow
 
 A product or quotient can fall below the smallest subnormal and round to 0.
 The `eta` term of the bound is what allows it.

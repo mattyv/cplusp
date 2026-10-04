@@ -1,6 +1,6 @@
 construct: "Subtraction after addition on doubles"
 standard: "[basic.fundamental]: the value representation of a floating-point type is implementation-defined."
-row: float_expression
+row: double_expression
 gap: 1
 cpp: "On this target, IEEE 754 round to nearest, a + b rounds to the nearest double. When a is below the unit round-off of b, the sum is b and `s - b` is 0. `shifted(1e-16, 1.0)` is 0, not 1e-16."
 naive_does: "The model computes in exact reals, so `(a + b) - b == a` for every a and b. The proof goes through."

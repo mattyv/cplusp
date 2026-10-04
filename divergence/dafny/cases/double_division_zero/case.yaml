@@ -1,6 +1,6 @@
 construct: "Division of two doubles"
 standard: "[expr.mul]: if the second operand of / is zero, the behavior is undefined. The note in [expr.pre] says that for ISO/IEC 60559 types this is the only undefined arithmetic."
-row: floating_point
+row: double
 gap: 3
 cpp: "`a / b` with `b == 0.0` is undefined behaviour. IEEE 754 hardware gives infinity, and the sanitizer reports the division. `ratio(1.0, 0.0)` is undefined."
 naive_does: "The model divides reals, and Dafny asks for `b != 0.0` and fails. The model is stricter than the hardware, which gives infinity."
@@ -12,6 +12,6 @@ witness:
   input: "ratio(1.0, 0.0)"
   ubsan: true
 rule: |
-  The model has no infinity, and C++ calls float division by zero undefined.
+  The model has no infinity, and C++ calls division of a double by zero undefined.
   The contract requires a non-zero divisor: `requires b != 0.0`.
   The quotient must stay below `MAX`, so the model needs `requires abs(a / b) <= MAX`, and the C++ contract carries `|a / b| <= DBL_MAX`.

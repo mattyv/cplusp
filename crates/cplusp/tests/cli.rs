@@ -131,8 +131,8 @@ fn policy_show_prints_one_row_per_rule_with_its_limit() {
     assert!(casts.contains("ban"), "{casts}");
     let iter = out.lines().find(|l| l.contains("iterators")).expect("row for iterators");
     assert!(iter.contains("restrict") && iter.contains("Range-for only."), "{iter}");
-    let floats = out.lines().find(|l| l.contains("floating_point")).expect("row for floating_point");
-    assert!(floats.contains("prover"), "{floats}");
+    let doubles = out.lines().find(|l| l.split_whitespace().nth(1) == Some("double")).expect("row for double");
+    assert!(doubles.contains("prover"), "{doubles}");
 }
 
 #[test]
@@ -505,7 +505,7 @@ fn every_sample_pair_agrees_with_its_rule() {
         "implicit_narrowing", "sign_conversion", "widening_multiplication", "literal_shift",
         "member_init_order", "slicing", "virtual_call_in_constructor", "virtual_destructor", "raw_pointer", "containers",
         "switch_fallthrough", "switch_missing_case", "accumulate_init", "array_span",
-        "float_equality", "float_expression", "rounding_mode", "global_constructors", "double_only",
+        "double_equality", "double_expression", "rounding_mode", "global_constructors", "double_only",
     ] {
         assert!(rules_dir.join(id).is_dir(), "no sample pair for rule {id}");
     }
