@@ -5,7 +5,7 @@ description: Rules for writing the Dafny model of a C+P function by hand, one ru
 
 # Writing Dafny for C+P
 
-A case in `divergence/dafny/cases/` found every rule here. The case shows the naive model, the divergence, and the mitigation. Follow the rules. When a construct has no rule, stop and write the case first.
+A case in `divergence/dafny/cases/` found every rule here. The case shows the naive model, the divergence, and the mitigation. Follow the rules. When a construct has no rule, stop and write the case first. For the right way under each row the policy allows, read `examples/<row>/`: the C++ with its contract, and the Dafny for it.
 
 ## signed_overflow
 

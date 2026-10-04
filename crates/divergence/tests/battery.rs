@@ -366,6 +366,50 @@ fn every_supported_row_has_a_case() {
     }
 }
 
+/// Every row the bot may use has an example under examples/: the C++ under the row, which passes the gate,
+/// and the Dafny the bot writes for it, which verifies. A trusted_only row also has the trusted body, which the
+/// gate refuses under that row, so the construct is really there. See examples/README.md.
+#[test]
+fn every_row_the_bot_may_use_has_an_example() {
+    let policy: PolicyRows = serde_yaml::from_str(&std::fs::read_to_string(root().join("policy/cplusp-policy.yaml")).unwrap()).unwrap();
+    let rows: Vec<&PolicyRow> = policy.rules.iter().filter(|r| r.decision != "ban").collect();
+    let gate_available = clang_tidy_available();
+    let check = |row: &PolicyRow| {
+        let dir = root().join("examples").join(&row.id);
+        let id = &row.id;
+        assert!(dir.is_dir(), "{id}: a row the bot may use has no example under examples/");
+        let (cpp, dfy, trusted) = (dir.join("example.cpp"), dir.join("example.dfy"), dir.join("trusted.cpp"));
+        assert!(cpp.exists() && dfy.exists(), "{id}: an example needs example.cpp and example.dfy");
+        assert_eq!(trusted.exists(), row.decision == "trusted_only", "{id}: trusted.cpp is for a trusted_only row only, and every such row has one");
+        assert_eq!(verdict(&dfy), Verdict::Verifies, "{id}: example.dfy must verify");
+        if gate_available {
+            let o = gate(&cpp);
+            let (out, err) = text(&o);
+            assert!(o.status.code() == Some(0) && out.trim().is_empty(), "{id}: example.cpp must pass the gate. stdout: {out} stderr: {err}");
+            if trusted.exists() {
+                let o = gate(&trusted);
+                let (out, err) = text(&o);
+                assert_eq!(o.status.code(), Some(1), "{id}: trusted.cpp must fail the gate, it holds the construct. stdout: {out} stderr: {err}");
+                for line in out.lines() {
+                    assert!(line.contains(&format!("\"rule\":\"{id}\"")), "{id}: the gate must refuse trusted.cpp under {id} only, got: {line}");
+                }
+            }
+        }
+    };
+    std::thread::scope(|s| {
+        let mut rest = rows.as_slice();
+        let mut handles = Vec::new();
+        for _ in 0..4 {
+            let (mine, others) = rest.split_at(rest.len().div_ceil(4).min(rest.len()));
+            rest = others;
+            handles.push(s.spawn(move || mine.iter().for_each(|r| check(r))));
+        }
+        for h in handles {
+            h.join().unwrap();
+        }
+    });
+}
+
 /// The cases each round of the battery planned. A missing one is work not done.
 #[test]
 fn the_battery_has_the_planned_cases() {
