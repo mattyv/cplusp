@@ -27,3 +27,7 @@ int32_t deduced() {
   const auto b = 1;  // BANNED
   return a - b;
 }
+
+auto deduced_return() {  // BANNED
+  return 1;
+}

@@ -58,3 +58,21 @@ int32_t grow_through_alias(std::vector<int32_t>& v) {
   }
   return s;
 }
+
+#include <functional>
+
+int32_t grow_through_wrapper(std::vector<int32_t>& v) {
+  std::reference_wrapper<std::vector<int32_t>> w(v);  // BANNED
+  int32_t s = 0;
+  for (const int32_t x : v) {
+    s += x;
+    w.get().push_back(x);
+  }
+  return s;
+}
+
+int32_t grow_through_ref(std::vector<int32_t>& v) {
+  auto w = std::ref(v);  // BANNED
+  w.get().push_back(1);
+  return 0;
+}

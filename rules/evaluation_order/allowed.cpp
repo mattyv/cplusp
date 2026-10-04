@@ -74,3 +74,7 @@ int32_t ends(std::vector<int32_t>& v) {
 int32_t two_at(std::vector<int32_t>& v) {
   return v.at(0) + v.at(1);
 }
+
+int32_t unevaluated(int32_t& x) {
+  return static_cast<int32_t>(sizeof(next(x))) + next(x);
+}

@@ -24,3 +24,9 @@ double tenth_by_constant(double a) {
 double thousand() {
   return 1e3;
 }
+
+#include <limits>
+
+double unit_roundoff() {
+  return std::numeric_limits<double>::epsilon() / 2.0;
+}

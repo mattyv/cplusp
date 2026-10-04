@@ -30,6 +30,7 @@ rules:
     detect:
       - matcher: typeLoc(loc(qualType(builtinType(), isInteger(), unless(qualType(booleanType())))))
       - matcher: varDecl(hasType(autoType(hasDeducedType(qualType(builtinType(), isInteger(), unless(qualType(booleanType())))))))
+      - matcher: functionDecl(returns(autoType(hasDeducedType(qualType(builtinType(), isInteger(), unless(qualType(booleanType())))))))
 
   - id: unscoped_enum
     construct: Unscoped `enum`
@@ -183,7 +184,7 @@ rules:
     canonical: "No stance. The model reads a literal as the real it spells"
     decision: ban
     why: The compiler rounds the literal to the nearest double before any operation. The model reads the real it spells, so the contract counts one rounding too few.
-    use_instead: "a hex float literal, an exact decimal such as 0.5, or a division by an exact literal, `a / 10.0` for `a * 0.1`."
+    use_instead: "a hex float literal, an exact decimal such as 0.5, or a division by an exact literal, `a / 10.0` for `a * 0.1`. The <cfloat> macros spell inexact decimals. Use std::numeric_limits<double> for those constants."
     stage: gate
     detect:
       - check: cplusp-inexact-literal
@@ -259,6 +260,7 @@ rules:
       - check: cppcoreguidelines-no-malloc
       - matcher: cxxNewExpr()
       - matcher: cxxDeleteExpr()
+      - matcher: callExpr(callee(functionDecl(hasAnyOverloadedOperatorName("new", "new[]", "delete", "delete[]"))))
 
   - id: raw_memory_ops
     construct: "`memcpy`, `memset`, `memmove` on anything but plain bytes"
@@ -361,6 +363,8 @@ rules:
       - matcher: 'varDecl(hasType(referenceType()), unless(parmVarDecl()), unless(hasParent(declStmt(hasParent(cxxForRangeStmt())))), hasInitializer(hasDescendant(declRefExpr(to(varDecl(hasType(anyOf(hasCanonicalType(hasDeclaration(cxxRecordDecl(hasAncestor(namespaceDecl(hasName("std")))))), references(qualType(hasCanonicalType(hasDeclaration(cxxRecordDecl(hasAncestor(namespaceDecl(hasName("std"))))))))))))))), unless(hasType(references(qualType(hasCanonicalType(hasDeclaration(cxxRecordDecl(hasAncestor(namespaceDecl(hasName("std")))))))))))'
       - matcher: 'cxxOperatorCallExpr(hasOverloadedOperatorName("[]"), hasArgument(0, hasType(hasCanonicalType(hasDeclaration(cxxRecordDecl(hasAnyName("::std::map", "::std::unordered_map")))))))'
       - matcher: 'varDecl(hasType(references(qualType(unless(isConstQualified()), hasCanonicalType(hasDeclaration(cxxRecordDecl(hasAncestor(namespaceDecl(hasName("std"))))))))), unless(parmVarDecl()), unless(isImplicit()), unless(hasParent(declStmt(hasParent(cxxForRangeStmt())))))'
+      - matcher: 'typeLoc(loc(qualType(hasDeclaration(cxxRecordDecl(hasName("::std::reference_wrapper"))))))'
+      - matcher: callExpr(callee(functionDecl(hasName("::std::ref"))))
       - matcher: 'unaryOperator(hasOperatorName("&"), hasUnaryOperand(ignoringParenImpCasts(anyOf(cxxOperatorCallExpr(hasOverloadedOperatorName("[]"), hasArgument(0, hasType(hasCanonicalType(hasDeclaration(cxxRecordDecl(hasAncestor(namespaceDecl(hasName("std"))))))))), cxxMemberCallExpr(on(hasType(hasCanonicalType(hasDeclaration(cxxRecordDecl(hasAncestor(namespaceDecl(hasName("std")))))))), callee(cxxMethodDecl(hasAnyName("front", "back", "at", "data"))))))))'
       - matcher: 'cxxMemberCallExpr(on(hasType(hasCanonicalType(hasDeclaration(cxxRecordDecl(hasAncestor(namespaceDecl(hasName("std")))))))), callee(cxxMethodDecl(hasAnyName("data", "c_str"))))'
       - matcher: callExpr(callee(functionDecl(hasAnyName("::std::data", "::std::to_address"))))
@@ -400,7 +404,8 @@ rules:
     stage: gate
     detect:
       - check: cplusp-iterator-arithmetic
-      - matcher: 'cxxForRangeStmt(hasRangeInit(ignoringParenImpCasts(anyOf(declRefExpr(to(varDecl().bind("range"))), memberExpr(member(fieldDecl().bind("field")))))), hasBody(hasDescendant(anyOf(cxxMemberCallExpr(on(ignoringParenImpCasts(anyOf(declRefExpr(to(varDecl(equalsBoundNode("range")))), memberExpr(member(fieldDecl(equalsBoundNode("field"))))))), callee(cxxMethodDecl(unless(isConst())))), callExpr(callee(functionDecl(hasAnyParameter(hasType(references(qualType(unless(isConstQualified()))))))), hasAnyArgument(ignoringParenImpCasts(anyOf(declRefExpr(to(varDecl(equalsBoundNode("range")))), memberExpr(member(fieldDecl(equalsBoundNode("field"))))))))))))'
+      - matcher: 'cxxForRangeStmt(hasRangeInit(ignoringParenImpCasts(anyOf(declRefExpr(to(varDecl().bind("range"))), memberExpr(member(fieldDecl().bind("field"))), callExpr(callee(functionDecl(hasName("::std::as_const"))), hasArgument(0, ignoringParenImpCasts(declRefExpr(to(varDecl().bind("range"))))))))), hasBody(hasDescendant(anyOf(cxxMemberCallExpr(on(ignoringParenImpCasts(anyOf(declRefExpr(to(varDecl(equalsBoundNode("range")))), memberExpr(member(fieldDecl(equalsBoundNode("field"))))))), callee(cxxMethodDecl(unless(isConst())))), cxxOperatorCallExpr(hasOverloadedOperatorName("="), hasArgument(0, ignoringParenImpCasts(anyOf(declRefExpr(to(varDecl(equalsBoundNode("range")))), memberExpr(member(fieldDecl(equalsBoundNode("field")))))))), callExpr(callee(functionDecl(hasAnyParameter(hasType(references(qualType(unless(isConstQualified()))))))), hasAnyArgument(ignoringParenImpCasts(anyOf(declRefExpr(to(varDecl(equalsBoundNode("range")))), memberExpr(member(fieldDecl(equalsBoundNode("field"))))))))))))'
+      - matcher: 'cxxForRangeStmt(hasRangeInit(ignoringParenImpCasts(memberExpr(member(fieldDecl())))), hasBody(hasDescendant(cxxMemberCallExpr(on(cxxThisExpr()), callee(cxxMethodDecl(unless(isConst())))))))'
 
   - id: optional_expected_variant
     construct: "`std::optional`, `std::expected`, `std::variant`"
@@ -743,7 +748,7 @@ rules:
     use_instead: direct calls or a template parameter, or mark the function trusted with a reason.
     stage: gate
     detect:
-      - matcher: typeLoc(loc(qualType(anyOf(hasCanonicalType(pointerType(pointee(functionType()))), hasCanonicalType(memberPointerType(pointee(functionType())))))), unless(hasAncestor(decl(isImplicit()))))
+      - matcher: typeLoc(loc(qualType(anyOf(hasCanonicalType(pointerType(pointee(functionType()))), hasCanonicalType(referenceType(pointee(functionType()))), hasCanonicalType(memberPointerType(pointee(functionType())))))), unless(hasAncestor(decl(isImplicit()))))
       - matcher: typeLoc(loc(qualType(hasDeclaration(cxxRecordDecl(hasName("::std::function"))))))
 
   - id: varargs_coroutines
@@ -771,8 +776,10 @@ rules:
     stage: gate
     detect:
       - matcher: typeLoc(loc(qualType(hasDeclaration(cxxRecordDecl(hasAnyName("::std::thread", "::std::jthread", "::std::mutex", "::std::recursive_mutex", "::std::shared_mutex", "::std::timed_mutex", "::std::atomic", "::std::atomic_flag", "::std::condition_variable", "::std::lock_guard", "::std::unique_lock", "::std::scoped_lock", "::std::future", "::std::promise"))))))
-      - matcher: typeLoc(loc(qualType(hasDeclaration(cxxRecordDecl(hasAnyName("::std::atomic_ref", "::std::shared_future", "::std::packaged_task", "::std::shared_lock", "::std::once_flag", "::std::counting_semaphore", "::std::binary_semaphore", "::std::latch", "::std::barrier", "::std::stop_token", "::std::stop_source"))))))
+      - matcher: typeLoc(loc(qualType(hasDeclaration(cxxRecordDecl(hasAnyName("::std::atomic_ref", "::std::shared_future", "::std::packaged_task", "::std::shared_lock", "::std::once_flag", "::std::counting_semaphore", "::std::binary_semaphore", "::std::latch", "::std::barrier", "::std::stop_token", "::std::stop_source", "::std::condition_variable_any", "::std::shared_timed_mutex", "::std::recursive_timed_mutex"))))))
       - matcher: callExpr(callee(functionDecl(hasAnyName("::std::async", "::std::call_once", "::std::atomic_thread_fence", "::std::atomic_signal_fence", "::std::atomic_load", "::std::atomic_store", "::std::atomic_exchange", "::std::atomic_fetch_add", "::std::atomic_fetch_sub", "::std::atomic_fetch_and", "::std::atomic_fetch_or", "::std::atomic_fetch_xor", "::std::atomic_compare_exchange_weak", "::std::atomic_compare_exchange_strong", "::std::this_thread::yield", "::std::this_thread::sleep_for", "::std::this_thread::sleep_until"))))
+      - matcher: declRefExpr(to(varDecl(matchesName("::execution::(par|par_unseq|unseq)$"))))
+      - matcher: typeLoc(loc(qualType(hasDeclaration(cxxRecordDecl(matchesName("::execution::(parallel_policy|parallel_unsequenced_policy|unsequenced_policy)$"))))))
 
   - id: shared_variables
     construct: Variables other threads may change

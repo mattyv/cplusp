@@ -435,6 +435,40 @@ fn gate_sees_every_spelling_of_a_diagnostic_pragma() {
     assert_eq!(o.status.code(), Some(0), "stdout: {} stderr: {}", stdout(&o), stderr(&o));
 }
 
+/// A `#line` directive moves the gate's view of file and line, and can name a pseudo-file to hide behind.
+/// It is a finding, and what follows it is still judged under the name it gave.
+#[test]
+fn gate_treats_a_line_directive_as_a_finding() {
+    if !clang_tidy_available() {
+        return;
+    }
+    let f = fixture("line-directive.cpp");
+    let o = gated(&[f.to_str().unwrap(), "--", "-std=c++23", "-ffp-contract=off"]);
+    assert_eq!(o.status.code(), Some(1), "stdout: {} stderr: {}", stdout(&o), stderr(&o));
+    let out = stdout(&o);
+    assert!(out.lines().any(|l| l.ends_with("line-directive.cpp:2: line directive: not allowed in verified code. It moves the gate's view.")), "{out}");
+    assert!(out.lines().any(|l| l.ends_with("<x>:1: pragma diagnostic: not allowed in verified code. It silences the gate.")), "{out}");
+    let f = fixture("line-system.cpp");
+    let o = gated(&[f.to_str().unwrap(), "--", "-std=c++23", "-ffp-contract=off"]);
+    assert_eq!(o.status.code(), Some(1), "stdout: {} stderr: {}", stdout(&o), stderr(&o));
+    assert!(stdout(&o).lines().any(|l| l.ends_with("line-system.cpp:2: line directive: not allowed in verified code. It moves the gate's view.")), "{}", stdout(&o));
+}
+
+/// A flag that strips the line markers from the preprocessor output leaves the gate blind. The run is refused.
+#[test]
+fn gate_refuses_a_preprocessor_run_without_line_markers() {
+    if !clang_tidy_available() {
+        return;
+    }
+    for flag in ["-P", "-Wp,-P", "-dM", "-M", "-MM", "-###", "-fdriver-only"] {
+        let o = gated(&["rules/goto/allowed.cpp", "--", "-std=c++23", "-ffp-contract=off", flag]);
+        assert_eq!(o.status.code(), Some(2), "{flag}: stdout {} stderr {}", stdout(&o), stderr(&o));
+        assert_eq!(stdout(&o).trim(), "", "{flag}: nothing on stdout for a refused run");
+        let expected = "cannot preprocess rules/goto/allowed.cpp: the preprocessor output has no line marker for it";
+        assert!(stderr(&o).lines().any(|l| l == expected), "{flag}: stderr {}", stderr(&o));
+    }
+}
+
 /// A file the preprocessor cannot read cannot be judged. The message has the shape of the other refusals.
 #[test]
 fn gate_names_a_missing_include() {

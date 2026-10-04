@@ -17,3 +17,7 @@ int32_t with_malloc() {
 int32_t read_fresh() {
   return *(new int32_t{42});  // BANNED
 }
+
+void* raw() {
+  return ::operator new(4);  // BANNED
+}

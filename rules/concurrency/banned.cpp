@@ -50,3 +50,16 @@ void store_through_ref(int32_t& x) {
   std::atomic_ref<int32_t> a{x};  // BANNED
   a.store(1);
 }
+
+#include <algorithm>
+#include <condition_variable>
+#include <execution>
+#include <shared_mutex>
+
+void wait_any(std::condition_variable_any& cv);  // BANNED
+void lock_shared_timed(std::shared_timed_mutex& m);  // BANNED
+void lock_recursive_timed(std::recursive_timed_mutex& m);  // BANNED
+
+void sort_parallel(std::vector<int32_t>& v) {
+  std::sort(std::execution::par, v.begin(), v.end());  // BANNED
+}

@@ -39,3 +39,10 @@ int32_t apply_boxed_ptr(const std::function<int32_t(int32_t)>* f, int32_t x) {  
 int32_t count_boxed(const std::vector<std::function<int32_t(int32_t)>>& items) {  // BANNED
   return items.empty() ? 0 : 1;
 }
+
+int32_t next(int32_t& x);
+
+int32_t through_reference(int32_t& x) {
+  int32_t (&fr)(int32_t&) = next;  // BANNED
+  return fr(x);
+}

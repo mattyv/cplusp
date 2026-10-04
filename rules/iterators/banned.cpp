@@ -60,3 +60,30 @@ struct Bag {
     }
   }
 };
+
+#include <utility>
+
+struct Pile {
+  std::vector<int32_t> items;
+  void grow() { items.push_back(1); }
+  void loop() {
+    for (const int32_t x : items) {  // BANNED
+      grow();
+    }
+  }
+};
+
+void replace_in_loop(std::vector<int32_t>& v, const std::vector<int32_t>& w) {
+  for (const int32_t x : v) {  // BANNED
+    v = w;
+  }
+}
+
+int32_t grow_const_view(std::vector<int32_t>& v) {
+  int32_t s = 0;
+  for (const int32_t x : std::as_const(v)) {  // BANNED
+    s += x;
+    v.push_back(x);
+  }
+  return s;
+}
