@@ -13,3 +13,7 @@ int32_t with_malloc() {
   std::free(std::malloc(sizeof(int32_t)));  // BANNED
   return 0;
 }
+
+int32_t read_fresh() {
+  return *(new int32_t{42});  // BANNED
+}

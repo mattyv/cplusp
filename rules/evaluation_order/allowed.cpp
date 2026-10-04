@@ -50,3 +50,11 @@ int32_t two_reads(const Counter& c) {
 void append(std::vector<int32_t>& v, int32_t& x) {
   v.push_back(next(x));
 }
+
+int32_t either(bool c, int32_t& x) {
+  return c ? next(x) : next(x);
+}
+
+bool in_order(int32_t& x, int32_t& y) {
+  return before(0, next(x)) && before(0, next(y));
+}

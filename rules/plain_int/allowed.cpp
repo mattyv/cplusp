@@ -23,3 +23,10 @@ bool is_set(bool flag) {
 }
 
 enum class Mode : uint8_t { Fast, Slow };
+
+#include <vector>
+
+int32_t count(const std::vector<int32_t>& v) {
+  const auto n = v.size();
+  return static_cast<int32_t>(n);
+}

@@ -42,3 +42,21 @@ int32_t grow_through_call(std::vector<int32_t>& v) {
   }
   return s;
 }
+
+int32_t grow_in_parentheses(std::vector<int32_t>& v) {
+  int32_t s = 0;
+  for (const int32_t x : (v)) {  // BANNED
+    s += x;
+    v.push_back(x);
+  }
+  return s;
+}
+
+struct Bag {
+  std::vector<int32_t> items;
+  void double_up() {
+    for (const int32_t x : items) {  // BANNED
+      items.push_back(x);
+    }
+  }
+};

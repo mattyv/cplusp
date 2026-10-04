@@ -48,3 +48,13 @@ int32_t first_by_ranges_data(std::vector<int32_t>& v) {
 int32_t first_by_to_address(std::vector<int32_t>& v) {
   return read(std::to_address(v.begin()));  // BANNED
 }
+
+int32_t grow_through_alias(std::vector<int32_t>& v) {
+  std::vector<int32_t>& w = v;  // BANNED
+  int32_t s = 0;
+  for (const int32_t x : v) {
+    s += x;
+    w.push_back(x);
+  }
+  return s;
+}

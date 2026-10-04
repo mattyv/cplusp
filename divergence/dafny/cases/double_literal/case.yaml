@@ -1,0 +1,21 @@
+construct: "A floating-point literal that is not a double"
+standard: "[lex.fcon]: if the scaled value is not in the range of representable values for its type, the program is ill-formed. Otherwise, the value is the scaled value if representable, else the larger or smaller representable value nearest the scaled value, chosen in an implementation-defined manner."
+row: double
+gap: 3
+cpp: "`0.1` is not a double. The compiler rounds it to the nearest double, 0x1.999999999999ap-4, before the multiply, and the product rounds again. `tenth(3.0)` is 3 * 0.1 in doubles, which misses the real 0.3 by 4.4e-17. The one-rounding bound allows 3.3e-17."
+naive_does: "The model reads `0.1` as the real one tenth, so the product rounds once and the proof of the one-rounding bound goes through."
+naive: verifies
+naive_is_wrong: true
+mitigated: verifies
+side: gate
+gate_rule: inexact_literal
+mitigation: "Gate row `inexact_literal`: a literal is exactly a double, or the gate refuses it. The C++ writes `a / 10.0`, where `10.0` is exact, and the one-rounding bound is true. A hex float with its exact decimal in the contract is the other way."
+witness:
+  input: "tenth(3.0), and whether its error against the real 0.3 is within the one-rounding bound"
+  ubsan: false
+  prints: "1"
+  fixed_prints: "0"
+rule: |
+  A literal in the C++ is the nearest double, not the real it spells. The model reads the real.
+  Write only literals that are exactly a double: a hex float, or a decimal such as 0.5, 1e3 or the exact expansion of a double. The gate refuses the others.
+  For a tenth, divide by `10.0` instead of multiplying by `0.1`.

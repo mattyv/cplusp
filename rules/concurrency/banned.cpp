@@ -45,3 +45,8 @@ void via_thread(int32_t x) {
   std::thread t(square, x);  // BANNED
   t.join();
 }
+
+void store_through_ref(int32_t& x) {
+  std::atomic_ref<int32_t> a{x};  // BANNED
+  a.store(1);
+}

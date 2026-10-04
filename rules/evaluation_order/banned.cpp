@@ -29,3 +29,13 @@ int32_t twice_bumped(Counter& c) {
 int32_t unsequenced(int32_t& x) {
   return x++ - x++;  // BANNED
 }
+
+#include <utility>
+
+bool mixed(int32_t& x) {
+  return before(next(x), x++);  // BANNED
+}
+
+bool exchanged(int32_t& x) {
+  return before(std::exchange(x, 1), std::exchange(x, 2));  // BANNED
+}

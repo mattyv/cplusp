@@ -32,6 +32,7 @@ const MATCHER: &str = "cplusp-matcher";
 // ponytail: a hand-kept list. Upgrade: load the plugin and read its `--list-checks`.
 const PLANNED_CHECKS: &[&str] = &[
     MATCHER, "cplusp-mutable", "cplusp-multiple-inheritance", "cplusp-iterator-arithmetic", "cplusp-impure-operator", "cplusp-lambda-limits",
+    "cplusp-evaluation-order", "cplusp-inexact-literal",
 ];
 
 // ------------------------------------------------------------------ command line

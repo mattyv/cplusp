@@ -29,6 +29,7 @@ rules:
     stage: gate
     detect:
       - matcher: typeLoc(loc(qualType(builtinType(), isInteger(), unless(qualType(booleanType())))))
+      - matcher: varDecl(hasType(autoType(hasDeducedType(qualType(builtinType(), isInteger(), unless(qualType(booleanType())))))))
 
   - id: unscoped_enum
     construct: Unscoped `enum`
@@ -60,6 +61,7 @@ rules:
     stage: gate
     detect:
       - matcher: typeLoc(loc(qualType(realFloatingPointType(), unless(hasCanonicalType(anyOf(asString("double"), asString("const double")))))))
+      - matcher: expr(hasType(hasCanonicalType(qualType(realFloatingPointType(), unless(anyOf(asString("double"), asString("const double")))))))
 
   - id: unions
     construct: Unions
@@ -175,6 +177,17 @@ rules:
     detect:
       - matcher: binaryOperator(hasAnyOperatorName("==", "!="), hasLHS(hasType(realFloatingPointType())))
 
+  - id: inexact_literal
+    construct: A floating-point literal that is not exactly a double
+    area: arithmetic
+    canonical: "No stance. The model reads a literal as the real it spells"
+    decision: ban
+    why: The compiler rounds the literal to the nearest double before any operation. The model reads the real it spells, so the contract counts one rounding too few.
+    use_instead: "a hex float literal, an exact decimal such as 0.5, or a division by an exact literal, `a / 10.0` for `a * 0.1`."
+    stage: gate
+    detect:
+      - check: cplusp-inexact-literal
+
   - id: rounding_mode
     construct: A call that changes the floating-point rounding mode or control register
     area: arithmetic
@@ -244,6 +257,8 @@ rules:
     detect:
       - check: cppcoreguidelines-owning-memory
       - check: cppcoreguidelines-no-malloc
+      - matcher: cxxNewExpr()
+      - matcher: cxxDeleteExpr()
 
   - id: raw_memory_ops
     construct: "`memcpy`, `memset`, `memmove` on anything but plain bytes"
@@ -338,13 +353,14 @@ rules:
     area: library
     canonical: Allowed
     decision: restrict
-    limit: Only methods that have a trusted contract. No reference into a container. No iterator held across a mutation. No operator[] on a map. No pointer into a container, by address-of, data(), c_str(), std::data, std::to_address or std::addressof.
+    limit: Only methods that have a trusted contract. No reference into a container. No iterator held across a mutation. No non-const reference to a container as a local, because a parameter is the only alias. No operator[] on a map. No pointer into a container, by address-of, data(), c_str(), std::data, std::to_address or std::addressof.
     why: Trusted contracts carry the invalidation rules. A reference into a container dies at the next mutation, and the model has only values.
     use_instead: "a copy of the element. For a map, find, at or contains."
     stage: gate
     detect:
       - matcher: 'varDecl(hasType(referenceType()), unless(parmVarDecl()), unless(hasParent(declStmt(hasParent(cxxForRangeStmt())))), hasInitializer(hasDescendant(declRefExpr(to(varDecl(hasType(anyOf(hasCanonicalType(hasDeclaration(cxxRecordDecl(hasAncestor(namespaceDecl(hasName("std")))))), references(qualType(hasCanonicalType(hasDeclaration(cxxRecordDecl(hasAncestor(namespaceDecl(hasName("std"))))))))))))))), unless(hasType(references(qualType(hasCanonicalType(hasDeclaration(cxxRecordDecl(hasAncestor(namespaceDecl(hasName("std")))))))))))'
       - matcher: 'cxxOperatorCallExpr(hasOverloadedOperatorName("[]"), hasArgument(0, hasType(hasCanonicalType(hasDeclaration(cxxRecordDecl(hasAnyName("::std::map", "::std::unordered_map")))))))'
+      - matcher: 'varDecl(hasType(references(qualType(unless(isConstQualified()), hasCanonicalType(hasDeclaration(cxxRecordDecl(hasAncestor(namespaceDecl(hasName("std"))))))))), unless(parmVarDecl()), unless(isImplicit()), unless(hasParent(declStmt(hasParent(cxxForRangeStmt())))))'
       - matcher: 'unaryOperator(hasOperatorName("&"), hasUnaryOperand(ignoringParenImpCasts(anyOf(cxxOperatorCallExpr(hasOverloadedOperatorName("[]"), hasArgument(0, hasType(hasCanonicalType(hasDeclaration(cxxRecordDecl(hasAncestor(namespaceDecl(hasName("std"))))))))), cxxMemberCallExpr(on(hasType(hasCanonicalType(hasDeclaration(cxxRecordDecl(hasAncestor(namespaceDecl(hasName("std")))))))), callee(cxxMethodDecl(hasAnyName("front", "back", "at", "data"))))))))'
       - matcher: 'cxxMemberCallExpr(on(hasType(hasCanonicalType(hasDeclaration(cxxRecordDecl(hasAncestor(namespaceDecl(hasName("std")))))))), callee(cxxMethodDecl(hasAnyName("data", "c_str"))))'
       - matcher: callExpr(callee(functionDecl(hasAnyName("::std::data", "::std::to_address"))))
@@ -384,7 +400,7 @@ rules:
     stage: gate
     detect:
       - check: cplusp-iterator-arithmetic
-      - matcher: 'cxxForRangeStmt(hasRangeInit(declRefExpr(to(varDecl().bind("range")))), hasBody(hasDescendant(anyOf(cxxMemberCallExpr(on(declRefExpr(to(varDecl(equalsBoundNode("range"))))), callee(cxxMethodDecl(unless(isConst())))), callExpr(callee(functionDecl(hasAnyParameter(hasType(references(qualType(unless(isConstQualified()))))))), hasAnyArgument(ignoringParenImpCasts(declRefExpr(to(varDecl(equalsBoundNode("range")))))))))))'
+      - matcher: 'cxxForRangeStmt(hasRangeInit(ignoringParenImpCasts(anyOf(declRefExpr(to(varDecl().bind("range"))), memberExpr(member(fieldDecl().bind("field")))))), hasBody(hasDescendant(anyOf(cxxMemberCallExpr(on(ignoringParenImpCasts(anyOf(declRefExpr(to(varDecl(equalsBoundNode("range")))), memberExpr(member(fieldDecl(equalsBoundNode("field"))))))), callee(cxxMethodDecl(unless(isConst())))), callExpr(callee(functionDecl(hasAnyParameter(hasType(references(qualType(unless(isConstQualified()))))))), hasAnyArgument(ignoringParenImpCasts(anyOf(declRefExpr(to(varDecl(equalsBoundNode("range")))), memberExpr(member(fieldDecl(equalsBoundNode("field"))))))))))))'
 
   - id: optional_expected_variant
     construct: "`std::optional`, `std::expected`, `std::variant`"
@@ -698,13 +714,13 @@ rules:
     area: control
     canonical: "MISRA 13.2. Core Guidelines ES.43 and ES.44"
     decision: restrict
-    limit: At most one change of state in one full expression. A call outside `std` may change state when a parameter is a non-const reference or pointer, or when it is a non-const member function.
+    limit: Two changes of state in one full expression only where the standard orders them. Function arguments and the operands of an arithmetic or comparison operator are not ordered. A call may change state when a parameter is a non-const reference or pointer, or when it is a non-const member function. A call into `std` counts too.
     why: C++ does not fix the order of two calls in one expression, and compilers differ. Two increments of one variable in one expression are undefined.
     use_instead: one statement per call, in the order the contract needs.
     stage: gate
     detect:
       - check: clang-diagnostic-unsequenced
-      - matcher: 'callExpr(callExpr(unless(callee(functionDecl(hasAncestor(namespaceDecl(hasName("std")))))), anyOf(callee(functionDecl(hasAnyParameter(hasType(qualType(anyOf(references(qualType(unless(isConstQualified()))), pointsTo(qualType(unless(isConstQualified()))))))))), allOf(cxxMemberCallExpr(), unless(cxxOperatorCallExpr()), callee(cxxMethodDecl(unless(isConst())))))), expr().bind("self"), hasAncestor(expr(hasDescendant(callExpr(callExpr(unless(callee(functionDecl(hasAncestor(namespaceDecl(hasName("std")))))), anyOf(callee(functionDecl(hasAnyParameter(hasType(qualType(anyOf(references(qualType(unless(isConstQualified()))), pointsTo(qualType(unless(isConstQualified()))))))))), allOf(cxxMemberCallExpr(), unless(cxxOperatorCallExpr()), callee(cxxMethodDecl(unless(isConst())))))), unless(equalsBoundNode("self")), unless(hasAncestor(expr(equalsBoundNode("self")))), unless(hasDescendant(expr(equalsBoundNode("self")))))))))'
+      - check: cplusp-evaluation-order
 
   - id: lambdas
     construct: Lambdas
@@ -755,7 +771,8 @@ rules:
     stage: gate
     detect:
       - matcher: typeLoc(loc(qualType(hasDeclaration(cxxRecordDecl(hasAnyName("::std::thread", "::std::jthread", "::std::mutex", "::std::recursive_mutex", "::std::shared_mutex", "::std::timed_mutex", "::std::atomic", "::std::atomic_flag", "::std::condition_variable", "::std::lock_guard", "::std::unique_lock", "::std::scoped_lock", "::std::future", "::std::promise"))))))
-      - matcher: callExpr(callee(functionDecl(hasAnyName("::std::async", "::std::atomic_load", "::std::atomic_store", "::std::atomic_exchange", "::std::atomic_fetch_add"))))
+      - matcher: typeLoc(loc(qualType(hasDeclaration(cxxRecordDecl(hasAnyName("::std::atomic_ref", "::std::shared_future", "::std::packaged_task", "::std::shared_lock", "::std::once_flag", "::std::counting_semaphore", "::std::binary_semaphore", "::std::latch", "::std::barrier", "::std::stop_token", "::std::stop_source"))))))
+      - matcher: callExpr(callee(functionDecl(hasAnyName("::std::async", "::std::call_once", "::std::atomic_thread_fence", "::std::atomic_signal_fence", "::std::atomic_load", "::std::atomic_store", "::std::atomic_exchange", "::std::atomic_fetch_add", "::std::atomic_fetch_sub", "::std::atomic_fetch_and", "::std::atomic_fetch_or", "::std::atomic_fetch_xor", "::std::atomic_compare_exchange_weak", "::std::atomic_compare_exchange_strong", "::std::this_thread::yield", "::std::this_thread::sleep_for", "::std::this_thread::sleep_until"))))
 
   - id: shared_variables
     construct: Variables other threads may change

@@ -21,3 +21,9 @@ int64_t widen(int32_t x) {
   long long wide = x;  // BANNED
   return wide;
 }
+
+int32_t deduced() {
+  auto a = 2147483647;  // BANNED
+  const auto b = 1;  // BANNED
+  return a - b;
+}
