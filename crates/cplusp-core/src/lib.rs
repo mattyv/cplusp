@@ -260,6 +260,27 @@ pub open spec fn spec_loosening_justified(base: Policy, overrides: Seq<Override>
         ==> overrides[x].loosened_because is Some
 }
 
+/// The index of the last override that names `id`, or -1 when none does. Later overrides win.
+pub open spec fn spec_last_named(overrides: Seq<Override>, id: Seq<char>) -> int
+    decreases overrides.len(),
+{
+    if overrides.len() == 0 {
+        -1
+    } else if overrides[overrides.len() - 1].id@ == id {
+        overrides.len() - 1
+    } else {
+        spec_last_named(overrides.drop_last(), id)
+    }
+}
+
+/// What an override leaves on the rule it names: its decision, its limit when it gives one and the
+/// base limit otherwise, and its reason when it loosens the base decision and no reason otherwise.
+pub open spec fn spec_applied(out: Rule, base: Rule, ov: Override) -> bool {
+    &&& out.decision == ov.decision
+    &&& out.limit == (if ov.limit is Some { ov.limit } else { base.limit })
+    &&& out.loosened_because == (if strictness(ov.decision) < strictness(base.decision) { ov.loosened_because } else { None })
+}
+
 // ------------------------------------------------------------------- lemmas
 
 /// Appending to a list keeps every name that was already in it.
@@ -287,6 +308,15 @@ proof fn lemma_has_option_extend(before: Seq<ConfigOption>, after: Seq<ConfigOpt
 }
 
 /// Growing the processed prefix by one override names exactly one more id.
+proof fn lemma_last_named_step(s: Seq<Override>, o: int, id: Seq<char>)
+    requires 0 <= o < s.len(),
+    ensures spec_last_named(s.subrange(0, o + 1), id) == (if s[o].id@ == id { o } else { spec_last_named(s.subrange(0, o), id) }),
+{
+    let big = s.subrange(0, o + 1);
+    assert(big[big.len() - 1] == s[o]);
+    assert(big.drop_last() =~= s.subrange(0, o));
+}
+
 proof fn lemma_named_step(s: Seq<Override>, o: int, id: Seq<char>)
     requires 0 <= o < s.len(),
     ensures spec_named(s.subrange(0, o + 1), id) == (spec_named(s.subrange(0, o), id) || s[o].id@ == id),
@@ -807,7 +837,8 @@ fn find_rule(rules: &Vec<Rule>, id: &String) -> (res: Option<usize>)
 ///
 /// On success: the same rules in the same order, every rule an override does not
 /// name is unchanged in content, a named rule keeps its identity (id, area, why,
-/// use_instead, detect), every override names a real rule, and every loosening
+/// use_instead, detect) and carries the decision, limit and reason of the last
+/// override that names it, every override names a real rule, and every loosening
 /// override carries a reason. On failure, the errors say which override was wrong.
 pub fn apply_overrides(base: &Policy, overrides: &Vec<Override>) -> (res: Result<Policy, Vec<PolicyError>>)
     requires spec_ids_unique(base.rules@),
@@ -817,6 +848,8 @@ pub fn apply_overrides(base: &Policy, overrides: &Vec<Override>) -> (res: Result
         res matches Ok(p) ==> forall|k: int| 0 <= k < p.rules.len() && !spec_named(overrides@, base.rules@[k].id@)
             ==> rule_eq(#[trigger] p.rules@[k], base.rules@[k]),
         res matches Ok(p) ==> forall|k: int| 0 <= k < p.rules.len() ==> spec_same_identity(#[trigger] p.rules@[k], base.rules@[k]),
+        res matches Ok(p) ==> forall|k: int| 0 <= k < p.rules.len() && spec_named(overrides@, base.rules@[k].id@)
+            ==> spec_applied(#[trigger] p.rules@[k], base.rules@[k], overrides@[spec_last_named(overrides@, base.rules@[k].id@)]),
         res matches Ok(p) ==> spec_overrides_resolve(*base, overrides@, overrides.len() as int),
         res matches Ok(p) ==> spec_loosening_justified(*base, overrides@, overrides.len() as int),
 {
@@ -831,6 +864,8 @@ pub fn apply_overrides(base: &Policy, overrides: &Vec<Override>) -> (res: Result
             forall|k: int| 0 <= k < out.rules.len() && !spec_named(overrides@.subrange(0, o as int), base.rules@[k].id@)
                 ==> rule_eq(#[trigger] out.rules@[k], base.rules@[k]),
             forall|k: int| 0 <= k < out.rules.len() ==> spec_same_identity(#[trigger] out.rules@[k], base.rules@[k]),
+            errors.len() == 0 ==> forall|k: int| 0 <= k < out.rules.len() && spec_named(overrides@.subrange(0, o as int), base.rules@[k].id@)
+                ==> spec_applied(#[trigger] out.rules@[k], base.rules@[k], overrides@[spec_last_named(overrides@.subrange(0, o as int), base.rules@[k].id@)]),
             errors.len() == 0 ==> spec_overrides_resolve(*base, overrides@, o as int),
             errors.len() == 0 ==> spec_loosening_justified(*base, overrides@, o as int),
         decreases overrides.len() - o,
@@ -848,10 +883,7 @@ pub fn apply_overrides(base: &Policy, overrides: &Vec<Override>) -> (res: Result
                 if looser && ov.loosened_because.is_none() {
                     errors.push(PolicyError::LoosenedWithoutReason { id: ov.id.clone() });
                 } else {
-                    let limit = match &ov.limit {
-                        Some(l) => Some(l.clone()),
-                        None => clone_opt_string(&current.limit),
-                    };
+                    let limit = if ov.limit.is_some() { clone_opt_string(&ov.limit) } else { clone_opt_string(&current.limit) };
                     let reason = if looser { clone_opt_string(&ov.loosened_because) } else { None };
                     let replaced = rule_with(current, ov.decision, limit, reason);
                     out.rules.set(k, replaced);
@@ -897,6 +929,18 @@ pub fn apply_overrides(base: &Policy, overrides: &Vec<Override>) -> (res: Result
                                 }
                             }
                             assert(spec_loosening_justified(*base, overrides@, o as int + 1));
+                            assert forall|kk: int| 0 <= kk < out.rules.len() && spec_named(overrides@.subrange(0, o as int + 1), base.rules@[kk].id@)
+                                implies spec_applied(#[trigger] out.rules@[kk], base.rules@[kk], overrides@[spec_last_named(overrides@.subrange(0, o as int + 1), base.rules@[kk].id@)]) by {
+                                lemma_last_named_step(overrides@, o as int, base.rules@[kk].id@);
+                                lemma_named_step(overrides@, o as int, base.rules@[kk].id@);
+                                if base.rules@[kk].id@ == ov.id@ {
+                                    assert(kk == k);
+                                    assert(out.rules@[kk] == replaced);
+                                } else {
+                                    assert(out.rules@[kk] == before[kk]);
+                                    assert(spec_named(overrides@.subrange(0, o as int), base.rules@[kk].id@));
+                                }
+                            }
                         }
                     }
                 }

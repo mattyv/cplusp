@@ -219,6 +219,17 @@ fn an_override_changes_only_the_rule_it_names() {
 }
 
 #[test]
+fn the_last_override_of_a_rule_wins_and_its_limit_replaces_the_base() {
+    let first = over("iterators", Decision::Ban, None);
+    let mut second = over("iterators", Decision::Restrict, None);
+    second.limit = Some("Range-for and index only.".to_string());
+    let result = apply_overrides(&base(), &vec![first, second]).unwrap();
+    assert_eq!(result.rules[1].decision, Decision::Restrict);
+    assert_eq!(result.rules[1].limit, Some("Range-for and index only.".to_string()));
+    assert_eq!(result.rules[1].loosened_because, None);
+}
+
+#[test]
 fn tightening_needs_no_reason() {
     let result = apply_overrides(&base(), &vec![over("variable_index", Decision::Ban, None)]);
     assert!(result.is_ok());
