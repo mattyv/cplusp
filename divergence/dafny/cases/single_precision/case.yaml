@@ -1,0 +1,21 @@
+construct: "Arithmetic in `float`"
+standard: "[basic.fundamental]: the type double provides at least as much precision as float."
+row: floating_point
+gap: 3
+cpp: "On this target `float` is IEEE 754 binary32, with a unit round-off of 2^-24. The float sum of 1 and 1e-8 is 1, so the error is 1e-8. The double bound allows about 1e-16."
+naive_does: "The model has one rounding, the rounding of `double`. It proves the double bound for a sum the C++ computes in float."
+naive: verifies
+naive_is_wrong: true
+mitigated: verifies
+side: gate
+gate_rule: double_only
+mitigation: "Gate row `double_only`: no `float` and no `long double` in verified code. The C++ computes in `double`, which is the type the model is of."
+witness:
+  input: "sum(1.0, 1e-8), and whether its error is within the double bound"
+  ubsan: false
+  prints: "1"
+  fixed_prints: "0"
+rule: |
+  The model is of `double` and of no other type.
+  Never write `float` or `long double` in verified code. The gate refuses them.
+  A `float` from outside is converted to `double` in trusted code at the edge, and the contract there is about the `double`.

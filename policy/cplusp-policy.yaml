@@ -50,6 +50,17 @@ rules:
     why: The model is a real after one rounding per operation, with the error bound of IEEE 754 binary64 as an axiom. It has no NaN and no infinity, so the contract must keep them out.
     stage: prover
 
+  - id: double_only
+    construct: "`float` and `long double`"
+    area: types
+    canonical: "Allowed by all. Our model is of one type"
+    decision: trusted_only
+    why: The model is of IEEE 754 binary64. A float or a long double would prove against bounds that are not its own.
+    use_instead: "double. Trusted code converts a float from outside at the edge."
+    stage: gate
+    detect:
+      - matcher: typeLoc(loc(qualType(realFloatingPointType(), unless(hasCanonicalType(anyOf(asString("double"), asString("const double")))))))
+
   - id: unions
     construct: Unions
     area: types

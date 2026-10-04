@@ -1,8 +1,8 @@
 // Model B: the C++ requires finite values and compares the difference against a tolerance that is a double, 2^-30.
 // The difference is `fsub`, so it rounds once. The contract has slack for that rounding, and it is a bound, never an equality.
 // The model has no NaN, so it is exact for the finite values the C++ requires.
-include "../../Float.dfy"
-import opened Float
+include "../../Double.dfy"
+import opened Double
 
 const T: real := 1.0 / 1073741824.0  // 2^-30, a double
 

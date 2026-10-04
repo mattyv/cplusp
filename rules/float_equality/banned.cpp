@@ -6,6 +6,6 @@ bool differ(double a, double b) {
   return a != b;  // BANNED
 }
 
-bool is_half(float x) {
-  return x == 0.5f;  // BANNED
+bool is_half(double x) {
+  return x == 0.5;  // BANNED
 }

@@ -29,3 +29,4 @@ Status is `decided`, `proposed` (the default until someone objects or the thin s
 | [0021](0021-the-gate-requires-the-build-the-proofs-assume.md) | The gate refuses a build the proofs cannot follow: fast math, a standard below C++20, a silenced warning | decided |
 | [0022](0022-the-baseline-is-cpp23.md) | Verified code is C++23 or later | decided |
 | [0023](0023-the-float-error-axiom-carries-an-absolute-term.md) | The float error axiom is relative error plus half a subnormal, with no lower bound | decided |
+| [0024](0024-verified-code-is-double-only.md) | Verified code uses `double` and no other floating-point type | decided |

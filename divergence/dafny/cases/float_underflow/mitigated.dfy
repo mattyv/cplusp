@@ -1,7 +1,7 @@
 // Model B: the product is `fmul`, and the contract is an error bound. The ETA term is the absolute error of a product below the normal range.
 // It lets the result be 0 when the product is below the smallest subnormal. The model cannot prove the result is not 0.
-include "../../Float.dfy"
-import opened Float
+include "../../Double.dfy"
+import opened Double
 
 method scaled(a: real, b: real) returns (result: real)
   requires abs(a * b) <= MAX

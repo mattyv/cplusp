@@ -1,7 +1,7 @@
 #include <cstdint>
 
-float as_float(uint32_t bits) {
-  return *reinterpret_cast<float*>(&bits);  // BANNED
+double as_double(uint64_t bits) {
+  return *reinterpret_cast<double*>(&bits);  // BANNED
 }
 
 void drop_const(const int32_t& x) {

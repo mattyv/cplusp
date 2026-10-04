@@ -358,7 +358,7 @@ Never state equality of two float results.
 The bound holds up to `MAX`, so require `abs(a) <= MAX / 4.0` and `abs(b) <= MAX / 4.0`.
 Dafny does not apply a lemma by itself, so call `RoundError(a + b)` in the body before `fadd`.
 In the C++ contract, write the bound as `|result - (a + b)| <= eps * |a + b| + eta`, with `eps` as `DBL_EPSILON / 2` and `eta` as `DBL_TRUE_MIN / 2`, and the magnitude bound `|a| <= DBL_MAX / 4` as a `requires`.
-The model is `divergence/dafny/Float.dfy`. Write `include "Float.dfy"` with the path to it, and `import opened Float`.
+The model is `divergence/dafny/Double.dfy`. Write `include "Double.dfy"` with the path to it, and `import opened Double`.
 
 ## float_nan
 

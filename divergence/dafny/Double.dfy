@@ -9,7 +9,9 @@
 //
 // What the model leaves out: NaN and infinity. A contract keeps them out with a finite precondition and an
 // upper magnitude bound. Decisions 0019, 0020 and 0023 record the trial, its outcome and the error axiom.
-module Float {
+// It is the model of `double` and of no other type. Row `double_only` keeps `float` and `long double` out of
+// verified code, decision 0024.
+module Double {
   const EPS: real := 1.0 / 9007199254740992.0  // 2^-53, the unit round-off
   // 2^-1075, half the smallest subnormal. The absolute error a result below the normal range can carry.
   const ETA: real := 1.0 / 404804506614621236704990693437834614099113299528284236713802716054860679135990693783920767402874248990374155728633623822779617474771586953734026799881477019843034848553132722728933815484186432682479535356945490137124014966849385397236206711298319112681620113024717539104666829230461005064372655017292012526615415482186989568.0

@@ -15,7 +15,7 @@ int32_t count(const std::vector<int32_t>& v) {
   return v.size();  // BANNED
 }
 
-int32_t whole(float f) {
+int32_t whole(double f) {
   return f;  // BANNED
 }
 

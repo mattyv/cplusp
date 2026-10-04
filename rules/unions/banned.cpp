@@ -2,7 +2,7 @@
 
 union Word {  // BANNED
   int32_t i;
-  float f;
+  double f;
 };
 
 int32_t bits(Word w) {

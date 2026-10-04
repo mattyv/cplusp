@@ -388,7 +388,7 @@ fn the_battery_has_the_planned_cases() {
         "float_sum", "float_nan", "float_to_int", "float_cancellation", "float_increment", "float_division_zero", "int_to_float",
         "pointer_into_container",
         // The float review: a product that underflows. The last round: state.
-        "float_underflow", "unlisted_modifies", "static_local", "global_constructors", "torn_read",
+        "float_underflow", "unlisted_modifies", "static_local", "global_constructors", "torn_read", "single_precision",
     ] {
         assert!(cases.join(id).join("case.yaml").exists(), "no case {id}");
     }
