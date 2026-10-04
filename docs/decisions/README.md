@@ -30,3 +30,4 @@ Status is `decided`, `proposed` (the default until someone objects or the thin s
 | [0022](0022-the-baseline-is-cpp23.md) | Verified code is C++23 or later | decided |
 | [0023](0023-the-float-error-axiom-carries-an-absolute-term.md) | The float error axiom is relative error plus half a subnormal, with no lower bound | decided |
 | [0024](0024-verified-code-is-double-only.md) | Verified code uses `double` and no other floating-point type | decided |
+| [0025](0025-the-gate-refuses-what-it-cannot-enforce.md) | A run that cannot enforce every row is refused, the compile database flags are judged, pragmas are findings, two rows move to the prover | decided |

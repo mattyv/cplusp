@@ -29,6 +29,14 @@ fn stderr(o: &Output) -> String {
 }
 
 /// The clang-tidy plugin, built by `cmake -S clang-tidy -B target/plugin -G Ninja && cmake --build target/plugin`.
+/// The gate with the plugin, which is the only run the gate accepts as complete.
+fn gated(args: &[&str]) -> Output {
+    let plugin = plugin();
+    let mut full = vec!["gate", "--plugin", plugin.to_str().unwrap()];
+    full.extend(args.iter().copied());
+    cplusp(&full)
+}
+
 fn plugin() -> PathBuf {
     let p = std::env::var_os("CPLUSP_PLUGIN").map(PathBuf::from).unwrap_or_else(|| root().join("target/plugin/libcplusp.so"));
     assert!(p.exists(), "plugin not built: run `cmake -S clang-tidy -B target/plugin -G Ninja && cmake --build target/plugin`, or set CPLUSP_PLUGIN");
@@ -183,12 +191,12 @@ fn gate_passes_an_allowed_sample_and_fails_a_banned_one() {
         return;
     }
     let allowed = root().join("rules/c_style_casts/allowed.cpp");
-    let o = cplusp(&["gate", allowed.to_str().unwrap(), "--", "-std=c++23", "-ffp-contract=off"]);
+    let o = gated(&[allowed.to_str().unwrap(), "--", "-std=c++23", "-ffp-contract=off"]);
     assert_eq!(o.status.code(), Some(0), "stdout: {} stderr: {}", stdout(&o), stderr(&o));
     assert_eq!(stdout(&o).trim(), "ok: no findings");
 
     let banned = root().join("rules/c_style_casts/banned.cpp");
-    let o = cplusp(&["gate", banned.to_str().unwrap(), "--", "-std=c++23", "-ffp-contract=off"]);
+    let o = gated(&[banned.to_str().unwrap(), "--", "-std=c++23", "-ffp-contract=off"]);
     assert_eq!(o.status.code(), Some(1), "stdout: {} stderr: {}", stdout(&o), stderr(&o));
     let out = stdout(&o);
     let expected = "banned.cpp:4: C-style casts: not allowed in verified code. Hides what kind of cast it is. All forms, including plain numeric narrowing. Use static_cast, or std::bit_cast for a byte view.";
@@ -202,7 +210,7 @@ fn gate_reports_a_trusted_only_construct_with_its_own_wording() {
         return;
     }
     let banned = root().join("rules/reinterpret_const_cast/banned.cpp");
-    let o = cplusp(&["gate", banned.to_str().unwrap(), "--", "-std=c++23", "-ffp-contract=off"]);
+    let o = gated(&[banned.to_str().unwrap(), "--", "-std=c++23", "-ffp-contract=off"]);
     assert_eq!(o.status.code(), Some(1), "stdout: {} stderr: {}", stdout(&o), stderr(&o));
     let out = stdout(&o);
     let expected = "banned.cpp:4: `reinterpret_cast`, `const_cast`: allowed only in trusted code. Defeats the type model. Most forms are UB. Use std::bit_cast, or mark the function trusted with a reason.";
@@ -216,7 +224,7 @@ fn gate_refuses_a_file_that_does_not_compile() {
         return;
     }
     let f = fixture("does-not-compile.cpp");
-    let o = cplusp(&["gate", f.to_str().unwrap(), "--", "-std=c++23", "-ffp-contract=off"]);
+    let o = gated(&[f.to_str().unwrap(), "--", "-std=c++23", "-ffp-contract=off"]);
     assert_eq!(o.status.code(), Some(2), "stdout: {} stderr: {}", stdout(&o), stderr(&o));
     assert_eq!(stdout(&o).trim(), "", "nothing on stdout for a file that does not compile");
     let err = stderr(&o);
@@ -229,7 +237,7 @@ fn gate_refuses_a_compile_error_named_after_a_warning() {
         return;
     }
     let f = fixture("narrowing.cpp");
-    let o = cplusp(&["gate", f.to_str().unwrap(), "--", "-std=c++23", "-ffp-contract=off"]);
+    let o = gated(&[f.to_str().unwrap(), "--", "-std=c++23", "-ffp-contract=off"]);
     assert_eq!(o.status.code(), Some(2), "stdout: {} stderr: {}", stdout(&o), stderr(&o));
     assert!(stderr(&o).lines().any(|l| l.starts_with("does not compile: ") && l.contains("narrowing.cpp:1:")), "{}", stderr(&o));
 }
@@ -240,7 +248,7 @@ fn gate_treats_nolint_as_a_finding() {
         return;
     }
     let f = fixture("nolint.cpp");
-    let o = cplusp(&["gate", f.to_str().unwrap(), "--", "-std=c++23", "-ffp-contract=off"]);
+    let o = gated(&[f.to_str().unwrap(), "--", "-std=c++23", "-ffp-contract=off"]);
     assert_eq!(o.status.code(), Some(1), "stdout: {} stderr: {}", stdout(&o), stderr(&o));
     let expected = "nolint.cpp:3: NOLINT: not allowed in verified code. It silences the gate. Use CPLUSP_TRUSTED with a reason.";
     assert!(stdout(&o).lines().any(|l| l.starts_with("Not provable: ") && l.ends_with(expected)), "{}", stdout(&o));
@@ -275,15 +283,15 @@ fn gate_refuses_flags_the_proofs_cannot_follow() {
         (vec!["-std=c++23", "-ffp-contract=off", "-Wno-everything"], "-Wno-everything: not allowed with the gate. It hides the compiler warnings the policy names.".to_string()),
         (vec!["-std=c++23", "-ffp-contract=off", "-Wno-unsequenced"], "-Wno-unsequenced: not allowed with the gate. It hides a compiler warning the policy names.".to_string()),
     ] {
-        let mut args = vec!["gate", "rules/goto/allowed.cpp", "--"];
+        let mut args = vec!["rules/goto/allowed.cpp", "--"];
         args.extend(flags.iter().copied());
-        let o = cplusp(&args);
+        let o = gated(&args);
         assert_eq!(o.status.code(), Some(2), "{flags:?}: stdout {} stderr {}", stdout(&o), stderr(&o));
         assert_eq!(stdout(&o).trim(), "", "{flags:?}: nothing on stdout for a refused build");
         assert!(stderr(&o).lines().any(|l| l == message), "{flags:?}: stderr {}", stderr(&o));
     }
     for std in ["-std=c++23", "-std=c++2b", "-std=c++26", "-std=gnu++23"] {
-        let o = cplusp(&["gate", "rules/goto/allowed.cpp", "--", std, "-ffp-contract=off", "-fdenormal-fp-math=ieee", "-ffp-model=strict", "-ffp-eval-method=source", "-Wno-unused-variable"]);
+        let o = gated(&["rules/goto/allowed.cpp", "--", std, "-ffp-contract=off", "-fdenormal-fp-math=ieee", "-ffp-model=strict", "-ffp-eval-method=source", "-Wno-unused-variable"]);
         assert_eq!(o.status.code(), Some(0), "{std}: stdout {} stderr {}", stdout(&o), stderr(&o));
     }
 }
@@ -310,34 +318,101 @@ fn gate_refuses_a_build_dir_together_with_trailing_flags() {
     assert!(stderr(&o).contains("Use -p or --, not both."), "{}", stderr(&o));
 }
 
+/// Without the plugin most rows have no check behind them. An "ok" from such a run would mean nothing,
+/// so the gate refuses the run. Decision 0025.
 #[test]
-fn gate_names_the_checks_that_do_not_exist_yet() {
+fn gate_refuses_a_run_that_cannot_enforce_every_row() {
     if !clang_tidy_available() {
         return;
     }
     let f = root().join("rules/goto/allowed.cpp");
     let o = cplusp(&["gate", f.to_str().unwrap(), "--", "-std=c++23", "-ffp-contract=off"]);
-    assert_eq!(o.status.code(), Some(0), "stdout: {} stderr: {}", stdout(&o), stderr(&o));
+    assert_eq!(o.status.code(), Some(2), "stdout: {} stderr: {}", stdout(&o), stderr(&o));
+    assert_eq!(stdout(&o).trim(), "", "nothing on stdout for a refused run");
     let err = stderr(&o);
-    let line = err.lines().find(|l| l.starts_with("warning: not enforced, no such check: ")).expect(&err);
+    let line = err.lines().find(|l| l.starts_with("not enforced: no such check ")).expect(&err);
     assert!(line.contains("cplusp-matcher"), "{line}");
-    assert!(!line.contains("cppcoreguidelines-avoid-goto"), "{line}");
+    assert!(line.ends_with(". The gate refuses a run that cannot enforce every row. Build the plugin and pass --plugin PATH."), "{line}");
 }
 
+/// With the plugin every row has its check, so a clean run says nothing on stderr.
 #[test]
-fn gate_with_the_plugin_no_longer_warns_about_the_generic_check() {
+fn gate_with_the_plugin_is_silent_on_stderr() {
     if !clang_tidy_available() {
         return;
     }
     let f = root().join("rules/goto/allowed.cpp");
-    let o = cplusp(&["gate", "--plugin", plugin().to_str().unwrap(), f.to_str().unwrap(), "--", "-std=c++23", "-ffp-contract=off"]);
+    let o = gated(&[f.to_str().unwrap(), "--", "-std=c++23", "-ffp-contract=off"]);
     assert_eq!(o.status.code(), Some(0), "stdout: {} stderr: {}", stdout(&o), stderr(&o));
-    let err = stderr(&o);
-    for line in err.lines().filter(|l| l.starts_with("warning: not enforced")) {
-        assert!(!line.contains("cplusp-matcher"), "{line}");
-        for built in ["cplusp-mutable", "cplusp-multiple-inheritance", "cplusp-impure-operator", "cplusp-iterator-arithmetic", "cplusp-lambda-limits"] {
-            assert!(!line.contains(built), "{line}");
+    assert_eq!(stderr(&o).trim(), "", "a complete run has nothing to warn about");
+}
+
+/// With `-p` the flags come from the database. The gate judges them the same way, and refuses a response file it cannot read.
+#[test]
+fn gate_reads_the_flags_of_the_compile_database() {
+    if !clang_tidy_available() {
+        return;
+    }
+    let file = root().join("rules/goto/allowed.cpp");
+    let file = file.to_str().unwrap();
+    let root = root();
+    let dir = root.to_str().unwrap();
+    let float = "not allowed with the gate. It changes floating-point results, and the proofs assume IEEE 754 round to nearest.";
+    for (entry, code, expected) in [
+        (format!(r#"{{"directory": "{dir}", "command": "clang++ -std=c++23 -ffp-contract=off -ffast-math -c {file} -o /tmp/allowed.o", "file": "{file}"}}"#), 2, format!("-ffast-math: {float}")),
+        (format!(r#"{{"directory": "{dir}", "arguments": ["clang++", "-std=c++20", "-ffp-contract=off", "-c", "{file}"], "file": "{file}"}}"#), 2, "-std=c++20: not allowed with the gate. The proofs assume C++23 or later.".to_string()),
+        (format!(r#"{{"directory": "{dir}", "command": "clang++ @flags.rsp -c {file}", "file": "{file}"}}"#), 2, "@flags.rsp: not allowed with the gate. The gate cannot read a response file.".to_string()),
+        (format!(r#"{{"directory": "{dir}", "command": "clang++ -std=c++23 -ffp-contract=off -c {file} -o /tmp/allowed.o", "file": "{file}"}}"#), 0, String::new()),
+    ] {
+        let build = tempfile::tempdir().unwrap();
+        std::fs::write(build.path().join("compile_commands.json"), format!("[{entry}]")).unwrap();
+        let o = gated(&["-p", build.path().to_str().unwrap(), file]);
+        assert_eq!(o.status.code(), Some(code), "{entry}: stdout {} stderr {}", stdout(&o), stderr(&o));
+        if code == 2 {
+            assert_eq!(stdout(&o).trim(), "", "{entry}: nothing on stdout for a refused build");
+            assert!(stderr(&o).lines().any(|l| l == expected), "{entry}: stderr {}", stderr(&o));
+        } else {
+            assert_eq!(stdout(&o).trim(), "ok: no findings", "{entry}");
         }
+    }
+}
+
+/// A diagnostic pragma silences a compiler warning the policy relies on. Like NOLINT, it is a finding.
+#[test]
+fn gate_treats_a_diagnostic_pragma_as_a_finding() {
+    if !clang_tidy_available() {
+        return;
+    }
+    let f = fixture("pragma.cpp");
+    let o = gated(&[f.to_str().unwrap(), "--", "-std=c++23", "-ffp-contract=off"]);
+    assert_eq!(o.status.code(), Some(1), "stdout: {} stderr: {}", stdout(&o), stderr(&o));
+    let out = stdout(&o);
+    for line in [2, 3, 4] {
+        let expected = format!("pragma.cpp:{line}: pragma diagnostic: not allowed in verified code. It silences the gate.");
+        assert!(out.lines().any(|l| l.starts_with("Not provable: ") && l.ends_with(&expected)), "{out}");
+    }
+}
+
+/// The gate judges the headers a file includes, outside the system paths, and scans them for suppressions too.
+#[test]
+fn gate_judges_and_scans_the_headers_a_file_includes() {
+    if !clang_tidy_available() {
+        return;
+    }
+    let f = fixture("includes-banned.cpp");
+    let o = gated(&[f.to_str().unwrap(), "--", "-std=c++23", "-ffp-contract=off"]);
+    assert_eq!(o.status.code(), Some(1), "stdout: {} stderr: {}", stdout(&o), stderr(&o));
+    assert!(stdout(&o).lines().any(|l| l.contains("banned-header.h:2: Unscoped `enum`: ")), "{}", stdout(&o));
+
+    let f = fixture("includes-silenced.cpp");
+    let o = gated(&[f.to_str().unwrap(), "--", "-std=c++23", "-ffp-contract=off"]);
+    assert_eq!(o.status.code(), Some(1), "stdout: {} stderr: {}", stdout(&o), stderr(&o));
+    let out = stdout(&o);
+    for expected in [
+        "silenced-header.h:1: pragma system_header: not allowed in verified code. It silences the gate.",
+        "silenced-header.h:3: NOLINT: not allowed in verified code. It silences the gate. Use CPLUSP_TRUSTED with a reason.",
+    ] {
+        assert!(out.lines().any(|l| l.starts_with("Not provable: ") && l.ends_with(expected)), "{out}");
     }
 }
 
@@ -407,7 +482,7 @@ fn gate_prints_each_finding_once() {
         return;
     }
     let f = fixture("twice.cpp");
-    let o = cplusp(&["gate", f.to_str().unwrap(), "--", "-std=c++23", "-ffp-contract=off"]);
+    let o = gated(&[f.to_str().unwrap(), "--", "-std=c++23", "-ffp-contract=off"]);
     assert_eq!(o.status.code(), Some(1), "stdout: {} stderr: {}", stdout(&o), stderr(&o));
     let lines: Vec<&str> = stdout(&o).lines().map(|l| l.trim()).filter(|l| !l.is_empty()).collect::<Vec<_>>().into_iter().map(|l| Box::leak(l.to_string().into_boxed_str()) as &str).collect();
     let distinct: BTreeSet<&str> = lines.iter().copied().collect();
@@ -420,7 +495,7 @@ fn gate_prints_paths_relative_to_the_working_directory() {
     if !clang_tidy_available() {
         return;
     }
-    let o = cplusp(&["gate", "rules/goto/banned.cpp", "--", "-std=c++23", "-ffp-contract=off"]);
+    let o = gated(&["rules/goto/banned.cpp", "--", "-std=c++23", "-ffp-contract=off"]);
     assert_eq!(o.status.code(), Some(1), "stdout: {} stderr: {}", stdout(&o), stderr(&o));
     assert!(stdout(&o).lines().any(|l| l.starts_with("Not provable: rules/goto/banned.cpp:4: ")), "{}", stdout(&o));
 }
@@ -430,7 +505,7 @@ fn gate_names_a_missing_input_file() {
     if !clang_tidy_available() {
         return;
     }
-    let o = cplusp(&["gate", "nope.cpp", "--", "-std=c++23", "-ffp-contract=off"]);
+    let o = gated(&["nope.cpp", "--", "-std=c++23", "-ffp-contract=off"]);
     assert_eq!(o.status.code(), Some(2), "stdout: {} stderr: {}", stdout(&o), stderr(&o));
     assert!(stderr(&o).contains("cannot read nope.cpp"), "{}", stderr(&o));
 }

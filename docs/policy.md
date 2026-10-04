@@ -151,6 +151,7 @@ The function name joins the location once the clang-tidy plugin's `cplusp-index`
 Two findings come from the gate itself, not from a policy row:
 
 - A `NOLINT` comment in a given file. It would silence clang-tidy. The gate reports it as a finding, with this message: `NOLINT: not allowed in verified code. It silences the gate. Use CPLUSP_TRUSTED with a reason.`
+- A diagnostic pragma: `#pragma clang diagnostic`, `#pragma GCC diagnostic`, `_Pragma`, or a `system_header` pragma. Each silences a compiler warning the policy relies on, or a whole file. The gate reports it as `pragma diagnostic: not allowed in verified code. It silences the gate.`, or `pragma system_header: ...`. The scan covers the given files and the headers they include outside the system paths, which the gate asks the preprocessor for. Third-party headers go behind `-isystem`.
 - A file the gate cannot read: `cannot read {file}`, exit 2.
 
 `cplusp gate --json` prints one JSON object per finding per line and nothing else. The bot's skill and the tests read this form:
@@ -161,7 +162,7 @@ Two findings come from the gate itself, not from a policy row:
 
 ## Checking the policy
 
-`cplusp policy check` prints `ok: 72 rules, 58 enforced by the gate` or one line per problem on stderr, in the form `{id}: {problem}`. `cplusp policy emit` prints the generated clang-tidy config. Both take `--policy FILE` for a team policy. A file without `rules` is a parse error. So is a rule or override with a field it may not carry. A misspelt key therefore cannot drop a team's overrides on the floor.
+`cplusp policy check` prints `ok: 72 rules, 56 enforced by the gate` or one line per problem on stderr, in the form `{id}: {problem}`. `cplusp policy emit` prints the generated clang-tidy config. Both take `--policy FILE` for a team policy. A file without `rules` is a parse error. So is a rule or override with a field it may not carry. A misspelt key therefore cannot drop a team's overrides on the floor.
 
 ## Reading the policy as a table
 
@@ -211,9 +212,9 @@ Three more refusals, all exit 2:
 - `-p` together with trailing `--` flags. clang-tidy would quietly drop `-p`. The message is `Use -p or --, not both.`
 - No clang-tidy on the machine when running `policy check`. Without it the check names cannot be checked.
 
-The gate reads the trailing `--` flags before clang-tidy does, and refuses three kinds, exit 2, with `{flag}: not allowed with the gate. {why}` on stderr. A flag that changes floating-point results: `-ffast-math`, `-Ofast`, `-funsafe-math-optimizations`, `-ffinite-math-only`, `-fassociative-math`, `-freciprocal-math`, `-fno-signed-zeros`, `-fno-honor-nans`, `-fno-honor-infinities`, `-ffp-model=fast`, `-mfpmath=387`, or `-m32`. Also `-fdenormal-fp-math=` other than `ieee`, `-ffp-eval-method=` other than `source`, and any `-ffp-contract` other than `off`. The last flag that sets contraction counts. `-ffp-model=precise` counts as `on`, and `-ffp-model=strict` counts as `off`. `-std` and `--std` are one flag. The proofs assume IEEE 754 round to nearest with gradual underflow and one rounding per operation. A `-std` below C++23, or no `-std` at all, because the baseline is C++23, decision 0022. No `-ffp-contract=off`, because GCC fuses a multiply and an add into one rounding otherwise, and the double model rounds once per operation. `-w`, `-Wno-everything`, or `-Wno-{name}` for a `clang-diagnostic-{name}` the policy names, because it hides a row. With `-p DIR` the flags come from the database, and the gate does not read them yet.
+The gate reads the trailing `--` flags before clang-tidy does, and refuses three kinds, exit 2, with `{flag}: not allowed with the gate. {why}` on stderr. A flag that changes floating-point results: `-ffast-math`, `-Ofast`, `-funsafe-math-optimizations`, `-ffinite-math-only`, `-fassociative-math`, `-freciprocal-math`, `-fno-signed-zeros`, `-fno-honor-nans`, `-fno-honor-infinities`, `-ffp-model=fast`, `-mfpmath=387`, or `-m32`. Also `-fdenormal-fp-math=` other than `ieee`, `-ffp-eval-method=` other than `source`, and any `-ffp-contract` other than `off`. The last flag that sets contraction counts. `-ffp-model=precise` counts as `on`, and `-ffp-model=strict` counts as `off`. `-std` and `--std` are one flag. The proofs assume IEEE 754 round to nearest with gradual underflow and one rounding per operation. A `-std` below C++23, or no `-std` at all, because the baseline is C++23, decision 0022. No `-ffp-contract=off`, because GCC fuses a multiply and an add into one rounding otherwise, and the double model rounds once per operation. `-w`, `-Wno-everything`, or `-Wno-{name}` for a `clang-diagnostic-{name}` the policy names, because it hides a row. With `-p DIR` the gate reads the command of each file from the database and judges its flags the same way. A response file, `@file`, is refused, because the gate cannot read it.
 
-Checks the plugin does not provide yet are names without a check behind them. Every `gate` run says so on stderr: `warning: not enforced, no such check: cplusp-recursion, cplusp-unlisted-state`. An "ok" from the gate is only as strong as that line is short. Without `--plugin`, the generic check is on that list too.
+A row whose check clang-tidy does not have cannot be enforced. The gate refuses such a run, exit 2, with `not enforced: no such check {names}. The gate refuses a run that cannot enforce every row. Build the plugin and pass --plugin PATH.` on stderr. Without `--plugin`, every `cplusp-` check is on that list, so the plugin is not optional. Decision 0025.
 
 ## Where the sample pairs live
 

@@ -422,8 +422,8 @@ A `float` from outside is converted to `double` in trusted code at the edge, and
 A global is a field of one state object.
 Every function that changes it lists it in `modifies`.
 A trusted contract that omits it is false.
-The gate check `cplusp-unlisted-state` does not exist yet, so the gate passes a function that changes a global without listing it.
-Until the check exists, a reviewer must read the trusted contracts for this.
+The gate does not read contracts, so it passes a function that changes a global without listing it.
+Dafny refuses a model that changes a field outside `modifies`. Until the match check ties the C++ contract to the model, a reviewer must read the trusted contracts for this.
 
 ## static_local
 
