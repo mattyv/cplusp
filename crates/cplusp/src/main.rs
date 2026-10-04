@@ -31,8 +31,7 @@ const MATCHER: &str = "cplusp-matcher";
 /// Checks that the clang-tidy plugin will add. The policy may name them today.
 // ponytail: a hand-kept list. Upgrade: load the plugin and read its `--list-checks`.
 const PLANNED_CHECKS: &[&str] = &[
-    MATCHER, "cplusp-mutable", "cplusp-multiple-inheritance", "cplusp-iterator-arithmetic", "cplusp-impure-operator",
-    "cplusp-recursion", "cplusp-lambda-limits", "cplusp-unlisted-state",
+    MATCHER, "cplusp-mutable", "cplusp-multiple-inheritance", "cplusp-iterator-arithmetic", "cplusp-impure-operator", "cplusp-lambda-limits",
 ];
 
 // ------------------------------------------------------------------ command line
@@ -438,6 +437,8 @@ fn refused_flags(flags: &[String], checks: &[String]) -> Vec<String> {
             "The proofs assume C++23 or later."
         } else if f.starts_with('@') {
             "The gate cannot read a response file."
+        } else if f == "--config" || f.starts_with("--config=") {
+            "The gate cannot read a config file."
         } else if f == "-w" || f == "-Wno-everything" {
             "It hides the compiler warnings the policy names."
         } else if f.strip_prefix("-Wno-").is_some_and(|n| checks.iter().any(|c| c.strip_prefix(DIAGNOSTIC) == Some(n))) {
@@ -514,7 +515,7 @@ struct At {
     message: String,
 }
 
-/// One thing the gate reports. `rule` and `check` are `nolint` for a suppression.
+/// One thing the gate reports. `rule` and `check` are `nolint` or `pragma` for a suppression.
 struct Finding {
     path: PathBuf,
     line: usize,
@@ -533,80 +534,115 @@ struct DatabaseEntry {
     command: Option<String>,
 }
 
-/// For each given file: the file, the directory its compiler runs in, and the flags of its entry in the database.
+/// A file the gate judges, the directory its compiler runs in, and the flags it gets.
+type Build = (PathBuf, PathBuf, Vec<String>);
+
+/// The path with `..` and links resolved, when the file exists.
+fn same_file(p: &Path) -> PathBuf {
+    fs::canonicalize(p).unwrap_or_else(|_| p.to_path_buf())
+}
+
+/// A build for every entry of each given file in the database. clang-tidy runs every entry, so the gate judges every entry.
 /// The compiler and the file itself are left out of the flags.
-// ponytail: a `command` is split on whitespace, with no shell quoting. Upgrade: a real shell split.
+// ponytail: a `command` is split on whitespace, and one with a quote or a backslash is refused. Upgrade: a real shell split.
 // The database is JSON, which serde_yaml reads. Upgrade: serde_json, when anything else needs it.
-fn database_builds(dir: &Path, files: &[PathBuf], cwd: &Path) -> Result<Vec<(PathBuf, PathBuf, Vec<String>)>> {
+fn database_builds(dir: &Path, files: &[PathBuf], cwd: &Path) -> Result<Vec<Build>> {
     let path = dir.join("compile_commands.json");
     let text = fs::read_to_string(&path).with_context(|| format!("cannot read {}", path.display()))?;
     let entries: Vec<DatabaseEntry> = parse(&text, "compile_commands.json")?;
-    files
-        .iter()
-        .map(|given| {
-            let file = cwd.join(given);
-            let e = entries
-                .iter()
-                .find(|e| e.directory.join(&e.file) == file)
-                .with_context(|| format!("{}: no entry in compile_commands.json", given.display()))?;
-            let all = e.arguments.clone().or_else(|| e.command.as_ref().map(|c| c.split_whitespace().map(String::from).collect()));
-            let flags = all.unwrap_or_default().into_iter().skip(1).filter(|a| e.directory.join(a) != file).collect();
-            Ok((file, e.directory.clone(), flags))
-        })
-        .collect()
+    let mut builds = Vec::new();
+    for given in files {
+        let file = cwd.join(given);
+        let want = same_file(&file);
+        let found = builds.len();
+        for e in entries.iter().filter(|e| same_file(&e.directory.join(&e.file)) == want) {
+            let all = match (&e.arguments, &e.command) {
+                (Some(arguments), _) => arguments.clone(),
+                (None, Some(command)) if command.contains(['\'', '"', '\\']) => bail!(
+                    "{}: the command in compile_commands.json has shell quoting, which the gate cannot read. Use arguments.",
+                    given.display()
+                ),
+                (None, Some(command)) => command.split_whitespace().map(String::from).collect(),
+                (None, None) => Vec::new(),
+            };
+            let flags = all.into_iter().skip(1).filter(|a| same_file(&e.directory.join(a)) != want).collect();
+            builds.push((file.clone(), e.directory.clone(), flags));
+        }
+        if builds.len() == found {
+            bail!("{}: no entry in compile_commands.json", given.display());
+        }
+    }
+    Ok(builds)
 }
 
-/// The headers a build includes outside the system paths, as the preprocessor lists them.
-fn included_headers(clang: &str, (file, dir, flags): &(PathBuf, PathBuf, Vec<String>)) -> Result<Vec<PathBuf>> {
-    // `-o /dev/null` comes last. With `-MD` in a database command, clang writes the preprocessed text to the `-o` file.
+/// A finding the gate makes itself, from a suppression.
+fn ban(path: PathBuf, line: usize, rule: &str, message: &str) -> Finding {
+    Finding { path, line, rule: rule.to_string(), check: rule.to_string(), decision: Decision::Ban, message: message.to_string() }
+}
+
+/// The lines of `text` with a NOLINT. It is a comment, so the preprocessor's output has lost it.
+fn nolints(path: &Path, text: &str) -> Vec<Finding> {
+    let message = "NOLINT: not allowed in verified code. It silences the gate. Use CPLUSP_TRUSTED with a reason.";
+    text.lines().enumerate().filter(|(_, l)| l.contains("NOLINT")).map(|(n, _)| ban(path.to_path_buf(), n + 1, "nolint", message)).collect()
+}
+
+/// A line marker of the preprocessor, `# N "path" flags`: the next line is line N of the path. Flag 3 is a system header.
+fn line_marker(text: &str) -> Option<(usize, &str, bool)> {
+    let (n, rest) = text.strip_prefix("# ")?.split_once(' ')?;
+    let (path, flags) = rest.strip_prefix('"')?.split_once('"')?;
+    Some((n.parse().ok()?, path, flags.split_whitespace().any(|f| f == "3")))
+}
+
+/// Run the preprocessor on a build and read its output. A diagnostic pragma and a `system_header` pragma are findings.
+/// Every spelling of a pragma comes out as one form, which a text scan cannot promise. Also returns the files the build
+/// includes outside the system paths, for the NOLINT scan.
+// ponytail: a line of a raw string literal that starts with `#pragma clang diagnostic` counts. A path with a quote in it
+// breaks the marker. Upgrade: read the tokens with the plugin.
+fn preprocess(clang: &str, (file, dir, flags): &Build, shown: impl Fn(&Path) -> String) -> Result<(Vec<Finding>, Vec<PathBuf>)> {
+    // The flags that write a file are the build's business. This run prints to stdout and writes nothing.
+    let (mut args, mut rest) = (Vec::new(), flags.iter());
+    while let Some(f) = rest.next() {
+        match f.as_str() {
+            "-MD" | "-MMD" | "-MP" | "-c" => {}
+            "-MF" | "-MT" | "-MQ" | "-o" => {
+                rest.next();
+            }
+            _ => args.push(f),
+        }
+    }
     let out = Command::new(clang)
         .current_dir(dir)
-        .args(flags)
-        .args(["-MM", "-MF", "-", "-o", "/dev/null"])
+        .args(args)
+        .args(["-E", "-o", "-"])
         .arg(file)
         .stdin(Stdio::null())
         .output()
         .with_context(|| format!("cannot run {clang}"))?;
     if !out.status.success() {
-        bail!("does not compile: {}", String::from_utf8_lossy(&out.stderr).lines().next().unwrap_or_default());
+        bail!("cannot preprocess {}: {}", shown(file), String::from_utf8_lossy(&out.stderr).lines().next().unwrap_or_default());
     }
-    // `target: file header ...`, with a backslash at each line break.
-    // ponytail: a path with a space in it splits in two. Upgrade: read the escapes.
-    let text = String::from_utf8_lossy(&out.stdout).replace("\\\n", " ");
-    Ok(text.split_whitespace().skip(2).map(|h| dir.join(h)).collect())
-}
-
-/// The lines of `text` that silence the gate: a NOLINT, a diagnostic pragma, or a `system_header` pragma.
-fn suppressions(path: &Path, text: &str) -> Vec<Finding> {
-    let mut found = Vec::new();
-    for (n, line) in text.lines().enumerate() {
-        // Spaces do not matter to the preprocessor, so they do not matter here.
-        let bare: String = line.split_whitespace().collect();
-        let hits = [
-            (line.contains("NOLINT"), "nolint", "NOLINT: not allowed in verified code. It silences the gate. Use CPLUSP_TRUSTED with a reason."),
-            (
-                ["#pragmaclangdiagnostic", "#pragmaGCCdiagnostic", "_Pragma("].iter().any(|p| bare.contains(p)),
-                "pragma",
-                "pragma diagnostic: not allowed in verified code. It silences the gate.",
-            ),
-            (
-                bare.split_once("#pragma").is_some_and(|(_, rest)| rest.contains("system_header")),
-                "pragma",
-                "pragma system_header: not allowed in verified code. It silences the gate.",
-            ),
-        ];
-        for (_, rule, message) in hits.into_iter().filter(|h| h.0) {
-            found.push(Finding {
-                path: path.to_path_buf(),
-                line: n + 1,
-                rule: rule.to_string(),
-                check: rule.to_string(),
-                decision: Decision::Ban,
-                message: message.to_string(),
-            });
+    // `entered` says, for each file, whether the first marker for it had no flag 3.
+    let (mut found, mut entered, mut silenced) = (Vec::new(), BTreeMap::new(), HashSet::new());
+    let (mut at, mut line, mut system) = (PathBuf::new(), 0, true);
+    for text in String::from_utf8_lossy(&out.stdout).lines() {
+        if let Some((n, name, sys)) = line_marker(text) {
+            // `<built-in>` and `<command line>` are not files.
+            let pseudo = name.starts_with('<');
+            let path = dir.join(name);
+            let user = !pseudo && *entered.entry(path.clone()).or_insert(!sys);
+            if sys && user && silenced.insert(path.clone()) {
+                let message = "pragma system_header: not allowed in verified code. It silences the gate.";
+                found.push(ban(path.clone(), n.saturating_sub(1), "pragma", message));
+            }
+            (at, line, system) = (path, n, sys || pseudo);
+            continue;
         }
+        if !system && ["#pragma clang diagnostic", "#pragma GCC diagnostic"].iter().any(|p| text.starts_with(p)) {
+            found.push(ban(at.clone(), line, "pragma", "pragma diagnostic: not allowed in verified code. It silences the gate."));
+        }
+        line += 1;
     }
-    found
+    Ok((found, entered.into_iter().filter(|(_, user)| *user).map(|(path, _)| path).collect()))
 }
 
 fn gate(c: &Common, json: bool, build_dir: Option<&Path>, plugin: Option<&Path>, files: &[PathBuf], clang_args: &[String]) -> Result<ExitCode> {
@@ -657,17 +693,19 @@ fn gate(c: &Common, json: bool, build_dir: Option<&Path>, plugin: Option<&Path>,
     let clang = locate(CLANG).context("clang++ not found. Install clang-18.")?;
     let shown = |p: &Path| p.strip_prefix(&cwd).unwrap_or(p).display().to_string();
     let (mut found, mut scanned) = (Vec::new(), HashSet::new());
-    let mut scan = |path: PathBuf| -> Result<()> {
-        if scanned.insert(path.clone()) {
-            let source = fs::read(&path).with_context(|| format!("cannot read {}", shown(&path)))?;
-            found.extend(suppressions(&path, &String::from_utf8_lossy(&source)));
+    let mut scan = |path: PathBuf| -> Result<Vec<Finding>> {
+        if !scanned.insert(path.clone()) {
+            return Ok(Vec::new());
         }
-        Ok(())
+        let source = fs::read(&path).with_context(|| format!("cannot read {}", shown(&path)))?;
+        Ok(nolints(&path, &String::from_utf8_lossy(&source)))
     };
     for build in &builds {
-        scan(build.0.clone())?;
-        for header in included_headers(&clang, build)? {
-            scan(header)?;
+        found.extend(scan(build.0.clone())?);
+        let (pragmas, headers) = preprocess(&clang, build, shown)?;
+        found.extend(pragmas);
+        for header in headers {
+            found.extend(scan(header)?);
         }
     }
 
