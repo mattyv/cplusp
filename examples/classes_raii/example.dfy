@@ -1,78 +1,79 @@
-// A class is a Dafny class. The C++ invariant is a predicate Valid(), which the constructor establishes and each method
-// keeps. `modifies this` in the C++ contract is `modifies this` here. A local object is a new object. Dafny has no destructor.
-// So the model of Guard has a method Destroy, and the function that owns the guard calls it where the block ends.
+// A class is a datatype, decision 0029. The invariant is a predicate over the value, a const method is a function, and a
+// method that changes the object takes it in and gives it back. The model has no destructor, so the function that owns
+// the guard calls Destroy where the block ends, and the global pool is a State value every function takes and returns.
 newtype int32 = x: int | -0x8000_0000 <= x < 0x8000_0000
 
-class Counter {
-  var n: int32
+datatype Counter = Counter(n: int32)
 
-  predicate Valid()
-    reads this
-  {
-    0 <= n <= 1000
-  }
+predicate Valid(c: Counter) { 0 <= c.n <= 1000 }
 
-  constructor (start: int32)
-    requires 0 <= start <= 1000
-    ensures Valid() && value() == start
-  {
-    n := start;
-  }
+function value(c: Counter): int32 { c.n }
 
-  function value(): int32
-    reads this
-    ensures value() == n
-  {
-    n
-  }
+method MakeCounter(start: int32) returns (c: Counter)
+  requires 0 <= start <= 1000
+  ensures Valid(c) && value(c) == start
+{
+  c := Counter(start);
+}
 
-  method bump()
-    requires Valid() && value() < 1000
-    modifies this
-    ensures Valid() && value() == old(value()) + 1
-  {
-    n := n + 1;
-  }
+method bump(c: Counter) returns (c': Counter)
+  requires Valid(c) && value(c) < 1000
+  ensures Valid(c') && value(c') == value(c) + 1
+{
+  c' := Counter(c.n + 1);
 }
 
 method bumped_twice(start: int32) returns (result: int32)
   requires 0 <= start <= 998
   ensures result == start + 2
 {
-  var c := new Counter(start);
-  c.bump();
-  c.bump();
-  result := c.value();
+  var c := MakeCounter(start);
+  c := bump(c);
+  c := bump(c);
+  result := value(c);
 }
 
-class Ref {
-  var v: int32
-}
+datatype State = State(open_handles: int32)
 
-class Guard {
-  var flag: Ref
-
-  constructor (f: Ref)
-    modifies f
-    ensures flag == f && f.v == 1
-  {
-    flag := f;
-    f.v := 1;
-  }
-
-  method Destroy()
-    modifies flag
-    ensures flag.v == 0
-  {
-    flag.v := 0;
-  }
-}
-
-method run(busy: Ref) returns (result: int32)
-  modifies busy
-  ensures result == 1 && busy.v == 0
+method acquire(s: State) returns (s': State, result: int32)
+  requires 0 <= s.open_handles < 1000
+  ensures s'.open_handles == s.open_handles + 1 && result == s.open_handles
 {
-  var g := new Guard(busy);
-  result := busy.v;
-  g.Destroy();
+  s' := State(s.open_handles + 1);
+  result := s.open_handles;
+}
+
+method release(s: State, handle: int32) returns (s': State)
+  requires s.open_handles > 0
+  ensures s'.open_handles == s.open_handles - 1
+{
+  s' := State(s.open_handles - 1);
+}
+
+datatype Guard = Guard(handle: int32)
+
+method MakeGuard(s: State) returns (s': State, g: Guard)
+  requires 0 <= s.open_handles < 1000
+  ensures s'.open_handles == s.open_handles + 1 && g.handle == s.open_handles
+{
+  var h: int32;
+  s', h := acquire(s);
+  g := Guard(h);
+}
+
+method Destroy(s: State, g: Guard) returns (s': State)
+  requires s.open_handles > 0
+  ensures s'.open_handles == s.open_handles - 1
+{
+  s' := release(s, g.handle);
+}
+
+method use_one(s: State) returns (s': State, result: int32)
+  requires 0 <= s.open_handles < 1000
+  ensures s'.open_handles == s.open_handles && result == s.open_handles
+{
+  var g: Guard;
+  s', g := MakeGuard(s);
+  result := g.handle;
+  s' := Destroy(s', g);
 }

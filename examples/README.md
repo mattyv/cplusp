@@ -14,11 +14,12 @@ The test `every_row_the_bot_may_use_has_an_example` in `crates/divergence` runs 
 
 - A free function is a method with the same contract.
 - A member function's contract uses the implicit `this`, decision 0028. Members are in scope by name and are never listed in `modifies` or `reads`. A non-const method may change any member, a const method none. The class invariant is a const member function, `valid()`, and every public method says `requires valid()` and `ensures valid()`.
-- A member function has no model on its own. Its state is the object, so the class comes first. One Dafny class per C++ class, with the fields as `var`s. The invariant is a predicate with `reads this`. Each member function is a method, with `modifies this` when it changes a field. A constructor is a `constructor` that establishes the invariant. A destructor is a method called where the block ends.
-- A class template or a function template has no model. Each type it is used at gets its own Dafny class or method.
-- A struct held by value is a `datatype`. A class reached through a reference or a `unique_ptr` is a `class`.
+- The model has no heap, decision 0029. An object is a `datatype`. A const member function is a `function` over the value. A non-const member function is a method that takes the object in and gives it back, `c' := bump(c)`. `old(x)` in the C++ is the value on the way in, `x` the value on the way out. The invariant is a predicate over the value. A constructor is a method that returns the value. A destructor is a method called where the block ends.
+- A class template or a function template has no model. Each type it is used at gets its own datatype and methods.
+- A pointer or a `unique_ptr` is an `Option<T>` value. An interface is an opaque type with its contract as the only functions known about it. An implementation proves it meets that contract on its own type.
 - A trusted function is a `method {:axiom}` with its contract and no body.
-- A global or a static is a field of one `State` object that every function takes.
+- A global or a static is a field of one `State` value that every function that touches it takes in and gives back.
+- A reference is a parameter only. Two non-const reference parameters of one type carry `requires &a != &b`. No `class`, `trait`, `modifies`, `reads`, `old` or `new` appears in a model, and the test `the_model_has_no_heap` keeps it so.
 - A `double` is a real through `Double.dfy`, with one rounding per operation.
 
 ## Larger examples

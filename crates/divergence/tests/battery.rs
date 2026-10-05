@@ -424,6 +424,27 @@ fn every_row_the_bot_may_use_has_an_example() {
     });
 }
 
+/// The model has no heap, decision 0029. An object is a value, so no example and no mitigated model uses a class, a
+/// trait, a frame or an allocation. The naive models are the bot's wrong models and may say anything.
+#[test]
+fn the_model_has_no_heap() {
+    // A heap construct, on a line of Dafny with its comment removed.
+    let heap = |code: &str| {
+        let words: Vec<&str> = code.split(|c: char| !c.is_alphanumeric() && c != '_').filter(|w| !w.is_empty()).collect();
+        let first = words.first().copied().unwrap_or("");
+        first == "class" || first == "trait" || first == "new" || words.iter().any(|w| ["modifies", "reads", "fresh", "old", "new"].contains(w))
+    };
+    let mut files: Vec<PathBuf> = std::fs::read_dir(root().join("examples")).unwrap().map(|e| e.unwrap().path().join("example.dfy")).filter(|p| p.exists()).collect();
+    files.extend(std::fs::read_dir(root().join("divergence/dafny/cases")).unwrap().map(|e| e.unwrap().path().join("mitigated.dfy")).filter(|p| p.exists()));
+    assert!(files.len() > 100, "found only {} models", files.len());
+    for file in files {
+        for (n, line) in std::fs::read_to_string(&file).unwrap().lines().enumerate() {
+            let code = line.split("//").next().unwrap_or("");
+            assert!(!heap(code), "{}:{}: the model has no heap, decision 0029. No class, trait, modifies, reads, old or new. An object is a value.\n{line}", file.strip_prefix(root()).unwrap().display(), n + 1);
+        }
+    }
+}
+
 /// The cases each round of the battery planned. A missing one is work not done.
 #[test]
 fn the_battery_has_the_planned_cases() {

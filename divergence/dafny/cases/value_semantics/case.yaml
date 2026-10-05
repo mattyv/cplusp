@@ -17,4 +17,4 @@ rule: |
   A C++ value is a Dafny `datatype`.
   Model a struct or class held by value as a datatype, and a copy as the same value.
   A field update is `p.(x := 5)`, a new value.
-  Use a Dafny `class` only for what the C++ reaches through a reference or pointer.
+  Never a Dafny `class`. What the C++ reaches through a reference is the value in and the value out, decision 0029.

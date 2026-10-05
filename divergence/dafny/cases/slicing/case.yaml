@@ -16,6 +16,6 @@ witness:
   ubsan: false
   prints: "1"
 rule: |
-  A Dafny object never loses its class, and a C++ copy into a base type does.
+  A datatype value keeps its constructor, and a C++ copy into a base type loses the derived part.
   Never copy a derived object into a base by value.
   Bind a reference.

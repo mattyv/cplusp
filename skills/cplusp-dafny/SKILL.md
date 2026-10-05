@@ -72,11 +72,11 @@ Map `size_t` to `uint64`, which assumes a 64-bit target.
 
 ## reference_aliasing
 
-Never model a reference parameter as an in value and an out value.
-Model it as an object, `class Ref { var v: int32 }`, with a `modifies` clause.
-Dafny then proves the contract for the case where two references are the same object.
-When the contract is false for that case, add `requires a != b` to the model and `requires &a != &b` to the C++ contract.
+A non-const reference parameter is a value in and a value out of the model, decision 0029.
+A value model cannot see two names for one object.
+So two non-const reference parameters of one type, or a reference and `this`, always carry `requires &a != &b` in the C++ contract.
 Callers must then prove that the two are different.
+A const reference is a value in.
 
 ## evaluation_order
 
@@ -194,7 +194,7 @@ The contract must require a non-empty container, or the C++ must test `empty()` 
 A C++ value is a Dafny `datatype`.
 Model a struct or class held by value as a datatype, and a copy as the same value.
 A field update is `p.(x := 5)`, a new value.
-Use a Dafny `class` only for what the C++ reaches through a reference or pointer.
+Never a Dafny `class`. What the C++ reaches through a reference is the value in and the value out, decision 0029.
 
 ## object_lifetime
 
@@ -215,14 +215,14 @@ Write the mem-initializers in declaration order, and model the constructor in th
 
 ## slicing
 
-A Dafny object never loses its class, and a C++ copy into a base type does.
+A datatype value keeps its constructor, and a C++ copy into a base type loses the derived part.
 Never copy a derived object into a base by value.
 Bind a reference.
 
 ## virtual_in_constructor
 
 A virtual call inside a constructor or destructor dispatches to the class under construction.
-Dafny dispatches to the class of the object.
+In the model a constructor builds a value, and a call on it is a call on the finished value.
 Do not call a virtual function from a constructor or destructor.
 
 ## virtual_destructor
@@ -240,13 +240,13 @@ Model the move as a copy and the source as gone.
 ## moved_from_unique_ptr
 
 A moved-from `unique_ptr` is null.
-Model `unique_ptr<T>` as a nullable reference, and a move as the source becoming null.
+Model `unique_ptr<T>` as an `Option<T>` value, and a move as the source becoming `None`.
 Never read the source after the move.
 
 ## null_pointer
 
-Model a pointer parameter as a nullable reference `T?`.
-Dafny then asks for `p != null` at every read.
+Model a pointer parameter as an `Option<T>` value.
+Dafny then asks for `p.Some?` at every read.
 Put it in the contract.
 
 ## operator_meaning
@@ -274,9 +274,9 @@ A run-time call has the same contract as any function.
 
 ## interface_dispatch
 
-A pure interface is a Dafny trait with the same functions.
-A class that implements several interfaces extends several traits.
-Dispatch through any of them is the same call.
+A pure interface is an opaque type with its contract as the only functions known about it.
+A class that implements several interfaces meets each contract on its own type.
+Dispatch through any of them is a call on the same value.
 
 ## array_index
 
@@ -426,16 +426,16 @@ For a tenth, divide by `10.0` instead of multiplying by `0.1`.
 
 ## unlisted_modifies
 
-A global is a field of one state object.
-Every function that changes it lists it in `modifies`.
+A global is a field of the State value.
+Every function that changes it takes the State in and gives it back. In the C++ contract that is `modifies total`.
 A trusted contract that omits it is false.
 The gate does not read contracts, so it passes a function that changes a global without listing it.
-Dafny refuses a model that changes a field outside `modifies`. Until the match check ties the C++ contract to the model, a reviewer must read the trusted contracts for this.
+Until the match check ties the C++ contract to the model, a reviewer must read the trusted contracts for this.
 
 ## static_local
 
 A function-local static is a global with a narrow name.
-Model it as a field of the state object, with `modifies` and `reads`.
+Model it as a field of the State value that the function takes in and gives back.
 Never model it as a local.
 
 ## global_constructors

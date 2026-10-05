@@ -50,7 +50,7 @@ int32_t first_by_to_address(std::vector<int32_t>& v) {
 }
 
 int32_t grow_through_alias(std::vector<int32_t>& v) {
-  std::vector<int32_t>& w = v;  // BANNED
+  std::vector<int32_t>& w = v;  // BANNED also: lvalue_references
   int32_t s = 0;
   for (const int32_t x : v) {
     s += x;

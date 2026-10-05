@@ -8,14 +8,14 @@ naive: verifies
 naive_is_wrong: true
 mitigated: verifies
 side: contract
-mitigation: "`add` gets `modifies s` and the same `requires` and `ensures` as the C++, and `delta` proves `result == 1`. The C++ contract of `add` gains `modifies total`."
+mitigation: "`add` takes the State in and gives it back, with the same `requires` and `ensures` as the C++, and `delta` proves `result == 1`. The C++ contract of `add` gains `modifies total`."
 witness:
   input: "delta()"
   ubsan: false
   prints: "1"
 rule: |
-  A global is a field of one state object.
-  Every function that changes it lists it in `modifies`.
+  A global is a field of the State value.
+  Every function that changes it takes the State in and gives it back. In the C++ contract that is `modifies total`.
   A trusted contract that omits it is false.
   The gate does not read contracts, so it passes a function that changes a global without listing it.
-  Dafny refuses a model that changes a field outside `modifies`. Until the match check ties the C++ contract to the model, a reviewer must read the trusted contracts for this.
+  Until the match check ties the C++ contract to the model, a reviewer must read the trusted contracts for this.

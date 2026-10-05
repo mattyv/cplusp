@@ -17,5 +17,5 @@ witness:
   prints: "1"
 rule: |
   A virtual call inside a constructor or destructor dispatches to the class under construction.
-  Dafny dispatches to the class of the object.
+  In the model a constructor builds a value, and a call on it is a call on the finished value.
   Do not call a virtual function from a constructor or destructor.

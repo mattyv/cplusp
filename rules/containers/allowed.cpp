@@ -39,8 +39,3 @@ int32_t first_by_addressof_copy(std::vector<int32_t>& v) {
   int32_t first = v[0];
   return read(std::addressof(first));
 }
-
-int32_t first_through_const_alias(const std::vector<int32_t>& v) {
-  const std::vector<int32_t>& w = v;
-  return w.empty() ? 0 : w.front();
-}

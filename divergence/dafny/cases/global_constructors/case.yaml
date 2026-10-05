@@ -9,7 +9,7 @@ naive_is_wrong: true
 mitigated: verifies
 side: gate
 gate_rule: global_constructors
-mitigation: "Gate row `global_constructors`: no global with a dynamic initializer. The C++ computes the value in a function, `derived_value()`, which lists `reads base_value`. In the model `base_value` is a field of the state object, and the model is exact."
+mitigation: "Gate row `global_constructors`: no global with a dynamic initializer. The C++ computes the value in a function, `derived_value()`, which lists `reads base_value`. In the model `base_value` is a field of the State value, and the model is exact."
 witness:
   fixed_prints: "6"
   input: "read_derived(), with base_value set in another file"

@@ -8,14 +8,14 @@ naive: verifies
 naive_is_wrong: true
 mitigated: verifies
 side: model
-mitigation: "A reference becomes an object with one field, so two references can be the same object. The contract then adds `requires &a != &b`, or states the aliased result."
+mitigation: "A non-const reference is a value in and a value out. The model cannot see two names for one object, so the C++ contract carries `requires &a != &b` for every pair of non-const references, and the caller proves it."
 witness:
   input: "add_both(x, x) with x = 3"
   ubsan: false
   prints: "12 6 9"
 rule: |
-  Never model a reference parameter as an in value and an out value.
-  Model it as an object, `class Ref { var v: int32 }`, with a `modifies` clause.
-  Dafny then proves the contract for the case where two references are the same object.
-  When the contract is false for that case, add `requires a != b` to the model and `requires &a != &b` to the C++ contract.
+  A non-const reference parameter is a value in and a value out of the model, decision 0029.
+  A value model cannot see two names for one object.
+  So two non-const reference parameters of one type, or a reference and `this`, always carry `requires &a != &b` in the C++ contract.
   Callers must then prove that the two are different.
+  A const reference is a value in.

@@ -39,9 +39,18 @@ class Crate : public Item, public Sized, public Weighed {
   uint32_t weight_;
 };
 
+//@ ensures result == s.size()
+uint64_t size_of(const Sized& s) {
+  return s.size();
+}
+
+//@ ensures result == w.weight()
+uint64_t weight_of(const Weighed& w) {
+  return w.weight();
+}
+
+// A reference is a parameter only, decision 0029, so each interface view is a call, not a local.
 //@ ensures result == c.size() + c.weight()
 uint64_t both(const Crate& c) {
-  const Sized& s = c;
-  const Weighed& w = c;
-  return uint64_t{s.size()} + w.weight();
+  return size_of(c) + weight_of(c);
 }

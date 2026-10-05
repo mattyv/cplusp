@@ -7,11 +7,11 @@ naive_does: "Dafny asks for a proof that `p != null` at the read. There is none.
 naive: fails
 mitigated: verifies
 side: contract
-mitigation: "A precondition `requires p != nullptr` in the C++ contract, and `requires p != null` in the model. The caller proves it."
+mitigation: "A precondition `requires p != nullptr` in the C++ contract, and `requires p.Some?` in the model. The caller proves it."
 witness:
   input: "read(nullptr)"
   ubsan: true
 rule: |
-  Model a pointer parameter as a nullable reference `T?`.
-  Dafny then asks for `p != null` at every read.
+  Model a pointer parameter as an `Option<T>` value.
+  Dafny then asks for `p.Some?` at every read.
   Put it in the contract.

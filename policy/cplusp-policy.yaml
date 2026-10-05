@@ -309,9 +309,14 @@ rules:
     construct: Lvalue references
     area: memory
     canonical: Allowed
-    decision: allow
-    why: The prover models them as pointers.
-    stage: prover
+    decision: restrict
+    limit: A parameter only. No reference member and no reference local. Two non-const reference parameters of one type carry `requires &a != &b`.
+    why: The model has no heap, decision 0029. A reference member or local is a second name for an object, and a value model cannot see it.
+    use_instead: "a parameter, or the object itself."
+    stage: gate
+    detect:
+      - matcher: fieldDecl(hasType(referenceType()))
+      - matcher: varDecl(hasType(referenceType()), unless(parmVarDecl()), unless(isImplicit()), unless(hasParent(declStmt(hasParent(cxxForRangeStmt())))))
 
   - id: rvalue_references
     construct: Rvalue refs and `std::move`

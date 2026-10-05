@@ -43,6 +43,6 @@ int32_t count_boxed(const std::vector<std::function<int32_t(int32_t)>>& items) {
 int32_t next(int32_t& x);
 
 int32_t through_reference(int32_t& x) {
-  int32_t (&fr)(int32_t&) = next;  // BANNED
+  int32_t (&fr)(int32_t&) = next;  // BANNED also: lvalue_references
   return fr(x);
 }

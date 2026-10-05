@@ -9,12 +9,12 @@ naive_is_wrong: true
 mitigated: verifies
 side: gate
 gate_rule: rvalue_references
-mitigation: "Gate row `rvalue_references`: no read of a variable after `std::move` of it. The model sets the source to null at the move, so Dafny refuses a later read."
+mitigation: "Gate row `rvalue_references`: no read of a variable after `std::move` of it. The model sets the source to `None` at the move, so Dafny refuses a later read."
 witness:
   fixed_prints: "14"
   input: "take with a value of 7"
   ubsan: true
 rule: |
   A moved-from `unique_ptr` is null.
-  Model `unique_ptr<T>` as a nullable reference, and a move as the source becoming null.
+  Model `unique_ptr<T>` as an `Option<T>` value, and a move as the source becoming `None`.
   Never read the source after the move.

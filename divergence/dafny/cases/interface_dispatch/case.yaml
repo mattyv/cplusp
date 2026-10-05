@@ -7,12 +7,12 @@ naive_does: "Each interface is a trait, and Store extends both. A call through e
 naive: verifies
 mitigated: verifies
 side: none
-mitigation: "None. The literal model is exact. A pure interface is a trait, and a class that implements several interfaces extends several traits."
+mitigation: "None. The literal model is exact. A pure interface is an opaque type with its contract, and an implementation proves it meets each contract on its own type."
 witness:
   input: "both with value 3 and items 4"
   ubsan: false
   prints: "7"
 rule: |
-  A pure interface is a Dafny trait with the same functions.
-  A class that implements several interfaces extends several traits.
-  Dispatch through any of them is the same call.
+  A pure interface is an opaque type with its contract as the only functions known about it.
+  A class that implements several interfaces meets each contract on its own type.
+  Dispatch through any of them is a call on the same value.

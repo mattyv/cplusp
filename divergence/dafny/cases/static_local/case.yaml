@@ -8,12 +8,12 @@ naive: verifies
 naive_is_wrong: true
 mitigated: verifies
 side: model
-mitigation: "`n` is a field of the state object. The method lists `modifies s`, and the contract is `n == old(n) + 1 && result == n`."
+mitigation: "`n` is a field of the State value. The method takes the State in and gives it back, and the contract is `n == old(n) + 1 && result == n`."
 witness:
   input: "two calls of counter()"
   ubsan: false
   prints: "1 2"
 rule: |
   A function-local static is a global with a narrow name.
-  Model it as a field of the state object, with `modifies` and `reads`.
+  Model it as a field of the State value that the function takes in and gives back.
   Never model it as a local.

@@ -32,24 +32,47 @@ int32_t bumped_twice(int32_t start) {
   return c.value();
 }
 
-// A destructor runs at the end of the block that owns the object, and it gives back what the constructor took. The guard sets a flag
-// while it lives. The model has no destructor, so it calls Destroy by hand at the end of the block.
+// RAII. A guard acquires a handle in its constructor and releases it in its destructor, at the end of the block that owns
+// it. The guard owns a value and holds no reference, decision 0029. The pool is a global the contracts list.
+int32_t open_handles = 0;
+
+//@ requires 0 <= open_handles < 1000
+//@ modifies open_handles
+//@ ensures open_handles == old(open_handles) + 1 && result == old(open_handles)
+int32_t acquire() {
+  return open_handles++;
+}
+
+//@ requires open_handles > 0
+//@ modifies open_handles
+//@ ensures open_handles == old(open_handles) - 1
+void release(int32_t) {
+  open_handles -= 1;
+}
+
 class Guard {
  public:
-  //@ modifies flag
-  //@ ensures flag == 1
-  explicit Guard(int32_t& flag) : flag_(flag) { flag_ = 1; }
+  //@ requires 0 <= open_handles < 1000
+  //@ modifies open_handles
+  //@ ensures open_handles == old(open_handles) + 1 && handle() == old(open_handles)
+  Guard() : handle_(acquire()) {}
 
-  //@ ensures flag_ == 0
-  ~Guard() { flag_ = 0; }
+  //@ requires open_handles > 0
+  //@ modifies open_handles
+  //@ ensures open_handles == old(open_handles) - 1
+  ~Guard() { release(handle_); }
+
+  //@ ensures result == handle_
+  int32_t handle() const { return handle_; }
 
  private:
-  int32_t& flag_;
+  int32_t handle_;
 };
 
-//@ modifies busy
-//@ ensures result == 1 && busy == 0
-int32_t run(int32_t& busy) {
-  Guard g(busy);
-  return busy;
+//@ requires 0 <= open_handles < 1000
+//@ modifies open_handles
+//@ ensures open_handles == old(open_handles) && result == old(open_handles)
+int32_t use_one() {
+  Guard g;
+  return g.handle();
 }
