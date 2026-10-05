@@ -7,13 +7,16 @@ naive_does: "The model makes `n` a local variable that is 0 on every call, so ev
 naive: verifies
 naive_is_wrong: true
 mitigated: verifies
-side: model
-mitigation: "`n` is a field of the State value. The method takes the State in and gives it back, and the contract is `n == old(n) + 1 && result == n`."
+side: gate
+gate_rule: static_local
+mitigation: "Gate row `static_local`: no function-local static, because no caller can list it. The C++ keeps the count in a static data member, `Tally::n`, listed in `modifies`. In the model it is a field of the State value the function takes in and gives back."
 witness:
   input: "two calls of counter()"
   ubsan: false
   prints: "1 2"
+  fixed_prints: "1 2"
 rule: |
-  A function-local static is a global with a narrow name.
+  A function-local static is a global with a name no caller's contract can list. The gate refuses it.
+  Use a static data member or a global, and list it in `modifies` or `reads`.
   Model it as a field of the State value that the function takes in and gives back.
   Never model it as a local.

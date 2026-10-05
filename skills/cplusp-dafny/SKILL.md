@@ -435,7 +435,8 @@ Until the match check ties the C++ contract to the model, a reviewer must read t
 
 ## static_local
 
-A function-local static is a global with a narrow name.
+A function-local static is a global with a name no caller's contract can list. The gate refuses it.
+Use a static data member or a global, and list it in `modifies` or `reads`.
 Model it as a field of the State value that the function takes in and gives back.
 Never model it as a local.
 

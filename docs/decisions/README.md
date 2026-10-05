@@ -35,3 +35,4 @@ Status is `decided`, `proposed` (the default until someone objects or the thin s
 | [0027](0027-floating-literals-are-exact-or-refused.md) | A floating-point literal is exactly a double, or the gate refuses it | decided |
 | [0028](0028-member-functions-use-the-implicit-this.md) | A member function's contract uses the implicit `this`, members are never listed, the invariant is a predicate method | decided |
 | [0029](0029-the-model-has-no-heap.md) | The model has no heap. An object is a value, a method takes it in and gives it back, no reference member or local | decided |
+| [0030](0030-const-reaches-through-a-handle-and-a-static-local-is-refused.md) | Const reaches through a `unique_ptr`, a function-local static is refused, two matcher holes closed | decided |

@@ -227,13 +227,14 @@ rules:
     area: memory
     canonical: Core Guidelines allow as observer
     decision: restrict
-    limit: A parameter only. One object, no ownership, no arithmetic. No pointer member and no pointer local.
+    limit: A parameter only. One object, no ownership, no arithmetic. No pointer member, no pointer local, and no pointer as a template argument.
     why: Nullability goes in the contract. A stored pointer can outlive its object, and the model has no object that dies.
     use_instead: "a reference, or a value."
     stage: gate
     detect:
       - matcher: fieldDecl(hasType(pointerType(unless(pointee(functionType())))), unless(isImplicit()))
       - matcher: varDecl(hasType(pointerType(unless(pointee(functionType())))), unless(parmVarDecl()), unless(isImplicit()))
+      - matcher: templateSpecializationTypeLoc(hasAnyTemplateArgumentLoc(hasTypeLoc(loc(pointerType(unless(pointee(ignoringParens(functionType()))))))))
 
   - id: pointer_arithmetic
     construct: Pointer arithmetic, array-to-pointer decay
@@ -289,9 +290,13 @@ rules:
     construct: "`std::unique_ptr`"
     area: memory
     canonical: Recommended
-    decision: allow
-    why: Trusted contract. Simple single ownership.
-    stage: spec
+    decision: restrict
+    limit: Const access only through a const handle or a const container of handles. A non-const call through one is refused.
+    why: Simple single ownership, behind a trusted contract. A const reference is a value in, decision 0029, so what it owns may not change through it.
+    use_instead: "a non-const reference to the owner when the owned object changes."
+    stage: gate
+    detect:
+      - matcher: cxxMemberCallExpr(callee(cxxMethodDecl(unless(isConst()))), on(ignoringParenImpCasts(cxxOperatorCallExpr(hasAnyOverloadedOperatorName("->", "*"), hasArgument(0, hasType(qualType(isConstQualified())))))))
 
   - id: shared_ptr
     construct: "`std::shared_ptr`"
@@ -464,6 +469,7 @@ rules:
     detect:
       - check: cppcoreguidelines-pro-type-static-cast-downcast
       - matcher: cxxDynamicCastExpr()
+      - matcher: cxxStaticCastExpr(hasDestinationType(hasCanonicalType(anyOf(references(recordType()), pointsTo(recordType())))), unless(hasDestinationType(hasCanonicalType(rValueReferenceType()))))
 
   # -------------------------------------------------------------- classes
   - id: classes_raii
@@ -827,6 +833,17 @@ rules:
     why: Hidden state breaks modular proofs. Treated as inputs and outputs, see State in the plan.
     use_instead: a reads or modifies clause naming the variable, or a parameter.
     stage: prover
+
+  - id: static_local
+    construct: A function-local static variable
+    area: state
+    canonical: MISRA restricts statics
+    decision: ban
+    why: Its state has no name a caller's contract can list, so no caller can prove anything about a call that changes it.
+    use_instead: "a static data member or a global, listed in reads or modifies."
+    stage: gate
+    detect:
+      - matcher: varDecl(isStaticLocal())
 
   # ------------------------------------------------------------- platform
   - id: inline_asm_intrinsics
