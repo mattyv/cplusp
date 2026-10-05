@@ -118,3 +118,8 @@ bool read_by_default(int32_t& x) {
 int32_t captured_beside(int32_t& x) {
   return std::make_pair(next(x), [k = x] { return k; }).first;  // BANNED
 }
+
+// A capture initializer that changes state is a change of state, beside the other one.
+int32_t captured_change(int32_t& x) {
+  return std::make_pair(next(x), [k = next(x)] { return k; }).first;  // BANNED
+}

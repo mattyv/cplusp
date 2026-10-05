@@ -100,3 +100,8 @@ int32_t first_two(const std::vector<int32_t>& v) {
 int32_t& first_of(std::vector<int32_t>& v) {
   return v.front();
 }
+
+// A std call in a function that returns a reference reaches only its arguments, so the reference it returns does too.
+const int32_t& larger(const int32_t& a, const int32_t& b) {
+  return std::max(a, b);
+}
