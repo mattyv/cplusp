@@ -3,7 +3,7 @@
 #include <vector>
 
 // A for loop with an early return, and a switch with a case for every enumerator. The prover follows both. The loop invariant
-// says what the loop has seen when it stops, and the decreases clause shows that it ends.
+// says what the loop saw before it stopped, and the decreases clause shows that it ends.
 //@ ensures result <= v.size()
 //@ ensures result < v.size() ==> v[result] == target
 //@ ensures forall j :: 0 <= j < result ==> v[j] != target
