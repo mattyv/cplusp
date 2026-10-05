@@ -513,6 +513,10 @@ rules:
       - matcher: cxxStaticCastExpr(hasDestinationType(hasCanonicalType(anyOf(references(recordType()), pointsTo(recordType())))), unless(hasDestinationType(hasCanonicalType(rValueReferenceType()))))
 
   # -------------------------------------------------------------- classes
+      - check: cplusp-allowlist
+        options:
+          downcasts: CXXDynamicCastExpr
+
   - id: classes_raii
     construct: Classes, constructors, destructors, RAII
     area: classes
@@ -654,11 +658,11 @@ rules:
     stage: gate
     detect:
       - matcher: classTemplateSpecializationDecl(isExplicitTemplateSpecialization())
-      - matcher: classTemplatePartialSpecializationDecl()
       - matcher: functionDecl(isExplicitTemplateSpecialization())
       - matcher: varDecl(isExplicitTemplateSpecialization())
-      - matcher: nonTypeTemplateParmDecl()
-      - matcher: templateTemplateParmDecl()
+      - check: cplusp-allowlist
+        options:
+          templates: ClassTemplatePartialSpecializationDecl,NonTypeTemplateParmDecl,TemplateTemplateParmDecl,VarTemplatePartialSpecializationDecl
 
   - id: constexpr
     construct: "`constexpr`, `consteval`, concepts"
@@ -680,6 +684,10 @@ rules:
       - matcher: typeLoc(loc(templateSpecializationType(hasDeclaration(namedDecl(hasAnyName("::std::enable_if", "::std::enable_if_t", "::std::void_t", "::std::conditional", "::std::conditional_t"))))))
 
   # -------------------------------------------------------------- control
+      - check: cplusp-allowlist
+        options:
+          metaprogramming: DependentNameType,DependentScopeDeclRefExpr,TypeAliasTemplateDecl
+
   - id: control_flow
     construct: "`if`, `switch`, `for`, `while`, early `return`"
     area: control
@@ -805,6 +813,9 @@ rules:
     detect:
       - matcher: typeLoc(loc(qualType(anyOf(hasCanonicalType(pointerType(pointee(functionType()))), hasCanonicalType(referenceType(pointee(functionType()))), hasCanonicalType(memberPointerType(pointee(functionType())))))), unless(hasAncestor(decl(isImplicit()))))
       - matcher: typeLoc(loc(qualType(hasDeclaration(cxxRecordDecl(hasName("::std::function"))))))
+      - check: cplusp-allowlist
+        options:
+          function_pointers: MemberPointerType
 
   - id: varargs_coroutines
     construct: Varargs, coroutines
@@ -931,6 +942,6 @@ rules:
     detect:
       - check: cplusp-allowlist
         options:
-          statements: ArraySubscriptExpr,AttributedStmt,OpaqueValueExpr,BinaryOperator,BreakStmt,CXXBindTemporaryExpr,CXXBoolLiteralExpr,CXXConstructExpr,CXXDefaultArgExpr,CXXDefaultInitExpr,CXXDependentScopeMemberExpr,CXXForRangeStmt,CXXFunctionalCastExpr,CXXMemberCallExpr,CXXNullPtrLiteralExpr,CXXOperatorCallExpr,CXXRewrittenBinaryOperator,CXXScalarValueInitExpr,CXXStaticCastExpr,CXXStdInitializerListExpr,CXXTemporaryObjectExpr,CXXThisExpr,CallExpr,CaseStmt,CharacterLiteral,CompoundAssignOperator,CompoundStmt,ConceptSpecializationExpr,ConditionalOperator,ConstantExpr,ContinueStmt,DeclRefExpr,DeclStmt,DefaultStmt,DoStmt,ExprWithCleanups,FloatingLiteral,ForStmt,IfStmt,ImplicitCastExpr,ImplicitValueInitExpr,InitListExpr,IntegerLiteral,LambdaExpr,MaterializeTemporaryExpr,MemberExpr,NullStmt,ParenExpr,ParenListExpr,ReturnStmt,StringLiteral,SubstNonTypeTemplateParmExpr,SwitchStmt,UnaryExprOrTypeTraitExpr,UnaryOperator,UnresolvedLookupExpr,WhileStmt
-          declarations: AccessSpecDecl,BindingDecl,CXXConstructorDecl,CXXConversionDecl,CXXDestructorDecl,CXXMethodDecl,CXXRecordDecl,ClassTemplateDecl,ClassTemplateSpecializationDecl,DecompositionDecl,EnumConstantDecl,EnumDecl,FieldDecl,FunctionDecl,FunctionTemplateDecl,NamespaceDecl,ParmVarDecl,StaticAssertDecl,TemplateTypeParmDecl,TypeAliasDecl,TypedefDecl,VarDecl
+          statements: ArraySubscriptExpr,AttributedStmt,OpaqueValueExpr,BinaryOperator,BreakStmt,CXXBindTemporaryExpr,CXXBoolLiteralExpr,CXXConstructExpr,CXXDefaultArgExpr,CXXDefaultInitExpr,CXXDeleteExpr,CXXDependentScopeMemberExpr,CXXForRangeStmt,CXXFunctionalCastExpr,CXXMemberCallExpr,CXXNewExpr,CXXNullPtrLiteralExpr,CXXOperatorCallExpr,CXXRewrittenBinaryOperator,CXXScalarValueInitExpr,CXXStaticCastExpr,CXXStdInitializerListExpr,CXXTemporaryObjectExpr,CXXThisExpr,CallExpr,CaseStmt,CharacterLiteral,CompoundAssignOperator,CompoundStmt,ConceptSpecializationExpr,ConditionalOperator,ConstantExpr,ContinueStmt,DeclRefExpr,DeclStmt,DefaultStmt,DoStmt,ExprWithCleanups,FloatingLiteral,ForStmt,IfStmt,ImplicitCastExpr,ImplicitValueInitExpr,InitListExpr,IntegerLiteral,LambdaExpr,MaterializeTemporaryExpr,MemberExpr,NullStmt,ParenExpr,ParenListExpr,ReturnStmt,StringLiteral,SubstNonTypeTemplateParmExpr,SwitchStmt,UnaryExprOrTypeTraitExpr,UnaryOperator,UnresolvedLookupExpr,WhileStmt
+          declarations: AccessSpecDecl,BindingDecl,CXXConstructorDecl,CXXConversionDecl,CXXDestructorDecl,CXXMethodDecl,CXXRecordDecl,ClassTemplateDecl,ClassTemplateSpecializationDecl,DecompositionDecl,EnumConstantDecl,EnumDecl,FieldDecl,FunctionDecl,FunctionTemplateDecl,NamespaceDecl,ParmVarDecl,StaticAssertDecl,TemplateTypeParmDecl,TypeAliasDecl,TypedefDecl,VarDecl,VarTemplateDecl,VarTemplateSpecializationDecl
           types: AutoType,BuiltinType,ConstantArrayType,ElaboratedType,EnumType,FunctionProtoType,LValueReferenceType,ParenType,PointerType,RValueReferenceType,RecordType,SubstTemplateTypeParmType,TemplateSpecializationType,TemplateTypeParmType,TypedefType,UsingType

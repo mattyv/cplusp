@@ -48,7 +48,6 @@ void member_escape_through(const std::vector<std::unique_ptr<S>>& owners) {
   mutate(owners[0]->x);  // BANNED
 }
 
-// An array owner: a subscript through a const handle is a write through it too.
-void array_write_through(const std::unique_ptr<int32_t[]>& p) {
-  p[0] = 1;  // BANNED
-}
+// An array owner: a subscript through a const handle is a write through it too. The array type itself is outside the subset,
+// so the one line carries both findings.
+void array_write_through(const std::unique_ptr<int32_t[]>& p) { p[0] = 1; }  // BANNED also: unlisted
