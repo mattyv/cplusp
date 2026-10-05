@@ -472,6 +472,7 @@ rules:
       - check: cplusp-allowlist
         options:
           c_style_casts: CStyleCastExpr
+      - matcher: cxxFunctionalCastExpr(unless(has(initListExpr())), hasDestinationType(hasCanonicalType(anyOf(isInteger(), realFloatingPointType(), enumType()))))
 
   - id: reinterpret_const_cast
     construct: "`reinterpret_cast`, `const_cast`"
@@ -722,7 +723,7 @@ rules:
     detect:
       - check: cplusp-allowlist
         options:
-          goto: GotoStmt,IndirectGotoStmt,LabelStmt,LabelDecl,AddrLabelExpr
+          goto: GotoStmt,IndirectGotoStmt,LabelStmt,AddrLabelExpr
 
   - id: unreachable_assume
     construct: "`[[assume]]`, `__builtin_unreachable`, `std::unreachable`"
@@ -918,6 +919,6 @@ rules:
     detect:
       - check: cplusp-allowlist
         options:
-          statements: ""
-          declarations: ""
-          types: ""
+          statements: ArraySubscriptExpr,AttributedStmt,OpaqueValueExpr,BinaryOperator,BreakStmt,CXXBindTemporaryExpr,CXXBoolLiteralExpr,CXXConstructExpr,CXXDefaultArgExpr,CXXDefaultInitExpr,CXXDependentScopeMemberExpr,CXXForRangeStmt,CXXFunctionalCastExpr,CXXMemberCallExpr,CXXNullPtrLiteralExpr,CXXOperatorCallExpr,CXXRewrittenBinaryOperator,CXXScalarValueInitExpr,CXXStaticCastExpr,CXXStdInitializerListExpr,CXXTemporaryObjectExpr,CXXThisExpr,CallExpr,CaseStmt,CharacterLiteral,CompoundAssignOperator,CompoundStmt,ConceptSpecializationExpr,ConditionalOperator,ConstantExpr,ContinueStmt,DeclRefExpr,DeclStmt,DefaultStmt,DoStmt,ExprWithCleanups,FloatingLiteral,ForStmt,IfStmt,ImplicitCastExpr,ImplicitValueInitExpr,InitListExpr,IntegerLiteral,LambdaExpr,MaterializeTemporaryExpr,MemberExpr,NullStmt,ParenExpr,ParenListExpr,ReturnStmt,StringLiteral,SwitchStmt,UnaryExprOrTypeTraitExpr,UnaryOperator,UnresolvedLookupExpr,WhileStmt
+          declarations: AccessSpecDecl,BindingDecl,CXXConstructorDecl,CXXConversionDecl,CXXDestructorDecl,CXXMethodDecl,CXXRecordDecl,ClassTemplateDecl,ClassTemplateSpecializationDecl,DecompositionDecl,EnumConstantDecl,EnumDecl,FieldDecl,FunctionDecl,FunctionTemplateDecl,NamespaceDecl,ParmVarDecl,StaticAssertDecl,TemplateTypeParmDecl,TypeAliasDecl,TypedefDecl,VarDecl
+          types: AutoType,BuiltinType,ConstantArrayType,ElaboratedType,EnumType,FunctionProtoType,LValueReferenceType,ParenType,PointerType,RValueReferenceType,RecordType,SubstTemplateTypeParmType,TemplateSpecializationType,TemplateTypeParmType,TypedefType,UsingType

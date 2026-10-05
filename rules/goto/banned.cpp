@@ -4,6 +4,6 @@ bool first_true(bool a, bool b) {
     goto done;  // BANNED
   }
   v = b;
-done:
+done:  // BANNED
   return v;
 }

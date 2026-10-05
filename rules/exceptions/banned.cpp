@@ -9,7 +9,7 @@ int32_t parse(int32_t x) {
 int32_t parse_or_zero(int32_t x) {
   try {  // BANNED
     return parse(x);
-  } catch (int32_t) {
+  } catch (int32_t) {  // BANNED
     return 0;
   }
 }
