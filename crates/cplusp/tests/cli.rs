@@ -742,11 +742,11 @@ fn every_sample_pair_agrees_with_its_rule() {
         "member_init_order", "slicing", "virtual_call_in_constructor", "virtual_destructor", "raw_pointer", "containers",
         "switch_fallthrough", "switch_missing_case", "accumulate_init", "array_span",
         "double_equality", "double_expression", "rounding_mode", "global_constructors", "double_only", "inexact_literal", "unique_ptr", "static_local", "strings",
-        "aliasing", "unlisted", "global_state",
+        "aliasing", "unlisted", "global_state", "iostreams",
     ] {
         assert!(rules_dir.join(id).is_dir(), "no sample pair for rule {id}");
     }
-    assert!(checked >= 64, "expected at least 64 sample pairs, found {checked}");
+    assert!(checked >= 65, "expected at least 65 sample pairs, found {checked}");
 }
 
 /// Pull `"key":"value"` or `"key":123` out of one JSON line without a JSON library.

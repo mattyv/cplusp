@@ -385,6 +385,18 @@ rules:
     detect:
       - matcher: typeLoc(loc(qualType(hasCanonicalType(hasDeclaration(cxxRecordDecl(hasAnyName("::std::basic_string", "::std::basic_string_view")))))))
 
+  - id: iostreams
+    construct: "`std::cout`, `std::cerr`, streams"
+    area: library
+    canonical: Allowed by all
+    decision: trusted_only
+    why: A stream is a global the whole program shares, and output is a side effect no contract describes. The model has no I/O.
+    use_instead: "return the value, and print it in a trusted function with a reason."
+    stage: gate
+    detect:
+      - matcher: declRefExpr(to(varDecl(hasAnyName("::std::cout", "::std::cerr", "::std::clog", "::std::cin", "::std::wcout", "::std::wcerr", "::std::wclog", "::std::wcin"))))
+      - matcher: typeLoc(loc(qualType(hasCanonicalType(hasDeclaration(cxxRecordDecl(matchesName("^::std::basic_[a-z]*stream$")))))))
+
   - id: containers
     construct: "`std::vector`, `std::string`, maps"
     area: library
