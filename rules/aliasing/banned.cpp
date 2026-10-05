@@ -96,3 +96,16 @@ void element_and_range(std::vector<int32_t>& v) {
 void global_by_reference() {
   bump(counter);  // BANNED
 }
+
+std::span<int32_t> head(std::vector<int32_t>& v) {
+  return std::span<int32_t>(v).first(1);
+}
+
+// A span cut by a user function is still a name for the buffer it was cut from.
+void cut_twice(std::vector<int32_t>& v) {
+  fill(head(v), head(v));  // BANNED also: evaluation_order
+}
+
+void cut_and_whole(std::vector<int32_t>& v) {
+  fill(head(v), v);  // BANNED also: evaluation_order
+}
