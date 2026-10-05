@@ -72,7 +72,7 @@ int32_t grow_through_wrapper(std::vector<int32_t>& v) {
 }
 
 int32_t grow_through_ref(std::vector<int32_t>& v) {
-  auto w = std::ref(v);  // BANNED
+  auto w = std::ref(v);  // BANNED also: lvalue_references
   w.get().push_back(1);
   return 0;
 }

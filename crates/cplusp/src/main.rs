@@ -581,22 +581,79 @@ fn ban(path: PathBuf, line: usize, rule: &str, message: &str) -> Finding {
     Finding { path, line, rule: rule.to_string(), check: rule.to_string(), decision: Decision::Ban, message: message.to_string() }
 }
 
-/// The lines of `text` with a NOLINT, and the lines that start a line directive, `#line` or `# 1 "x"`.
+/// The lines of `text` with a NOLINT, and the lines where a line directive starts, `#line` or `# 1 "x"`.
 /// A NOLINT is a comment, so the preprocessor's output has lost it. A directive written in the source looks like a marker
 /// the preprocessor made, so only the source text tells the two apart.
-// ponytail: a line of a raw string literal that starts like a directive counts, and a directive behind a line splice is
-// missed. The preprocessor path in `preprocess` still catches the splice. Upgrade: read the tokens with the plugin.
 fn scan_text(path: &Path, text: &str) -> Vec<Finding> {
     let nolint = "NOLINT: not allowed in verified code. It silences the gate. Use CPLUSP_TRUSTED with a reason.";
     let line = "line directive: not allowed in verified code. It moves the gate's view.";
-    let mut found = Vec::new();
-    for (n, l) in text.lines().enumerate() {
-        if l.contains("NOLINT") {
-            found.push(ban(path.to_path_buf(), n + 1, "nolint", nolint));
+    let mut found: Vec<Finding> =
+        text.lines().enumerate().filter(|(_, l)| l.contains("NOLINT")).map(|(n, _)| ban(path.to_path_buf(), n + 1, "nolint", nolint)).collect();
+    found.extend(line_directives(text).into_iter().map(|n| ban(path.to_path_buf(), n, "line", line)));
+    found
+}
+
+/// The length of a backslash and a newline at the start of `b`, which the preprocessor deletes.
+fn splice(b: &[u8]) -> Option<usize> {
+    [&b"\\\n"[..], &b"\\\r\n"[..]].into_iter().find(|s| b.starts_with(s)).map(<[u8]>::len)
+}
+
+/// The end of a string or character literal that opens at `i`. A literal ends at its quote or at a newline.
+fn quoted(b: &[u8], mut i: usize, line: &mut usize) -> usize {
+    let quote = b[i];
+    i += 1;
+    while i < b.len() && b[i] != b'\n' && b[i] != quote {
+        if let Some(n) = splice(&b[i..]) {
+            (i, *line) = (i + n, *line + 1);
+        } else {
+            i += if b[i] == b'\\' { 2 } else { 1 };
         }
-        let directive = l.trim_start().strip_prefix('#').map(str::trim_start);
-        if directive.is_some_and(|r| r.starts_with("line") || r.starts_with(|c: char| c.is_ascii_digit())) {
-            found.push(ban(path.to_path_buf(), n + 1, "line", line));
+    }
+    (i + usize::from(i < b.len() && b[i] == quote)).min(b.len())
+}
+
+/// The lines where a `#line` or a line marker starts. A directive is the first token of a line, so blanks, block comments
+/// and splices may come before the `#` and between it and its first word. The digraph `%:` is `#`.
+// ponytail: a raw string literal is read as plain text. A line in it that starts like a directive counts, and a `/*` or a quote in
+// it can hide the code after it. A forged marker does not show in the preprocessor's output, so the text is the only evidence.
+// Upgrade: read the tokens with the plugin.
+fn line_directives(text: &str) -> Vec<usize> {
+    let b = text.as_bytes();
+    let (mut i, mut line, mut start, mut hash, mut found) = (0, 1, true, None, Vec::new());
+    while i < b.len() {
+        let rest = &b[i..];
+        if let Some(n) = splice(rest) {
+            (i, line) = (i + n, line + 1);
+        } else if rest.starts_with(b"/*") {
+            let end = text[i + 2..].find("*/").map_or(b.len(), |e| i + e + 4);
+            line += b[i..end].iter().filter(|&&c| c == b'\n').count();
+            i = end;
+        } else if rest.starts_with(b"//") {
+            // To the end of the line, and past a splice.
+            i += 2;
+            while i < b.len() && b[i] != b'\n' {
+                match splice(&b[i..]) {
+                    Some(n) => (i, line) = (i + n, line + 1),
+                    None => i += 1,
+                }
+            }
+        } else if b[i] == b'\n' {
+            (i, line, start, hash) = (i + 1, line + 1, true, None);
+        } else if b[i].is_ascii_whitespace() {
+            i += 1;
+        } else if start && hash.is_none() && (b[i] == b'#' || rest.starts_with(b"%:")) {
+            (i, start, hash) = (i + if b[i] == b'#' { 1 } else { 2 }, false, Some(line));
+        } else {
+            if let Some(at) = hash.take().filter(|_| rest.starts_with(b"line") || b[i].is_ascii_digit()) {
+                found.push(at);
+            }
+            start = false;
+            // A quote after a letter or a digit is a digit separator or a literal prefix, not the start of a literal.
+            i = match b[i] {
+                b'"' => quoted(b, i, &mut line),
+                b'\'' if !(i > 0 && b[i - 1].is_ascii_alphanumeric()) => quoted(b, i, &mut line),
+                _ => i + 1,
+            };
         }
     }
     found

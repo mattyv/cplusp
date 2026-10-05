@@ -177,13 +177,13 @@ public:
 
 AST_MATCHER(FunctionDecl, isOperatorFunction) { return Node.isOverloadedOperator(); }
 
-// A parameter the function can write through: a non-const lvalue reference, a pointer to non-const, or a std::span of
-// non-const elements, which writes through like a pointer.
 const ClassTemplateSpecializationDecl *asSpan(QualType Type) {
   const auto *Span = dyn_cast_or_null<ClassTemplateSpecializationDecl>(Type.getNonReferenceType()->getAsCXXRecordDecl());
   return Span && Span->getName() == "span" && inStdNamespace(Span) ? Span : nullptr;
 }
 
+// A parameter type the function can write through: a non-const lvalue reference, a pointer to non-const, or a std::span of
+// non-const elements, which writes through like a pointer.
 bool isMutableType(QualType Type) {
   Type = Type.getCanonicalType();
   if (const auto *Span = asSpan(Type))
@@ -191,9 +191,9 @@ bool isMutableType(QualType Type) {
   return (Type->isLValueReferenceType() || Type->isPointerType()) && !Type->getPointeeType().isConstQualified();
 }
 
-bool isMutableParameter(const ParmVarDecl *Parameter) { return isMutableType(Parameter->getType()); }
-
-bool hasMutableParameter(const FunctionDecl *Function) { return llvm::any_of(Function->parameters(), isMutableParameter); }
+bool hasMutableParameter(const FunctionDecl *Function) {
+  return llvm::any_of(Function->parameters(), [](const ParmVarDecl *Parameter) { return isMutableType(Parameter->getType()); });
+}
 
 // A function that may change state: a non-static non-const member, or any function with a parameter it can write through.
 // A static member has no object, so only its parameters count.
@@ -308,8 +308,8 @@ bool conflict(const Roots &A, const Roots &B) {
   return llvm::any_of(A, [&](const RootPath &P) { return llvm::any_of(B, [&](const RootPath &Q) { return related(P, Q); }); });
 }
 
-// What the walk of an expression found. `ConstHandle` is set when the path passes through the `operator*`, `operator->`
-// or `get` of a const unique_ptr or shared_ptr.
+// What the walk of an expression found. `ConstHandle` is set when the path passes through the `operator*`, `operator->`, `get`
+// or the subscript of an array owner, of a const unique_ptr or shared_ptr.
 struct Walk {
   Roots Paths;
   bool ConstHandle = false;
@@ -387,9 +387,8 @@ Walk rangeRoots(const VarDecl *Var) {
 }
 
 // ponytail: three ceilings. A reference local is a name of its own, and the row lvalue_references bans it, so the walk does not
-// follow it to its initializer. A structured binding is its own root. A call that returns a pointer or a span by value, and a call
-// through a function pointer, have a fresh root, so two spans cut by one user function from one buffer are missed.
-// Upgrade: follow the initializer of a reference local, and treat a returned pointer or span like a returned reference.
+// follow it to its initializer. A structured binding is its own root. A call through a function pointer has a fresh root.
+// Upgrade: follow the initializer of a reference local and of a binding, and read the type of a function pointer.
 Walk rootsOf(const Expr *E) {
   Walk W;
   if (!E)
@@ -409,6 +408,8 @@ Walk rootsOf(const Expr *E) {
     return rootsOf(Full->getSubExpr());
   if (const auto *Temporary = dyn_cast<MaterializeTemporaryExpr>(E))
     return rootsOf(Temporary->getSubExpr());
+  if (const auto *Default = dyn_cast<CXXDefaultArgExpr>(E))
+    return rootsOf(Default->getExpr());
   if (const auto *Bind = dyn_cast<CXXBindTemporaryExpr>(E))
     return rootsOf(Bind->getSubExpr());
   if (const auto *Ref = dyn_cast<DeclRefExpr>(E)) {
@@ -463,24 +464,26 @@ Walk rootsOf(const Expr *E) {
     return asSpan(Construct->getType()) && Construct->getNumArgs() ? rootsOf(Construct->getArg(0)) : W;
   const auto *Call = dyn_cast<CallExpr>(E);
   const FunctionDecl *Function = Call ? Call->getDirectCallee() : nullptr;
-  if (!Function)
+  // An allocation function returns new memory, which no other name reaches.
+  if (!Function || Function->isReplaceableGlobalAllocationFunction())
     return W;
   const Expr *Object = objectOf(Call);
   const OverloadedOperatorKind Operator = Function->getOverloadedOperator();
   const bool Deref = Object && isHandle(Object->getType()) && (Operator == OO_Star || Operator == OO_Arrow);
   if (Object && (Deref || Operator == OO_Subscript || keepsRoot(Function))) {
     W = rootsOf(Object);
-    // The owner is const as declared, not as the implicit cast to the const operator makes it. A write through `get()` is as
-    // much a write through the handle as one through `*`.
+    // The owner is const as declared, not as the implicit cast to the const operator makes it. A write through `get()` or
+    // through the subscript of an array owner is as much a write through the handle as one through `*`. An operator has no name.
     const QualType Owner = Object->IgnoreParenImpCasts()->getType();
-    if (Owner.isConstQualified() && isOwner(Owner) && (Deref || Function->getName() == "get"))
+    const bool Get = Function->getDeclName().isIdentifier() && Function->getName() == "get";
+    if (Owner.isConstQualified() && isOwner(Owner) && (Deref || Get || Operator == OO_Subscript))
       W.ConstHandle = true;
     return W;
   }
   if (!Object && keepsRoot(Function))
     return Call->getNumArgs() ? rootsOf(Call->getArg(0)) : W;
-  if (Function->getReturnType()->isReferenceType()) {
-    // Any reference may be one of the arguments, or something the State holds.
+  if (bindsToName(Function->getReturnType())) {
+    // Any reference, pointer or span may be one of the arguments, or something the State holds.
     llvm::SmallVector<Arg, 4> Args;
     collectArgs(Call, Args);
     for (const Arg &A : Args)
@@ -519,12 +522,25 @@ void collectArgs(const Expr *Node, llvm::SmallVectorImpl<Arg> &Out) {
 
 // cplusp-aliasing: decision 0033. When one argument of a call can write, no two arguments reach one object.
 // A global bound to a reference, a pointer or a span is refused on its own, because it is the State as well. A const reference
-// to a global in a call into std is the one exception: nothing in std can reach the State.
+// to a global in a call into std is the one exception: nothing in std can reach the State. A function that returns a reference,
+// a pointer or a span may return only what its parameters or `this` reach, else every call of it passes a global.
 class AliasingCheck : public SpelledCheck {
 public:
   using SpelledCheck::SpelledCheck;
-  void registerMatchers(MatchFinder *Finder) override { Finder->addMatcher(expr(anyOf(callExpr(), cxxConstructExpr())).bind("call"), this); }
+  void registerMatchers(MatchFinder *Finder) override {
+    Finder->addMatcher(expr(anyOf(callExpr(), cxxConstructExpr())).bind("call"), this);
+    Finder->addMatcher(returnStmt(forFunction(functionDecl().bind("function"))).bind("return"), this);
+  }
   void check(const MatchFinder::MatchResult &Result) override {
+    if (const auto *Return = Result.Nodes.getNodeAs<ReturnStmt>("return")) {
+      // A function that returns a reference, a pointer or a span may return only what its parameters or `this` reach. A global,
+      // or the State, that escapes this way is a global passed by reference at every call of the function.
+      const auto *Function = Result.Nodes.getNodeAs<FunctionDecl>("function");
+      if (Return->getRetValue() && bindsToName(Function->getReturnType()) &&
+          llvm::any_of(rootsOf(Return->getRetValue()).Paths, [](const RootPath &P) { return P.Global || P.Steps[0] == &StateKey; }))
+        diag(Return->getBeginLoc(), "a reference to a global escapes");
+      return;
+    }
     const auto *Node = Result.Nodes.getNodeAs<Expr>("call");
     llvm::SmallVector<Arg, 4> Args;
     collectArgs(Node, Args);
@@ -601,9 +617,12 @@ bool isChange(const Stmt *S) {
 // parameter has no callee the check can read, and so has a call through a function pointer or a member pointer.
 // Upgrade: count the capture initializers, and visit instantiations.
 // An unevaluated operand changes nothing: `sizeof`, `alignof`, `noexcept` and `typeid` do not run it.
+// A default argument has no children of its own, and the call runs its expression.
 bool changes(const Stmt *S) {
   if (isa<LambdaExpr, UnaryExprOrTypeTraitExpr, CXXNoexceptExpr, CXXTypeidExpr>(S))
     return false;
+  if (const auto *Default = dyn_cast<CXXDefaultArgExpr>(S))
+    return changes(Default->getExpr());
   return isChange(S) || llvm::any_of(S->children(), [](const Stmt *Child) { return Child && changes(Child); });
 }
 
@@ -669,8 +688,18 @@ bool isRealCall(const Stmt *S) {
 }
 
 void effects(const Stmt *S, Effects &E) {
-  if (!S || isa<LambdaExpr, UnaryExprOrTypeTraitExpr, CXXNoexceptExpr, CXXTypeidExpr>(S))
+  if (!S || isa<UnaryExprOrTypeTraitExpr, CXXNoexceptExpr, CXXTypeidExpr>(S))
     return;
+  // Where a lambda is written only its capture initializers run. A default argument has no children of its own.
+  if (const auto *Lambda = dyn_cast<LambdaExpr>(S)) {
+    for (const Expr *Init : Lambda->capture_inits())
+      effects(Init, E);
+    return;
+  }
+  if (const auto *Default = dyn_cast<CXXDefaultArgExpr>(S)) {
+    effects(Default->getExpr(), E);
+    return;
+  }
   if (isa<DeclRefExpr, MemberExpr, CXXThisExpr>(S))
     addPaths(E.Reads, rootsOf(cast<Expr>(S)).Paths);
   if (isa<CallExpr, CXXConstructExpr>(S)) {
