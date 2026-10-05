@@ -366,18 +366,34 @@ fn every_supported_row_has_a_case() {
     }
 }
 
+/// The larger examples: each combines several rows in one piece of code a bot would write, and pushes the gate
+/// and the model where one row at a time does not. See examples/README.md.
+const LARGER_EXAMPLES: &[&str] = &["stack_template", "sorted_insert", "state_machine", "parse_digits", "dot_product", "shape_area_sum"];
+
 /// Every row the bot may use has an example under examples/: the C++ under the row, which passes the gate,
 /// and the Dafny the bot writes for it, which verifies. A trusted_only row also has the trusted body, which the
-/// gate refuses under that row, so the construct is really there. See examples/README.md.
+/// gate refuses under that row, so the construct is really there. The larger examples are checked the same way,
+/// and every folder under examples/ is one or the other. See examples/README.md.
 #[test]
 fn every_row_the_bot_may_use_has_an_example() {
     let policy: PolicyRows = serde_yaml::from_str(&std::fs::read_to_string(root().join("policy/cplusp-policy.yaml")).unwrap()).unwrap();
-    let rows: Vec<&PolicyRow> = policy.rules.iter().filter(|r| r.decision != "ban").collect();
+    let mut rows: Vec<PolicyRow> = policy.rules.into_iter().filter(|r| r.decision != "ban").collect();
+    rows.extend(LARGER_EXAMPLES.iter().map(|id| PolicyRow { id: id.to_string(), decision: "larger".to_string() }));
+    // Any other folder is a question somebody asked, "what about this pattern". It is checked the same way.
+    for entry in std::fs::read_dir(root().join("examples")).unwrap() {
+        let dir = entry.unwrap().path();
+        if dir.is_dir() {
+            let name = dir.file_name().unwrap().to_string_lossy().into_owned();
+            if !rows.iter().any(|r| r.id == name) {
+                rows.push(PolicyRow { id: name, decision: "larger".to_string() });
+            }
+        }
+    }
     let gate_available = clang_tidy_available();
     let check = |row: &PolicyRow| {
         let dir = root().join("examples").join(&row.id);
         let id = &row.id;
-        assert!(dir.is_dir(), "{id}: a row the bot may use has no example under examples/");
+        assert!(dir.is_dir(), "{id}: a row the bot may use, or a planned larger example, has no folder under examples/");
         let (cpp, dfy, trusted) = (dir.join("example.cpp"), dir.join("example.dfy"), dir.join("trusted.cpp"));
         assert!(cpp.exists() && dfy.exists(), "{id}: an example needs example.cpp and example.dfy");
         assert_eq!(trusted.exists(), row.decision == "trusted_only", "{id}: trusted.cpp is for a trusted_only row only, and every such row has one");
@@ -401,13 +417,7 @@ fn every_row_the_bot_may_use_has_an_example() {
         }
     };
     std::thread::scope(|s| {
-        let mut rest = rows.as_slice();
-        let mut handles = Vec::new();
-        for _ in 0..4 {
-            let (mine, others) = rest.split_at(rest.len().div_ceil(4).min(rest.len()));
-            rest = others;
-            handles.push(s.spawn(move || mine.iter().for_each(|r| check(r))));
-        }
+        let handles: Vec<_> = rows.chunks(rows.len().div_ceil(4)).map(|mine| s.spawn(move || mine.iter().for_each(|r| check(r)))).collect();
         for h in handles {
             h.join().unwrap();
         }
