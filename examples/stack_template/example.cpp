@@ -4,32 +4,36 @@
 
 // A class template with type parameters only. Each instantiation is its own type with its own model.
 // The capacity is a run-time value, because a non-type template parameter is not in the subset.
+// The contracts use the implicit this, decision 0028. Members are in scope by name and are never listed.
+// The invariant is the predicate valid(), and every public method requires and ensures it.
 template <typename T>
 class Stack {
  public:
   //@ requires capacity > 0
-  //@ ensures size() == 0 && this->capacity() == capacity
+  //@ ensures valid() && size() == 0 && this->capacity() == capacity
   explicit Stack(size_t capacity) : capacity_(capacity) {}
 
-  //@ reads items_
+  //@ ensures result == (capacity_ > 0 && items_.size() <= capacity_)
+  bool valid() const { return capacity_ > 0 && items_.size() <= capacity_; }
+
+  //@ requires valid()
   //@ ensures result == items_.size()
   size_t size() const { return items_.size(); }
 
+  //@ requires valid()
   //@ ensures result == capacity_
   size_t capacity() const { return capacity_; }
 
-  //@ requires size() < capacity()
-  //@ modifies items_
-  //@ ensures size() == old(size()) + 1 && top() == x
+  //@ requires valid() && size() < capacity()
+  //@ ensures valid() && capacity() == old(capacity()) && size() == old(size()) + 1 && top() == x
   void push(const T& x) { items_.push_back(x); }
 
-  //@ requires size() > 0
+  //@ requires valid() && size() > 0
   //@ ensures result == items_[size() - 1]
   const T& top() const { return items_.back(); }
 
-  //@ requires size() > 0
-  //@ modifies items_
-  //@ ensures size() == old(size()) - 1
+  //@ requires valid() && size() > 0
+  //@ ensures valid() && capacity() == old(capacity()) && size() == old(size()) - 1
   void pop() { items_.pop_back(); }
 
  private:
