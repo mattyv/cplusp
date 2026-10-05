@@ -2,3 +2,5 @@
 /.cplusp
 *.generated.yaml
 .claude/worktrees/
+*-py/
+__pycache__/

@@ -423,7 +423,7 @@ fn every_row_the_bot_may_use_has_an_example() {
         }
     };
     std::thread::scope(|s| {
-        let handles: Vec<_> = rows.chunks(rows.len().div_ceil(4)).map(|mine| s.spawn(move || mine.iter().for_each(|r| check(r)))).collect();
+        let handles: Vec<_> = rows.chunks(rows.len().div_ceil(4)).map(|mine| s.spawn(move || mine.iter().for_each(&check))).collect();
         for h in handles {
             h.join().unwrap();
         }
