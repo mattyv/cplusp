@@ -469,7 +469,9 @@ rules:
     use_instead: static_cast, or std::bit_cast for a byte view.
     stage: gate
     detect:
-      - check: google-readability-casting
+      - check: cplusp-allowlist
+        options:
+          c_style_casts: CStyleCastExpr
 
   - id: reinterpret_const_cast
     construct: "`reinterpret_cast`, `const_cast`"
@@ -480,8 +482,9 @@ rules:
     use_instead: std::bit_cast, or mark the function trusted with a reason.
     stage: gate
     detect:
-      - check: cppcoreguidelines-pro-type-reinterpret-cast
-      - check: cppcoreguidelines-pro-type-const-cast
+      - check: cplusp-allowlist
+        options:
+          reinterpret_const_cast: CXXReinterpretCastExpr,CXXConstCastExpr
 
   - id: downcasts
     construct: Downcasts (`static_cast`, `dynamic_cast`)
@@ -704,8 +707,9 @@ rules:
     use_instead: "a result struct with an error enum today, and std::expected when the toolchain compiles it."
     stage: gate
     detect:
-      - matcher: cxxThrowExpr()
-      - matcher: cxxTryStmt()
+      - check: cplusp-allowlist
+        options:
+          exceptions: CXXThrowExpr,CXXTryStmt,CXXCatchStmt
 
   - id: goto
     construct: "`goto`"
@@ -716,7 +720,9 @@ rules:
     use_instead: a loop.
     stage: gate
     detect:
-      - check: cppcoreguidelines-avoid-goto
+      - check: cplusp-allowlist
+        options:
+          goto: GotoStmt,IndirectGotoStmt,LabelStmt,LabelDecl,AddrLabelExpr
 
   - id: unreachable_assume
     construct: "`[[assume]]`, `__builtin_unreachable`, `std::unreachable`"
@@ -797,9 +803,9 @@ rules:
     stage: gate
     detect:
       - check: cppcoreguidelines-pro-type-vararg
-      - matcher: coawaitExpr()
-      - matcher: coyieldExpr()
-      - matcher: coreturnStmt()
+      - check: cplusp-allowlist
+        options:
+          varargs_coroutines: CoroutineBodyStmt,CoawaitExpr,DependentCoawaitExpr,CoyieldExpr,CoreturnStmt,VAArgExpr
 
   # ---------------------------------------------------------- concurrency
   - id: concurrency
@@ -880,7 +886,9 @@ rules:
     use_instead: plain C++, or mark the function trusted with a reason.
     stage: gate
     detect:
-      - check: hicpp-no-assembler
+      - check: cplusp-allowlist
+        options:
+          inline_asm_intrinsics: GCCAsmStmt,MSAsmStmt,FileScopeAsmDecl
       - matcher: callExpr(callee(functionDecl(matchesName("^::(_mm|_mm256|_mm512|__builtin_ia32|__builtin_neon|__builtin_arm)_"))))
 
   - id: function_like_macros
@@ -895,3 +903,19 @@ rules:
       - check: cppcoreguidelines-macro-usage
         options:
           AllowedRegexp: "^CPLUSP_"
+
+  # ------------------------------------------------------------- the allowlist
+  - id: unlisted
+    construct: A construct no row names
+    area: platform
+    canonical: "Decision 0032. An allowlist, not a blocklist"
+    decision: ban
+    why: The gate refuses what it does not know. Every kind of statement, expression, declaration and type that verified code may use is on the lists in this row. A kind outside them has no rule yet, so no proof covers it.
+    use_instead: "a construct the subset lists, or ask for a row."
+    stage: gate
+    detect:
+      - check: cplusp-allowlist
+        options:
+          statements: ""
+          declarations: ""
+          types: ""
