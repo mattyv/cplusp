@@ -1,9 +1,10 @@
 //! The mitigation report of one prover, generated from divergence/<prover>/cases/*/case.yaml.
-//! The battery itself is in tests/battery.rs.
+//! The battery itself is in tests/battery.rs. The differential run, decision 0034, is at the end.
 
 use std::error::Error;
 use std::fmt::Display;
 use std::path::Path;
+use std::process::Command;
 
 use serde::{Deserialize, Serialize};
 
@@ -81,4 +82,287 @@ pub fn report(prover_dir: &Path) -> Result<String, Box<dyn Error>> {
         out.push('\n');
     }
     Ok(out)
+}
+
+// The differential run. The files and the block are described in divergence/README.md.
+
+/// What the run found. Each variant carries the line to print.
+pub enum Outcome {
+    Agree(String),
+    Diverge(String),
+}
+
+#[derive(Deserialize)]
+struct Arg {
+    r#type: String,
+    min: Option<i128>,
+    max: Option<i128>,
+    len: Option<(usize, usize)>,
+}
+
+#[derive(Deserialize)]
+struct Differential {
+    runs: usize,
+    args: Vec<Arg>,
+}
+
+// Only the differential block. The battery and the report read the rest.
+#[derive(Deserialize)]
+struct Block {
+    differential: Option<Differential>,
+}
+
+/// One generated value of one argument.
+enum Val {
+    Int(i128),
+    Bool(bool),
+    Seq(Vec<i128>),
+}
+
+fn list<T: Display>(items: impl IntoIterator<Item = T>) -> String {
+    items.into_iter().map(|i| i.to_string()).collect::<Vec<_>>().join(", ")
+}
+
+/// The Dafny spelling: `-4`, `true`, `[1, 2]`. The verdict line shows the arguments the same way.
+impl Display for Val {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        match self {
+            Val::Int(v) => write!(f, "{v}"),
+            Val::Bool(b) => write!(f, "{b}"),
+            Val::Seq(s) => write!(f, "[{}]", list(s)),
+        }
+    }
+}
+
+/// The range of an integer type name, or None for any other name.
+fn int_range(name: &str) -> Option<(i128, i128)> {
+    let (signed, bits) = match name.strip_prefix("uint") {
+        Some(b) => (false, b),
+        None => (true, name.strip_prefix("int")?),
+    };
+    let bits: u32 = bits.parse().ok().filter(|b| [8, 32, 64].contains(b))?;
+    Some(if signed { (-(1i128 << (bits - 1)), (1i128 << (bits - 1)) - 1) } else { (0, (1i128 << bits) - 1) })
+}
+
+/// `"[int64]"` is a sequence of `int64`. The pair is the element type and whether it is a sequence.
+fn split_type(ty: &str) -> (&str, bool) {
+    match ty.strip_prefix('[').and_then(|t| t.strip_suffix(']')) {
+        Some(elem) => (elem, true),
+        None => (ty, false),
+    }
+}
+
+/// The C++ spelling of a value. The minimum of a signed type needs its macro, and a 64-bit unsigned value needs `u`.
+fn cpp_val(v: &Val, elem: &str) -> String {
+    let int = |x: i128| match int_range(elem) {
+        Some((lo, _)) if lo < 0 && x == lo => format!("INT{}_MIN", elem.trim_start_matches(char::is_alphabetic)),
+        _ if elem == "uint64" => format!("{x}u"),
+        _ => x.to_string(),
+    };
+    match v {
+        Val::Int(x) => int(*x),
+        Val::Bool(b) => b.to_string(),
+        Val::Seq(s) => format!("{{{}}}", list(s.iter().map(|&x| int(x)))),
+    }
+}
+
+/// A step of xorshift64. ponytail: the numbers are of low quality and the seed is one constant. Upgrade to the `rand`
+/// crate if a case ever needs a better spread.
+fn next(state: &mut u64) -> u64 {
+    *state ^= *state << 13;
+    *state ^= *state >> 7;
+    *state ^= *state << 17;
+    *state
+}
+
+/// A value in `lo..=hi`. ponytail: a span wider than 2^64 is not reached in full, and the types here stop at 64 bits.
+fn between(state: &mut u64, lo: i128, hi: i128) -> i128 {
+    lo + i128::from(next(state)) % (hi - lo + 1)
+}
+
+/// The inputs of one argument. The edges come first, then values from the shared xorshift state. ponytail: the edges of
+/// two arguments pair by position, so a pair like (min, max) comes only from the random part. Upgrade: cross the lists.
+fn generate(a: &Arg, naive: bool, runs: usize, seed: &mut u64) -> Result<Vec<Val>, String> {
+    let (elem, seq) = split_type(&a.r#type);
+    let mut edges = Vec::new();
+    let mut random: Box<dyn FnMut() -> Val + '_> = if elem == "bool" && !seq {
+        edges.extend([Val::Bool(true), Val::Bool(false)]);
+        Box::new(|| Val::Bool(next(seed) & 1 == 1))
+    } else {
+        let (tlo, thi) = int_range(elem).ok_or(format!("{} is not a type of the differential block", a.r#type))?;
+        let (min, max) = (a.min.unwrap_or(tlo), a.max.unwrap_or(thi));
+        for (name, bound) in [("min", min), ("max", max)] {
+            if !(tlo..=thi).contains(&bound) {
+                return Err(format!("{name} {bound} is outside {elem}"));
+            }
+        }
+        if min > max {
+            return Err(format!("min {min} is above max {max}"));
+        }
+        // The naive run takes the whole range of the type and keeps the length.
+        let (lo, hi) = if naive { (tlo, thi) } else { (min, max) };
+        let (llo, lhi) = a.len.unwrap_or((0, 8));
+        if llo > lhi {
+            return Err(format!("len [{llo}, {lhi}] is reversed"));
+        }
+        if seq {
+            edges.extend([vec![], vec![lo], vec![hi]].into_iter().filter(|s| (llo..=lhi).contains(&s.len())).map(Val::Seq));
+            Box::new(move || {
+                let n = between(seed, llo as i128, lhi as i128) as usize;
+                Val::Seq((0..n).map(|_| between(seed, lo, hi)).collect())
+            })
+        } else {
+            for v in [lo, hi, 0, 1, -1] {
+                if (lo..=hi).contains(&v) && !edges.iter().any(|e| matches!(e, Val::Int(x) if *x == v)) {
+                    edges.push(Val::Int(v));
+                }
+            }
+            Box::new(move || Val::Int(between(seed, lo, hi)))
+        }
+    };
+    Ok(edges.into_iter().chain(std::iter::from_fn(|| Some(random()))).take(runs).collect())
+}
+
+/// UBSan, with float division by zero, which `undefined` leaves out.
+pub const UBSAN: &[&str] = &["-fsanitize=undefined,float-divide-by-zero", "-fno-sanitize-recover=all"];
+/// AddressSanitizer, with sized deallocation so a delete through the wrong type is caught.
+pub const ASAN: &[&str] = &["-fsanitize=address", "-fsized-deallocation"];
+
+/// Dafny at `$DAFNY`, else `/opt/dafny/dafny/dafny`, else `dafny` on PATH.
+pub fn dafny_path() -> std::ffi::OsString {
+    if let Some(d) = std::env::var_os("DAFNY") {
+        return d;
+    }
+    if Path::new("/opt/dafny/dafny/dafny").exists() {
+        return "/opt/dafny/dafny/dafny".into();
+    }
+    "dafny".into()
+}
+
+/// An I/O error that says which file or tool it came from, which the bare error does not.
+fn named<T>(what: impl Display, r: std::io::Result<T>) -> Result<T, String> {
+    r.map_err(|e| format!("{what}: {e}"))
+}
+
+/// The line that names the error: the first with "rror" in it, else the first that is not blank.
+fn first_error(text: &str) -> String {
+    text.lines().find(|l| l.contains("rror")).or_else(|| text.lines().find(|l| !l.trim().is_empty())).unwrap_or("no output").to_string()
+}
+
+/// Runs the case's model and its C++ on the same generated inputs and compares the lines. An `Err` is a run that could not
+/// complete, never a verdict.
+pub fn differential(case_dir: &Path, naive: bool) -> Result<Outcome, Box<dyn Error>> {
+    let id = case_dir.file_name().unwrap_or_default().to_string_lossy().into_owned();
+    let yaml = case_dir.join("case.yaml");
+    let at = |e: &dyn Display| format!("{}: {e}", yaml.display());
+    let block: Block = serde_yaml::from_str(&std::fs::read_to_string(&yaml).map_err(|e| at(&e))?).map_err(|e| at(&e))?;
+    let Some(spec) = block.differential else { return Err(format!("{id}: no differential block in case.yaml").into()) };
+    if spec.runs == 0 {
+        return Err(format!("{id}: runs is 0").into());
+    }
+
+    let mut seed = 0x2545_F491_4F6C_DD1D;
+    let inputs = spec.args.iter().map(|a| generate(a, naive, spec.runs, &mut seed).map_err(|e| format!("{id}: {e}"))).collect::<Result<Vec<_>, _>>()?;
+
+    let tmp = std::env::temp_dir().join(format!("divergence-{id}-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&tmp);
+    std::fs::create_dir_all(&tmp)?;
+    let result = compare(case_dir, naive, &spec, &inputs, &tmp, &id);
+    let _ = std::fs::remove_dir_all(&tmp);
+    result
+}
+
+/// The two runs and the comparison, with the files in `tmp`.
+fn compare(case_dir: &Path, naive: bool, spec: &Differential, inputs: &[Vec<Val>], tmp: &Path, id: &str) -> Result<Outcome, Box<dyn Error>> {
+    let mut dfy = String::new();
+    // A sanitizer ends the process without a flush of stdout, and a pipe is buffered. So the header unbuffers stdout, and
+    // the lines before the death survive, or the divergence would be reported at the wrong input.
+    let mut header = format!(
+        "#pragma once\n#include <cstddef>\n#include <cstdint>\n#include <cstdio>\n#include <vector>\ninline const int unbuffered = std::setvbuf(stdout, nullptr, _IONBF, 0);\ninline constexpr std::size_t runs = {};\n",
+        spec.runs
+    );
+    for (j, (a, vals)) in spec.args.iter().zip(inputs).enumerate() {
+        let (elem, seq) = split_type(&a.r#type);
+        let (dafny_ty, cpp_ty) = match (seq, elem) {
+            (true, _) => ("seq<seq<int>>", format!("std::vector<{elem}_t>")),
+            (false, "bool") => ("seq<bool>", "bool".to_string()),
+            _ => ("seq<int>", format!("{elem}_t")),
+        };
+        dfy.push_str(&format!("const arg{j}: {dafny_ty} := [{}]\n", list(vals)));
+        header.push_str(&format!("inline const {cpp_ty} arg{j}[] = {{{}}};\n", list(vals.iter().map(|v| cpp_val(v, elem)))));
+    }
+    std::fs::write(tmp.join("inputs.dfy"), dfy)?;
+    std::fs::write(tmp.join("inputs.h"), header)?;
+
+    // A driver that prints fewer lines than there are inputs is not a pass. It is an error, on either side.
+    let short = |n: usize, side: &str| format!("{id}: {} inputs, {n} {} from the {side}", spec.runs, if n == 1 { "line" } else { "lines" });
+
+    // The model. Dafny builds beside its first file, so the driver is copied here to keep the case folder as it is.
+    let driver = if naive && case_dir.join("drive_naive.dfy").exists() { "drive_naive.dfy" } else { "drive.dfy" };
+    let from = case_dir.join(driver);
+    named(from.display(), std::fs::copy(&from, tmp.join(driver)))?;
+    let dafny = dafny_path();
+    let o = Command::new(&dafny)
+        .args(["run", "--no-verify", "--target:py"])
+        .arg(tmp.join(driver))
+        .arg("--input")
+        .arg(case_dir.join(if naive { "naive.dfy" } else { "mitigated.dfy" }))
+        .arg("--input")
+        .arg(tmp.join("inputs.dfy"))
+        .output();
+    let o = named(Path::new(&dafny).display(), o)?;
+    let text = String::from_utf8_lossy(&o.stdout);
+    // Dafny says it did not verify before the program speaks.
+    let spoke = text.lines().position(|l| l.starts_with("Dafny program verifier")).filter(|_| o.status.success());
+    let Some(spoke) = spoke else {
+        return Err(first_error(&format!("{text}\n{}", String::from_utf8_lossy(&o.stderr))).into());
+    };
+    let model: Vec<&str> = text.lines().skip(spoke + 1).collect();
+    if model.len() != spec.runs {
+        return Err(short(model.len(), "model").into());
+    }
+
+    // The C++.
+    let fixed = case_dir.join("fixed.cpp");
+    let cpp = if fixed.exists() && !naive { fixed } else { case_dir.join("code.cpp") };
+    let exe = tmp.join("drive");
+    let o = Command::new("clang++-18")
+        .args(["-std=c++23", "-ffp-contract=off", "-O0"])
+        .args(UBSAN)
+        .args(ASAN)
+        .arg("-I")
+        .arg(tmp)
+        .arg(case_dir.join("drive.cpp"))
+        .arg(cpp)
+        .arg("-o")
+        .arg(&exe)
+        .output();
+    let o = named("clang++-18", o)?;
+    if !o.status.success() {
+        return Err(first_error(&String::from_utf8_lossy(&o.stderr)).into());
+    }
+    let o = named(exe.display(), Command::new(&exe).output())?;
+    let stderr = String::from_utf8_lossy(&o.stderr);
+    let stdout = String::from_utf8_lossy(&o.stdout);
+    let mut got: Vec<&str> = stdout.lines().collect();
+    if o.status.success() {
+        if got.len() != spec.runs {
+            return Err(short(got.len(), "C++").into());
+        }
+    } else {
+        if !(stderr.contains("runtime error") || stderr.contains("Sanitizer:")) {
+            return Err(format!("{id}: the C++ failed at input {} without a sanitizer report: {}", got.len(), first_error(&stderr)).into());
+        }
+        // The death is a line of its own, at the input that caused it.
+        got.push("undefined behaviour");
+    }
+
+    for k in 0..got.len().max(model.len()) {
+        let (cpp, model) = (got.get(k).copied().unwrap_or("nothing"), model.get(k).copied().unwrap_or("nothing"));
+        if cpp != model {
+            let args = list(inputs.iter().map(|vals| vals.get(k).map_or("nothing".to_string(), |v| v.to_string())));
+            return Ok(Outcome::Diverge(format!("diverge: {id}, input {k} ([{args}]): C++ {cpp}, model {model}")));
+        }
+    }
+    Ok(Outcome::Agree(format!("agree: {id}, {} inputs", spec.runs)))
 }
