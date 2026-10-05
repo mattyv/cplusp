@@ -105,3 +105,22 @@ int32_t& first_of(std::vector<int32_t>& v) {
 const int32_t& larger(const int32_t& a, const int32_t& b) {
   return std::max(a, b);
 }
+
+// A function that passed the gate returns only what its parameters or `this` reach. So a caller that returns such a call
+// returns what the arguments reach, and nothing more. The trial found `return _find(key);` refused for the State it could not
+// reach.
+struct Table {
+  int32_t cells[4] = {0, 0, 0, 0};
+  //@ requires i < 4
+  int32_t& cell(std::size_t i) {
+    return cells[i];
+  }
+  //@ requires i < 4
+  int32_t& find(std::size_t i) {
+    return cell(i);
+  }
+};
+
+int32_t& first_again(std::vector<int32_t>& v) {
+  return first_of(v);
+}
