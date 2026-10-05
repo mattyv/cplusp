@@ -48,6 +48,13 @@ bool change_beside_another_local(int32_t& x, int32_t y) {
   return before(next(x), y);
 }
 
+const int32_t limit = 10;
+
+// A constant is not State. Nothing the change does can reach it.
+int32_t change_beside_a_constant(int32_t& x) {
+  return next(x) + limit;
+}
+
 void store(std::vector<int32_t>& v, std::size_t i, int32_t& x) {
   v[i] = next(x);
 }

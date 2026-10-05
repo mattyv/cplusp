@@ -71,6 +71,11 @@ int32_t capped() {
   return std::min(counter, limit);
 }
 
+// A constant is not State, so a const global may bind to a const reference in any call.
+int32_t over_limit(int32_t x) {
+  return add(x, limit);
+}
+
 // Spans over two different vectors.
 void copy_between(std::vector<int32_t>& to, const std::vector<int32_t>& from) {
   fill(to, from);
