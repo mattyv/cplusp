@@ -233,9 +233,8 @@ fn every_case_says_what_it_claims() {
             match (&case.side, &case.gate_rule) {
                 (Side::Gate, Some(rule)) => {
                     assert_eq!(o.status.code(), Some(1), "{id}: code.cpp must fail the gate, that is the mitigation. stdout: {out} stderr: {err}");
-                    for line in out.lines() {
-                        assert!(line.contains(&format!("\"rule\":\"{rule}\"")), "{id}: the gate must report code.cpp under {rule}, got: {line}");
-                    }
+                    // The named row is the reason. Another row may refuse the same code too.
+                    assert!(out.lines().any(|l| l.contains(&format!("\"rule\":\"{rule}\""))), "{id}: the gate must report code.cpp under {rule}, got: {out}");
                 }
                 _ => assert!(o.status.code() == Some(0) && out.trim().is_empty(), "{id}: code.cpp must pass the gate, or the case is not about C+P. stdout: {out} stderr: {err}"),
             }

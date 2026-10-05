@@ -17,10 +17,18 @@ struct Store : Readable, Countable {
   int32_t count() const override { return items; }
 };
 
+//@ ensures result == r.read()
+int32_t read_of(const Readable& r) {
+  return r.read();
+}
+
+//@ ensures result == c.count()
+int32_t count_of(const Countable& c) {
+  return c.count();
+}
+
 //@ requires 0 <= s.value <= 1000 && 0 <= s.items <= 1000
 //@ ensures result == s.value + s.items
 int32_t both(const Store& s) {
-  const Readable& r = s;
-  const Countable& c = s;
-  return r.read() + c.count();
+  return read_of(s) + count_of(s);
 }

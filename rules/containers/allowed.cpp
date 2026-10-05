@@ -8,9 +8,8 @@ int32_t first_then_grow(std::vector<int32_t>& v) {
 }
 
 int32_t total(const std::vector<int32_t>& v) {
-  const std::vector<int32_t>& w = v;
   int32_t t = 0;
-  for (const int32_t& x : w) {
+  for (const int32_t& x : v) {
     t += x;
   }
   return t;

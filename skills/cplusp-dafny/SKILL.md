@@ -217,7 +217,7 @@ Write the mem-initializers in declaration order, and model the constructor in th
 
 A datatype value keeps its constructor, and a C++ copy into a base type loses the derived part.
 Never copy a derived object into a base by value.
-Bind a reference.
+Pass it as a reference parameter.
 
 ## virtual_in_constructor
 

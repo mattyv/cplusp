@@ -9,8 +9,12 @@ struct Derived : Base {
   int32_t value() const override { return 2; }
 };
 
+//@ ensures result == b.value()
+int32_t value_through_base(const Base& b) {
+  return b.value();
+}
+
 //@ ensures result == d.value()
 int32_t value_of(const Derived& d) {
-  const Base& b = d;
-  return b.value();
+  return value_through_base(d);
 }

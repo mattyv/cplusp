@@ -9,7 +9,7 @@ naive_is_wrong: true
 mitigated: verifies
 side: gate
 gate_rule: slicing
-mitigation: "Gate row `slicing`: no copy of a derived object into a base by value. The C++ binds a reference, `const Base& b = d;`, and the model is exact."
+mitigation: "Gate row `slicing`: no copy of a derived object into a base by value. The C++ passes `d` to a parameter of type `const Base&`, and the model is exact."
 witness:
   fixed_prints: "2"
   input: "value_of with a Derived"
@@ -18,4 +18,4 @@ witness:
 rule: |
   A datatype value keeps its constructor, and a C++ copy into a base type loses the derived part.
   Never copy a derived object into a base by value.
-  Bind a reference.
+  Pass it as a reference parameter.
