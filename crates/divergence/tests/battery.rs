@@ -381,6 +381,10 @@ fn every_row_the_bot_may_use_has_an_example() {
         let (cpp, dfy, trusted) = (dir.join("example.cpp"), dir.join("example.dfy"), dir.join("trusted.cpp"));
         assert!(cpp.exists() && dfy.exists(), "{id}: an example needs example.cpp and example.dfy");
         assert_eq!(trusted.exists(), row.decision == "trusted_only", "{id}: trusted.cpp is for a trusted_only row only, and every such row has one");
+        if trusted.exists() {
+            let declaration = std::fs::read_to_string(&cpp).unwrap();
+            assert!(declaration.contains("CPLUSP_TRUSTED(\""), "{id}: the trusted declaration in example.cpp carries CPLUSP_TRUSTED with a reason, from include/cplusp.h");
+        }
         assert_eq!(verdict(&dfy), Verdict::Verifies, "{id}: example.dfy must verify");
         if gate_available {
             let o = gate(&cpp);

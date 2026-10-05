@@ -1,5 +1,5 @@
 construct: "Calls with side effects in the arguments"
-standard: "[expr.call]: the initialization of a parameter, including every associated value computation and side effect, is indeterminately sequenced with respect to that of any other parameter."
+standard: "[expr.call]: the initialization of a parameter, including every associated value computation and side effect, is indeterminately sequenced with respect to any other parameter."
 row: evaluation_order
 gap: 3
 cpp: "The order of evaluation of arguments is unspecified. clang goes left to right, and g++ goes right to left."
@@ -18,7 +18,7 @@ witness:
   prints: "1"
 rule: |
   Dafny has no method call inside an expression, so the model must choose an order.
-  C++ does not choose one for arguments, and compilers differ.
-  Never model two calls that change state in one expression.
-  Change the C++ to put each call in its own statement.
-  Then hoist the calls in the same order.
+  C++ orders the right side of an assignment before the left. It orders the operands of `&&`, `||`, the comma and `?:`, and a call's arguments before its body.
+  It does not order the arguments of one call among themselves, nor the operands of an arithmetic or comparison operator. Compilers differ there.
+  Never model two changes of state that C++ leaves unordered. The gate refuses them.
+  Where C++ orders them, hoist the calls into statements in that order, and model `&&`, `||` and `?:` as an `if`.

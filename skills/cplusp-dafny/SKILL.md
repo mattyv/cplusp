@@ -81,10 +81,10 @@ Callers must then prove that the two are different.
 ## evaluation_order
 
 Dafny has no method call inside an expression, so the model must choose an order.
-C++ does not choose one for arguments, and compilers differ.
-Never model two calls that change state in one expression.
-Change the C++ to put each call in its own statement.
-Then hoist the calls in the same order.
+C++ orders the right side of an assignment before the left. It orders the operands of `&&`, `||`, the comma and `?:`, and a call's arguments before its body.
+It does not order the arguments of one call among themselves, nor the operands of an arithmetic or comparison operator. Compilers differ there.
+Never model two changes of state that C++ leaves unordered. The gate refuses them.
+Where C++ orders them, hoist the calls into statements in that order, and model `&&`, `||` and `?:` as an `if`.
 
 ## loop_underflow
 
