@@ -1,5 +1,5 @@
 // A move is a copy, and the source is gone. After the move the model gives the source an unspecified value. A read of it would
-// prove nothing, and the C++ does not read it. The statement after the havoc reads the new owner only.
+// prove nothing, and the C++ does not use it. The statement after the havoc uses the owner that took the value only.
 newtype int32 = x: int | -0x8000_0000 <= x < 0x8000_0000
 newtype uint64 = x: int | 0 <= x < 0x1_0000_0000_0000_0000
 

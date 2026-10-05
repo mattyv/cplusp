@@ -1,23 +1,21 @@
-// A pointer parameter is a nullable reference. Dafny asks for `p != null` at every read, and the contract carries it, in the
+// A pointer parameter is an Option value, decision 0029. Dafny asks for `p.Some?` at every read, and the contract carries it, in the
 // C++ as `requires p != nullptr`. The test in read_or gives the proof for the read in its second branch.
 newtype int32 = x: int | -0x8000_0000 <= x < 0x8000_0000
 
-class Cell {
-  var v: int32
+datatype Option<T> = None | Some(value: T)
+
+method read(p: Option<int32>) returns (result: int32)
+  requires p.Some?
+  ensures result == p.value
+{
+  result := p.value;
 }
 
-method read(p: Cell?) returns (result: int32)
-  requires p != null
-  ensures result == p.v
+method read_or(p: Option<int32>, fallback: int32) returns (result: int32)
+  ensures result == (if !p.Some? then fallback else p.value)
 {
-  result := p.v;
-}
-
-method read_or(p: Cell?, fallback: int32) returns (result: int32)
-  ensures result == (if p == null then fallback else p.v)
-{
-  if p == null {
+  if !p.Some? {
     return fallback;
   }
-  return p.v;
+  return p.value;
 }

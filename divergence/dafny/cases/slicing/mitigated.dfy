@@ -1,25 +1,33 @@
-// Model B: the C++ binds a reference, `const Base& b = d;`, so b is the same object as d and keeps its class.
-// The same text as model A is exact for a reference. It was wrong for the copy.
+// Model B: the C++ passes `d` to a reference parameter of type `const Base&`, so the callee sees the same object and its class.
+// Base is an opaque type, decision 0029, and Derived is a datatype that meets the contract of Base. The conversion from a Derived
+// to a Base view is trusted, as in interface_dispatch. A copy `Base b = d;` would make a separate Base value, and the gate refuses it.
 newtype int32 = x: int | -0x8000_0000 <= x < 0x8000_0000
 
-trait Base {
-  function value(): int32
-}
+type Base
 
-class Derived extends Base {
-  function value(): int32 { 2 }
+function {:axiom} value(b: Base): int32
+
+datatype Derived = Derived
+
+function derived_value(d: Derived): int32 { 2 }
+
+function {:axiom} AsBase(d: Derived): Base
+  ensures value(AsBase(d)) == derived_value(d)
+
+method value_through_base(b: Base) returns (result: int32)
+  ensures result == value(b)
+{
+  result := value(b);
 }
 
 method value_of(d: Derived) returns (result: int32)
-  ensures result == d.value()
+  ensures result == derived_value(d)
 {
-  var b: Base := d;
-  result := b.value();
+  result := value_through_base(AsBase(d));
 }
 
 // The model proves 2, and so does C++.
 method Demo() {
-  var d := new Derived;
-  var r := value_of(d);
+  var r := value_of(Derived);
   assert r == 2;
 }

@@ -1,19 +1,22 @@
-// Model B: a reference is an object with one field, so two references can be the same object.
-// Delete `requires a != b` and Dafny refuses the contract. It is false when a and b are the same object.
+// Model B: a non-const reference parameter is a value in and a value out, decision 0029. A value model cannot see two names for
+// one object, so the C++ contract carries `requires &a != &b` and the caller proves it. Without that clause the contract is false
+// for add_both(x, x), which leaves x = 12. The clause has no counterpart on values. It is a fact about the C++ call.
 newtype int32 = x: int | -0x8000_0000 <= x < 0x8000_0000
 
-class Ref {
-  var v: int32
+method add_both(a: int32, b: int32) returns (a': int32, b': int32)
+  requires -0x1000_0000 <= a < 0x1000_0000
+  requires -0x1000_0000 <= b < 0x1000_0000
+  ensures a' as int == a as int + b as int
+  ensures b' as int == a as int + 2 * (b as int)
+{
+  a' := a + b;
+  b' := b + a';
 }
 
-method add_both(a: Ref, b: Ref)
-  requires a != b
-  requires -0x1000_0000 <= a.v < 0x1000_0000
-  requires -0x1000_0000 <= b.v < 0x1000_0000
-  modifies a, b
-  ensures a.v as int == old(a.v) as int + old(b.v) as int
-  ensures b.v as int == old(a.v) as int + 2 * (old(b.v) as int)
-{
-  a.v := a.v + b.v;
-  b.v := b.v + a.v;
+// Two different objects x and y with 3 and 4 end as 7 and 11. The call add_both(x, x) is not a call the contract allows.
+method Demo() {
+  var x: int32 := 3;
+  var y: int32 := 4;
+  var a, b := add_both(x, y);
+  assert a == 7 && b == 11;
 }

@@ -1,26 +1,23 @@
-// Model B: a move copies the reference and sets the source to null. A read of the source is then a null dereference,
-// and Dafny refuses it. Put `p.v` in place of `q.v` below and the proof fails with "target object may be null".
+// Model B: a unique_ptr is an Option value, decision 0029. A move copies the value and sets the source to None. A read of the
+// source is then a read of a value that is not Some, and Dafny refuses it. Put `p.value` in place of `q.value` below and the
+// proof fails. The C++ contract names the value on the way in, `old(*p)`, and the model names the input `p0`.
 newtype int32 = x: int | -0x8000_0000 <= x < 0x8000_0000
 
-class Cell {
-  var v: int32
-}
+datatype Option<T> = None | Some(value: T)
 
-method take(p0: Cell?) returns (result: int32)
-  requires p0 != null
-  requires -0x4000_0000 <= p0.v < 0x4000_0000
-  ensures result as int == 2 * (old(p0.v) as int)
+method take(p0: Option<int32>) returns (result: int32)
+  requires p0.Some?
+  requires -0x4000_0000 <= p0.value < 0x4000_0000
+  ensures result as int == 2 * (p0.value as int)
 {
   var p := p0;
   var q := p;
-  p := null;
-  result := q.v + q.v;
+  p := None;
+  result := q.value + q.value;
 }
 
 // The model proves 14, and so does the fixed C++.
 method Demo() {
-  var c := new Cell;
-  c.v := 7;
-  var r := take(c);
+  var r := take(Some(7));
   assert r == 14;
 }

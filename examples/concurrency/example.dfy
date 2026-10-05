@@ -1,5 +1,5 @@
 // The getter is a method with no body, an axiom that states the contract of trusted.cpp. It is a method and not a function, so two
-// calls may return two values. The caller reads once and proves its result from the range alone.
+// calls may return two values. The caller asks once and proves its result from the range alone.
 newtype int32 = x: int | -0x8000_0000 <= x < 0x8000_0000
 
 method {:axiom} level() returns (result: int32)

@@ -1,4 +1,4 @@
-// A range-for is a loop over a seq, and the body reads each element. The model loops by index. The invariant says what the total is
+// A range-for is a loop over a seq, and the body uses each element. The model loops by index. The invariant says what the total is
 // after the first i elements. A bound on it keeps the sum inside int32, and `decreases` shows that the loop ends. Sum is the
 // specification, and `Sum(v)` in the C++ contract is this function.
 newtype int32 = x: int | -0x8000_0000 <= x < 0x8000_0000

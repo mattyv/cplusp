@@ -1,16 +1,11 @@
-// A reference is an object with one field, so two references can be the same object. `requires dst != src` is the model of
-// `requires &dst != &src`. Delete it and Dafny refuses the contract, which is false when dst and src are one object.
+// A non-const reference parameter is a value in and a value out, decision 0029. A value model cannot see two names for one
+// object, so the C++ clause `requires &dst != &src` has no counterpart on values. The caller proves it, and the C++ contract is
+// false for take(x, x), where the second line clears the value that the first line copied.
 newtype int32 = x: int | -0x8000_0000 <= x < 0x8000_0000
 
-class Ref {
-  var v: int32
-}
-
-method take(dst: Ref, src: Ref)
-  requires dst != src
-  modifies dst, src
-  ensures dst.v == old(src.v) && src.v == 0
+method take(dst: int32, src: int32) returns (dst': int32, src': int32)
+  ensures dst' == src && src' == 0
 {
-  dst.v := src.v;
-  src.v := 0;
+  dst' := src;
+  src' := 0;
 }

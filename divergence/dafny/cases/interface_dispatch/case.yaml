@@ -15,4 +15,5 @@ witness:
 rule: |
   A pure interface is an opaque type with its contract as the only functions known about it.
   A class that implements several interfaces meets each contract on its own type.
+  The upcast is an axiom that says only `f(As(x)) == f_impl(x)`. A lemma proves `f_impl` meets the interface contract, or the two axioms can contradict and prove anything.
   Dispatch through any of them is a call on the same value.

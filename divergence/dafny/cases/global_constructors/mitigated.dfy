@@ -1,14 +1,11 @@
 // Model B: no global has a dynamic initializer. `derived_value` computes the value from `base_value` when it is called.
-// `base_value` is a global of another file, so it is a field of the state object, and the contract says `reads` it.
+// `base_value` is a global of another file, so it is a field of the State value, and every function that needs it takes the State.
 // The order in which the files initialize does not enter the model, because fixed.cpp does not depend on it.
 newtype int32 = x: int | -0x8000_0000 <= x < 0x8000_0000
 
-class State {
-  var base_value: int32
-}
+datatype State = State(base_value: int32)
 
 function derived_value(s: State): int32
-  reads s
   requires s.base_value < 0x7FFF_FFFF
   ensures derived_value(s) == s.base_value + 1
 { s.base_value + 1 }

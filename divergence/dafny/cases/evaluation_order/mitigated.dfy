@@ -1,32 +1,28 @@
 // Model B: the C++ now names each result in its own statement. The order in the model is the order in the C++.
-// The Dafny is the same as the naive model. What changed is that the C++ promises the order.
+// A reference parameter is a value in and a value out, decision 0029. The model is the same as the naive one in its order.
+// What changed is that the C++ promises the order.
 newtype int32 = x: int | -0x8000_0000 <= x < 0x8000_0000
 
-class Ref {
-  var v: int32
-}
-
-method next(x: Ref) returns (result: int32)
-  requires x.v < 0x7FFF_FFFF
-  modifies x
-  ensures x.v as int == old(x.v) as int + 1
-  ensures result == old(x.v)
+method next(x: int32) returns (x': int32, result: int32)
+  requires x < 0x7FFF_FFFF
+  ensures x' as int == x as int + 1
+  ensures result == x
 {
-  result := x.v;
-  x.v := x.v + 1;
+  result := x;
+  x' := x + 1;
 }
 
 function before(a: int32, b: int32): bool {
   a < b
 }
 
-method rises(x: Ref) returns (result: bool)
-  requires x.v < 0x7FFF_FFFE
-  modifies x
-  ensures x.v as int == old(x.v) as int + 2
+method rises(x: int32) returns (x': int32, result: bool)
+  requires x < 0x7FFF_FFFE
+  ensures x' as int == x as int + 2
   ensures result == true
 {
-  var first := next(x);
-  var second := next(x);
+  var x1, first := next(x);
+  var x2, second := next(x1);
+  x' := x2;
   result := before(first, second);
 }
