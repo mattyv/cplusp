@@ -6,7 +6,10 @@
 struct Pair {
   int32_t a = 0;
   int32_t b = 0;
-  void set(int32_t v) { a = v; }
+  void take(int32_t& v) {
+    a = v;
+    v = 0;
+  }
   int32_t sum() const { return a + b; }
 };
 
@@ -70,9 +73,9 @@ void same_buffer(std::vector<int32_t>& v) {
   fill(v, v);  // BANNED
 }
 
-// The object of a non-const member call and one of its members.
+// The object of a non-const member call and one of its members, by reference.
 void object_and_member(Pair& p) {
-  p.set(p.a);  // BANNED
+  p.take(p.b);  // BANNED
 }
 
 // Through a handle: the owner and what it owns.
@@ -82,14 +85,10 @@ void handle(std::unique_ptr<int32_t>& p) {
   owner_and_owned(p, *p);  // BANNED
 }
 
-void append_one(std::vector<int32_t>& w, const int32_t& x) {
-  w.push_back(x);
-}
-
-// The loop variable of a range-for is a name for an element of the range.
+// The loop variable of a range-for is a name for an element of the range, so it and an element of the range are two names.
 void element_and_range(std::vector<int32_t>& v) {
-  for (const int32_t& e : v) {
-    append_one(v, e);  // BANNED
+  for (int32_t& e : v) {
+    take(e, v[0]);  // BANNED
   }
 }
 

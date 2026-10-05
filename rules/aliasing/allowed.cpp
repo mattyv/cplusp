@@ -1,3 +1,4 @@
+#include <algorithm>
 #include <cstdint>
 #include <span>
 #include <utility>
@@ -55,6 +56,19 @@ int32_t member_and_sum(const Pair& p) {
 void set_from_copy(Pair& p) {
   int32_t v = p.b;
   p.set(v);
+}
+
+// A member passed by value is a copy too, so the object and the member are not two names in this call.
+void set_from_member(Pair& p) {
+  p.set(p.b);
+}
+
+int32_t counter = 0;
+const int32_t limit = 10;
+
+// A const reference to a global in a call into std. Nothing in std can reach the State.
+int32_t capped() {
+  return std::min(counter, limit);
 }
 
 // Spans over two different vectors.
