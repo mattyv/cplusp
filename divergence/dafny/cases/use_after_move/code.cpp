@@ -8,3 +8,7 @@ std::size_t total(std::string s) {
   std::string t = std::move(s);
   return s.size() + t.size();
 }
+
+std::size_t total_of_hi() {
+  return total("hi");
+}

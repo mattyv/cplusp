@@ -1,6 +1,6 @@
 #include <cstdint>
 #include <memory>
-#include <string>
+#include <vector>
 
 struct Base {
   virtual int32_t value() const { return 1; }
@@ -8,7 +8,7 @@ struct Base {
 };
 
 struct Derived : Base {
-  std::string name = "0123456789abcdef0123456789abcdef";
+  std::vector<uint8_t> name = std::vector<uint8_t>(32, 0);
   int32_t value() const override { return 2; }
 };
 

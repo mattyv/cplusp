@@ -1,11 +1,15 @@
-// Model B: `find` is an Option<nat>. None is npos, and npos + 1 wraps to 0, so the model has a case for each.
-// The postcondition says what the C++ does in both. A C++ that wants the position tests `!= std::string::npos` first.
+// Model B: the search is over bytes, decision 0031, and it returns an Option<nat>. None is "no match", and there is no npos to do
+// arithmetic on. The postcondition says what the C++ does in both cases. A text is a seq<uint8>, and 'z' is the byte 0x7A.
+newtype uint8 = x: int | 0 <= x < 0x100
 newtype uint64 = x: int | 0 <= x < 0x1_0000_0000_0000_0000
 
 datatype Option<T> = None | Some(value: T)
 
-function Find(s: string, c: char): (r: Option<nat>)
+const Z: uint8 := 0x7A
+
+function Find(s: seq<uint8>, c: uint8): (r: Option<nat>)
   ensures r.Some? ==> r.value < |s| && s[r.value] == c
+  ensures r.None? ==> forall i :: 0 <= i < |s| ==> s[i] != c
   decreases |s|
 {
   if |s| == 0 then None
@@ -16,13 +20,20 @@ function Find(s: string, c: char): (r: Option<nat>)
   }
 }
 
-method after(s: string) returns (result: uint64)
+method after(s: seq<uint8>) returns (result: uint64)
   requires |s| < 0x1_0000_0000_0000_0000
-  ensures Find(s, 'z').Some? ==> result as int == Find(s, 'z').value + 1
-  ensures Find(s, 'z').None? ==> result == 0
+  ensures Find(s, Z).Some? ==> result as int == Find(s, Z).value + 1
+  ensures Find(s, Z).None? ==> result == 0
 {
-  match Find(s, 'z') {
+  match Find(s, Z) {
     case Some(i) => result := (i + 1) as uint64;
     case None => result := 0;
   }
+}
+
+// The witness text is the three bytes of "abc". It has no 'z', so the result is 0, and so is the output of the fixed C++.
+method after_z() returns (result: uint64)
+  ensures result == 0
+{
+  result := after([0x61, 0x62, 0x63]);
 }

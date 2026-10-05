@@ -49,7 +49,7 @@ method MakeSquare(side: int32) returns (q: Square)
 function square_area(q: Square): int32
   requires ValidSquare(q)
   ensures 0 <= square_area(q) <= 1_000_000
-  ensures square_area(q) == q.side * q.side
+  ensures (ProductAtMost(q.side as int, q.side as int); square_area(q) == q.side * q.side)
 {
   ProductAtMost(q.side as int, q.side as int);
   q.side * q.side
@@ -69,7 +69,7 @@ method MakeRect(w: int32, h: int32) returns (r: Rect)
 function rect_area(r: Rect): int32
   requires ValidRect(r)
   ensures 0 <= rect_area(r) <= 1_000_000
-  ensures rect_area(r) == r.w * r.h
+  ensures (ProductAtMost(r.w as int, r.h as int); rect_area(r) == r.w * r.h)
 {
   ProductAtMost(r.w as int, r.h as int);
   r.w * r.h

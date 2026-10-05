@@ -11,8 +11,8 @@
 // about a call that changes it. Use a static data member or a global, listed in reads or modifies." The body of acquire is not in this
 // folder. It makes the pool with `new uint8_t[4096]`, and the gate refuses that line under the row raw_allocation: "`new` / `delete`,
 // `malloc` / `free`: allowed only in trusted code. Allocation is trusted. Ownership goes through RAII types. Use std::unique_ptr or a
-// container, or mark the function trusted with a reason." The test of the battery takes a trusted.cpp for a trusted_only row of the policy
-// and no other folder, so this folder keeps the declarations and the callers, and the refusal is quoted here.
+// container, or mark the function trusted with a reason." The body is in trusted.cpp, which the gate refuses, and this file keeps
+// the declarations and the callers. The refusal is quoted here.
 class Arena {
  public:
   Arena() = delete;

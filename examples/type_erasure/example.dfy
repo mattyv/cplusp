@@ -32,7 +32,7 @@ predicate ValidSquare(q: Square) { 0 <= q.side <= 1000 }
 
 function square_area(q: Square): int32
   requires ValidSquare(q)
-  ensures 0 <= square_area(q) <= 1_000_000 && square_area(q) == q.side * q.side
+  ensures (ProductAtMost(q.side as int, q.side as int); 0 <= square_area(q) <= 1_000_000 && square_area(q) == q.side * q.side)
 {
   ProductAtMost(q.side as int, q.side as int);
   q.side * q.side
@@ -44,7 +44,7 @@ predicate ValidRect(r: Rect) { 0 <= r.w <= 1000 && 0 <= r.h <= 1000 }
 
 function rect_area(r: Rect): int32
   requires ValidRect(r)
-  ensures 0 <= rect_area(r) <= 1_000_000 && rect_area(r) == r.w * r.h
+  ensures (ProductAtMost(r.w as int, r.h as int); 0 <= rect_area(r) <= 1_000_000 && rect_area(r) == r.w * r.h)
 {
   ProductAtMost(r.w as int, r.h as int);
   r.w * r.h
