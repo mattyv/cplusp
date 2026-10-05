@@ -4,7 +4,7 @@
 
 int64_t sum_by_reference(const std::vector<int64_t>& values) {
   int64_t total = 0;
-  std::for_each(values.begin(), values.end(), [&total](int64_t v) { total += v; });  // BANNED
+  std::for_each(values.begin(), values.end(), [&total](int64_t v) { total += v; });  // BANNED also: lvalue_references
   return total;
 }
 
