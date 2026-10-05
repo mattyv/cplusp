@@ -182,6 +182,7 @@ Write `if b then 1 else 0`.
 
 Model an `enum class` as a datatype of its enumerators.
 A cast from an integer needs a `requires` that the value is an enumerator, in the C++ contract and in the model.
+A flags type, where `|` makes values no enumerator names, is a `bv32` in the model, and a cast to it needs no enumerator precondition.
 
 ## size_minus_one
 
@@ -325,8 +326,9 @@ Use `contains` and `at`, which the gate allows, and model them as `k in m` and `
 ## string_npos
 
 `std::string::find` returns `npos` for no match, and arithmetic on it wraps.
-Model `find` as `Option<nat>`.
-Test for `npos` before you use the result.
+Text in verified code is a span of bytes, decision 0031. The gate refuses `std::string` and `std::string_view`.
+A search returns `std::optional<size_t>`, and the model of it is `Option<nat>`.
+Never do arithmetic on a position before the `None` case is handled.
 
 ## switch_fallthrough
 

@@ -395,7 +395,11 @@ fn every_row_the_bot_may_use_has_an_example() {
         assert!(dir.is_dir(), "{id}: a row the bot may use, or a planned larger example, has no folder under examples/");
         let (cpp, dfy, trusted) = (dir.join("example.cpp"), dir.join("example.dfy"), dir.join("trusted.cpp"));
         assert!(cpp.exists() && dfy.exists(), "{id}: an example needs example.cpp and example.dfy");
-        assert_eq!(trusted.exists(), row.decision == "trusted_only", "{id}: trusted.cpp is for a trusted_only row only, and every such row has one");
+        if row.decision == "trusted_only" {
+            assert!(trusted.exists(), "{id}: every trusted_only row shows the trusted body in trusted.cpp");
+        } else if row.decision != "larger" {
+            assert!(!trusted.exists(), "{id}: trusted.cpp is for a trusted_only row or a larger example, not for a row the gate accepts");
+        }
         if trusted.exists() {
             let declaration = std::fs::read_to_string(&cpp).unwrap();
             assert!(declaration.contains("CPLUSP_TRUSTED(\""), "{id}: the trusted declaration in example.cpp carries CPLUSP_TRUSTED with a reason, from include/cplusp.h");
@@ -409,8 +413,11 @@ fn every_row_the_bot_may_use_has_an_example() {
                 let o = gate(&trusted);
                 let (out, err) = text(&o);
                 assert_eq!(o.status.code(), Some(1), "{id}: trusted.cpp must fail the gate, it holds the construct. stdout: {out} stderr: {err}");
-                for line in out.lines() {
-                    assert!(line.contains(&format!("\"rule\":\"{id}\"")), "{id}: the gate must refuse trusted.cpp under {id} only, got: {line}");
+                // A row's trusted body shows that row's construct and no other. A larger example's trusted body may hit any row.
+                if row.decision == "trusted_only" {
+                    for line in out.lines() {
+                        assert!(line.contains(&format!("\"rule\":\"{id}\"")), "{id}: the gate must refuse trusted.cpp under {id} only, got: {line}");
+                    }
                 }
             }
         }

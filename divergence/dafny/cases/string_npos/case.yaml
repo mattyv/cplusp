@@ -6,8 +6,9 @@ cpp: "`find` returns `npos` for a string without 'z'. `npos + 1` wraps to 0, whi
 naive_does: "The model of `find` returns the index and needs `'z' in s`. The method leaves it out, so Dafny refuses the call and fails. The model is stricter."
 naive: fails
 mitigated: verifies
-side: cpp
-mitigation: "The C++ tests `!= std::string::npos` before the arithmetic, and its contract names both cases. The model of `find` is an `Option<nat>`, with a case for `None`."
+side: gate
+gate_rule: strings
+mitigation: "Gate row `strings`: no `std::string` in verified code, decision 0031. The C++ searches a span of bytes with a loop and returns an `std::optional` position, so there is no `npos` and no arithmetic on it. The model of the search is an `Option<nat>`, with a case for `None`."
 witness:
   fixed_prints: "0"
   input: "the string \"abc\""
@@ -15,5 +16,6 @@ witness:
   prints: "0"
 rule: |
   `std::string::find` returns `npos` for no match, and arithmetic on it wraps.
-  Model `find` as `Option<nat>`.
-  Test for `npos` before you use the result.
+  Text in verified code is a span of bytes, decision 0031. The gate refuses `std::string` and `std::string_view`.
+  A search returns `std::optional<size_t>`, and the model of it is `Option<nat>`.
+  Never do arithmetic on a position before the `None` case is handled.

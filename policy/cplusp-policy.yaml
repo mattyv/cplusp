@@ -360,6 +360,17 @@ rules:
       - matcher: varDecl(unless(parmVarDecl()), hasType(hasCanonicalType(hasDeclaration(cxxRecordDecl(hasName("::std::span"))))))
       - matcher: fieldDecl(hasType(hasCanonicalType(hasDeclaration(cxxRecordDecl(hasName("::std::span"))))))
 
+  - id: strings
+    construct: "`std::string`, `std::string_view`"
+    area: library
+    canonical: Allowed by all
+    decision: trusted_only
+    why: Text is a sequence of `char`, whose signedness the compiler sets, and the model has no text type. Verified code reads text as bytes.
+    use_instead: "std::span<const uint8_t>, or mark the function trusted with a reason."
+    stage: gate
+    detect:
+      - matcher: typeLoc(loc(qualType(hasCanonicalType(hasDeclaration(cxxRecordDecl(hasAnyName("::std::basic_string", "::std::basic_string_view")))))))
+
   - id: containers
     construct: "`std::vector`, `std::string`, maps"
     area: library
@@ -676,7 +687,7 @@ rules:
     canonical: eCv++ ban. Common in safety code
     decision: ban
     why: Verified code is noexcept.
-    use_instead: std::expected.
+    use_instead: "a result struct with an error enum today, and std::expected when the toolchain compiles it."
     stage: gate
     detect:
       - matcher: cxxThrowExpr()

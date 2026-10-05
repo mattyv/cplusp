@@ -15,3 +15,4 @@ witness:
 rule: |
   Model an `enum class` as a datatype of its enumerators.
   A cast from an integer needs a `requires` that the value is an enumerator, in the C++ contract and in the model.
+  A flags type, where `|` makes values no enumerator names, is a `bv32` in the model, and a cast to it needs no enumerator precondition.
