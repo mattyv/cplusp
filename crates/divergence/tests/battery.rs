@@ -68,18 +68,8 @@ fn root() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("../..").canonicalize().unwrap()
 }
 
-fn dafny() -> String {
-    if let Some(d) = std::env::var_os("DAFNY") {
-        return d.to_string_lossy().into_owned();
-    }
-    if Path::new("/opt/dafny/dafny/dafny").exists() {
-        return "/opt/dafny/dafny/dafny".into();
-    }
-    "dafny".into()
-}
-
 fn verdict(file: &Path) -> Verdict {
-    let out = Command::new(dafny()).arg("verify").arg(file).output().expect("dafny runs");
+    let out = Command::new(divergence::dafny_path()).arg("verify").arg(file).output().expect("dafny runs");
     let text = String::from_utf8_lossy(&out.stdout) + String::from_utf8_lossy(&out.stderr);
     if text.contains("resolution/type errors detected") {
         return Verdict::TypeError;
@@ -88,10 +78,8 @@ fn verdict(file: &Path) -> Verdict {
     if text.contains(", 0 errors") { Verdict::Verifies } else { Verdict::Fails }
 }
 
-/// UBSan, with float division by zero, which `undefined` leaves out.
-const UBSAN: &[&str] = &["-fsanitize=undefined,float-divide-by-zero", "-fno-sanitize-recover=all"];
-/// AddressSanitizer, with sized deallocation so a delete through the wrong type is caught.
-const ASAN: &[&str] = &["-fsanitize=address", "-fsized-deallocation"];
+// The sanitizer flags are the lib's, so the differential run and the witnesses see the same faults.
+use divergence::{ASAN, UBSAN};
 
 fn build(compiler: &str, sources: &[&Path], exe: &Path, flags: &[&str]) -> Output {
     let mut c = Command::new(compiler);

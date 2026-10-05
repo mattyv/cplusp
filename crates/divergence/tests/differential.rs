@@ -76,11 +76,40 @@ fn the_model_and_the_cpp_agree_on_every_input_and_the_naive_model_does_not() {
     assert!(seen >= PLANNED.len(), "found {seen} cases with a differential block, planned {}", PLANNED.len());
 }
 
-/// A run the command cannot complete is an error, never a verdict.
+/// A run the command cannot complete is an error that names the problem, never a verdict. The fixtures under
+/// tests/fixtures/differential each break one thing. A quiet pass is the one failure this run must never have, so a
+/// driver that prints fewer lines than the run has inputs is an error too, on either side.
 #[test]
-fn the_differential_run_refuses_a_case_without_a_driver() {
-    let (o, out, err) = divergence(&["differential", "divergence/dafny/cases/const_alias"]);
+fn the_differential_run_refuses_what_it_cannot_judge() {
+    let refusals = [
+        ("divergence/dafny/cases/const_alias", "const_alias: no differential block in case.yaml"),
+        ("crates/divergence/tests/fixtures/differential/short_model", "short_model: 3 inputs, 1 line from the model"),
+        ("crates/divergence/tests/fixtures/differential/short_cpp", "short_cpp: 3 inputs, 1 line from the C++"),
+        ("crates/divergence/tests/fixtures/differential/zero_runs", "zero_runs: runs is 0"),
+        ("crates/divergence/tests/fixtures/differential/reversed_len", "reversed_len: len [4, 3] is reversed"),
+        ("crates/divergence/tests/fixtures/differential/bad_range", "bad_range: min -5 is outside uint32"),
+        ("crates/divergence/tests/fixtures/differential/bad_type", "bad_type: int16 is not a type of the differential block"),
+        ("crates/divergence/tests/fixtures/differential/no_driver", "no_driver/drive.dfy: No such file"),
+        ("crates/divergence/tests/fixtures/differential/throws", "throws: the C++ failed at input 1 without a sanitizer report"),
+    ];
+    for (dir, message) in refusals {
+        let (o, out, err) = divergence(&["differential", dir]);
+        assert_eq!(o.status.code(), Some(2), "{dir}: stdout: {out} stderr: {err}");
+        assert!(err.contains(message), "{dir}: expected `{message}` in stderr: {err}");
+        assert!(out.trim().is_empty(), "{dir}: no verdict on an error, got: {out}");
+    }
+    // The tools it needs, by name.
+    let o = Command::new(env!("CARGO_BIN_EXE_divergence"))
+        .args(["differential", "crates/divergence/tests/fixtures/differential/throws"])
+        .env("DAFNY", "/nonexistent/dafny")
+        .current_dir(root())
+        .output()
+        .expect("divergence runs");
+    let err = String::from_utf8_lossy(&o.stderr);
+    assert_eq!(o.status.code(), Some(2), "stderr: {err}");
+    assert!(err.contains("/nonexistent/dafny"), "the error names the Dafny it could not run: {err}");
+    // A command line it does not understand is the usage line, not the report of a prover called `differential`.
+    let (o, out, err) = divergence(&["differential"]);
     assert_eq!(o.status.code(), Some(2), "stdout: {out} stderr: {err}");
-    assert!(err.contains("const_alias: no differential block in case.yaml"), "stderr: {err}");
-    assert!(out.trim().is_empty(), "no verdict on an error, got: {out}");
+    assert!(err.starts_with("usage: divergence"), "stderr: {err}");
 }

@@ -1,0 +1,4 @@
+differential:
+  runs: 0
+  args:
+    - {type: int32}

@@ -1,0 +1,4 @@
+differential:
+  runs: 3
+  args:
+    - {type: uint32, min: -5, max: 5}

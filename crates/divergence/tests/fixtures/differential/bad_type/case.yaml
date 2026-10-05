@@ -1,0 +1,4 @@
+differential:
+  runs: 3
+  args:
+    - {type: int16}

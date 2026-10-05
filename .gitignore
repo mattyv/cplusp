@@ -2,5 +2,5 @@
 /.cplusp
 *.generated.yaml
 .claude/worktrees/
-*-py/
-__pycache__/
+# A hand run of Dafny on a driver builds beside it. The command never does.
+/divergence/dafny/cases/*/*-py/
