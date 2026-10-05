@@ -1,6 +1,6 @@
 # 0033: One root, one writer
 
-Date: 2026-10-05. Status: proposed. Amends the aliasing rule of 0029, which made `requires &a != &b` a contract clause. Follows a third outside review.
+Date: 2026-10-05. Status: decided, after the gate held it and two reviews read it. Amends the aliasing rule of 0029, which made `requires &a != &b` a contract clause. Follows a third outside review.
 
 ## Decision
 

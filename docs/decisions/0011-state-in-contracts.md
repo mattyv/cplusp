@@ -1,6 +1,6 @@
 # 0011: State enters contracts as inputs and outputs
 
-Date: 2026-10-03. Status: proposed.
+Date: 2026-10-03. Status: decided on 2026-10-05. The gate check that reads the two clauses is the next round, decision to follow.
 
 ## Decision
 

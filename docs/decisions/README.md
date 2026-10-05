@@ -16,7 +16,7 @@ Status is `decided`, `proposed` (the default until someone objects or the thin s
 | [0008](0008-rust-with-verus.md) | The driver is Rust written in Verus. C++ only for the clang-tidy module. No Python | decided |
 | [0009](0009-no-ply.md) | Ply is not a dependency for now | decided |
 | [0010](0010-how-we-work.md) | Test first, proofs in, the ponytail ladder, Sonnet implements and Fable reviews | decided |
-| [0011](0011-state-in-contracts.md) | Members are implicit. Globals and statics are listed in reads or modifies | proposed |
+| [0011](0011-state-in-contracts.md) | Members are implicit. Globals and statics are listed in reads or modifies | decided |
 | [0012](0012-shared-variables.md) | Variables other threads may change enter verified code only as values | proposed |
 | [0013](0013-gate-flag.md) | A row is gate-enforced when its stage is gate, or it has detect and a decision other than allow | decided |
 | [0014](0014-gate-refusals.md) | The gate refuses what it cannot judge: compile errors, NOLINT, bad build dirs, loose YAML | decided |
@@ -38,5 +38,5 @@ Status is `decided`, `proposed` (the default until someone objects or the thin s
 | [0030](0030-const-reaches-through-a-handle-and-a-static-local-is-refused.md) | Const reaches through a `unique_ptr`, a function-local static is refused, two matcher holes closed | decided |
 | [0031](0031-text-is-bytes-in-verified-code.md) | Text is bytes in verified code. `std::string` is trusted only, a search returns an optional | decided |
 | [0032](0032-the-gate-is-an-allowlist.md) | The gate is an allowlist of node kinds. A kind it does not list is refused | decided |
-| [0033](0033-one-root-one-writer.md) | One root, one writer. No two names for one object in a call, no write through a const handle, no read beside an unordered change | proposed |
+| [0033](0033-one-root-one-writer.md) | One root, one writer. No two names for one object in a call, no write through a const handle, no read beside an unordered change | decided |
 | [0034](0034-the-differential-run-is-the-first-match-check.md) | The differential run is the first match check. The model and the C++ run on the same inputs, and the naive model must part ways | decided |
