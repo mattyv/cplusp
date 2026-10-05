@@ -104,3 +104,26 @@ Coord both(Coord x) {
 }
 
 }  // namespace shapes
+
+#include <array>
+
+// Two attributes the list has, a class template that names itself, and a deduced template argument.
+[[nodiscard]] int32_t kept(int32_t x) {
+  return x;
+}
+
+int32_t dropped([[maybe_unused]] int32_t x) {
+  return 0;
+}
+
+template <typename T>
+struct Box {
+  T value;
+  Box(const Box& other) : value(other.value) {}
+};
+
+//@ ensures result == 1
+int32_t first_of_three() {
+  std::array a{int32_t{1}, int32_t{2}, int32_t{3}};
+  return a[0];
+}

@@ -20,4 +20,4 @@ rule: |
   Every function that changes it takes the State in and gives it back. In the C++ contract that is `modifies total`.
   A trusted contract that omits it is false.
   The gate reads the `modifies` and `reads` lines, decision 0035, and refuses an access to a global they do not list, also through a call.
-  A trusted function has a body the gate does not judge, so a reviewer still reads its lines.
+  The gate reads the lines of a trusted function too, so a trusted body that forgets one is refused. A reviewer still reads what the lines claim.

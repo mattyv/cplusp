@@ -30,3 +30,17 @@ int32_t first_of_vla(int32_t n) {
   a[0] = 1;
   return a[0];
 }
+
+void done(int32_t* p);
+
+// Attributes are not node kinds, so they have a list of their own. A cleanup attribute runs a hidden call at scope exit.
+int32_t with_cleanup() {
+  int32_t x __attribute__((cleanup(done))) = 0;  // BANNED
+  return x;
+}
+
+[[gnu::pure]] int32_t promised_pure(int32_t x);  // BANNED
+
+struct __attribute__((may_alias)) Alias {  // BANNED
+  int32_t v;
+};

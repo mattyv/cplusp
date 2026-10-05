@@ -140,6 +140,8 @@ trusted_only:  Not provable: {file}:{line}: {construct}: allowed only in trusted
 restrict:      Not provable: {file}:{line}: {construct}: outside its limit. Limit: {limit} Use {use_instead}
 ```
 
+A hand-written check may add one sentence of its own at the end, after the `Use` clause. The allowlist says which construct: `The construct is GotoStmt.` The state check says which variable: `total changes, and the modifies line does not list it.` The sentence is the plugin's, and the gate prints it as it is.
+
 For example, the `iterators` entry above produces:
 
 ```
@@ -163,7 +165,7 @@ Two findings come from the gate itself, not from a policy row:
 
 ## Checking the policy
 
-`cplusp policy check` prints `ok: 78 rules, 65 enforced by the gate` or one line per problem on stderr, in the form `{id}: {problem}`. `cplusp policy emit` prints the generated clang-tidy config. Both take `--policy FILE` for a team policy. A file without `rules` is a parse error. So is a rule or override with a field it may not carry. A misspelt key therefore cannot drop a team's overrides on the floor.
+`cplusp policy check` prints `ok: 79 rules, 66 enforced by the gate` or one line per problem on stderr, in the form `{id}: {problem}`. `cplusp policy emit` prints the generated clang-tidy config. Both take `--policy FILE` for a team policy. A file without `rules` is a parse error. So is a rule or override with a field it may not carry. A misspelt key therefore cannot drop a team's overrides on the floor.
 
 ## Reading the policy as a table
 

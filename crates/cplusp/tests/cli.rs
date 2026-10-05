@@ -482,6 +482,39 @@ fn gate_treats_a_forged_line_marker_as_a_finding() {
     }
 }
 
+/// Any pragma but `once` changes the build the proofs assume, or silences the gate. Two that turn contraction back on
+/// behind the flags: clang's own and the standard's. The message names the pragma by its first two words.
+#[test]
+fn gate_treats_any_other_pragma_as_a_finding() {
+    if !clang_tidy_available() {
+        return;
+    }
+    for (file, name) in [("pragma-fp.cpp", "pragma clang fp"), ("pragma-stdc.cpp", "pragma STDC FP_CONTRACT")] {
+        let f = fixture(file);
+        let o = gated(&[f.to_str().unwrap(), "--", "-std=c++23", "-ffp-contract=off"]);
+        assert_eq!(o.status.code(), Some(1), "{file}: stdout: {} stderr: {}", stdout(&o), stderr(&o));
+        let out = stdout(&o);
+        let expected = format!("{file}:2: {name}: not allowed in verified code. It changes the build the proofs assume.");
+        assert!(out.lines().any(|l| l.ends_with(&expected)), "{file}: {out}");
+    }
+}
+
+/// A team may loosen a row to allow. When the row claims node kinds, those kinds are allowed too, or the loosening
+/// would refuse the same lines under `unlisted` and the documented feature would be a lie.
+#[test]
+fn a_loosened_row_that_claims_kinds_allows_them() {
+    if !clang_tidy_available() {
+        return;
+    }
+    let team = fixture("team-loosen.yaml");
+    let banned = root().join("rules/goto/banned.cpp");
+    let plugin = plugin();
+    let o = cplusp(&["gate", "--policy", team.to_str().unwrap(), "--plugin", plugin.to_str().unwrap(), banned.to_str().unwrap(), "--", "-std=c++23", "-ffp-contract=off"]);
+    let out = stdout(&o);
+    assert_eq!(o.status.code(), Some(0), "stdout: {out} stderr: {}", stderr(&o));
+    assert!(!out.contains("GotoStmt") && !out.contains("LabelStmt"), "a loosened goto is no unlisted construct: {out}");
+}
+
 /// A flag that strips the line markers from the preprocessor output leaves the gate blind. The run is refused.
 #[test]
 fn gate_refuses_a_preprocessor_run_without_line_markers() {
@@ -745,11 +778,11 @@ fn every_sample_pair_agrees_with_its_rule() {
         "member_init_order", "slicing", "virtual_call_in_constructor", "virtual_destructor", "raw_pointer", "containers",
         "switch_fallthrough", "switch_missing_case", "accumulate_init", "array_span",
         "double_equality", "double_expression", "rounding_mode", "global_constructors", "double_only", "inexact_literal", "unique_ptr", "static_local", "strings",
-        "aliasing", "unlisted", "global_state", "iostreams",
+        "aliasing", "unlisted", "global_state", "iostreams", "builtins",
     ] {
         assert!(rules_dir.join(id).is_dir(), "no sample pair for rule {id}");
     }
-    assert!(checked >= 65, "expected at least 65 sample pairs, found {checked}");
+    assert!(checked >= 66, "expected at least 66 sample pairs, found {checked}");
 }
 
 /// Pull `"key":"value"` or `"key":123` out of one JSON line without a JSON library.

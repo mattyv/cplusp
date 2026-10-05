@@ -50,3 +50,25 @@ struct Counter {
     ++n;
   }
 };
+
+// An unqualified name on the line is fine when one variable has it.
+//@ requires Tally::n < 0x7FFFFFFF
+//@ modifies n
+void count_short() {
+  Tally::n += 1;
+}
+
+template <typename T>
+struct Box {
+  static int32_t n;
+};
+
+template <typename T>
+int32_t Box<T>::n = 0;
+
+// The static member of a class template, named without the template arguments, as the bot writes it.
+//@ requires Box::n < 0x7FFFFFFF
+//@ modifies Box::n
+void bump_box() {
+  Box<int32_t>::n += 1;
+}

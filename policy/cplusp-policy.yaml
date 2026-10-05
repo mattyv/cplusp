@@ -930,13 +930,24 @@ rules:
         options:
           AllowedRegexp: "^CPLUSP_"
 
+  - id: builtins
+    construct: Compiler builtins
+    area: platform
+    canonical: Not in any guideline
+    decision: ban
+    why: A `__builtin_` call is the compiler's own function, with no contract and often undefined behaviour on the wrong argument. The three that mark unreachable code have their own row.
+    use_instead: "the standard library function that does the same, or mark the function trusted with a reason."
+    stage: gate
+    detect:
+      - matcher: callExpr(callee(functionDecl(matchesName("^::__builtin_"), unless(hasAnyName("__builtin_unreachable", "__builtin_assume")))))
+
   # ------------------------------------------------------------- the allowlist
   - id: unlisted
     construct: A construct no row names
     area: platform
     canonical: "Decision 0032. An allowlist, not a blocklist"
     decision: ban
-    why: The gate refuses what it does not know. Every kind of statement, expression, declaration and type that verified code may use is on the lists in this row. A kind outside them has no rule yet, so no proof covers it.
+    why: The gate refuses what it does not know. Every kind of statement, expression, declaration and type that verified code may use is on the lists in this row, and so is every attribute. A kind outside them has no rule yet, so no proof covers it.
     use_instead: "a construct the subset lists, or ask for a row."
     stage: gate
     detect:
@@ -944,4 +955,5 @@ rules:
         options:
           statements: ArraySubscriptExpr,AttributedStmt,OpaqueValueExpr,BinaryOperator,BreakStmt,CXXBindTemporaryExpr,CXXBoolLiteralExpr,CXXConstructExpr,CXXDefaultArgExpr,CXXDefaultInitExpr,CXXDeleteExpr,CXXDependentScopeMemberExpr,CXXForRangeStmt,CXXFunctionalCastExpr,CXXMemberCallExpr,CXXNewExpr,CXXNullPtrLiteralExpr,CXXOperatorCallExpr,CXXRewrittenBinaryOperator,CXXScalarValueInitExpr,CXXStaticCastExpr,CXXStdInitializerListExpr,CXXTemporaryObjectExpr,CXXThisExpr,CallExpr,CaseStmt,CharacterLiteral,CompoundAssignOperator,CompoundStmt,ConceptSpecializationExpr,ConditionalOperator,ConstantExpr,ContinueStmt,DeclRefExpr,DeclStmt,DefaultStmt,DoStmt,ExprWithCleanups,FloatingLiteral,ForStmt,IfStmt,ImplicitCastExpr,ImplicitValueInitExpr,InitListExpr,IntegerLiteral,LambdaExpr,MaterializeTemporaryExpr,MemberExpr,NullStmt,ParenExpr,ParenListExpr,ReturnStmt,StringLiteral,SubstNonTypeTemplateParmExpr,SwitchStmt,UnaryExprOrTypeTraitExpr,UnaryOperator,UnresolvedLookupExpr,WhileStmt
           declarations: AccessSpecDecl,BindingDecl,CXXConstructorDecl,CXXConversionDecl,CXXDestructorDecl,CXXMethodDecl,CXXRecordDecl,ClassTemplateDecl,ClassTemplateSpecializationDecl,DecompositionDecl,EnumConstantDecl,EnumDecl,FieldDecl,FunctionDecl,FunctionTemplateDecl,NamespaceDecl,ParmVarDecl,StaticAssertDecl,TemplateTypeParmDecl,TypeAliasDecl,TypedefDecl,VarDecl,VarTemplateDecl,VarTemplateSpecializationDecl
-          types: AutoType,BuiltinType,ConstantArrayType,ElaboratedType,EnumType,FunctionProtoType,LValueReferenceType,ParenType,PointerType,RValueReferenceType,RecordType,SubstTemplateTypeParmType,TemplateSpecializationType,TemplateTypeParmType,TypedefType,UsingType
+          types: AutoType,BuiltinType,ConstantArrayType,ElaboratedType,EnumType,FunctionProtoType,LValueReferenceType,ParenType,PointerType,RValueReferenceType,RecordType,SubstTemplateTypeParmType,TemplateSpecializationType,TemplateTypeParmType,TypedefType,UsingType,InjectedClassNameType,DeducedTemplateSpecializationType
+          attributes: annotate,fallthrough,final,maybe_unused,nodiscard,override
