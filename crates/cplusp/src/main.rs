@@ -28,6 +28,11 @@ const CONFIG_ERROR: &str = "clang-tidy-config";
 /// The generic check of the plugin. A `matcher` entry of the policy becomes an option of this check.
 const MATCHER: &str = "cplusp-matcher";
 
+/// The checks of the plugin whose message starts with the id of a rule: `{rule}: {sentence}`, or the bare id. The gate maps a finding
+/// to its rule by that id and puts the sentence after the message of the rule. Every other check maps by its own name.
+// ponytail: a hand-kept list. Upgrade: a prefix on the check name.
+const RULE_FIRST: &[&str] = &[MATCHER, "cplusp-allowlist", "cplusp-unlisted-state"];
+
 /// Checks that the clang-tidy plugin will add. The policy may name them today.
 // ponytail: a hand-kept list. Upgrade: load the plugin and read its `--list-checks`.
 const PLANNED_CHECKS: &[&str] = &[
@@ -517,6 +522,7 @@ struct At {
 }
 
 /// One thing the gate reports. `rule` and `check` are `nolint` or `pragma` for a suppression.
+/// `sentence` is what a check in `RULE_FIRST` said after the rule id. Findings that differ in it are not one finding.
 struct Finding {
     path: PathBuf,
     line: usize,
@@ -524,6 +530,7 @@ struct Finding {
     check: String,
     decision: Decision,
     message: String,
+    sentence: String,
 }
 
 /// An entry of `compile_commands.json`.
@@ -578,7 +585,7 @@ fn database_builds(dir: &Path, files: &[PathBuf], cwd: &Path) -> Result<Vec<Buil
 
 /// A finding the gate makes itself, from a suppression.
 fn ban(path: PathBuf, line: usize, rule: &str, message: &str) -> Finding {
-    Finding { path, line, rule: rule.to_string(), check: rule.to_string(), decision: Decision::Ban, message: message.to_string() }
+    Finding { path, line, rule: rule.to_string(), check: rule.to_string(), decision: Decision::Ban, message: message.to_string(), sentence: String::new() }
 }
 
 /// The lines of `text` with a NOLINT, and the lines where a line directive starts, `#line` or `# 1 "x"`.
@@ -856,11 +863,13 @@ fn gate(c: &Common, json: bool, build_dir: Option<&Path>, plugin: Option<&Path>,
     }
 
     for (path, d) in diagnostics {
-        // The generic check puts the rule id in the message. Every other check maps by its name.
-        let i = if d.name == MATCHER {
-            match rule_by_id(&loaded.policy, &d.at.message) {
+        // A check in RULE_FIRST puts the rule id first in the message, and may follow it with a sentence for the bot.
+        // Every other check maps by its name.
+        let (id, sentence) = d.at.message.split_once(": ").unwrap_or((&d.at.message, ""));
+        let i = if RULE_FIRST.contains(&d.name.as_str()) {
+            match rule_by_id(&loaded.policy, &id.to_string()) {
                 Some(i) if is_active(&loaded.policy.rules[i]) => Some(i),
-                _ => bail!("{MATCHER} reported {}, which is not a rule the gate enforces", d.at.message),
+                _ => bail!("{} reported {}, which is not a rule the gate enforces", d.name, d.at.message),
             }
         } else {
             rule_for_check(&loaded.policy, &d.name)
@@ -874,17 +883,21 @@ fn gate(c: &Common, json: bool, build_dir: Option<&Path>, plugin: Option<&Path>,
         }
         // The core promises a limit and a use_instead on every rule it maps a finding to.
         let (limit, instead) = (rule.limit.as_deref().unwrap_or(""), rule.use_instead.as_deref().unwrap_or(""));
-        let message = match rule.decision {
+        let mut message = match rule.decision {
             Decision::Ban => format!("{}: not allowed in verified code. {} Use {instead}", doc.construct, rule.why),
             Decision::TrustedOnly => format!("{}: allowed only in trusted code. {} Use {instead}", doc.construct, rule.why),
             // `rule_for_check` never returns an allow rule.
             Decision::Restrict | Decision::Allow => format!("{}: outside its limit. Limit: {limit} Use {instead}", doc.construct),
         };
+        let sentence = if RULE_FIRST.contains(&d.name.as_str()) { sentence.to_string() } else { String::new() };
+        if !sentence.is_empty() {
+            message = format!("{message} {sentence}");
+        }
         let line = line_of(&path, d.at.offset)?;
-        found.push(Finding { path, line, rule: rule.id.clone(), check: d.name, decision: rule.decision, message });
+        found.push(Finding { path, line, rule: rule.id.clone(), check: d.name, decision: rule.decision, message, sentence });
     }
-    found.sort_by(|a, b| (&a.path, a.line, &a.rule).cmp(&(&b.path, b.line, &b.rule)));
-    found.dedup_by(|a, b| (&a.path, a.line, &a.rule) == (&b.path, b.line, &b.rule));
+    found.sort_by(|a, b| (&a.path, a.line, &a.rule, &a.sentence).cmp(&(&b.path, b.line, &b.rule, &b.sentence)));
+    found.dedup_by(|a, b| (&a.path, a.line, &a.rule, &a.sentence) == (&b.path, b.line, &b.rule, &b.sentence));
 
     for f in &found {
         if json {

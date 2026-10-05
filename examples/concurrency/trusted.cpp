@@ -6,6 +6,7 @@
 // The declaration in example.cpp carries the CPLUSP_TRUSTED marker.
 std::atomic<int32_t> current_level{0};
 
+//@ reads current_level
 int32_t level() {
   return current_level.load();
 }

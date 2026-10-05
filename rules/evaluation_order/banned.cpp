@@ -54,7 +54,7 @@ int32_t change_beside_a_call(int32_t& x, int32_t a) {
 
 // One change beside a global, which is the State.
 int32_t change_beside_a_global(int32_t& x) {
-  return next(x) + total;  // BANNED
+  return next(x) + total;  // BANNED also: global_state
 }
 
 // A non-const call on an object beside a member of that object.
@@ -111,7 +111,7 @@ bool before_total(int32_t a, int32_t b = total);
 
 // The default argument reads the global beside the change.
 bool read_by_default(int32_t& x) {
-  return before_total(next(x));  // BANNED
+  return before_total(next(x));  // BANNED also: global_state
 }
 
 // A capture initializer reads x beside the change of x.

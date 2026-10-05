@@ -67,6 +67,7 @@ int32_t counter = 0;
 const int32_t limit = 10;
 
 // A const reference to a global in a call into std. Nothing in std can reach the State.
+//@ reads counter
 int32_t capped() {
   return std::min(counter, limit);
 }

@@ -76,13 +76,15 @@ fn policy_emit_is_the_clang_tidy_config_for_the_default_policy() {
     let out = stdout(&o);
     assert!(out.contains("Checks:"), "{out}");
     assert!(out.contains("-*"), "{out}");
-    assert!(out.contains("google-readability-casting"), "{out}");
-    assert!(out.contains("cppcoreguidelines-avoid-goto"), "{out}");
+    assert!(out.contains("cppcoreguidelines-init-variables"), "{out}");
+    assert!(out.contains("cplusp-allowlist"), "{out}");
     assert!(out.contains("WarningsAsErrors: '*'"), "{out}");
     // A dormant check on an allow row never reaches the config.
     assert!(!out.contains("cppcoreguidelines-pro-bounds-constant-array-index"), "{out}");
-    // Every check once.
-    assert_eq!(out.matches("google-readability-casting").count(), 1, "{out}");
+    // Every check once, though many rows name it.
+    let checks = out.lines().find(|l| l.starts_with("Checks:")).expect("Checks line");
+    assert_eq!(checks.matches("cplusp-allowlist").count(), 1, "{checks}");
+    assert_eq!(checks.matches("cppcoreguidelines-init-variables").count(), 1, "{checks}");
 }
 
 /// A `clang-diagnostic-{name}` check reports only when the compiler has `-W{name}` on, and clang leaves
@@ -208,7 +210,7 @@ fn gate_passes_an_allowed_sample_and_fails_a_banned_one() {
     let o = gated(&[banned.to_str().unwrap(), "--", "-std=c++23", "-ffp-contract=off"]);
     assert_eq!(o.status.code(), Some(1), "stdout: {} stderr: {}", stdout(&o), stderr(&o));
     let out = stdout(&o);
-    let expected = "banned.cpp:4: C-style casts: not allowed in verified code. Hides what kind of cast it is. All forms, including plain numeric narrowing. Use static_cast, or std::bit_cast for a byte view.";
+    let expected = "banned.cpp:4: C-style casts: not allowed in verified code. Hides what kind of cast it is. All forms, including plain numeric narrowing. Use static_cast, or std::bit_cast for a byte view. The construct is CStyleCastExpr.";
     assert!(out.lines().any(|l| l.starts_with("Not provable: ") && l.ends_with(expected)), "{out}");
 }
 
@@ -222,7 +224,7 @@ fn gate_reports_a_trusted_only_construct_with_its_own_wording() {
     let o = gated(&[banned.to_str().unwrap(), "--", "-std=c++23", "-ffp-contract=off"]);
     assert_eq!(o.status.code(), Some(1), "stdout: {} stderr: {}", stdout(&o), stderr(&o));
     let out = stdout(&o);
-    let expected = "banned.cpp:4: `reinterpret_cast`, `const_cast`: allowed only in trusted code. Defeats the type model. Most forms are UB. Use std::bit_cast, or mark the function trusted with a reason.";
+    let expected = "banned.cpp:4: `reinterpret_cast`, `const_cast`: allowed only in trusted code. Defeats the type model. Most forms are UB. Use std::bit_cast, or mark the function trusted with a reason. The construct is CXXReinterpretCastExpr.";
     assert!(out.lines().any(|l| l.ends_with(expected)), "{out}");
 }
 
@@ -597,8 +599,9 @@ fn policy_emit_turns_matcher_patterns_into_options_of_the_generic_check() {
     let checks = out.lines().find(|l| l.starts_with("Checks:")).expect("Checks line");
     assert_eq!(checks.matches("cplusp-matcher").count(), 1, "{checks}");
     assert!(out.contains("  cplusp-matcher.unscoped_enum/1: 'enumDecl(unless(isScoped()), unless(isImplicit()))'"), "{out}");
-    assert!(out.contains("  cplusp-matcher.exceptions/1: 'cxxThrowExpr()'"), "{out}");
-    assert!(out.contains("  cplusp-matcher.exceptions/2: 'cxxTryStmt()'"), "{out}");
+    assert!(out.contains("  cplusp-matcher.lvalue_references/1: 'fieldDecl(hasType(referenceType()))'"), "{out}");
+    // A row that claims node kinds names them as an option of the allowlist check, keyed by the row.
+    assert!(out.contains("  cplusp-allowlist.exceptions: 'CXXThrowExpr,CXXTryStmt,CXXCatchStmt'"), "{out}");
 }
 
 #[test]

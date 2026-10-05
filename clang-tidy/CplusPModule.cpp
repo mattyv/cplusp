@@ -5,7 +5,7 @@
 // The check compiles the pattern and reports every match with the rule id as its message.
 // The Rust side turns the rule id into the message for the bot.
 //
-// Nine hand-written checks, for the rules that a pattern cannot say. The gate maps a finding to its rule by
+// Eleven hand-written checks, for the rules that a pattern cannot say. The gate maps a finding to its rule by
 // the name of the check, so their messages are short and plain. The sample pair of each rule is the evidence.
 
 #include "ClangTidyCheck.h"
@@ -293,6 +293,7 @@ const char StateKey = 0, ThisKey = 0;
 struct RootPath {
   std::vector<const void *> Steps;
   bool Global = false;
+  const Expr *At = nullptr;  // the expression that names the variable, for a path that starts at one
 };
 using Roots = llvm::SmallVector<RootPath, 2>;
 
@@ -355,8 +356,11 @@ bool writesThrough(QualType Type) {
 bool bindsToName(QualType Type) { return Type->isReferenceType() || Type->isPointerType() || asSpan(Type); }
 
 // A global or a static data member is State. A constant is not: nothing writes it, so it is no second name for anything,
-// and a read of it beside a change reads nothing the change can reach.
-bool isMutableGlobal(const VarDecl *Var) { return Var->hasGlobalStorage() && !Var->getType().isConstQualified(); }
+// and a read of it beside a change reads nothing the change can reach. A global of std, such as `std::cout`, is the business of the
+// row iostreams and not of the rules about State.
+bool isMutableGlobal(const VarDecl *Var) {
+  return Var->hasGlobalStorage() && !Var->getType().isConstQualified() && !inStdNamespace(Var);
+}
 
 // An argument that names an object: it binds to a reference, a pointer or a span, or it is the object of a member call.
 struct Arg {
@@ -416,7 +420,7 @@ Walk rootsOf(const Expr *E) {
     if (const auto *Var = dyn_cast<VarDecl>(Ref->getDecl())) {
       if (Var->hasInit() && (Var->isImplicit() || (Var->isCXXForRangeDecl() && Var->getType()->isReferenceType())))
         return rangeRoots(Var);
-      W.Paths.push_back({{Var}, isMutableGlobal(Var)});
+      W.Paths.push_back({{Var}, isMutableGlobal(Var), Ref});
     } else if (isa<BindingDecl>(Ref->getDecl())) {
       W.Paths.push_back({{Ref->getDecl()}, false});
     }
@@ -428,7 +432,7 @@ Walk rootsOf(const Expr *E) {
   }
   if (const auto *Member = dyn_cast<MemberExpr>(E)) {
     if (const auto *Var = dyn_cast<VarDecl>(Member->getMemberDecl())) {
-      W.Paths.push_back({{Var}, isMutableGlobal(Var)});
+      W.Paths.push_back({{Var}, isMutableGlobal(Var), Member});
     } else if (isa<FieldDecl>(Member->getMemberDecl())) {
       W = rootsOf(Member->getBase());
       for (RootPath &Path : W.Paths)
@@ -483,13 +487,12 @@ Walk rootsOf(const Expr *E) {
   if (!Object && keepsRoot(Function))
     return Call->getNumArgs() ? rootsOf(Call->getArg(0)) : W;
   if (bindsToName(Function->getReturnType())) {
-    // Any reference, pointer or span may be one of the arguments, or something the State holds. Nothing in std can reach the State.
+    // A reference, pointer or span that a function returns reaches only what its arguments and its object reach. The return check
+    // refuses a function that returns a global, so no caller receives one.
     llvm::SmallVector<Arg, 4> Args;
     collectArgs(Call, Args);
     for (const Arg &A : Args)
       W.add(A.Where);
-    if (!inStdNamespace(Function))
-      W.Paths.push_back(stateRoot());
   }
   return W;
 }
@@ -534,11 +537,11 @@ public:
   }
   void check(const MatchFinder::MatchResult &Result) override {
     if (const auto *Return = Result.Nodes.getNodeAs<ReturnStmt>("return")) {
-      // A function that returns a reference, a pointer or a span may return only what its parameters or `this` reach. A global,
-      // or the State, that escapes this way is a global passed by reference at every call of the function.
+      // A function that returns a reference, a pointer or a span may return only what its parameters or `this` reach. A global
+      // that escapes this way is a global passed by reference at every call of the function.
       const auto *Function = Result.Nodes.getNodeAs<FunctionDecl>("function");
       if (Return->getRetValue() && bindsToName(Function->getReturnType()) &&
-          llvm::any_of(rootsOf(Return->getRetValue()).Paths, [](const RootPath &P) { return P.Global || P.Steps[0] == &StateKey; }))
+          llvm::any_of(rootsOf(Return->getRetValue()).Paths, [](const RootPath &P) { return P.Global; }))
         diag(Return->getBeginLoc(), "a reference to a global escapes");
       return;
     }
@@ -780,6 +783,304 @@ public:
   }
 };
 
+// cplusp-allowlist: decision 0032. The gate refuses every kind of node it does not know. The options are three lists of allowed kinds,
+// `statements`, `declarations` and `types`, and one option per row of the policy, `{row}: kinds`, that names the kinds the row claims.
+// A kind names the class of the node in clang: `GotoStmt`, `ImplicitCastExpr`, `FunctionDecl`, `BuiltinType`. The message is
+// `{row}: The construct is {Kind}.` A kind that a row claims is that row's finding, even when it is on a list. A kind on no row and on
+// no list is `unlisted`. Like the generic check, it reads the tree as the compiler has it, with the implicit casts.
+class AllowlistCheck : public ClangTidyCheck {
+public:
+  AllowlistCheck(StringRef Name, ClangTidyContext *Context) : ClangTidyCheck(Name, Context), Ctx(Context) {}
+
+  void registerMatchers(MatchFinder *Finder) override {
+    const std::string Prefix = (getID() + ".").str();
+    for (const auto &Option : Ctx->getOptions().CheckOptions) {
+      StringRef Key = Option.getKey();
+      if (!Key.consume_front(Prefix))
+        continue;
+      llvm::SmallVector<StringRef, 16> Kinds;
+      StringRef(Option.getValue().Value).split(Kinds, ',', -1, false);
+      for (StringRef Kind : Kinds) {
+        Kind = Kind.trim();
+        if (Kind.empty())
+          continue;
+        if (Key == "statements")
+          Statements.insert(Kind);
+        else if (Key == "declarations")
+          Declarations.insert(Kind);
+        else if (Key == "types")
+          Types.insert(Kind);
+        else
+          Claimed[Kind] = Key.str();
+      }
+    }
+    // A node in a system header is no source of ours. The body of an implicit function comes from the compiler too, so none of its
+    // statements is. Nor is a node below a substituted template argument: clang writes `(Enum)1` for an enum argument, and the
+    // argument is judged where it is written. The test of the location comes first, because the headers hold most of the nodes.
+    Finder->addMatcher(stmt(unless(isExpansionInSystemHeader()), unless(hasAncestor(functionDecl(isImplicit()))),
+                            unless(hasAncestor(substNonTypeTemplateParmExpr())))
+                           .bind("stmt"),
+                       this);
+    Finder->addMatcher(decl(unless(isExpansionInSystemHeader())).bind("decl"), this);
+    Finder->addMatcher(typeLoc(unless(isExpansionInSystemHeader())).bind("type"), this);
+  }
+
+  void check(const MatchFinder::MatchResult &Result) override {
+    SourceLocation Loc;
+    std::string Kind;
+    const llvm::StringSet<> *Allowed = nullptr;
+    if (const auto *S = Result.Nodes.getNodeAs<Stmt>("stmt")) {
+      Loc = S->getBeginLoc();
+      Kind = S->getStmtClassName();
+      Allowed = &Statements;
+    } else if (const auto *D = Result.Nodes.getNodeAs<Decl>("decl")) {
+      // The kinds of an implicit declaration come from the compiler, not from the source.
+      if (D->isImplicit() || isa<TranslationUnitDecl>(D))
+        return;
+      Loc = D->getLocation();
+      Kind = std::string(D->getDeclKindName()) + "Decl";
+      Allowed = &Declarations;
+    } else if (const auto *T = Result.Nodes.getNodeAs<TypeLoc>("type")) {
+      if (T->isNull())
+        return;
+      Loc = T->getBeginLoc();
+      Kind = std::string(T->getTypePtr()->getTypeClassName()) + "Type";
+      Allowed = &Types;
+    } else {
+      return;
+    }
+    if (Loc.isInvalid())
+      return;
+    // A node from a macro is reported where the macro is used.
+    Loc = Result.SourceManager->getFileLoc(Loc);
+    const auto Row = Claimed.find(Kind);
+    if (Row != Claimed.end())
+      diag(Loc, "%0: The construct is %1.") << Row->second << Kind;
+    else if (!Allowed->contains(Kind))
+      diag(Loc, "unlisted: The construct is %0.") << Kind;
+  }
+
+private:
+  ClangTidyContext *Ctx;
+  llvm::StringSet<> Statements, Declarations, Types;
+  // The kind, and the row that claims it.
+  llvm::StringMap<std::string> Claimed;
+};
+
+// ------------------------------------------------------------ unlisted state, decision 0035
+
+// The two kinds of contract line the gate reads: `//@ modifies a, b` and `//@ reads a, b`. Every other line is ignored.
+struct Contract {
+  std::vector<std::string> Modifies, Reads;
+};
+
+// The contract lines of the function that starts at `First`: the contiguous lines above that line that start with `//@`. A
+// `CPLUSP_...(...)` marker line does not end the block. Any other line does. The lines come from the source buffer, because `//@`
+// is no doc comment and the AST has not got it.
+Contract contractAbove(const SourceManager &SM, SourceLocation First) {
+  Contract C;
+  First = SM.getExpansionLoc(First);
+  if (First.isInvalid())
+    return C;
+  const auto [File, Offset] = SM.getDecomposedLoc(First);
+  bool Invalid = false;
+  const StringRef Text = SM.getBufferData(File, &Invalid);
+  if (Invalid)
+    return C;
+  size_t Start = Text.substr(0, Offset).rfind('\n');
+  Start = Start == StringRef::npos ? 0 : Start + 1;
+  while (Start > 0) {
+    // The line above is the text from the newline before it up to the newline that ends it.
+    const size_t End = Start - 1;
+    size_t Begin = Text.substr(0, End).rfind('\n');
+    Begin = Begin == StringRef::npos ? 0 : Begin + 1;
+    StringRef Line = Text.slice(Begin, End).trim();
+    Start = Begin;
+    if (Line.starts_with("CPLUSP_"))
+      continue;
+    if (!Line.consume_front("//@"))
+      break;
+    Line = Line.ltrim();
+    std::vector<std::string> *Names = Line.consume_front("modifies") ? &C.Modifies : Line.consume_front("reads") ? &C.Reads : nullptr;
+    if (!Names || (!Line.empty() && !isspace(static_cast<unsigned char>(Line.front()))))
+      continue;
+    llvm::SmallVector<StringRef, 8> Parts;
+    Line.split(Parts, ',', -1, false);
+    for (StringRef Name : Parts)
+      if (!Name.trim().empty())
+        Names->push_back(Name.trim().str());
+  }
+  return C;
+}
+
+// Where a function starts: its return type, or its name for a constructor. A function template starts at its `template`.
+SourceLocation firstTokenOf(const FunctionDecl *Function) {
+  if (const FunctionTemplateDecl *Template = Function->getDescribedFunctionTemplate())
+    return Template->getBeginLoc();
+  return Function->getOuterLocStart();
+}
+
+// ponytail: two ceilings. A callee that has no lines in this translation unit adds nothing, so a callee in a header behind
+// -isystem, a callee through a function pointer and a callee in another file add nothing. A lambda body is not read, and a lambda is
+// not a function that has lines. Upgrade: a contract reader that runs on every file, and a record of the lines of every function.
+Contract contractOf(const SourceManager &SM, const FunctionDecl *Function) {
+  Contract C;
+  if (const FunctionDecl *Pattern = Function->getTemplateInstantiationPattern())
+    Function = Pattern;
+  for (const FunctionDecl *Declaration : Function->redecls()) {
+    if (SM.isInSystemHeader(Declaration->getLocation()))
+      continue;
+    Contract One = contractAbove(SM, firstTokenOf(Declaration));
+    C.Modifies.insert(C.Modifies.end(), One.Modifies.begin(), One.Modifies.end());
+    C.Reads.insert(C.Reads.end(), One.Reads.begin(), One.Reads.end());
+  }
+  return C;
+}
+
+// A mutable global or a static data member. A constant, a member and a function-local static are not state here.
+bool isState(const VarDecl *Var) { return isMutableGlobal(Var) && !Var->isStaticLocal(); }
+
+// A listed name is the qualified name of the variable, or the qualified name after a `::`.
+bool sameName(StringRef A, StringRef B) {
+  return A == B || (A.size() > B.size() && A.ends_with(B) && A.drop_back(B.size()).ends_with("::")) ||
+         (B.size() > A.size() && B.ends_with(A) && B.drop_back(A.size()).ends_with("::"));
+}
+
+bool isListed(const std::vector<std::string> &Names, StringRef Name) {
+  return llvm::any_of(Names, [&](const std::string &Listed) { return sameName(Name, Listed); });
+}
+
+// Calls Visit on every node the function runs. An unevaluated operand is not run, and a lambda runs only its capture initializers.
+// A default argument runs at the call, so its nodes are reported at the call. `Where` is the location to report at, or invalid.
+template <typename F> void walkNodes(const Stmt *S, SourceLocation Call, SourceLocation Where, const F &Visit) {
+  if (!S || isa<UnaryExprOrTypeTraitExpr, CXXNoexceptExpr, CXXTypeidExpr>(S))
+    return;
+  if (const auto *Lambda = dyn_cast<LambdaExpr>(S)) {
+    for (const Expr *Init : Lambda->capture_inits())
+      walkNodes(Init, Call, Where, Visit);
+    return;
+  }
+  if (const auto *Default = dyn_cast<CXXDefaultArgExpr>(S)) {
+    walkNodes(Default->getExpr(), Call, Call, Visit);
+    return;
+  }
+  Visit(S, Where);
+  if (isa<CallExpr, CXXConstructExpr>(S))
+    Call = S->getBeginLoc();
+  for (const Stmt *Child : S->children())
+    walkNodes(Child, Call, Where, Visit);
+}
+
+// cplusp-unlisted-state: decision 0035. A function writes only the global state its `//@ modifies` line lists, and reads only what
+// its `//@ reads` or `modifies` line lists. State is a mutable global or static data member. A write is an assignment target, an
+// increment, the object of a non-const member call, or a binding to a non-const reference, pointer or span. Any other mention is a
+// read. A call adds what its callee lists. The message is `global_state: {sentence}`, one finding per access.
+class UnlistedStateCheck : public SpelledCheck {
+public:
+  using SpelledCheck::SpelledCheck;
+  void onStartOfTranslationUnit() override {
+    StateNames.clear();
+    Collected = false;
+  }
+  void registerMatchers(MatchFinder *Finder) override {
+    Finder->addMatcher(functionDecl(isDefinition(), unless(isImplicit()), unless(isExpansionInSystemHeader())).bind("function"), this);
+  }
+  void check(const MatchFinder::MatchResult &Result) override {
+    const auto *Function = Result.Nodes.getNodeAs<FunctionDecl>("function");
+    const SourceManager &SM = *Result.SourceManager;
+    if (!Collected) {
+      collectState(Result.Context->getTranslationUnitDecl(), SM, StateNames);
+      Collected = true;
+    }
+    // The nodes the function runs: its body, and the initializers of a constructor.
+    llvm::SmallVector<const Stmt *, 4> Parts;
+    Parts.push_back(Function->getBody());
+    if (const auto *Constructor = dyn_cast<CXXConstructorDecl>(Function))
+      for (const CXXCtorInitializer *Init : Constructor->inits())
+        Parts.push_back(Init->getInit());
+    // First the writes, because a loop variable writes a variable that the range names, and the range comes first in the tree.
+    llvm::SmallPtrSet<const Stmt *, 16> Written;
+    for (const Stmt *Part : Parts)
+      walkNodes(Part, SourceLocation(), SourceLocation(), [&](const Stmt *S, SourceLocation) {
+        llvm::SmallVector<Roots, 4> Targets;
+        if (const auto *Binary = dyn_cast<BinaryOperator>(S); Binary && Binary->isAssignmentOp()) {
+          Targets.push_back(rootsOf(Binary->getLHS()).Paths);
+        } else if (const auto *Unary = dyn_cast<UnaryOperator>(S); Unary && Unary->isIncrementDecrementOp()) {
+          Targets.push_back(rootsOf(Unary->getSubExpr()).Paths);
+        } else if (isa<CallExpr, CXXConstructExpr>(S)) {
+          llvm::SmallVector<Arg, 4> Args;
+          collectArgs(cast<Expr>(S), Args);
+          for (const Arg &A : Args)
+            if (A.Writes)
+              Targets.push_back(A.Where.Paths);
+        }
+        for (const Roots &Paths : Targets)
+          for (const RootPath &Path : Paths)
+            if (Path.At)
+              Written.insert(Path.At);
+      });
+    // The lines may sit on an earlier declaration, as a header has them, and not on the definition.
+    const Contract Own = contractOf(SM, Function);
+    const auto Refuse = [&](SourceLocation Loc, StringRef Name, bool Write) {
+      if (Write ? isListed(Own.Modifies, Name) : isListed(Own.Modifies, Name) || isListed(Own.Reads, Name))
+        return;
+      if (Write)
+        diag(SM.getExpansionLoc(Loc), "global_state: %0 changes, and the modifies line does not list it.") << Name;
+      else
+        diag(SM.getExpansionLoc(Loc), "global_state: %0 is read, and no reads or modifies line lists it.") << Name;
+    };
+    for (const Stmt *Part : Parts)
+      walkNodes(Part, SourceLocation(), SourceLocation(), [&](const Stmt *S, SourceLocation Where) {
+        const VarDecl *Var = nullptr;
+        if (const auto *Ref = dyn_cast<DeclRefExpr>(S))
+          Var = dyn_cast<VarDecl>(Ref->getDecl());
+        else if (const auto *Member = dyn_cast<MemberExpr>(S))
+          Var = dyn_cast<VarDecl>(Member->getMemberDecl());
+        if (Var && isState(Var))
+          Refuse(Where.isValid() ? Where : S->getBeginLoc(), Var->getQualifiedNameAsString(), Written.contains(S));
+        const FunctionDecl *Callee = nullptr;
+        if (const auto *Call = dyn_cast<CallExpr>(S))
+          Callee = Call->getDirectCallee();
+        else if (const auto *Construct = dyn_cast<CXXConstructExpr>(S))
+          Callee = Construct->getConstructor();
+        if (!Callee)
+          return;
+        // A callee lists its parameters on its lines too. Only a name that is a global of this file, and no parameter of the callee,
+        // is state.
+        const auto IsState = [&](const std::string &Name) {
+          return llvm::any_of(Callee->parameters(), [&](const ParmVarDecl *P) { return P->getName() == Name; }) ? false
+                 : llvm::any_of(StateNames, [&](const std::string &Known) { return sameName(Known, Name); });
+        };
+        const Contract Brought = contractOf(SM, Callee);
+        for (const std::string &Name : Brought.Modifies)
+          if (IsState(Name))
+            Refuse(Where.isValid() ? Where : S->getBeginLoc(), Name, true);
+        for (const std::string &Name : Brought.Reads)
+          if (IsState(Name))
+            Refuse(Where.isValid() ? Where : S->getBeginLoc(), Name, false);
+      });
+  }
+
+private:
+  // The qualified names of the state of this file, found once per translation unit.
+  std::vector<std::string> StateNames;
+  bool Collected = false;
+
+  // The state a file declares, outside the system headers: in a namespace, a linkage specification or a class.
+  static void collectState(const DeclContext *Context, const SourceManager &SM, std::vector<std::string> &Out) {
+    for (const Decl *D : Context->decls()) {
+      if (SM.isInSystemHeader(D->getLocation()))
+        continue;
+      if (const auto *Var = dyn_cast<VarDecl>(D)) {
+        if (isState(Var))
+          Out.push_back(Var->getQualifiedNameAsString());
+      } else if (isa<NamespaceDecl, LinkageSpecDecl, CXXRecordDecl>(D)) {
+        collectState(cast<DeclContext>(D), SM, Out);
+      }
+    }
+  }
+};
+
 class CplusPModule : public ClangTidyModule {
 public:
   void addCheckFactories(ClangTidyCheckFactories &Factories) override {
@@ -792,6 +1093,8 @@ public:
     Factories.registerCheck<EvaluationOrderCheck>("cplusp-evaluation-order");
     Factories.registerCheck<AliasingCheck>("cplusp-aliasing");
     Factories.registerCheck<ConstHandleCheck>("cplusp-const-handle");
+    Factories.registerCheck<AllowlistCheck>("cplusp-allowlist");
+    Factories.registerCheck<UnlistedStateCheck>("cplusp-unlisted-state");
     Factories.registerCheck<InexactLiteralCheck>("cplusp-inexact-literal");
   }
 };

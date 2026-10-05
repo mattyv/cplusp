@@ -94,7 +94,7 @@ void element_and_range(std::vector<int32_t>& v) {
 
 // A global is the State as well, so a reference to it is a second name.
 void global_by_reference() {
-  bump(counter);  // BANNED
+  bump(counter);  // BANNED also: global_state
 }
 
 std::span<int32_t> head(std::vector<int32_t>& v) {
@@ -115,7 +115,7 @@ void bump_two(int32_t& x, int32_t& y = counter);
 // A default argument is an argument. Here it binds a global to a reference.
 void defaulted() {
   int32_t x = 0;
-  bump_two(x);  // BANNED
+  bump_two(x);  // BANNED also: global_state
 }
 
 struct Holder {
@@ -127,9 +127,9 @@ Holder holder;
 // A function that returns a reference may return only what its parameters reach. A global that escapes this way is a
 // global passed by reference at every call of the function.
 int32_t& name_of_counter() {
-  return counter;  // BANNED
+  return counter;  // BANNED also: global_state
 }
 
 int32_t& name_of_field() {
-  return holder.v;  // BANNED
+  return holder.v;  // BANNED also: global_state
 }

@@ -5,6 +5,7 @@
 // The declaration in example.cpp carries the CPLUSP_TRUSTED marker.
 volatile uint32_t status_register = 0;
 
+//@ reads status_register
 uint32_t read_status() {
   return status_register & 0xFFu;
 }
