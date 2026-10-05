@@ -483,12 +483,13 @@ Walk rootsOf(const Expr *E) {
   if (!Object && keepsRoot(Function))
     return Call->getNumArgs() ? rootsOf(Call->getArg(0)) : W;
   if (bindsToName(Function->getReturnType())) {
-    // Any reference, pointer or span may be one of the arguments, or something the State holds.
+    // Any reference, pointer or span may be one of the arguments, or something the State holds. Nothing in std can reach the State.
     llvm::SmallVector<Arg, 4> Args;
     collectArgs(Call, Args);
     for (const Arg &A : Args)
       W.add(A.Where);
-    W.Paths.push_back(stateRoot());
+    if (!inStdNamespace(Function))
+      W.Paths.push_back(stateRoot());
   }
   return W;
 }
