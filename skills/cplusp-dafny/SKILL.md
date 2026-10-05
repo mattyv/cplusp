@@ -74,9 +74,17 @@ Map `size_t` to `uint64`, which assumes a 64-bit target.
 
 A non-const reference parameter is a value in and a value out of the model, decision 0029.
 A value model cannot see two names for one object.
-So two non-const reference parameters of one type, or a reference and `this`, always carry `requires &a != &b` in the C++ contract.
-Callers must then prove that the two are different.
+So the gate refuses a call in which two reference arguments reach one object and one of them can write, row `aliasing`, decision 0033.
+No contract carries a clause about addresses. A value has no address.
 A const reference is a value in.
+
+## const_alias
+
+A const reference is a value in, and a non-const reference is a value in and a value out.
+A const reference to the object another argument writes is not a value in. The write changes it under the call.
+So the gate refuses a call that passes one object to a non-const and to a const reference, row `aliasing`, decision 0033.
+The same holds for a struct beside its member, a container beside itself, and an owner beside what it owns.
+Pass two objects, or copy the value out first and pass the copy.
 
 ## evaluation_order
 
@@ -84,6 +92,7 @@ Dafny has no method call inside an expression, so the model must choose an order
 C++ orders the right side of an assignment before the left. It orders the operands of `&&`, `||`, the comma and `?:`, and a call's arguments before its body.
 It does not order the arguments of one call among themselves, nor the operands of an arithmetic or comparison operator. Compilers differ there.
 Never model two changes of state that C++ leaves unordered. The gate refuses them.
+Beside one unordered change, only a literal or a local the change does not write may stand. The gate refuses a call, a global or a member of the written object there, decision 0033.
 Where C++ orders them, hoist the calls into statements in that order, and model `&&`, `||` and `?:` as an `if`.
 
 ## loop_underflow

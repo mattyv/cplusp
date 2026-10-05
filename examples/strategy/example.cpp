@@ -2,8 +2,8 @@
 
 // A strategy is an interface with one operation and a contract, and the code that uses it takes the strategy as a parameter.
 // The classic form also has a Context class that keeps the strategy in a member. The gate refuses a reference member at its line:
-// "Lvalue references: outside its limit. Limit: A parameter only. No reference member and no reference local. Two non-const
-// reference parameters of one type carry `requires &a != &b`. Use a parameter, or the object itself." It refuses a pointer member
+// "Lvalue references: outside its limit. Limit: A parameter only. No reference member and no reference local. In a call, two
+// reference arguments never name one object, row `aliasing`. Use a parameter, or the object itself." It refuses a pointer member
 // in the same way: "Non-owning raw pointer to one object: outside its limit. Limit: A parameter only. One object, no ownership, no
 // arithmetic. No pointer member and no pointer local. Use a reference, or a value." So the strategy stays a parameter, and the
 // function that runs it is the context.

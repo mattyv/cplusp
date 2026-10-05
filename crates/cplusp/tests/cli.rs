@@ -454,6 +454,23 @@ fn gate_treats_a_line_directive_as_a_finding() {
     assert!(stdout(&o).lines().any(|l| l.ends_with("line-system.cpp:2: line directive: not allowed in verified code. It moves the gate's view.")), "{}", stdout(&o));
 }
 
+/// A line marker written in the source, `# 1 "x" 1 3`, looks like the preprocessor's own. It declares the rest of the file
+/// a system header, which clang-tidy does not judge, and the output alone cannot tell it from a real include. The source text can.
+#[test]
+fn gate_treats_a_forged_line_marker_as_a_finding() {
+    if !clang_tidy_available() {
+        return;
+    }
+    for (file, at) in [("forged-marker.cpp", "forged-marker.cpp:2"), ("includes-forged.cpp", "forged-marker.h:2")] {
+        let f = fixture(file);
+        let o = gated(&[f.to_str().unwrap(), "--", "-std=c++23", "-ffp-contract=off"]);
+        assert_eq!(o.status.code(), Some(1), "{file}: stdout: {} stderr: {}", stdout(&o), stderr(&o));
+        let out = stdout(&o);
+        let expected = format!("{at}: line directive: not allowed in verified code. It moves the gate's view.");
+        assert!(out.lines().any(|l| l.ends_with(&expected)), "{file}: {out}");
+    }
+}
+
 /// A flag that strips the line markers from the preprocessor output leaves the gate blind. The run is refused.
 #[test]
 fn gate_refuses_a_preprocessor_run_without_line_markers() {
@@ -716,10 +733,11 @@ fn every_sample_pair_agrees_with_its_rule() {
         "member_init_order", "slicing", "virtual_call_in_constructor", "virtual_destructor", "raw_pointer", "containers",
         "switch_fallthrough", "switch_missing_case", "accumulate_init", "array_span",
         "double_equality", "double_expression", "rounding_mode", "global_constructors", "double_only", "inexact_literal", "unique_ptr", "static_local", "strings",
+        "aliasing",
     ] {
         assert!(rules_dir.join(id).is_dir(), "no sample pair for rule {id}");
     }
-    assert!(checked >= 61, "expected at least 61 sample pairs, found {checked}");
+    assert!(checked >= 62, "expected at least 62 sample pairs, found {checked}");
 }
 
 /// Pull `"key":"value"` or `"key":123` out of one JSON line without a JSON library.

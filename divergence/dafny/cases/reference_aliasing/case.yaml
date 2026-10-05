@@ -7,15 +7,17 @@ naive_does: "Each reference is a separate in value and out value, so the model s
 naive: verifies
 naive_is_wrong: true
 mitigated: verifies
-side: model
-mitigation: "A non-const reference is a value in and a value out. The model cannot see two names for one object, so the C++ contract carries `requires &a != &b` for every pair of non-const references, and the caller proves it."
+side: gate
+gate_rule: aliasing
+mitigation: "Gate row `aliasing`, decision 0033: in a call where one argument can write, every reference argument reaches a different object. The call `add_both(x, x)` is refused at its line. The C++ passes two objects, and the value model is exact for that call."
 witness:
-  input: "add_both(x, x) with x = 3"
+  input: "demo(), which calls add_both(x, x) with x = 3, then add_both(a, b) with 3 and 4"
   ubsan: false
-  prints: "12 6 9"
+  prints: "12"
+  fixed_prints: "7 11"
 rule: |
   A non-const reference parameter is a value in and a value out of the model, decision 0029.
   A value model cannot see two names for one object.
-  So two non-const reference parameters of one type, or a reference and `this`, always carry `requires &a != &b` in the C++ contract.
-  Callers must then prove that the two are different.
+  So the gate refuses a call in which two reference arguments reach one object and one of them can write, row `aliasing`, decision 0033.
+  No contract carries a clause about addresses. A value has no address.
   A const reference is a value in.

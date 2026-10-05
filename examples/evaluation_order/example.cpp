@@ -20,7 +20,6 @@ int32_t two_steps(int32_t& x) {
   return first + second;
 }
 
-//@ requires &x != &y
 //@ requires x < 0x7FFFFFFF && y < 0x7FFFFFFF
 //@ modifies x, y
 //@ ensures x == old(x) + 1

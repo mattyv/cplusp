@@ -35,8 +35,17 @@ int32_t nested(int32_t& x) {
   return twice(next(x));
 }
 
+// Beside the one change, a literal or a different local. Neither can see the change.
 int32_t one_change(int32_t& x, int32_t a) {
-  return next(x) + twice(a);
+  return next(x) + a;
+}
+
+bool change_beside_a_literal(int32_t& x) {
+  return before(next(x), 1);
+}
+
+bool change_beside_another_local(int32_t& x, int32_t y) {
+  return before(next(x), y);
 }
 
 void store(std::vector<int32_t>& v, std::size_t i, int32_t& x) {

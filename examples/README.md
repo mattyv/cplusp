@@ -19,7 +19,7 @@ The test `every_row_the_bot_may_use_has_an_example` in `crates/divergence` runs 
 - A pointer or a `unique_ptr` is an `Option<T>` value. An interface is an opaque type with its contract as the only functions known about it. An implementation proves it meets that contract on its own type. The upcast is an axiom that says only `f(As(x)) == f_impl(x)`, and a lemma proves `f_impl` meets the interface contract. Without the lemma the two axioms can contradict.
 - A trusted function is a `method {:axiom}` with its contract and no body.
 - A global or a static is a field of one `State` value that every function that touches it takes in and gives back.
-- A reference is a parameter only. Two non-const reference parameters of one type carry `requires &a != &b`. No `class`, `trait`, `modifies`, `reads`, `old` or `new` appears in a model, and the test `the_model_has_no_heap` keeps it so.
+- A reference is a parameter only. In a call where one argument can write, no two reference, pointer or span arguments reach one object. The gate holds it at every call, decision 0033. No contract carries a clause about addresses. No `class`, `trait`, `modifies`, `reads`, `old` or `new` appears in a model, and the test `the_model_has_no_heap` keeps it so.
 - A `double` is a real through `Double.dfy`, with one rounding per operation.
 
 ## Larger examples

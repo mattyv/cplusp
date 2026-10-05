@@ -1,7 +1,7 @@
 #include <cstdint>
 #include <vector>
 
-//@ requires &dst != &src
+// Two references never name one object in a call, row aliasing, so no clause about addresses is needed.
 //@ ensures dst == old(src) && src == 0
 void take(int32_t& dst, int32_t& src) {
   dst = src;

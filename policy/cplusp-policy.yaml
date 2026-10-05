@@ -291,12 +291,12 @@ rules:
     area: memory
     canonical: Recommended
     decision: restrict
-    limit: Const access only through a const handle or a const container of handles. A non-const call through one is refused.
-    why: Simple single ownership, behind a trusted contract. A const reference is a value in, decision 0029, so what it owns may not change through it.
+    limit: Const access only through a const handle or a const container of handles. No write through one. No assignment, increment or non-const call on what it owns, and no binding of that to a non-const reference, pointer or span.
+    why: Simple single ownership, behind a trusted contract. A const reference is a value in, decisions 0029 and 0033, so what it owns may not change through it.
     use_instead: "a non-const reference to the owner when the owned object changes."
     stage: gate
     detect:
-      - matcher: cxxMemberCallExpr(callee(cxxMethodDecl(unless(isConst()))), on(ignoringParenImpCasts(cxxOperatorCallExpr(hasAnyOverloadedOperatorName("->", "*"), hasArgument(0, hasType(qualType(isConstQualified())))))))
+      - check: cplusp-const-handle
 
   - id: shared_ptr
     construct: "`std::shared_ptr`"
@@ -315,13 +315,24 @@ rules:
     area: memory
     canonical: Allowed
     decision: restrict
-    limit: A parameter only. No reference member and no reference local. Two non-const reference parameters of one type carry `requires &a != &b`.
+    limit: A parameter only. No reference member and no reference local. In a call, two reference arguments never name one object, row `aliasing`.
     why: The model has no heap, decision 0029. A reference member or local is a second name for an object, and a value model cannot see it.
     use_instead: "a parameter, or the object itself."
     stage: gate
     detect:
       - matcher: fieldDecl(hasType(referenceType()))
       - matcher: varDecl(hasType(referenceType()), unless(parmVarDecl()), unless(isImplicit()), unless(hasParent(declStmt(hasParent(cxxForRangeStmt())))))
+
+  - id: aliasing
+    construct: Two names for one object in one call
+    area: memory
+    canonical: "No C++ guideline. Rust's rule: one writer or many readers"
+    decision: ban
+    why: The model has no heap, decision 0033, and a value model cannot see two names for one object. When one argument of a call can write, every reference, pointer or span argument and the object of the call must reach a different object. A global passed by reference is State as well, so it has two names too.
+    use_instead: "two objects, or one call that takes the object once. Copy the value out first and pass the copy."
+    stage: gate
+    detect:
+      - check: cplusp-aliasing
 
   - id: rvalue_references
     construct: Rvalue refs and `std::move`
@@ -741,7 +752,7 @@ rules:
     area: control
     canonical: "MISRA 13.2. Core Guidelines ES.43 and ES.44"
     decision: restrict
-    limit: Two changes of state in one full expression only where the standard orders them. Function arguments and the operands of an arithmetic or comparison operator are not ordered. A call may change state when a parameter is a non-const reference or pointer, or when it is a non-const member function. A call into `std` counts too. The casts `std::move`, `std::forward` and `std::as_const`, the accessors `begin`, `end`, `at`, `front`, `back` and `get`, and the makers `make_pair`, `make_tuple` and `tie`, change nothing.
+    limit: Two changes of state in one full expression only where the standard orders them. Function arguments and the operands of an arithmetic or comparison operator are not ordered. Beside an unordered change of state, an operand is a literal, or a local or parameter the change does not write. Not a call, not a global, and not a member of an object the change writes. A call may change state when a parameter is a non-const reference or pointer, or when it is a non-const member function. A call into `std` counts too. The casts `std::move`, `std::forward` and `std::as_const`, the accessors `begin`, `end`, `at`, `front`, `back` and `get`, and the makers `make_pair`, `make_tuple` and `tie`, change nothing.
     why: C++ does not fix the order of two calls in one expression, and compilers differ. Two increments of one variable in one expression are undefined.
     use_instead: one statement per call, in the order the contract needs.
     stage: gate

@@ -9,3 +9,10 @@ void add_both(int32_t& a, int32_t& b) {
   a += b;
   b += a;
 }
+
+// The bot passed one object twice. The contract says 6 and 9, and the object ends as 12.
+int32_t demo() {
+  int32_t x = 3;
+  add_both(x, x);
+  return x;
+}

@@ -36,6 +36,32 @@ bool mixed(int32_t& x) {
   return before(next(x), x++);  // BANNED
 }
 
+int32_t twice(int32_t a) {
+  return 2 * a;
+}
+
+int32_t total = 0;
+
+// One change and a read of what it changes. Clang says true, GCC says false.
+bool change_and_read(int32_t& x) {
+  return before(next(x), x);  // BANNED
+}
+
+// One change beside a call. Any call may read the State the change may write.
+int32_t change_beside_a_call(int32_t& x, int32_t a) {
+  return next(x) + twice(a);  // BANNED
+}
+
+// One change beside a global, which is the State.
+int32_t change_beside_a_global(int32_t& x) {
+  return next(x) + total;  // BANNED
+}
+
+// A non-const call on an object beside a member of that object.
+int32_t object_and_member(Counter& c) {
+  return c.bump() + c.n;  // BANNED
+}
+
 bool exchanged(int32_t& x) {
   return before(std::exchange(x, 1), std::exchange(x, 2));  // BANNED
 }

@@ -4,8 +4,8 @@
 // constructor and the copy deleted. The gate takes it. The function-local static is no finding, because the row for statics is checked
 // by the prover, and `instance()` may return a reference. A call such as `Tally::instance().bump()` passes too. The gate refuses only
 // a caller that keeps the reference in a local, `Tally& t = Tally::instance();`, at that line: "Lvalue references: outside its limit.
-// Limit: A parameter only. No reference member and no reference local. Two non-const reference parameters of one type carry
-// `requires &a != &b`. Use a parameter, or the object itself."
+// Limit: A parameter only. No reference member and no reference local. In a call, two reference arguments never name one object,
+// row `aliasing`. Use a parameter, or the object itself."
 // The row for statics asks each function to list the static it reads or changes, and a function-local static has no name that a
 // contract can use. A caller of `instance().bump()` changes the singleton and has nothing to put in `modifies`. So the form shown
 // is a class of static members, which is the singleton by construction: there is no object to make or to copy. The data is a static

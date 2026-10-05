@@ -1,0 +1,23 @@
+construct: "A non-const and a const reference to one object"
+standard: "[dcl.ref]: a reference can be thought of as a name of an object, and a const reference is only a promise about the name, not about the object."
+row: lvalue_references
+gap: 3
+cpp: "A const reference is a value in, so the model reads `b` as its input. In `set_and_read(x, x)` the write to `a` changes `b` too. The result is 1, and the contract says 0."
+naive_does: "The model takes `b` as a value and returns it unchanged, so it proves `result == old(b)` and says 0 for `set_and_read(x, x)`."
+naive: verifies
+naive_is_wrong: true
+mitigated: verifies
+side: gate
+gate_rule: aliasing
+mitigation: "Gate row `aliasing`, decision 0033: a const reference beside a non-const one to the same object is a second name for a value the call writes. The gate refuses `set_and_read(x, x)` at its line. With two objects the const reference is a value in, as the model says."
+witness:
+  input: "demo(), which calls set_and_read(x, x) with x = 0"
+  ubsan: false
+  prints: "1"
+  fixed_prints: "0"
+rule: |
+  A const reference is a value in, and a non-const reference is a value in and a value out.
+  A const reference to the object another argument writes is not a value in. The write changes it under the call.
+  So the gate refuses a call that passes one object to a non-const and to a const reference, row `aliasing`, decision 0033.
+  The same holds for a struct beside its member, a container beside itself, and an owner beside what it owns.
+  Pass two objects, or copy the value out first and pass the copy.

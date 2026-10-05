@@ -30,3 +30,31 @@ int32_t peek_first(const std::vector<std::unique_ptr<Command>>& cmds) {
 int32_t peek_one(const std::unique_ptr<Command>& p) {
   return p->peek();
 }
+
+struct S {
+  int32_t x = 0;
+};
+
+void mutate(int32_t& x) {
+  x = 42;
+}
+
+// A read through a const handle is fine.
+//@ requires p != nullptr
+//@ ensures result == *p + 1
+int32_t read_through(const std::unique_ptr<int32_t>& p) {
+  return *p + 1;
+}
+
+// A write through a non-const handle is fine.
+//@ requires p != nullptr
+//@ ensures *p == 42
+void write_through(std::unique_ptr<int32_t>& p) {
+  *p = 42;
+}
+
+//@ requires p != nullptr
+//@ ensures p->x == 42
+void escape_through(std::unique_ptr<S>& p) {
+  mutate(p->x);
+}

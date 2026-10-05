@@ -474,6 +474,8 @@ fn the_battery_has_the_planned_cases() {
         "pointer_into_container",
         // The float review: a product that underflows. The last round: state.
         "double_underflow", "unlisted_modifies", "static_local", "global_constructors", "torn_read", "single_precision", "double_literal",
+        // The third review: two names for one object in one call.
+        "const_alias",
     ] {
         assert!(cases.join(id).join("case.yaml").exists(), "no case {id}");
     }

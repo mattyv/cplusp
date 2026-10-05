@@ -18,3 +18,32 @@ void run_one(const std::unique_ptr<Command>& p) {
 void run_deref(const std::unique_ptr<Command>& p) {
   (*p).run();  // BANNED
 }
+
+struct S {
+  int32_t x = 0;
+};
+
+void mutate(int32_t& x) {
+  x = 42;
+}
+
+// A write through a const handle, in every spelling: an assignment, a member write, an increment, and a non-const binding.
+void assign_through(const std::unique_ptr<int32_t>& p) {
+  *p = 42;  // BANNED
+}
+
+void member_write_through(const std::unique_ptr<S>& p) {
+  p->x = 42;  // BANNED
+}
+
+void increment_through(const std::unique_ptr<int32_t>& p) {
+  (*p)++;  // BANNED
+}
+
+void escape_through(const std::unique_ptr<int32_t>& p) {
+  mutate(*p);  // BANNED
+}
+
+void member_escape_through(const std::vector<std::unique_ptr<S>>& owners) {
+  mutate(owners[0]->x);  // BANNED
+}

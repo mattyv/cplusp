@@ -20,7 +20,7 @@ Status is `decided`, `proposed` (the default until someone objects or the thin s
 | [0012](0012-shared-variables.md) | Variables other threads may change enter verified code only as values | proposed |
 | [0013](0013-gate-flag.md) | A row is gate-enforced when its stage is gate, or it has detect and a decision other than allow | decided |
 | [0014](0014-gate-refusals.md) | The gate refuses what it cannot judge: compile errors, NOLINT, bad build dirs, loose YAML | decided |
-| [0015](0015-scope-gate-only.md) | Build the gate and nothing past it until told otherwise | decided |
+| [0015](0015-scope-gate-only.md) | Build the gate and nothing past it until told otherwise | superseded by 0017 |
 | [0016](0016-data-driven-plugin.md) | One generic clang-tidy check driven by matcher patterns in the policy | decided |
 | [0017](0017-hand-written-dafny-and-divergence-battery.md) | No translator yet. Hand-written Dafny under rules found by a divergence battery | decided |
 | [0018](0018-one-battery-per-prover.md) | One divergence battery, one skill and one mitigation report per prover | decided |
@@ -37,3 +37,5 @@ Status is `decided`, `proposed` (the default until someone objects or the thin s
 | [0029](0029-the-model-has-no-heap.md) | The model has no heap. An object is a value, a method takes it in and gives it back, no reference member or local | decided |
 | [0030](0030-const-reaches-through-a-handle-and-a-static-local-is-refused.md) | Const reaches through a `unique_ptr`, a function-local static is refused, two matcher holes closed | decided |
 | [0031](0031-text-is-bytes-in-verified-code.md) | Text is bytes in verified code. `std::string` is trusted only, a search returns an optional | decided |
+| [0032](0032-the-gate-is-an-allowlist.md) | The gate is an allowlist of node kinds. A kind it does not list is refused | decided |
+| [0033](0033-one-root-one-writer.md) | One root, one writer. No two names for one object in a call, no write through a const handle, no read beside an unordered change | proposed |

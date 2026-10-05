@@ -1,16 +1,16 @@
 // The edge where the naive model and the C++ part ways: add_both(x, x) is one object, not two.
-// Prints the aliased result, then the two results of the separate call that the naive model describes.
+// code.cpp prints the aliased result, 12. fixed.cpp passes two objects and prints 7 and 11, as the contract says.
 #include <cstdint>
 #include <cstdio>
 
-void add_both(int32_t& a, int32_t& b);
+int32_t demo();
 
 int main() {
-  int32_t x = 3;
-  add_both(x, x);
-  int32_t a = 3;
-  int32_t b = 3;
-  add_both(a, b);
-  std::printf("%d %d %d\n", x, a, b);
+  int32_t r = demo();
+  if (r > 99) {
+    std::printf("%d %d\n", r / 100, r % 100);
+  } else {
+    std::printf("%d\n", r);
+  }
   return 0;
 }
