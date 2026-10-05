@@ -109,3 +109,27 @@ void cut_twice(std::vector<int32_t>& v) {
 void cut_and_whole(std::vector<int32_t>& v) {
   fill(head(v), v);  // BANNED also: evaluation_order
 }
+
+void bump_two(int32_t& x, int32_t& y = counter);
+
+// A default argument is an argument. Here it binds a global to a reference.
+void defaulted() {
+  int32_t x = 0;
+  bump_two(x);  // BANNED
+}
+
+struct Holder {
+  int32_t v = 0;
+};
+
+Holder holder;
+
+// A function that returns a reference may return only what its parameters reach. A global that escapes this way is a
+// global passed by reference at every call of the function.
+int32_t& name_of_counter() {
+  return counter;  // BANNED
+}
+
+int32_t& name_of_field() {
+  return holder.v;  // BANNED
+}

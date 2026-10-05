@@ -106,3 +106,15 @@ int32_t write(std::span<int32_t> s) {
 bool through_span(std::span<int32_t> s) {
   return before(write(s), write(s));  // BANNED
 }
+
+bool before_total(int32_t a, int32_t b = total);
+
+// The default argument reads the global beside the change.
+bool read_by_default(int32_t& x) {
+  return before_total(next(x));  // BANNED
+}
+
+// A capture initializer reads x beside the change of x.
+int32_t captured_beside(int32_t& x) {
+  return std::make_pair(next(x), [k = x] { return k; }).first;  // BANNED
+}

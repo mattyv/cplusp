@@ -47,3 +47,8 @@ void escape_through(const std::unique_ptr<int32_t>& p) {
 void member_escape_through(const std::vector<std::unique_ptr<S>>& owners) {
   mutate(owners[0]->x);  // BANNED
 }
+
+// An array owner: a subscript through a const handle is a write through it too.
+void array_write_through(const std::unique_ptr<int32_t[]>& p) {
+  p[0] = 1;  // BANNED
+}

@@ -95,3 +95,8 @@ int32_t with_temporary(int32_t x) {
 int32_t first_two(const std::vector<int32_t>& v) {
   return v.size() < 2 ? 0 : add(v[0], v[1]);
 }
+
+// A reference that a function returns reaches what its parameter reaches.
+int32_t& first_of(std::vector<int32_t>& v) {
+  return v.front();
+}

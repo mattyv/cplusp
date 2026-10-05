@@ -461,7 +461,16 @@ fn gate_treats_a_forged_line_marker_as_a_finding() {
     if !clang_tidy_available() {
         return;
     }
-    for (file, at) in [("forged-marker.cpp", "forged-marker.cpp:2"), ("includes-forged.cpp", "forged-marker.h:2")] {
+    // The plain spelling, one in a header, and the spellings a text scan forgets: a block comment before the `#`, a digraph,
+    // a line splice after the `#`, and a comment between the `#` and the number. Each is a directive to the preprocessor.
+    for (file, at) in [
+        ("forged-marker.cpp", "forged-marker.cpp:2"),
+        ("includes-forged.cpp", "forged-marker.h:2"),
+        ("forged-comment.cpp", "forged-comment.cpp:2"),
+        ("forged-digraph.cpp", "forged-digraph.cpp:2"),
+        ("forged-splice.cpp", "forged-splice.cpp:2"),
+        ("forged-inner-comment.cpp", "forged-inner-comment.cpp:2"),
+    ] {
         let f = fixture(file);
         let o = gated(&[f.to_str().unwrap(), "--", "-std=c++23", "-ffp-contract=off"]);
         assert_eq!(o.status.code(), Some(1), "{file}: stdout: {} stderr: {}", stdout(&o), stderr(&o));
