@@ -1,8 +1,10 @@
 #include <cstdint>
 #include <memory>
+#include "../../include/cplusp.h"
 
 // Allocation is trusted. The trusted function allocates and hands the object to a unique_ptr, and its contract says what the
 // box holds. The body is in trusted.cpp. The caller uses the box as any unique_ptr, and the prover proves from the contract.
+CPLUSP_TRUSTED("allocates with new, and a unique_ptr owns the object at once")
 //@ ensures result != nullptr && *result == x
 std::unique_ptr<int32_t> make_box(int32_t x);
 

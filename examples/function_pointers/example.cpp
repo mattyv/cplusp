@@ -1,7 +1,9 @@
 #include <cstdint>
+#include "../../include/cplusp.h"
 
 // An indirect call needs a contract on its target, so a function pointer is trusted. The trusted function calls through a
 // pointer and promises what the target does. The body is in trusted.cpp. The caller proves from the contract.
+CPLUSP_TRUSTED("calls through a function pointer, and the contract says what the target does")
 //@ requires x < 0x7FFFFFFF
 //@ ensures result == x + 1
 int32_t increment(int32_t x);

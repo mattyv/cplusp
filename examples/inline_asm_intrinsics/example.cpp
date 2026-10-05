@@ -1,7 +1,9 @@
 #include <cstdint>
+#include "../../include/cplusp.h"
 
 // A SIMD intrinsic is trusted, and hot-path code goes behind a contract. The addition wraps on overflow, so the contract keeps
 // the sum in range. The body is in trusted.cpp. The caller proves from the contract.
+CPLUSP_TRUSTED("a SIMD intrinsic, checked against the scalar sum")
 //@ requires -0x40000000 <= a < 0x40000000
 //@ requires -0x40000000 <= b < 0x40000000
 //@ ensures result == a + b

@@ -19,7 +19,7 @@ method write_at(v: IntVec, i: uint64, x: int32)
   modifies v
   ensures |v.items| == |old(v.items)|
   ensures v.items[i] == x
-  ensures forall j :: 0 <= j < |v.items| && j != i as int ==> v.items[j] == old(v.items[j])
+  ensures forall j :: 0 <= j < |v.items| ==> (j != i as int ==> v.items[j] == old(v.items[j]))
 {
   v.items := v.items[i as int := x];
 }

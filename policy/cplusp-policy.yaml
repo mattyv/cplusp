@@ -841,8 +841,10 @@ rules:
     area: platform
     canonical: MISRA advisory ban
     decision: ban
-    why: Hides code from the prover.
+    why: Hides code from the prover. The markers of include/cplusp.h are the one exception, because they carry no code.
     use_instead: a constexpr function or a template.
     stage: gate
     detect:
       - check: cppcoreguidelines-macro-usage
+        options:
+          AllowedRegexp: "^CPLUSP_"

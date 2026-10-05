@@ -10,10 +10,9 @@ mitigated: verifies
 side: contract
 mitigation: "The getter is trusted code that must read an atomic, which the gate cannot see yet. Its model is a method with `ensures` only a range, so two calls may differ. The contract of `difference` is a bound, `-999 <= result <= 999`, and not `result == 0`. The contract covers the verified side only."
 witness:
-  input: "one write in a second thread with no ordering against one read, which the sanitizer sees, then a writer loop while the main thread calls difference() a million times"
+  input: "one write in a second thread with no ordering against one read, which the sanitizer sees. Then a writer loop while the main thread calls difference() a million times. The sanitizer report is the evidence. Whether a call sees two values within the loop depends on the scheduler, so the output is not checked"
   ubsan: false
   tsan: true
-  prints: "1"
 rule: |
   A variable another thread may change has no value, only a fresh read each time.
   Model its getter as a method that does not constrain its result between calls.

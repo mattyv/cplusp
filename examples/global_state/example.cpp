@@ -2,6 +2,7 @@
 
 // A global is an input and an output of every function that touches it, and the contract lists it. A function that changes the
 // global says so in `modifies`, and a function that only reads it says so in `reads`. A caller then knows what a call can change.
+// A static data member is a global with a class name, and the contract names it in the same way.
 int32_t total = 0;
 
 //@ requires -0x40000000 <= x < 0x40000000
@@ -25,4 +26,19 @@ int32_t current() {
 void add_twice(int32_t x) {
   add(x);
   add(x);
+}
+
+struct Registry {
+  static int32_t last_id;
+};
+
+int32_t Registry::last_id = 0;
+
+//@ requires Registry::last_id < 0x7FFFFFFF
+//@ modifies Registry::last_id
+//@ ensures Registry::last_id == old(Registry::last_id) + 1
+//@ ensures result == Registry::last_id
+int32_t next_id() {
+  Registry::last_id += 1;
+  return Registry::last_id;
 }

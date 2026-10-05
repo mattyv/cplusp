@@ -1,5 +1,6 @@
-// A range-for is a loop over a seq, and the body reads each element. The invariant says what the total is after the first i
-// elements, and a bound on it keeps the sum inside int32. Sum is the specification, and `sum(v)` in the C++ is the same function.
+// A range-for is a loop over a seq, and the body reads each element. The model loops by index. The invariant says what the total is
+// after the first i elements. A bound on it keeps the sum inside int32, and `decreases` shows that the loop ends. Sum is the
+// specification, and `Sum(v)` in the C++ contract is this function.
 newtype int32 = x: int | -0x8000_0000 <= x < 0x8000_0000
 
 function Sum(s: seq<int32>): int
@@ -19,6 +20,7 @@ method total(v: seq<int32>) returns (result: int32)
     invariant 0 <= i <= |v|
     invariant t as int == Sum(v[..i])
     invariant -1000 * i <= t as int <= 1000 * i
+    decreases |v| - i
   {
     assert v[..i + 1][..i] == v[..i];
     t := t + v[i];

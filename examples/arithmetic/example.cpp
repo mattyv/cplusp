@@ -14,3 +14,11 @@ int32_t quotient(int32_t a, int32_t b) {
 uint32_t distance(uint32_t a, uint32_t b) {
   return a - b;
 }
+
+// A shift count stops one short of the width. Dafny shifts bit-vectors only, so the model maps this function to bv32.
+//@ requires n < 32
+//@ ensures result <= x
+//@ ensures n == 0 ==> result == x
+uint32_t shift_right(uint32_t x, uint32_t n) {
+  return x >> n;
+}

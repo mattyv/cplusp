@@ -1,11 +1,12 @@
-// A constexpr function is a Dafny function, and a constexpr constant is a const. Calling it at run time is the same call.
-// The bound on x keeps the product inside int32.
+// scaled is pure, so it is a function. constexpr changes nothing in the model, and a constexpr constant is a const. A call at run
+// time is the same call. The bound on x keeps the product inside int32.
 newtype int32 = x: int | -0x8000_0000 <= x < 0x8000_0000
 
 const kScale: int32 := 10
 
 function scaled(x: int32): int32
   requires -0x7FFFFF <= x <= 0x7FFFFF
+  ensures scaled(x) == x * kScale
 {
   x * kScale
 }

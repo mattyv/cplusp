@@ -3,6 +3,7 @@
 
 // Trusted: the function allocates with new, and a unique_ptr takes the object at once, so nothing leaks. The gate refuses the
 // new under the raw_allocation row, which is the point. Verified code sees only the contract in example.cpp.
+// The declaration in example.cpp carries the CPLUSP_TRUSTED marker.
 std::unique_ptr<int32_t> make_box(int32_t x) {
   return std::unique_ptr<int32_t>(new int32_t(x));
 }

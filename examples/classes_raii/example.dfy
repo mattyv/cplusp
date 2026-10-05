@@ -1,5 +1,6 @@
 // A class is a Dafny class. The C++ invariant is a predicate Valid(), which the constructor establishes and each method
-// keeps. `modifies this` in the C++ contract is `modifies this` here. A local object is a new object.
+// keeps. `modifies this` in the C++ contract is `modifies this` here. A local object is a new object. Dafny has no destructor.
+// So the model of Guard has a method Destroy, and the function that owns the guard calls it where the block ends.
 newtype int32 = x: int | -0x8000_0000 <= x < 0x8000_0000
 
 class Counter {
@@ -20,6 +21,7 @@ class Counter {
 
   function value(): int32
     reads this
+    ensures value() == n
   {
     n
   }
@@ -41,4 +43,36 @@ method bumped_twice(start: int32) returns (result: int32)
   c.bump();
   c.bump();
   result := c.value();
+}
+
+class Ref {
+  var v: int32
+}
+
+class Guard {
+  var flag: Ref
+
+  constructor (f: Ref)
+    modifies f
+    ensures flag == f && f.v == 1
+  {
+    flag := f;
+    f.v := 1;
+  }
+
+  method Destroy()
+    modifies flag
+    ensures flag.v == 0
+  {
+    flag.v := 0;
+  }
+}
+
+method run(busy: Ref) returns (result: int32)
+  modifies busy
+  ensures result == 1 && busy.v == 0
+{
+  var g := new Guard(busy);
+  result := busy.v;
+  g.Destroy();
 }

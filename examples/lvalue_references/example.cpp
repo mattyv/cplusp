@@ -1,12 +1,12 @@
 #include <cstdint>
 
-// A reference is an alias, so two references may name one object. The contract says they do not, and the prover
-// checks the body for that case. Without the requires line the contract would be false for swap_values(x, x).
-//@ requires &a != &b
-//@ modifies a, b
-//@ ensures a == old(b) && b == old(a)
-void swap_values(int32_t& a, int32_t& b) {
-  int32_t t = a;
-  a = b;
-  b = t;
+// A reference is an alias, so two references may name one object. This function moves the value of src into dst and clears src.
+// For take(x, x) the second line clears the value that the first line copied, so the contract is false for that call. The
+// requires line keeps the two apart, and the prover checks the body for that case only.
+//@ requires &dst != &src
+//@ modifies dst, src
+//@ ensures dst == old(src) && src == 0
+void take(int32_t& dst, int32_t& src) {
+  dst = src;
+  src = 0;
 }

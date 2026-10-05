@@ -1,7 +1,7 @@
 #include <cstdint>
 
 // A class of values. The constructor sets the invariant and each method keeps it, and the prover checks both. The members
-// clean themselves up, so the class needs no destructor. A local object is destroyed at the end of its block.
+// clean themselves up, so this class needs no destructor. A local object is destroyed at the end of its block.
 class Counter {
  public:
   //@ requires 0 <= start <= 1000
@@ -13,6 +13,7 @@ class Counter {
   //@ ensures value() == old(value()) + 1
   void bump() { n_ += 1; }
 
+  //@ ensures result == n_
   int32_t value() const { return n_; }
 
  private:
@@ -27,4 +28,27 @@ int32_t bumped_twice(int32_t start) {
   c.bump();
   c.bump();
   return c.value();
+}
+
+// A destructor runs at the end of the block that owns the object, and it gives back what the constructor took. The guard sets a flag
+// while it lives. The model has no destructor, so it calls Destroy by hand at the end of the block.
+class Guard {
+ public:
+  //@ modifies flag
+  //@ ensures flag == 1
+  explicit Guard(int32_t& flag) : flag_(flag) { flag_ = 1; }
+
+  //@ modifies flag_
+  //@ ensures flag_ == 0
+  ~Guard() { flag_ = 0; }
+
+ private:
+  int32_t& flag_;
+};
+
+//@ modifies busy
+//@ ensures result == 1 && busy == 0
+int32_t run(int32_t& busy) {
+  Guard g(busy);
+  return busy;
 }

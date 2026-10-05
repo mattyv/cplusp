@@ -1,7 +1,9 @@
 #include <cstdint>
+#include "../../include/cplusp.h"
 
 // Shared ownership is trusted, and the contract speaks of the value and not of the reference count. The body is in trusted.cpp.
 // The caller uses the value, and the prover proves from the contract.
+CPLUSP_TRUSTED("shared ownership, and the contract speaks of the value only")
 //@ ensures result == x
 int32_t shared_value(int32_t x);
 

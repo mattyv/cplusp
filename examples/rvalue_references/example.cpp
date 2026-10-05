@@ -3,11 +3,14 @@
 #include <utility>
 #include <vector>
 
-// std::move of a local hands its contents to the callee, and the moved-from vector is never read again. The model treats
-// a move as a copy and the source as gone.
-//@ ensures result == v.size()
-size_t consume(std::vector<int32_t> v) {
-  return v.size();
+// An rvalue reference parameter takes a value that the caller gives up. The function moves it into a local, and std::move of a local
+// or a parameter is the only move allowed. The moved-from vector is never read again. The model treats a move as a copy and the
+// source as gone.
+//@ requires v.size() <= 0x7FFFFFFFFFFFFFFF
+//@ ensures result == old(v.size())
+size_t consume(std::vector<int32_t>&& v) {
+  std::vector<int32_t> owned = std::move(v);
+  return owned.size();
 }
 
 //@ ensures result == 3

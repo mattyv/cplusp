@@ -1,5 +1,6 @@
 // A pure interface is a trait. A class that implements several interfaces extends several traits, and dispatch through any of
-// them is the same call. The data of the concrete base, the id, is a field of the class, since a Dafny class has one parent.
+// them is the same call. A Dafny class extends traits only, so the concrete base Item has no counterpart.
+// Its id is a field of the class.
 newtype uint32 = x: int | 0 <= x < 0x1_0000_0000
 newtype uint64 = x: int | 0 <= x < 0x1_0000_0000_0000_0000
 

@@ -2,6 +2,7 @@
 
 // Trusted: the function calls its target through a pointer, and the target adds one. The gate refuses a function pointer under
 // the function_pointers row, which is the point. Verified code sees only the contract of increment in example.cpp.
+// The declaration in example.cpp carries the CPLUSP_TRUSTED marker.
 int32_t successor(int32_t x) {
   return x + 1;
 }

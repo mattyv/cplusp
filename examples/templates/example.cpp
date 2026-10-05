@@ -2,6 +2,7 @@
 
 // A template has type parameters only and no specialisation. It is verified once for each type it is used at, so each
 // instantiation has its own model. The contract is the same, and the types carry the difference.
+//@ ensures result >= a && result >= b && (result == a || result == b)
 template <typename T>
 T larger(T a, T b) {
   return a < b ? b : a;

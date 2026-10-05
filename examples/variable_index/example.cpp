@@ -14,7 +14,7 @@ int32_t read_at(const std::vector<int32_t>& v, size_t i) {
 //@ modifies v
 //@ ensures v.size() == old(v.size())
 //@ ensures v[i] == x
-//@ ensures forall j < v.size(): j != i ==> v[j] == old(v[j])
+//@ ensures forall j :: 0 <= j < v.size() ==> (j != i ==> v[j] == old(v[j]))
 void write_at(std::vector<int32_t>& v, size_t i, int32_t x) {
   v[i] = x;
 }

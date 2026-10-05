@@ -1,7 +1,9 @@
 #include <cstdint>
+#include "../../include/cplusp.h"
 
 // Volatile is for hardware access, so the accessor is trusted, and its contract says what every read keeps, a range. The body
 // is in trusted.cpp. Two reads may differ, and the caller reads once.
+CPLUSP_TRUSTED("reads a hardware status register")
 //@ ensures result <= 255
 uint32_t read_status();
 

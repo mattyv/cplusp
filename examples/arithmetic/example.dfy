@@ -28,3 +28,13 @@ method distance(a: uint32, b: uint32) returns (result: uint32)
 {
   result := a - b;
 }
+
+// A shift needs bit-vectors, so this method uses bv32. Dafny accepts a shift by the full width and C++ does not,
+// so the count stops one short of it.
+method shift_right(x: bv32, n: bv32) returns (result: bv32)
+  requires n < 32
+  ensures result <= x
+  ensures n == 0 ==> result == x
+{
+  result := x >> n;
+}

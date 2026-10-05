@@ -4,7 +4,9 @@
 // so it carries no data. The function reads the object through each interface, and the sum cannot overflow in 64 bits.
 class Item {
  public:
+  //@ ensures id() == id
   explicit Item(uint32_t id) : id_(id) {}
+  //@ ensures result == id_
   uint32_t id() const { return id_; }
 
  private:
@@ -25,6 +27,7 @@ class Weighed {
 
 class Crate : public Item, public Sized, public Weighed {
  public:
+  //@ ensures this->id() == id && size_ == size && weight_ == weight
   Crate(uint32_t id, uint32_t size, uint32_t weight) : Item(id), size_(size), weight_(weight) {}
   //@ ensures result == size_
   uint32_t size() const override { return size_; }
