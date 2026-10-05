@@ -30,7 +30,7 @@ Status is `decided`, `proposed` (the default until someone objects or the thin s
 | [0022](0022-the-baseline-is-cpp23.md) | Verified code is C++23 or later | decided |
 | [0023](0023-the-float-error-axiom-carries-an-absolute-term.md) | The float error axiom is relative error plus half a subnormal, with no lower bound | decided |
 | [0024](0024-verified-code-is-double-only.md) | Verified code uses `double` and no other floating-point type | decided |
-| [0025](0025-the-gate-refuses-what-it-cannot-enforce.md) | A run that cannot enforce every row is refused, the compile database flags are judged, pragmas are findings, two rows move to the prover | decided |
+| [0025](0025-the-gate-refuses-what-it-cannot-enforce.md) | A run that cannot enforce every row is refused, the compile database flags are judged, pragmas are findings, two rows move to the prover | decided, global_state back to the gate by 0035 |
 | [0026](0026-state-changes-in-one-expression-follow-the-standards-order.md) | Two changes of state in one expression are allowed only where the standard orders them | decided |
 | [0027](0027-floating-literals-are-exact-or-refused.md) | A floating-point literal is exactly a double, or the gate refuses it | decided |
 | [0028](0028-member-functions-use-the-implicit-this.md) | A member function's contract uses the implicit `this`, members are never listed, the invariant is a predicate method | decided |
@@ -40,3 +40,4 @@ Status is `decided`, `proposed` (the default until someone objects or the thin s
 | [0032](0032-the-gate-is-an-allowlist.md) | The gate is an allowlist of node kinds. A kind it does not list is refused | decided |
 | [0033](0033-one-root-one-writer.md) | One root, one writer. No two names for one object in a call, no write through a const handle, no read beside an unordered change | decided |
 | [0034](0034-the-differential-run-is-the-first-match-check.md) | The differential run is the first match check. The model and the C++ run on the same inputs, and the naive model must part ways | decided |
+| [0035](0035-unlisted-state-is-the-gates.md) | Unlisted state is the gate's. It reads the `modifies` and `reads` lines and refuses an access they do not list | decided |

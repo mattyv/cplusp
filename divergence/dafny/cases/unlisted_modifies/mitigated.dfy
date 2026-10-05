@@ -1,6 +1,7 @@
 // Model B: a global is a field of the State value, decision 0029. `add` takes the State in and gives it back, so the caller knows
 // that `total` may change, and the ensures says how. In the C++ contract that is `modifies total`.
-// `delta` proves 1. A model of `add` that returns no State is no longer the model of the C++.
+// `delta` proves 1. A model of `add` that returns no State is no longer the model of the C++. The gate refuses the C++ that
+// forgets the line, decision 0035, so the model never meets it.
 newtype int32 = x: int | -0x8000_0000 <= x < 0x8000_0000
 
 datatype State = State(total: int32)

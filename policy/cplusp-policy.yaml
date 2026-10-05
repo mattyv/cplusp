@@ -860,10 +860,12 @@ rules:
     area: state
     canonical: MISRA restricts globals
     decision: restrict
-    limit: Listed in the contract's reads or modifies clause. Constants exempt.
-    why: Hidden state breaks modular proofs. Treated as inputs and outputs, see State in the plan.
-    use_instead: a reads or modifies clause naming the variable, or a parameter.
-    stage: prover
+    limit: Listed on the contract's `//@ modifies` line when the body changes it, on `//@ reads` or `//@ modifies` when the body reads it, directly or through a call that lists it. Constants exempt. Members are implicit.
+    why: Hidden state breaks modular proofs. A global is a field of the State value the function takes in and gives back, decisions 0011 and 0035, and the model needs the list to know which functions take it.
+    use_instead: a reads or modifies line naming the variable, or a parameter.
+    stage: gate
+    detect:
+      - check: cplusp-unlisted-state
 
   - id: static_local
     construct: A function-local static variable

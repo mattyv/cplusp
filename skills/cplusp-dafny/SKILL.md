@@ -441,8 +441,8 @@ For a tenth, divide by `10.0` instead of multiplying by `0.1`.
 A global is a field of the State value.
 Every function that changes it takes the State in and gives it back. In the C++ contract that is `modifies total`.
 A trusted contract that omits it is false.
-The gate does not read contracts, so it passes a function that changes a global without listing it.
-Until the match check ties the C++ contract to the model, a reviewer must read the trusted contracts for this.
+The gate reads the `modifies` and `reads` lines, decision 0035, and refuses an access to a global they do not list, also through a call.
+A trusted function has a body the gate does not judge, so a reviewer still reads its lines.
 
 ## static_local
 

@@ -7,15 +7,17 @@ naive_does: "The model of `add` is an axiom method with `ensures total == old(to
 naive: verifies
 naive_is_wrong: true
 mitigated: verifies
-side: contract
-mitigation: "`add` takes the State in and gives it back, with the same `requires` and `ensures` as the C++, and `delta` proves `result == 1`. The C++ contract of `add` gains `modifies total`."
+side: gate
+gate_rule: global_state
+mitigation: "Gate row `global_state`, decision 0035: the gate reads the `modifies` and `reads` lines and refuses `total += x` in a function whose lines do not list `total`. The C++ contract of `add` gains `modifies total`, and `delta`, which changes `total` through `add`, lists it too. `add` takes the State in and gives it back, and `delta` proves `result == 1`."
 witness:
   input: "delta()"
   ubsan: false
   prints: "1"
+  fixed_prints: "1"
 rule: |
   A global is a field of the State value.
   Every function that changes it takes the State in and gives it back. In the C++ contract that is `modifies total`.
   A trusted contract that omits it is false.
-  The gate does not read contracts, so it passes a function that changes a global without listing it.
+  The gate reads the `modifies` and `reads` lines, decision 0035, and refuses an access to a global they do not list, also through a call.
   Until the match check ties the C++ contract to the model, a reviewer must read the trusted contracts for this.
