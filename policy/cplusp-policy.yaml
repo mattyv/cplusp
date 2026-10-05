@@ -919,7 +919,7 @@ rules:
     use_instead: "the standard library function that does the same, or mark the function trusted with a reason."
     stage: gate
     detect:
-      - matcher: callExpr(callee(functionDecl(matchesName("^::__builtin_"), unless(hasAnyName("__builtin_unreachable", "__builtin_assume")))))
+      - matcher: callExpr(callee(functionDecl(matchesName("^::__builtin_"), unless(hasAnyName("__builtin_unreachable", "__builtin_assume")))), unless(hasAncestor(coroutineBodyStmt())))
 
   # ------------------------------------------------------------- the allowlist
   - id: unlisted
@@ -936,7 +936,7 @@ rules:
           statements: ArraySubscriptExpr,AttributedStmt,OpaqueValueExpr,BinaryOperator,BreakStmt,CXXBindTemporaryExpr,CXXBoolLiteralExpr,CXXConstructExpr,CXXDefaultArgExpr,CXXDefaultInitExpr,CXXDeleteExpr,CXXDependentScopeMemberExpr,CXXForRangeStmt,CXXFunctionalCastExpr,CXXMemberCallExpr,CXXNewExpr,CXXNullPtrLiteralExpr,CXXOperatorCallExpr,CXXRewrittenBinaryOperator,CXXScalarValueInitExpr,CXXStaticCastExpr,CXXStdInitializerListExpr,CXXTemporaryObjectExpr,CXXThisExpr,CallExpr,CaseStmt,CharacterLiteral,CompoundAssignOperator,CompoundStmt,ConceptSpecializationExpr,ConditionalOperator,ConstantExpr,ContinueStmt,DeclRefExpr,DeclStmt,DefaultStmt,DoStmt,ExprWithCleanups,FloatingLiteral,ForStmt,IfStmt,ImplicitCastExpr,ImplicitValueInitExpr,InitListExpr,IntegerLiteral,LambdaExpr,MaterializeTemporaryExpr,MemberExpr,NullStmt,ParenExpr,ParenListExpr,ReturnStmt,StringLiteral,SubstNonTypeTemplateParmExpr,SwitchStmt,UnaryExprOrTypeTraitExpr,UnaryOperator,UnresolvedLookupExpr,WhileStmt
           declarations: AccessSpecDecl,BindingDecl,CXXConstructorDecl,CXXConversionDecl,CXXDestructorDecl,CXXMethodDecl,CXXRecordDecl,ClassTemplateDecl,ClassTemplateSpecializationDecl,DecompositionDecl,EnumConstantDecl,EnumDecl,FieldDecl,FunctionDecl,FunctionTemplateDecl,NamespaceDecl,ParmVarDecl,StaticAssertDecl,TemplateTypeParmDecl,TypeAliasDecl,TypedefDecl,VarDecl,VarTemplateDecl,VarTemplateSpecializationDecl
           types: AutoType,BuiltinType,ConstantArrayType,ElaboratedType,EnumType,FunctionProtoType,LValueReferenceType,ParenType,PointerType,RValueReferenceType,RecordType,SubstTemplateTypeParmType,TemplateSpecializationType,TemplateTypeParmType,TypedefType,UsingType,InjectedClassNameType,DeducedTemplateSpecializationType
-          attributes: annotate,fallthrough,final,maybe_unused,nodiscard,override
+          attributes: annotate,constinit,fallthrough,final,maybe_unused,nodiscard,override
           c_style_casts: CStyleCastExpr
           downcasts: CXXDynamicCastExpr
           exceptions: CXXThrowExpr,CXXTryStmt,CXXCatchStmt

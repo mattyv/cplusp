@@ -21,18 +21,18 @@ The gate reads no markers yet, so every finding counts as a finding in verified 
 
 | File | Lines | Lines with a finding | Findings |
 | --- | --- | --- | --- |
-| FlashRadixTree.hpp | 1216 | 190 | 248 |
-| SplayTree.hpp | 825 | 119 | 161 |
+| FlashRadixTree.hpp | 1216 | 175 | 222 |
+| SplayTree.hpp | 825 | 116 | 142 |
 | Test.hpp | 1210 | 257 | 274 |
 | main.cpp | 600 | 21 | 26 |
-| All | 3851 | 587 | 709 |
+| All | 3851 | 569 | 664 |
 
-The rows, from the most findings down. The first run had 695 findings with a different shape, see the next section.
+The rows, from the most findings down. The first run had 695 findings with a different shape, see the next section. These are the numbers after the night's fixes.
 
 | Row | Findings | What the lines are |
 | --- | --- | --- |
 | iostreams | 175 | The tests and the driver print to `std::cout` |
-| unlisted | 170 | Template machinery: unresolved constructs and member names in templates, the class's own name inside its template, parameter packs, concepts and requires clauses, friends |
+| unlisted | 123 | Template machinery: unresolved constructs and member names in templates, parameter packs, concepts and requires clauses, friends |
 | strings | 72 | Keys are `std::string` |
 | metaprogramming | 66 | Dependent names and `typename T::type` in templates |
 | iterators | 57 | The API returns iterators, and the tests compare them with `end()` |
@@ -43,6 +43,7 @@ The rows, from the most findings down. The first run had 695 findings with a dif
 | lvalue_references | 14 | Reference locals and `catch` by reference |
 | templates | 8 | Enum template parameters |
 | global_state | 8 | The test allocator's static counters, with no `reads` or `modifies` lines |
+| builtins | 2 | `__builtin_expect` in the splay tree |
 | the rest | 36 | Pointer arithmetic, function pointers, moves, raw allocation, implicit conversions and single findings |
 
 ## What the trial changed in the gate
