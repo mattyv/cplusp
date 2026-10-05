@@ -25,6 +25,23 @@ struct Fixed {
   int32_t data = N;
 };
 
+#include <type_traits>
+
+enum class Width { Narrow, Wide };
+
+// An enum template argument is a value the compiler substitutes. The cast it writes for that is no cast in the source, so the
+// alias line below carries no finding of its own. The trial on a real file found it reported as a C-style cast.
+template <Width width>  // BANNED
+struct Sized {
+  using Count = std::conditional_t<width == Width::Narrow, int32_t, int64_t>;
+  Count n = 0;
+};
+
+int64_t wide_count() {
+  Sized<Width::Wide> s;
+  return s.n;
+}
+
 template <template <typename> class C>  // BANNED
 struct Wrap {
   C<int32_t> inner{};
