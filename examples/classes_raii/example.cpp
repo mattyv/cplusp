@@ -1,23 +1,25 @@
 #include <cstdint>
 
-// A class of values. The constructor sets the invariant and each method keeps it, and the prover checks both. The members
-// clean themselves up, so this class needs no destructor. A local object is destroyed at the end of its block.
+// A class of values. The invariant is the predicate valid(), decision 0028. The constructor establishes it and each method
+// requires and ensures it. Members are in scope by name and are never listed. The members clean themselves up, so this
+// class needs no destructor. A local object is destroyed at the end of its block.
 class Counter {
  public:
   //@ requires 0 <= start <= 1000
-  //@ ensures value() == start
+  //@ ensures valid() && value() == start
   explicit Counter(int32_t start) : n_(start) {}
 
-  //@ requires value() < 1000
-  //@ modifies this
-  //@ ensures value() == old(value()) + 1
+  //@ ensures result == (0 <= n_ && n_ <= 1000)
+  bool valid() const { return 0 <= n_ && n_ <= 1000; }
+
+  //@ requires valid() && value() < 1000
+  //@ ensures valid() && value() == old(value()) + 1
   void bump() { n_ += 1; }
 
   //@ ensures result == n_
   int32_t value() const { return n_; }
 
  private:
-  //@ invariant 0 <= n_ <= 1000
   int32_t n_;
 };
 
@@ -38,7 +40,6 @@ class Guard {
   //@ ensures flag == 1
   explicit Guard(int32_t& flag) : flag_(flag) { flag_ = 1; }
 
-  //@ modifies flag_
   //@ ensures flag_ == 0
   ~Guard() { flag_ = 0; }
 
