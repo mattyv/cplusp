@@ -1,3 +1,4 @@
 /target
 /.cplusp
 *.generated.yaml
+.claude/worktrees/
