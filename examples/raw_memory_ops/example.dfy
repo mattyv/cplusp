@@ -1,6 +1,6 @@
 // A struct is a datatype, decision 0029. The trusted copy is a method with no body, an axiom with the contract of trusted.cpp,
-// and it takes the destination in and gives it back. The C++ clause `requires &dst != &src` has no counterpart on values. The
-// caller has the same requirement for its two objects.
+// and it takes the destination in and gives it back. A value has no address, so the model never sees two names for one object.
+// The gate refuses a call that passes one object under two names, row aliasing, decision 0033.
 newtype int32 = x: int | -0x8000_0000 <= x < 0x8000_0000
 
 datatype Pair = Pair(a: int32, b: int32)

@@ -1,7 +1,7 @@
 // Dafny has no call inside an expression, so the model chooses an order, and the C++ has one call per statement to match it.
 // The && is modelled as an if: the second call runs only when the first result is positive, as in C++.
-// A reference parameter is a value in and a value out, decision 0029. The clause `requires &x != &y` is a fact about the two
-// C++ names and has no counterpart on values. The caller proves it.
+// A reference parameter is a value in and a value out, decision 0029. Two names for one object never reach the model, because
+// the gate refuses the call that passes them, row aliasing, decision 0033.
 newtype int32 = x: int | -0x8000_0000 <= x < 0x8000_0000
 
 method next(x: int32) returns (x': int32, result: int32)
