@@ -353,6 +353,20 @@ fn every_supported_row_has_a_case() {
     }
 }
 
+/// A proof that holds under one solver seed and fails under another is brittle, and the bot meets the seed it meets. The models
+/// that failed once this way are verified under two more seeds, so a fix that only moved the problem shows up here.
+#[test]
+fn the_once_brittle_proofs_hold_on_every_seed() {
+    for id in ["visitor", "factory", "shape_area_sum", "type_erasure"] {
+        let file = root().join("examples").join(id).join("example.dfy");
+        for seed in ["7", "1234"] {
+            let out = Command::new(divergence::dafny_path()).args(["verify", "--boogie", &format!("-randomSeed:{seed}")]).arg(&file).output().expect("dafny runs");
+            let text = String::from_utf8_lossy(&out.stdout) + String::from_utf8_lossy(&out.stderr);
+            assert!(text.contains(", 0 errors"), "{id}: example.dfy fails under seed {seed}:\n{text}");
+        }
+    }
+}
+
 /// The larger examples: each combines several rows in one piece of code a bot would write, and pushes the gate
 /// and the model where one row at a time does not. See examples/README.md.
 const LARGER_EXAMPLES: &[&str] = &["stack_template", "sorted_insert", "state_machine", "parse_digits", "dot_product", "shape_area_sum"];

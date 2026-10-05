@@ -62,10 +62,10 @@ method MakeSquare(side: int32) returns (q: Square)
 function square_area(q: Square): int32
   requires ValidSquare(q)
   ensures 0 <= square_area(q) <= 1_000_000
-  ensures square_area(q) == q.side * q.side
+  ensures square_area(q) as int == (q.side as int) * (q.side as int)
 {
   ProductAtMost(q.side as int, q.side as int);
-  q.side * q.side
+  ((q.side as int) * (q.side as int)) as int32
 }
 
 datatype Rect = Rect(w: int32, h: int32)
@@ -82,10 +82,11 @@ method MakeRect(w: int32, h: int32) returns (r: Rect)
 function rect_area(r: Rect): int32
   requires ValidRect(r)
   ensures 0 <= rect_area(r) <= 1_000_000
-  ensures rect_area(r) == r.w * r.h
+  ensures rect_area(r) as int == (r.w as int) * (r.h as int)
 {
+  // The product is stated in int, so the contract itself never asks whether an int32 product fits. One seed found that question.
   ProductAtMost(r.w as int, r.h as int);
-  r.w * r.h
+  ((r.w as int) * (r.h as int)) as int32
 }
 
 method {:axiom} visit_square(v: Visitor, s: Square) returns (v': Visitor)
