@@ -581,10 +581,25 @@ fn ban(path: PathBuf, line: usize, rule: &str, message: &str) -> Finding {
     Finding { path, line, rule: rule.to_string(), check: rule.to_string(), decision: Decision::Ban, message: message.to_string() }
 }
 
-/// The lines of `text` with a NOLINT. It is a comment, so the preprocessor's output has lost it.
-fn nolints(path: &Path, text: &str) -> Vec<Finding> {
-    let message = "NOLINT: not allowed in verified code. It silences the gate. Use CPLUSP_TRUSTED with a reason.";
-    text.lines().enumerate().filter(|(_, l)| l.contains("NOLINT")).map(|(n, _)| ban(path.to_path_buf(), n + 1, "nolint", message)).collect()
+/// The lines of `text` with a NOLINT, and the lines that start a line directive, `#line` or `# 1 "x"`.
+/// A NOLINT is a comment, so the preprocessor's output has lost it. A directive written in the source looks like a marker
+/// the preprocessor made, so only the source text tells the two apart.
+// ponytail: a line of a raw string literal that starts like a directive counts, and a directive behind a line splice is
+// missed. The preprocessor path in `preprocess` still catches the splice. Upgrade: read the tokens with the plugin.
+fn scan_text(path: &Path, text: &str) -> Vec<Finding> {
+    let nolint = "NOLINT: not allowed in verified code. It silences the gate. Use CPLUSP_TRUSTED with a reason.";
+    let line = "line directive: not allowed in verified code. It moves the gate's view.";
+    let mut found = Vec::new();
+    for (n, l) in text.lines().enumerate() {
+        if l.contains("NOLINT") {
+            found.push(ban(path.to_path_buf(), n + 1, "nolint", nolint));
+        }
+        let directive = l.trim_start().strip_prefix('#').map(str::trim_start);
+        if directive.is_some_and(|r| r.starts_with("line") || r.starts_with(|c: char| c.is_ascii_digit())) {
+            found.push(ban(path.to_path_buf(), n + 1, "line", line));
+        }
+    }
+    found
 }
 
 /// A line marker of the preprocessor, `# N "path" flags`: the next line is line N of the path.
@@ -714,7 +729,7 @@ fn gate(c: &Common, json: bool, build_dir: Option<&Path>, plugin: Option<&Path>,
             return Ok(Vec::new());
         }
         let source = fs::read(&path).with_context(|| format!("cannot read {}", shown(&path)))?;
-        Ok(nolints(&path, &String::from_utf8_lossy(&source)))
+        Ok(scan_text(&path, &String::from_utf8_lossy(&source)))
     };
     for build in &builds {
         found.extend(scan(build.0.clone())?);
