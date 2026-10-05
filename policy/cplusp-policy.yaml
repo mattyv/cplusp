@@ -482,8 +482,6 @@ rules:
     stage: gate
     detect:
       - check: cplusp-allowlist
-        options:
-          c_style_casts: CStyleCastExpr
       - matcher: cxxFunctionalCastExpr(unless(has(initListExpr())), hasDestinationType(hasCanonicalType(anyOf(isInteger(), realFloatingPointType(), enumType()))))
 
   - id: reinterpret_const_cast
@@ -496,8 +494,6 @@ rules:
     stage: gate
     detect:
       - check: cplusp-allowlist
-        options:
-          reinterpret_const_cast: CXXReinterpretCastExpr,CXXConstCastExpr
 
   - id: downcasts
     construct: Downcasts (`static_cast`, `dynamic_cast`)
@@ -514,8 +510,6 @@ rules:
 
   # -------------------------------------------------------------- classes
       - check: cplusp-allowlist
-        options:
-          downcasts: CXXDynamicCastExpr
 
   - id: classes_raii
     construct: Classes, constructors, destructors, RAII
@@ -661,8 +655,6 @@ rules:
       - matcher: functionDecl(isExplicitTemplateSpecialization())
       - matcher: varDecl(isExplicitTemplateSpecialization())
       - check: cplusp-allowlist
-        options:
-          templates: ClassTemplatePartialSpecializationDecl,NonTypeTemplateParmDecl,TemplateTemplateParmDecl,VarTemplatePartialSpecializationDecl
 
   - id: constexpr
     construct: "`constexpr`, `consteval`, concepts"
@@ -685,8 +677,6 @@ rules:
 
   # -------------------------------------------------------------- control
       - check: cplusp-allowlist
-        options:
-          metaprogramming: DependentNameType,DependentScopeDeclRefExpr,TypeAliasTemplateDecl
 
   - id: control_flow
     construct: "`if`, `switch`, `for`, `while`, early `return`"
@@ -729,8 +719,6 @@ rules:
     stage: gate
     detect:
       - check: cplusp-allowlist
-        options:
-          exceptions: CXXThrowExpr,CXXTryStmt,CXXCatchStmt
 
   - id: goto
     construct: "`goto`"
@@ -742,8 +730,6 @@ rules:
     stage: gate
     detect:
       - check: cplusp-allowlist
-        options:
-          goto: GotoStmt,IndirectGotoStmt,LabelStmt,AddrLabelExpr
 
   - id: unreachable_assume
     construct: "`[[assume]]`, `__builtin_unreachable`, `std::unreachable`"
@@ -814,8 +800,6 @@ rules:
       - matcher: typeLoc(loc(qualType(anyOf(hasCanonicalType(pointerType(pointee(functionType()))), hasCanonicalType(referenceType(pointee(functionType()))), hasCanonicalType(memberPointerType(pointee(functionType())))))), unless(hasAncestor(decl(isImplicit()))))
       - matcher: typeLoc(loc(qualType(hasDeclaration(cxxRecordDecl(hasName("::std::function"))))))
       - check: cplusp-allowlist
-        options:
-          function_pointers: MemberPointerType
 
   - id: varargs_coroutines
     construct: Varargs, coroutines
@@ -828,8 +812,6 @@ rules:
     detect:
       - check: cppcoreguidelines-pro-type-vararg
       - check: cplusp-allowlist
-        options:
-          varargs_coroutines: CoroutineBodyStmt,CoawaitExpr,DependentCoawaitExpr,CoyieldExpr,CoreturnStmt,VAArgExpr
 
   # ---------------------------------------------------------- concurrency
   - id: concurrency
@@ -913,8 +895,6 @@ rules:
     stage: gate
     detect:
       - check: cplusp-allowlist
-        options:
-          inline_asm_intrinsics: GCCAsmStmt,MSAsmStmt,FileScopeAsmDecl
       - matcher: callExpr(callee(functionDecl(matchesName("^::(_mm|_mm256|_mm512|__builtin_ia32|__builtin_neon|__builtin_arm)_"))))
 
   - id: function_like_macros
@@ -947,7 +927,7 @@ rules:
     area: platform
     canonical: "Decision 0032. An allowlist, not a blocklist"
     decision: ban
-    why: The gate refuses what it does not know. Every kind of statement, expression, declaration and type that verified code may use is on the lists in this row, and so is every attribute. A kind outside them has no rule yet, so no proof covers it.
+    why: The gate refuses what it does not know. Every kind of statement, expression, declaration and type that verified code may use is on the lists in this row, and so is every attribute. A kind outside them has no rule yet, so no proof covers it. The kinds a ban row claims are listed here too, under the row's name, so a team that loosens the row loosens its kinds with it.
     use_instead: "a construct the subset lists, or ask for a row."
     stage: gate
     detect:
@@ -957,3 +937,13 @@ rules:
           declarations: AccessSpecDecl,BindingDecl,CXXConstructorDecl,CXXConversionDecl,CXXDestructorDecl,CXXMethodDecl,CXXRecordDecl,ClassTemplateDecl,ClassTemplateSpecializationDecl,DecompositionDecl,EnumConstantDecl,EnumDecl,FieldDecl,FunctionDecl,FunctionTemplateDecl,NamespaceDecl,ParmVarDecl,StaticAssertDecl,TemplateTypeParmDecl,TypeAliasDecl,TypedefDecl,VarDecl,VarTemplateDecl,VarTemplateSpecializationDecl
           types: AutoType,BuiltinType,ConstantArrayType,ElaboratedType,EnumType,FunctionProtoType,LValueReferenceType,ParenType,PointerType,RValueReferenceType,RecordType,SubstTemplateTypeParmType,TemplateSpecializationType,TemplateTypeParmType,TypedefType,UsingType,InjectedClassNameType,DeducedTemplateSpecializationType
           attributes: annotate,fallthrough,final,maybe_unused,nodiscard,override
+          c_style_casts: CStyleCastExpr
+          downcasts: CXXDynamicCastExpr
+          exceptions: CXXThrowExpr,CXXTryStmt,CXXCatchStmt
+          function_pointers: MemberPointerType
+          goto: GotoStmt,IndirectGotoStmt,LabelStmt,AddrLabelExpr
+          inline_asm_intrinsics: GCCAsmStmt,MSAsmStmt,FileScopeAsmDecl
+          metaprogramming: DependentNameType,DependentScopeDeclRefExpr,TypeAliasTemplateDecl
+          reinterpret_const_cast: CXXReinterpretCastExpr,CXXConstCastExpr
+          templates: ClassTemplatePartialSpecializationDecl,NonTypeTemplateParmDecl,TemplateTemplateParmDecl,VarTemplatePartialSpecializationDecl
+          varargs_coroutines: CoroutineBodyStmt,CoawaitExpr,DependentCoawaitExpr,CoyieldExpr,CoreturnStmt,VAArgExpr
