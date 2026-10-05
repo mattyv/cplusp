@@ -14,6 +14,11 @@ witness:
   fixed_prints: "10000000000"
   input: "100000 * 100000"
   ubsan: true
+differential:
+  runs: 300
+  args:
+    - {type: int32}
+    - {type: int32}
 rule: |
   C++ does arithmetic in the type of the operands, not in the type of the destination.
   `a * b` on two `int32_t` is an `int32_t` product, and overflow in it gives undefined behaviour, even when the result goes into an `int64_t`.

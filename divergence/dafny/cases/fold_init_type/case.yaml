@@ -15,6 +15,10 @@ witness:
   input: "two values of INT32_MAX as int64_t"
   ubsan: false
   prints: "-2"
+differential:
+  runs: 200
+  args:
+    - {type: "[int64]", len: [0, 8], min: -2147483648, max: 2147483647}
 rule: |
   A fold runs in the type of its init value.
   Write the init value in the element type, or a wider one.

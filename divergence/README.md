@@ -27,6 +27,15 @@ The fields of `case.yaml`:
 - `witness`: `input` in words. `ubsan: true` when the witness hits undefined behaviour. `asan: true` when it hits AddressSanitizer or LeakSanitizer, for a lifetime bug or a leak. `tsan: true` when it hits ThreadSanitizer, for a data race. `prints` for its output under clang. `prints_gcc` when g++ prints something else, which shows an unspecified result. `fixed_prints` for the output of `fixed.cpp`, the same under both compilers.
 - `rule`: the rule in words. Every line appears in the skill file.
 
+A case may also carry the differential run, decision 0034:
+
+- `drive.dfy`: a `Main` that calls the model on the generated inputs and prints one line per input. The inputs are the constants `arg0`, `arg1` and so on, one `seq` per argument, typed `seq<int>`, `seq<bool>` or `seq<seq<int>>`. The driver converts each element to the model's type with `as`.
+- `drive_naive.dfy`: the same for the naive model, only when its signature differs. Otherwise `drive.dfy` serves both.
+- `drive.cpp`: a `main` that includes `inputs.h`, calls the C++ and prints the same lines. `inputs.h` defines `runs` and the arrays `arg0`, `arg1` and so on, with `std::vector` for a sequence.
+- `differential` in `case.yaml`: `runs`, the number of inputs, and `args`, one entry per argument. An entry has `type`, one of `int8`, `uint8`, `int32`, `uint32`, `int64`, `uint64`, `bool`, or a sequence written `"[int64]"`. It may have `min` and `max` for the mitigated run, and `len: [lo, hi]` for a sequence. The naive run uses the whole range of the type.
+
+`cargo run -p divergence -- differential dafny/cases/CASE` generates the inputs, with the edges of each range first and a fixed seed after. It compiles the mitigated model with Dafny and the C++ under the rule with the sanitizers. Then it runs both and compares the lines. It prints `agree: CASE, N inputs` and exits 0, or `diverge: CASE, input K (ARGS): C++ OUT, model OUT` and exits 1, where a sanitizer report counts as `undefined behaviour`. A run it cannot complete is an error on stderr and exit 2, never a verdict. `--naive` runs the naive model against `code.cpp`. The test runs every case that has a driver, and requires the naive model to diverge wherever the case says it is wrong.
+
 `cargo run -p divergence -- dafny` generates `docs/mitigations-dafny.md` from the cases. Do not edit it by hand. The test in `crates/divergence` runs every case through Dafny, the gate, the witness under the sanitizer, and the skill file. So the cases, the report and the skill cannot drift.
 
 Tools: Dafny at `$DAFNY`, else `/opt/dafny/dafny/dafny`, else `dafny` on PATH. clang++ 18 with the sanitizer runtime (`libclang-rt-18-dev`), g++, and the gate's plugin at `target/plugin/libcplusp.so` or `$CPLUSP_PLUGIN`.

@@ -15,6 +15,11 @@ witness:
   input: "-1 < 1"
   ubsan: false
   prints: "0"
+differential:
+  runs: 300
+  args:
+    - {type: int32}
+    - {type: uint64}
 rule: |
   Dafny will not compare an `int32` with a `uint64`, and `as int` on both sides gives the true comparison, not the C++ one.
   C++ converts the signed operand to unsigned first, so a negative value compares as a huge value.

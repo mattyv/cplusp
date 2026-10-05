@@ -12,6 +12,11 @@ mitigation: "A `bv32` type in the model, and the precondition `n < 32`, not `n <
 witness:
   input: "1 << 32"
   ubsan: true
+differential:
+  runs: 300
+  args:
+    - {type: uint32}
+    - {type: uint32, min: 0, max: 31}
 rule: |
   Dafny has shifts on bit-vector types only, so map `uint32_t` to `bv32` in code that shifts.
   Dafny accepts a shift by the full width, but C++ does not.

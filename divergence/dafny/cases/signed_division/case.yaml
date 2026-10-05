@@ -13,6 +13,11 @@ witness:
   input: "-7 / 2 and -7 % 2"
   ubsan: false
   prints: "-3 -1"
+differential:
+  runs: 300
+  args:
+    - {type: int32}
+    - {type: int32, min: -1000, max: 1000}
 rule: |
   Dafny `/` and `%` round toward negative infinity, and C++ rounds toward zero.
   Never carry `/` or `%` over on signed values.

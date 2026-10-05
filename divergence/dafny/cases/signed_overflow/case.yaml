@@ -12,6 +12,11 @@ mitigation: Bounded `int32` type, and a precondition on the sum written with `as
 witness:
   input: INT32_MAX + 1
   ubsan: true
+differential:
+  runs: 300
+  args:
+    - {type: int32, min: -1073741824, max: 1073741823}
+    - {type: int32, min: -1073741824, max: 1073741823}
 rule: |
   Map `int32_t` to `newtype int32 = x: int | -0x8000_0000 <= x < 0x8000_0000`, never to `int`.
   Dafny then checks every arithmetic step for overflow, in the body and in the contract alike.

@@ -525,7 +525,7 @@ The first thing to exist is the whole pipeline, tiny, end to end, the way `dafny
 2. Two functions, one calling the other. The caller's proof uses the callee's contract. Change the callee's contract and watch the prover re-prove the caller.
 3. Break one. Remove a precondition and get `Not proved: cannot show the result fits in int32_t`. Add a `goto` and get `Not provable: goto is not allowed in verified code`.
 
-Before any translator exists, run step 1 through both prover candidates by hand. Write the one function in Dafny and in VeriFast C. Compare the contract the bot would have to write. Exit test: all three steps run from one command, with messages a bot can act on without reading anything else. This settles the prover choice, the spec syntax and the shape of the messages before we build any breadth.
+There is no translator, decision 0017, and the prover is Dafny with a hand-written model. The first match check is the differential run, decision 0034: the model and the C++ run on the same inputs and must print the same. Exit test: all three steps run from one command, with messages a bot can act on without reading anything else. This settles the spec syntax and the shape of the messages before we build any more breadth.
 
 ## Phase 1: the gate
 
@@ -590,6 +590,7 @@ We deliberately do **not** enable `cppcoreguidelines-pro-bounds-constant-array-i
 **Delivery**
 
 - [ ] Phase 0 thin slice: one function verified end to end, two chained, one broken each way
+- [ ] The differential run, decision 0034: six cases with drivers, the naive model caught on each
 - [x] Plugin: builds, loads, lists its checks. One generic check driven by policy patterns, 29 sample pairs
 - [x] Policy YAML schema and the config it emits, with a golden test
 - [ ] `-markers` and `-index`. Driver maps edits to functions and filters by kind
@@ -697,3 +698,4 @@ Decided Oct 3, 2026: we prove as much of our own tooling as the tools allow. Few
 - Fourteen design patterns under `examples/`, each in the shape the subset takes, with the gate's refusal of the classic form quoted. Decision 0030 closes what the round found. Const reaches through a `unique_ptr`, and a function-local static is refused. A downcast inside a template and a pointer as a template argument are refused too. `std::expected` does not compile under the pinned toolchain, which the soundness map records.
 - Seventeen hot-path idioms and day-one questions under `examples/`. Decision 0031: text is bytes in verified code, `std::string` is trusted only, a search returns an optional, and a larger example may carry a trusted body. The two rows whose check was never built are the prover's.
 - A third review found four holes, all in the new value model's claim that it is exact. Decision 0033: one root, one writer. In a call where one argument can write, no two reference, pointer or span arguments reach one object. No contract carries a clause about addresses. Const reaches through a handle for every spelling of a write. Beside an unordered change of state only a literal or an untouched local may stand. A line marker written in the source is a finding. Decision 0032: the gate becomes an allowlist of node kinds. 76 rules, 62 enforced by the gate.
+- Decision 0034: the differential run. A case may carry a driver pair, and the command compiles the model and the C++ and runs both on generated inputs. Six cases carry one. The naive model must diverge wherever the case says it is wrong.
