@@ -21,11 +21,11 @@ The gate reads no markers yet, so every finding counts as a finding in verified 
 
 | File | Lines | Lines with a finding | Findings |
 | --- | --- | --- | --- |
-| FlashRadixTree.hpp | 1216 | 175 | 222 |
-| SplayTree.hpp | 825 | 116 | 142 |
-| Test.hpp | 1210 | 257 | 274 |
-| main.cpp | 600 | 21 | 26 |
-| All | 3851 | 569 | 664 |
+| FlashRadixTree.hpp | 1216 | 177 | 226 |
+| SplayTree.hpp | 825 | 117 | 143 |
+| Test.hpp | 1210 | 256 | 273 |
+| main.cpp | 600 | 21 | 27 |
+| All | 3851 | 571 | 669 |
 
 The rows, from the most findings down. The first run had 695 findings with a different shape, see the next section. These are the numbers after the night's fixes.
 
@@ -42,9 +42,11 @@ The rows, from the most findings down. The first run had 695 findings with a dif
 | exceptions | 20 | `throw` and `try` in the tests and on allocation failure |
 | lvalue_references | 14 | Reference locals and `catch` by reference |
 | templates | 8 | Enum template parameters |
-| global_state | 8 | The test allocator's static counters, with no `reads` or `modifies` lines |
+| global_state | 8 | The test allocator's static counters, with no `reads` or `modifies` lines, and `std::stoi` in the driver, which reaches `errno` |
 | builtins | 2 | `__builtin_expect` in the splay tree |
-| the rest | 36 | Pointer arithmetic, function pointers, moves, raw allocation, implicit conversions and single findings |
+| the rest | 41 | Pointer arithmetic, function pointers, moves, raw allocation, implicit conversions, two aliasing and two `unique_ptr` findings, and single findings |
+
+The table is from a second run, under decision 0037, where the state check reads the code the compiler generates. The first run gave 664 findings on 569 lines. The second gives five more and loses one. Lost: a write to a static counter in a template body that nothing instantiates. It has no generated code, so the translation unit that instantiates it will judge it. Gained: `std::stoi` in the driver, which reaches `errno` through a reference the gate cannot follow. A call through a table of pointers to member functions in the splay tree, which the row `function_pointers` now sees as a deduced type. Four findings of the rows `aliasing` and `unique_ptr` from the round of decision 0033. The eight state findings are otherwise the same lines.
 
 ## What the trial changed in the gate
 
