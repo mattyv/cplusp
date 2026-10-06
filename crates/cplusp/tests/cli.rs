@@ -549,7 +549,7 @@ fn gate_reads_a_virtual_call_in_the_second_inclusion_of_a_header() {
     let o = gated(&[f.to_str().unwrap(), "--", "-std=c++23", "-ffp-contract=off"]);
     assert_eq!(o.status.code(), Some(1), "stdout: {} stderr: {}", stdout(&o), stderr(&o));
     let out = stdout(&o);
-    assert!(out.lines().any(|l| l.contains("twice-step.h:7: ") && l.ends_with("total changes, and the modifies line does not list it.")), "{out}");
+    assert!(out.lines().any(|l| l.contains("twice-step.h:6: ") && l.ends_with("total changes, and the modifies line does not list it.")), "{out}");
 }
 
 /// The directives are read under the build's own flags, decision 0037. With `-trigraphs`, `??=` is `#`, and the marker it starts
