@@ -159,3 +159,47 @@ void drop_bell() {
 void drop_silent() {
   std::unique_ptr<Silent> s = std::make_unique<Silent>();
 }
+
+#include <array>
+
+struct Clock {
+  virtual ~Clock() = default;
+  //@ requires total < 0x7FFFFFFF
+  //@ modifies total
+  virtual int32_t tick() const {
+    total += 1;
+    return total;
+  }
+};
+
+const std::array<Clock, 1> clocks{};
+
+// A virtual call on a constant global object is a virtual call, read by the call the tree wrote. The pointer the compiler reads to find
+// the function is no pointer the gate must follow.
+//@ requires total < 0x7FFFFFFF
+//@ modifies total
+int32_t tick_once() {
+  return clocks[0].tick();
+}
+
+struct Chime : Bell {};
+
+// An override is held to the nearest base that has lines. The destructor nobody wrote for Chime has none, and Bell's list total.
+struct Gong : Chime {
+  //@ requires total < 0x7FFFFFFF
+  //@ modifies total
+  ~Gong() override {
+    total += 1;
+  }
+};
+
+// The same for a destructor nobody wrote, two steps down from the lines.
+struct Rattle : Chime {
+  Guard g;
+};
+
+//@ requires total < 0x7FFFFFFE
+//@ modifies total
+void rattle() {
+  Rattle r;
+}

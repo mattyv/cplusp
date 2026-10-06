@@ -20,3 +20,22 @@ int32_t add(int32_t a, int32_t b) {
 int32_t both() {
   return add(a_write(), b_write());
 }
+
+struct Clock {
+  virtual ~Clock() = default;
+  virtual int32_t tick() const {
+    return 0;
+  }
+};
+
+struct Loud : Clock {
+  int32_t tick() const override {
+    total += 1;
+    return total;
+  }
+};
+
+// Two calls of a const virtual function. The function the source names changes nothing, and an override of it writes a global.
+int32_t twice(const Clock& c) {
+  return add(c.tick(), c.tick());
+}

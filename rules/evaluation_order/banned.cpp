@@ -197,3 +197,24 @@ int32_t sum_x(Vec1 a, Vec1 b) {
 int32_t two_sums(Vec1 a, Vec1 b, Vec1 c, Vec1 d) {
   return sum_x(a + b, c + d);  // BANNED
 }
+
+struct Noted {
+  int32_t v = 0;
+  Noted() = default;
+  //@ requires total < 0x7FFFFFFF
+  //@ modifies total
+  Noted(const Noted& other) : v(other.v) {
+    total += 1;
+  }
+};
+
+bool both_empty(std::vector<Noted> a, std::vector<Noted> b) {
+  return a.empty() && b.empty();
+}
+
+// Two copies of a container of Noted. Each copy runs Noted's copy constructor, which lists total. Two changes, decision 0037.
+//@ requires total < 0x7FFFFFFE
+//@ modifies total
+bool copied_twice(const std::vector<Noted>& v) {
+  return both_empty(v, v);  // BANNED
+}

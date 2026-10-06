@@ -528,6 +528,8 @@ fn the_sequencing_check_reads_a_callees_body_under_a_loosened_state_row() {
         let out = stdout(&o);
         assert_eq!(o.status.code(), Some(1), "{policy:?}: stdout: {out} stderr: {}", stderr(&o));
         assert!(out.lines().any(|l| l.contains("sequencing-through-bodies.cpp:21: Two changes of state in one expression")), "{policy:?}: {out}");
+        // The function the source names changes nothing. An override of it writes a global, and a call through the base may run it.
+        assert!(out.lines().any(|l| l.contains("sequencing-through-bodies.cpp:40: Two changes of state in one expression")), "{policy:?}: {out}");
     }
 }
 

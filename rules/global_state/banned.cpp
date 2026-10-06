@@ -418,3 +418,44 @@ void owned_derived() {
 void shared_base() {
   std::shared_ptr<Alarm> a = std::make_shared<Siren>();  // BANNED also: shared_ptr
 }  // BANNED
+
+struct Remote {
+  virtual ~Remote();
+  virtual void act();
+};
+
+// 13. A virtual function with no body here and no lines is a function with no body and no lines, however it is called.
+void act_remote(Remote& r) {
+  r.act();  // BANNED
+}
+
+struct Ticked {
+  std::unique_ptr<Clock> c = std::make_unique<Clock>();
+  int32_t v = c->tick();  // BANNED
+};
+
+// 14. A default member initializer has no function of its own. Its code runs in every function that makes the object, on the line of
+// the initializer, and the virtual call inside it is read in each of them, decision 0037. The first maker lists nothing, and the
+// finding sits on the initializer. The second lists total.
+int32_t ticked_unlisted() {
+  Ticked t{};
+  return t.v;
+}
+
+//@ requires total < 0x7FFFFFFF
+//@ modifies total
+int32_t ticked_listed() {
+  Ticked t{};
+  return t.v;
+}
+
+#include <mutex>
+
+void stash() {
+  std::__once_callable = &total;
+}
+
+// 15. A pointer kept in a global of the library is a pointer the gate cannot follow when this file reads it.
+void write_back() {
+  *static_cast<int32_t*>(std::__once_callable) = 5;  // BANNED
+}
