@@ -78,3 +78,25 @@ struct Base {
 void invoke_member(Base& b) {
   std::invoke(&Base::act, b);  // BANNED also: global_state
 }
+
+#include <array>
+#include <cstddef>
+
+//@ requires total < 0x7FFFFFFF
+//@ modifies total
+void bump_total() {
+  total += 1;
+}
+
+void quiet() {}
+
+// A deduced type spells no pointer, and the pointer is made all the same: by the address of a function, or by its name where no call
+// takes it. The compiler fills the table from a constant of its own, and a call through the table runs what the constant names,
+// decision 0037.
+void table_by_address(std::size_t i) {
+  auto arr = std::array{&bump_total, &quiet, &quiet}; arr[i]();  // BANNED also: global_state
+}
+
+void table_by_name(std::size_t i) {
+  auto arr = std::array{quiet, quiet}; arr[i]();  // BANNED
+}
