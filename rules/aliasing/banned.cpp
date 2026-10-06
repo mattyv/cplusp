@@ -79,6 +79,7 @@ void object_and_member(Pair& p) {
 }
 
 // Through a handle: the owner and what it owns.
+//@ requires p != nullptr
 void owner_and_owned(std::unique_ptr<int32_t>& p, int32_t& x);
 
 void handle(std::unique_ptr<int32_t>& p) {

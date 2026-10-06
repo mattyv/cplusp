@@ -23,7 +23,9 @@ int32_t through_const_alias(const std::vector<int32_t>& v) {
   return w.empty() ? 0 : w.front();
 }
 
+//@ ensures dst == old(src) && src == 0
 void take(int32_t& dst, int32_t& src);
+//@ ensures a == 1 && result == old(b)
 int32_t set_and_read(int32_t& a, const int32_t& b);
 
 // A reference wrapper is a reference local in disguise.

@@ -32,6 +32,7 @@ int32_t grow_in_loop(std::vector<int32_t>& v) {
   return s;
 }
 
+//@ ensures v.size() == old(v.size()) + 1
 void grow(std::vector<int32_t>& v, int32_t x);
 
 int32_t grow_through_call(std::vector<int32_t>& v) {

@@ -24,6 +24,7 @@
 #include <algorithm>
 #include <initializer_list>
 #include <optional>
+#include <set>
 #include <string>
 #include <vector>
 
@@ -403,14 +404,7 @@ bool namedInStd(const CallExpr *Call, const FunctionDecl *Function) {
 
 // A function that this file does not define, and std does not own, may return a reference, a pointer or a span to any global: it
 // reaches the State again. A function that this file defines has had its returns checked, so it returns only what its arguments reach.
-bool hiddenReference(const CallExpr *Call) {
-  const FunctionDecl *Function = Call->getDirectCallee();
-  if (!Function || Function->isReplaceableGlobalAllocationFunction() || keepsRoot(Function))
-    return false;
-  const Expr *Object = objectOf(Call);
-  const OverloadedOperatorKind Operator = Function->getOverloadedOperator();
-  if (Object && (Operator == OO_Subscript || ((Operator == OO_Star || Operator == OO_Arrow) && isHandle(Object->getType()))))
-    return false;
+bool hiddenReference(const CallExpr *Call, const FunctionDecl *Function) {
   return bindsToName(Function->getReturnType()) && !namedInStd(Call, Function) && !Function->isImplicit() && !Function->isDefaulted() &&
          !Function->isDefined();
 }
@@ -518,7 +512,7 @@ Walk rootsOf(const Expr *E) {
     collectArgs(Call, Args);
     for (const Arg &A : Args)
       W.add(A.Where);
-    if (hiddenReference(Call)) {
+    if (hiddenReference(Call, Function)) {
       RootPath Hidden = stateRoot();
       Hidden.At = Call;
       W.Paths.push_back(Hidden);
@@ -554,16 +548,28 @@ void collectArgs(const Expr *Node, llvm::SmallVectorImpl<Arg> &Out) {
   }
 }
 
+// A function that the semantic checks do not judge: the dependent pattern of a template, which is judged at each instantiation where
+// every type and every callee is known, and the body of an implicit function, which the compiler wrote. A lambda's call operator is
+// implicit and is judged, because the lambda runs where it is written. Decision 0036.
+AST_MATCHER(FunctionDecl, notJudged) {
+  const auto *Method = dyn_cast<CXXMethodDecl>(&Node);
+  return Node.isDependentContext() || (Node.isImplicit() && !(Method && Method->getParent()->isLambda()));
+}
+
+// The matchers of the semantic checks: a node in a user file, and not in a function that is not judged. The checks read the tree as the
+// compiler has it, with the instantiations of a template.
+auto judged() { return allOf(unless(isExpansionInSystemHeader()), unless(forFunction(notJudged()))); }
+
 // cplusp-aliasing: decision 0033. When one argument of a call can write, no two arguments reach one object.
 // A global bound to a reference, a pointer or a span is refused on its own, because it is the State as well. A const reference
 // to a global in a call into std is the one exception: nothing in std can reach the State. A function that returns a reference,
 // a pointer or a span may return only what its parameters or `this` reach, else every call of it passes a global.
-class AliasingCheck : public SpelledCheck {
+class AliasingCheck : public ClangTidyCheck {
 public:
-  using SpelledCheck::SpelledCheck;
+  using ClangTidyCheck::ClangTidyCheck;
   void registerMatchers(MatchFinder *Finder) override {
-    Finder->addMatcher(expr(anyOf(callExpr(), cxxConstructExpr())).bind("call"), this);
-    Finder->addMatcher(returnStmt(forFunction(functionDecl().bind("function"))).bind("return"), this);
+    Finder->addMatcher(expr(anyOf(callExpr(), cxxConstructExpr()), judged()).bind("call"), this);
+    Finder->addMatcher(returnStmt(forFunction(functionDecl(unless(notJudged())).bind("function"))).bind("return"), this);
   }
   void check(const MatchFinder::MatchResult &Result) override {
     if (const auto *Return = Result.Nodes.getNodeAs<ReturnStmt>("return")) {
@@ -596,10 +602,10 @@ public:
 
 // cplusp-const-handle: decision 0033. A write whose path passes through a const unique_ptr or shared_ptr. A write is an
 // assignment, an increment, a non-const member call, or a binding to a non-const reference, pointer or span.
-class ConstHandleCheck : public SpelledCheck {
+class ConstHandleCheck : public ClangTidyCheck {
 public:
-  using SpelledCheck::SpelledCheck;
-  void registerMatchers(MatchFinder *Finder) override { Finder->addMatcher(expr().bind("expr"), this); }
+  using ClangTidyCheck::ClangTidyCheck;
+  void registerMatchers(MatchFinder *Finder) override { Finder->addMatcher(expr(judged()).bind("expr"), this); }
   void check(const MatchFinder::MatchResult &Result) override {
     const auto *Node = Result.Nodes.getNodeAs<Expr>("expr");
     bool Writes = false;
@@ -628,6 +634,11 @@ bool changesNothing(const FunctionDecl *Function) {
                             Function->getName());
 }
 
+// Whether a call of `Function` may change a global: it lists one on its `modifies` line, its body or the body of something it calls
+// writes one, or it is outside std with no body here and no contract lines. Defined with the state check, which reads the same lines.
+bool reachesState(const FunctionDecl *Function);
+void resetReach();
+
 // A node that changes state: an assignment, an increment, a call of a function that may change state, or a construction
 // with a parameter the constructor can write through. A std::span is a view, and cutting one changes nothing, so
 // `fill(v, v)` is a matter for the row aliasing. An operator call is judged by its callee only for `()`. Any other
@@ -638,19 +649,24 @@ bool isChange(const Stmt *S) {
   if (const auto *Binary = dyn_cast<BinaryOperator>(S))
     return Binary->isAssignmentOp();
   if (const auto *Construct = dyn_cast<CXXConstructExpr>(S))
-    return !asSpan(Construct->getType()) && hasMutableParameter(Construct->getConstructor());
+    // A constructor of a system header builds a std object. The compiler builds some of them for a rewritten comparison, such as
+    // the `__unspec` of `o < 5` on an optional, and no author wrote them.
+    return !asSpan(Construct->getType()) && !Construct->getConstructor()->getASTContext().getSourceManager().isInSystemHeader(Construct->getConstructor()->getLocation()) &&
+           (hasMutableParameter(Construct->getConstructor()) || reachesState(Construct->getConstructor()));
   if (const auto *Operator = dyn_cast<CXXOperatorCallExpr>(S))
     if (Operator->getOperator() != OO_Call)
       return isAssignmentOrIncrement(Operator->getOperator());
-  if (const auto *Call = dyn_cast<CallExpr>(S))
-    return Call->getDirectCallee() && !changesNothing(Call->getDirectCallee()) && mayChangeState(Call->getDirectCallee());
+  if (const auto *Call = dyn_cast<CallExpr>(S)) {
+    const FunctionDecl *Callee = Call->getDirectCallee();
+    return Callee && !changesNothing(Callee) && (mayChangeState(Callee) || reachesState(Callee));
+  }
   return false;
 }
 
 // ponytail: three ceilings. A lambda changes nothing where it is written, so a capture initializer that does is missed.
-// A reference member lets a const method change state, and the check calls that method pure. A call through a template
-// parameter has no callee the check can read, and so has a call through a function pointer or a member pointer.
-// Upgrade: count the capture initializers, and visit instantiations.
+// A reference member lets a const method change state, and the check calls that method pure. A call through a function pointer
+// or a member pointer has no callee the check can read.
+// Upgrade: count the capture initializers, and read the type of a pointer.
 // An unevaluated operand changes nothing: `sizeof`, `alignof`, `noexcept` and `typeid` do not run it.
 // A default argument has no children of its own, and the call runs its expression.
 bool changes(const Stmt *S) {
@@ -758,10 +774,11 @@ void effects(const Stmt *S, Effects &E) {
 
 // cplusp-evaluation-order: a node with two unordered children that each change state, decision 0026. When exactly one changes
 // state, no other unordered child reads what the change can reach, decision 0033.
-class EvaluationOrderCheck : public SpelledCheck {
+class EvaluationOrderCheck : public ClangTidyCheck {
 public:
-  using SpelledCheck::SpelledCheck;
-  void registerMatchers(MatchFinder *Finder) override { Finder->addMatcher(expr().bind("expr"), this); }
+  using ClangTidyCheck::ClangTidyCheck;
+  void onStartOfTranslationUnit() override { resetReach(); }
+  void registerMatchers(MatchFinder *Finder) override { Finder->addMatcher(expr(judged()).bind("expr"), this); }
   void check(const MatchFinder::MatchResult &Result) override {
     const auto *Node = Result.Nodes.getNodeAs<Expr>("expr");
     auto Children = unorderedChildren(Node);
@@ -886,6 +903,9 @@ public:
       Loc = T->getBeginLoc();
       Kind = std::string(T->getTypePtr()->getTypeClassName()) + "Type";
       Allowed = &Types;
+      // A qualifier is no node kind and no attribute, and `__restrict` promises the compiler that two pointers never alias.
+      if (T->getType().isLocalRestrictQualified() && Loc.isValid())
+        diag(Result.SourceManager->getFileLoc(Loc), "unlisted: The construct is __restrict.");
     } else {
       return;
     }
@@ -914,11 +934,13 @@ private:
   }
 };
 
-// ------------------------------------------------------------ unlisted state, decision 0035
+// ------------------------------------------------------------ unlisted state, decisions 0035 and 0036
 
-// The two kinds of contract line the gate reads: `//@ modifies a, b` and `//@ reads a, b`. Every other line is ignored.
+// The two kinds of contract line the gate reads: `//@ modifies a, b` and `//@ reads a, b`. Every other line is ignored, but it shows
+// that the function has a contract, and a contract with no `modifies` line says that the function changes no global.
 struct Contract {
   std::vector<std::string> Modifies, Reads;
+  bool Any = false;  // a `//@` line of any kind is there
 };
 
 // The contract lines of the function that starts at `First`: the contiguous lines above that line that start with `//@`. A
@@ -947,6 +969,7 @@ Contract contractAbove(const SourceManager &SM, SourceLocation First) {
       continue;
     if (!Line.consume_front("//@"))
       break;
+    C.Any = true;
     Line = Line.ltrim();
     std::vector<std::string> *Names = Line.consume_front("modifies") ? &C.Modifies : Line.consume_front("reads") ? &C.Reads : nullptr;
     if (!Names || (!Line.empty() && !isspace(static_cast<unsigned char>(Line.front()))))
@@ -960,7 +983,8 @@ Contract contractAbove(const SourceManager &SM, SourceLocation First) {
   return C;
 }
 
-// Where a function starts: its return type, or its name for a constructor. A function template starts at its `template`.
+// Where a function starts: its return type, or its name for a constructor. A function template starts at its `template`, and its
+// lines sit above that, as in examples/templates.
 SourceLocation firstTokenOf(const FunctionDecl *Function) {
   if (const FunctionTemplateDecl *Template = Function->getDescribedFunctionTemplate())
     return Template->getBeginLoc();
@@ -968,9 +992,9 @@ SourceLocation firstTokenOf(const FunctionDecl *Function) {
 }
 
 // ponytail: one ceiling. A callee that has no lines in this translation unit adds nothing, so a callee in a header behind -isystem,
-// a callee through a function pointer, a virtual call that an override answers, and a callee in another file add nothing. A lambda
-// is no function that has lines, and its body counts for the function that passes it.
-// Upgrade: a contract reader that runs on every file, and a record of the lines of every function.
+// a callee through a function pointer, a virtual call that an override answers, and a callee in another file add nothing, unless it
+// has no body and no lines at all, which the gate refuses. Upgrade: a contract reader that runs on every file, and a record of the
+// lines of every function.
 Contract contractOf(const SourceManager &SM, const FunctionDecl *Function) {
   Contract C;
   if (const FunctionDecl *Pattern = Function->getTemplateInstantiationPattern())
@@ -982,8 +1006,23 @@ Contract contractOf(const SourceManager &SM, const FunctionDecl *Function) {
     Contract One = contractAbove(SM, firstTokenOf(Declaration));
     C.Modifies.insert(C.Modifies.end(), One.Modifies.begin(), One.Modifies.end());
     C.Reads.insert(C.Reads.end(), One.Reads.begin(), One.Reads.end());
+    C.Any |= One.Any;
   }
   return C;
+}
+
+// The function whose lines judge `Function`. A lambda has none of its own, so its call operator is judged against the function that
+// the lambda is written in.
+const FunctionDecl *linesOwner(const FunctionDecl *Function) {
+  while (const auto *Method = dyn_cast<CXXMethodDecl>(Function)) {
+    if (!Method->getParent()->isLambda())
+      break;
+    const auto *Outer = dyn_cast<FunctionDecl>(Method->getParent()->getDeclContext());
+    if (!Outer)
+      break;
+    Function = Outer;
+  }
+  return Function;
 }
 
 // The name of a variable as a contract line writes it: qualified, and without the arguments of a class template, so `Box<int>::n` is
@@ -1005,35 +1044,38 @@ std::string nameOf(const VarDecl *Var) {
 // A mutable global or a static data member. A constant, a member and a function-local static are not state here.
 bool isState(const VarDecl *Var) { return isMutableGlobal(Var) && !Var->isStaticLocal(); }
 
-StringRef lastComponent(StringRef Name) {
-  const size_t At = Name.rfind("::");
-  return At == StringRef::npos ? Name : Name.substr(At + 2);
+// The state variable that a listed name names. A name is the qualified name of the variable, or that name after a `::`, and it names
+// the variable only when no other state variable of the whole translation unit matches it too: two statics called `n` are named by
+// none, and so are two that end in `C::k`.
+const std::string *resolve(StringRef Listed, const std::vector<std::string> &State) {
+  const std::string *Found = nullptr;
+  for (const std::string &Name : State) {
+    const StringRef Full = Name;
+    if (Full == Listed || (Full.size() > Listed.size() && Full.ends_with(Listed) && Full.drop_back(Listed.size()).ends_with("::"))) {
+      if (Found)
+        return nullptr;
+      Found = &Name;
+    }
+  }
+  return Found;
 }
 
-// One name is the other, or the other after a `::`.
-bool sameName(StringRef A, StringRef B) {
-  return A == B || (A.size() > B.size() && A.ends_with(B) && A.drop_back(B.size()).ends_with("::")) ||
-         (B.size() > A.size() && B.ends_with(A) && B.drop_back(A.size()).ends_with("::"));
+// A function with a body in this translation unit, or whose pattern has one.
+bool hasBody(const FunctionDecl *Function) {
+  const FunctionDecl *Pattern = Function->getTemplateInstantiationPattern();
+  return Function->isDefined() || (Pattern && Pattern->isDefined());
 }
 
-// A state variable of the file, by its qualified name, and where it is first declared.
-struct StateName {
-  std::string Name;
-  SourceLocation At;
-};
-
-// A listed name is the qualified name of the variable, or that name after a `::`. A name with no `::` is the variable's own name, and
-// it names the variable only when no other state variable has that name where the function starts: two statics called `n` are named by
-// none.
-bool isListed(const std::vector<std::string> &Listed, StringRef Name, const std::vector<StateName> &State, const SourceManager &SM,
-              SourceLocation Start) {
-  return llvm::any_of(Listed, [&](const std::string &L) {
-    if (L.find("::") == std::string::npos)
-      return lastComponent(Name) == L && llvm::count_if(State, [&](const StateName &S) {
-               return lastComponent(S.Name) == L && SM.isBeforeInTranslationUnit(S.At, Start);
-             }) <= 1;
-    return sameName(Name, L);
-  });
+// A function that the gate cannot read: outside std and the system headers, with no body here and no contract lines. A call of it
+// may change any global. A builtin, a function that the compiler or a `= default` defines, and a pure virtual function, which an
+// override answers, are no such function.
+// ponytail: an override in another file is not read, so a virtual call adds only what the declaration lists. Upgrade: read every
+// override of the class hierarchy that the file can see.
+bool isOpaque(const SourceManager &SM, const FunctionDecl *Function) {
+  if (Function->isImplicit() || Function->isDefaulted() || Function->isPureVirtual() || Function->getBuiltinID() || inStdNamespace(Function) ||
+      SM.isInSystemHeader(Function->getLocation()) || hasBody(Function))
+    return false;
+  return !contractOf(SM, Function).Any;
 }
 
 // A constructor or destructor that nobody wrote, so its lines are those of what it runs.
@@ -1045,6 +1087,10 @@ const CXXRecordDecl *classOf(QualType Type) {
   const CXXRecordDecl *Record = Type->getBaseElementTypeUnsafe()->getAsCXXRecordDecl();
   return Record ? Record->getDefinition() : nullptr;
 }
+
+// A walk over the bases and the members of a class goes to the end of them. A class holds its members by value, so the graph is finite,
+// and the set keeps a class that appears twice from being walked twice. No limit ends a walk in a pass, decision 0036.
+using ClassSet = llvm::SmallPtrSet<const CXXRecordDecl *, 16>;
 
 // The constructor of `Class` that is of the same kind as `Kind`, or null when the class declares none: an implicit one runs then. A
 // move that the class does not declare runs the copy.
@@ -1065,8 +1111,9 @@ const CXXConstructorDecl *constructorLike(const CXXRecordDecl *Class, const CXXC
 }
 
 // The expressions of the in-class initializers that an implicit default constructor of `Record` runs, for its members and its bases.
-void inClassInitializers(const CXXRecordDecl *Record, int Depth, llvm::SmallVectorImpl<const Expr *> &Out, const CXXConstructorDecl *Default) {
-  if (!Record || Depth > 8 || inSystemHeader(Record))
+// ponytail: this walk and the two below go over the same bases and members. Upgrade: one walk that takes what to collect.
+void inClassInitializers(const CXXRecordDecl *Record, const CXXConstructorDecl *Kind, ClassSet &Seen, llvm::SmallVectorImpl<const Expr *> &Out) {
+  if (!Record || inSystemHeader(Record) || !Seen.insert(Record).second)
     return;
   const auto Member = [&](QualType Type, const Expr *Init) {
     if (Init) {
@@ -1074,14 +1121,134 @@ void inClassInitializers(const CXXRecordDecl *Record, int Depth, llvm::SmallVect
       return;
     }
     const CXXRecordDecl *Class = classOf(Type);
-    const CXXConstructorDecl *Constructor = Class ? constructorLike(Class, Default) : nullptr;
+    const CXXConstructorDecl *Constructor = Class ? constructorLike(Class, Kind) : nullptr;
     if (Class && (!Constructor || isImplicitMember(Constructor)))
-      inClassInitializers(Class, Depth + 1, Out, Default);
+      inClassInitializers(Class, Kind, Seen, Out);
   };
   for (const CXXBaseSpecifier &Base : Record->bases())
     Member(Base.getType(), nullptr);
   for (const FieldDecl *Field : Record->fields())
     Member(Field->getType(), Field->getInClassInitializer());
+}
+
+// The user-written constructors that an implicit constructor of `Record` runs for its bases and members, of the kind it is.
+void constructorsRunBy(const CXXRecordDecl *Record, const CXXConstructorDecl *Kind, ClassSet &Seen,
+                       llvm::SmallVectorImpl<const FunctionDecl *> &Out) {
+  if (!Record || inSystemHeader(Record) || !Seen.insert(Record).second)
+    return;
+  const auto Member = [&](QualType Type, bool HasInit) {
+    const CXXRecordDecl *Class = classOf(Type);
+    if (!Class || (Kind->isDefaultConstructor() && HasInit))
+      return;
+    const CXXConstructorDecl *Constructor = constructorLike(Class, Kind);
+    if (!Constructor || isImplicitMember(Constructor))
+      constructorsRunBy(Class, Kind, Seen, Out);
+    else
+      Out.push_back(Constructor);
+  };
+  for (const CXXBaseSpecifier &Base : Record->bases())
+    Member(Base.getType(), false);
+  for (const FieldDecl *Field : Record->fields())
+    Member(Field->getType(), Field->hasInClassInitializer());
+}
+
+// The user classes among the template arguments of `Type`, and among its own parts: what a std template over them runs the code of.
+// A reference and an array are looked through. A pointer holds no object, so it runs nothing.
+using TypeSet = llvm::SmallPtrSet<const void *, 16>;
+void userClassesIn(QualType Type, ClassSet &Out, TypeSet &Seen);
+
+void userClassesInArgs(llvm::ArrayRef<TemplateArgument> Args, ClassSet &Out, TypeSet &Seen) {
+  for (const TemplateArgument &Arg : Args) {
+    if (Arg.getKind() == TemplateArgument::Type)
+      userClassesIn(Arg.getAsType(), Out, Seen);
+    else if (Arg.getKind() == TemplateArgument::Pack)
+      userClassesInArgs(Arg.pack_elements(), Out, Seen);
+  }
+}
+
+void userClassesIn(QualType Type, ClassSet &Out, TypeSet &Seen) {
+  if (Type.isNull())
+    return;
+  const clang::Type *Base = Type.getNonReferenceType()->getBaseElementTypeUnsafe();
+  if (!Seen.insert(Base->getCanonicalTypeInternal().getAsOpaquePtr()).second)
+    return;
+  const CXXRecordDecl *Record = Base->getAsCXXRecordDecl();
+  if (!Record)
+    return;
+  if (const CXXRecordDecl *Definition = Record->getDefinition())
+    Record = Definition;
+  if (!inSystemHeader(Record))
+    Out.insert(Record);
+  if (const auto *Specialization = dyn_cast<ClassTemplateSpecializationDecl>(Record))
+    userClassesInArgs(Specialization->getTemplateArgs().asArray(), Out, Seen);
+}
+
+// The user-written destructors that destroying an object of `Record` runs: its own, and those of its bases and members. A member that
+// is a std template over a user class runs that class's destructor too.
+void destructorsRunBy(const CXXRecordDecl *Record, ClassSet &Seen, llvm::SmallVectorImpl<const FunctionDecl *> &Out) {
+  if (!Record || inSystemHeader(Record) || !Seen.insert(Record).second)
+    return;
+  const CXXDestructorDecl *Destructor = Record->getDestructor();
+  if (Destructor && !isImplicitMember(Destructor))
+    Out.push_back(Destructor);
+  const auto Part = [&](QualType Type) {
+    const CXXRecordDecl *Class = classOf(Type);
+    if (!Class)
+      return;
+    if (!inSystemHeader(Class)) {
+      destructorsRunBy(Class, Seen, Out);
+    } else if (const auto *Specialization = dyn_cast<ClassTemplateSpecializationDecl>(Class)) {
+      ClassSet Users;
+      TypeSet Types;
+      userClassesInArgs(Specialization->getTemplateArgs().asArray(), Users, Types);
+      for (const CXXRecordDecl *User : Users)
+        destructorsRunBy(User, Seen, Out);
+    }
+  };
+  for (const CXXBaseSpecifier &Base : Record->bases())
+    Part(Base.getType());
+  for (const FieldDecl *Field : Record->fields())
+    Part(Field->getType());
+}
+
+// The functions of a user class that a std template may run: its constructors, its destructor and its assignment operators, with a
+// constructor that nobody wrote replaced by the constructors it runs.
+void classFunctions(const CXXRecordDecl *Class, llvm::SmallVectorImpl<const FunctionDecl *> &Out) {
+  for (const CXXConstructorDecl *Constructor : Class->ctors()) {
+    if (!isImplicitMember(Constructor)) {
+      Out.push_back(Constructor);
+    } else if (Constructor->isDefaultConstructor() || Constructor->isCopyOrMoveConstructor()) {
+      ClassSet Seen;
+      constructorsRunBy(Class, Constructor, Seen, Out);
+    }
+  }
+  ClassSet Seen;
+  destructorsRunBy(Class, Seen, Out);
+  for (const CXXMethodDecl *Method : Class->methods())
+    if ((Method->isCopyAssignmentOperator() || Method->isMoveAssignmentOperator()) && !isImplicitMember(Method))
+      Out.push_back(Method);
+}
+
+// The user classes that a call of `Callee` runs the code of when `Callee` is a template specialization declared in a system header: the
+// classes among its template arguments, and among the types of the arguments it is given. A std function that is no template runs none.
+void stdTemplateUsers(const FunctionDecl *Callee, const SourceManager &SM, llvm::ArrayRef<const Expr *> Args, ClassSet &Out) {
+  if (!Callee || !SM.isInSystemHeader(Callee->getLocation()))
+    return;
+  TypeSet Types;
+  bool Template = false;
+  if (const TemplateArgumentList *List = Callee->getTemplateSpecializationArgs()) {
+    userClassesInArgs(List->asArray(), Out, Types);
+    Template = true;
+  }
+  if (const auto *Method = dyn_cast<CXXMethodDecl>(Callee))
+    if (const auto *Specialization = dyn_cast<ClassTemplateSpecializationDecl>(Method->getParent())) {
+      userClassesInArgs(Specialization->getTemplateArgs().asArray(), Out, Types);
+      Template = true;
+    }
+  if (!Template)
+    return;
+  for (const Expr *Arg : Args)
+    userClassesIn(Arg->getType(), Out, Types);
 }
 
 // Calls Visit on every node the function runs: the nodes of a lambda body too, because the lambda runs inside the function that passes
@@ -1108,76 +1275,112 @@ template <typename F> void walkNodes(const Stmt *S, SourceLocation Call, SourceL
     const CXXConstructorDecl *Constructor = Construct->getConstructor();
     if (Constructor->isDefaultConstructor() && isImplicitMember(Constructor)) {
       llvm::SmallVector<const Expr *, 4> Inits;
-      inClassInitializers(Constructor->getParent(), 0, Inits, Constructor);
+      ClassSet Seen;
+      inClassInitializers(Constructor->getParent(), Constructor, Seen, Inits);
       for (const Expr *Init : Inits)
         walkNodes(Init, Call, Where, Visit);
     }
   }
 }
 
-// The user-written constructors that an implicit constructor of `Record` runs for its bases and members, of the kind it is.
-void constructorsRunBy(const CXXRecordDecl *Record, const CXXConstructorDecl *Kind, int Depth,
-                       llvm::SmallVectorImpl<const FunctionDecl *> &Out) {
-  if (!Record || Depth > 8 || inSystemHeader(Record))
-    return;
-  const auto Member = [&](QualType Type, bool HasInit) {
-    const CXXRecordDecl *Class = classOf(Type);
-    if (!Class || (Kind->isDefaultConstructor() && HasInit))
-      return;
-    const CXXConstructorDecl *Constructor = constructorLike(Class, Kind);
-    if (!Constructor || isImplicitMember(Constructor))
-      constructorsRunBy(Class, Kind, Depth + 1, Out);
-    else
-      Out.push_back(Constructor);
-  };
-  for (const CXXBaseSpecifier &Base : Record->bases())
-    Member(Base.getType(), false);
-  for (const FieldDecl *Field : Record->fields())
-    Member(Field->getType(), Field->hasInClassInitializer());
+// Calls Each on the root path of everything that S writes: an assignment target, an increment, an argument that binds to a non-const
+// reference, pointer or span, and the object of a non-const member call.
+template <typename F> void forEachWrite(const Stmt *S, const F &Each) {
+  if (const auto *Binary = dyn_cast<BinaryOperator>(S); Binary && Binary->isAssignmentOp()) {
+    for (const RootPath &Path : rootsOf(Binary->getLHS()).Paths)
+      Each(Path);
+  } else if (const auto *Unary = dyn_cast<UnaryOperator>(S); Unary && Unary->isIncrementDecrementOp()) {
+    for (const RootPath &Path : rootsOf(Unary->getSubExpr()).Paths)
+      Each(Path);
+  } else if (isa<CallExpr, CXXConstructExpr>(S)) {
+    llvm::SmallVector<Arg, 4> Args;
+    collectArgs(cast<Expr>(S), Args);
+    for (const Arg &A : Args)
+      if (A.Writes)
+        for (const RootPath &Path : A.Where.Paths)
+          Each(Path);
+  }
 }
 
-// The user-written destructors that destroying an object of `Record` runs: its own, and those of its bases and members.
-void destructorsRunBy(const CXXRecordDecl *Record, int Depth, llvm::SmallVectorImpl<const FunctionDecl *> &Out) {
-  if (!Record || Depth > 8 || inSystemHeader(Record))
-    return;
-  const CXXDestructorDecl *Destructor = Record->getDestructor();
-  if (Destructor && !isImplicitMember(Destructor))
-    Out.push_back(Destructor);
-  for (const CXXBaseSpecifier &Base : Record->bases())
-    destructorsRunBy(classOf(Base.getType()), Depth + 1, Out);
-  for (const FieldDecl *Field : Record->fields())
-    destructorsRunBy(classOf(Field->getType()), Depth + 1, Out);
+// What a call of a function may change, found once per function in a translation unit.
+llvm::DenseMap<const FunctionDecl *, bool> &reachCache() {
+  static llvm::DenseMap<const FunctionDecl *, bool> Cache;
+  return Cache;
 }
 
-// cplusp-unlisted-state: decision 0035. A function writes only the global state its `//@ modifies` line lists, and reads only what
-// its `//@ reads` or `modifies` line lists. State is a mutable global or static data member that a system header does not declare. A
-// write is an assignment target, an increment, the object of a non-const member call, or a binding to a non-const reference, pointer
-// or span. Any other mention is a read. A call adds what its callee lists, and so do the constructors an implicit constructor runs and
-// the destructor of every local and temporary. A reference from a function this file does not define may reach any global, and no
-// line can list that. The message is `global_state: {sentence}`, one finding per access.
-// It reads the tree as the compiler has it, with the instantiations of a template, so a call that depends on a template argument
-// has its callee.
+void resetReach() { reachCache().clear(); }
+
+// The call graph from `Function`, to the end: a function that lists a global on its `modifies` line, that writes a mutable global, or that
+// the gate cannot read, may change a global, and so does every function that calls it. The lines of the visited functions are read as
+// the state check reads them.
+bool reachesState(const FunctionDecl *Function) {
+  auto &Cache = reachCache();
+  if (const auto Known = Cache.find(Function); Known != Cache.end())
+    return Known->second;
+  llvm::SmallPtrSet<const FunctionDecl *, 16> Seen;
+  llvm::SmallVector<const FunctionDecl *, 8> Work{Function};
+  bool Found = false;
+  while (!Work.empty() && !Found) {
+    const FunctionDecl *Current = Work.pop_back_val();
+    if (!Seen.insert(Current->getCanonicalDecl()).second)
+      continue;
+    const SourceManager &SM = Current->getASTContext().getSourceManager();
+    if (inStdNamespace(Current) || SM.isInSystemHeader(Current->getLocation()))
+      continue;
+    if (isOpaque(SM, Current) || !contractOf(SM, Current).Modifies.empty()) {
+      Found = true;
+      break;
+    }
+    const FunctionDecl *Definition = nullptr;
+    Current->isDefined(Definition);
+    if (!Definition && Current->getTemplateInstantiationPattern())
+      Current->getTemplateInstantiationPattern()->isDefined(Definition);
+    if (!Definition || !Definition->getBody())
+      continue;
+    llvm::SmallVector<const Stmt *, 4> Parts{Definition->getBody()};
+    if (const auto *Constructor = dyn_cast<CXXConstructorDecl>(Definition))
+      for (const CXXCtorInitializer *Init : Constructor->inits())
+        Parts.push_back(Init->getInit());
+    for (const Stmt *Part : Parts)
+      walkNodes(Part, SourceLocation(), SourceLocation(), [&](const Stmt *S, SourceLocation) {
+        forEachWrite(S, [&](const RootPath &Path) { Found |= Path.Global; });
+        if (const auto *Call = dyn_cast<CallExpr>(S); Call && Call->getDirectCallee())
+          Work.push_back(Call->getDirectCallee());
+        else if (const auto *Construct = dyn_cast<CXXConstructExpr>(S))
+          Work.push_back(Construct->getConstructor());
+      });
+  }
+  Cache[Function] = Found;
+  return Found;
+}
+
+// cplusp-unlisted-state: decisions 0035 and 0036. A function writes only the global state its `//@ modifies` line lists, and reads only
+// what its `//@ reads` or `modifies` line lists. State is a mutable global or static data member that a system header does not declare.
+// A write is an assignment target, an increment, the object of a non-const member call, or a binding to a non-const reference, pointer
+// or span. Any other mention is a read. A call adds what its callee lists. So do the constructors an implicit constructor runs, the
+// destructor of every local, temporary and deleted object, a function passed by name, and the user classes that a std template runs.
+// A call of a function that the gate cannot read is refused, and so is a reference from a function this file does not define: any
+// global may be behind it, and no line can list that. The message is `global_state: {sentence}`, one finding per access.
+// It reads the tree as the compiler has it, with the instantiations of a template, so a call that depends on a template argument has
+// its callee. The pattern is not judged.
 class UnlistedStateCheck : public ClangTidyCheck {
 public:
   using ClangTidyCheck::ClangTidyCheck;
   void onStartOfTranslationUnit() override {
     StateNames.clear();
     Collected = false;
+    resetReach();
   }
   void registerMatchers(MatchFinder *Finder) override {
-    Finder->addMatcher(functionDecl(isDefinition(), unless(isImplicit()), unless(isExpansionInSystemHeader())).bind("function"), this);
+    Finder->addMatcher(functionDecl(isDefinition(), unless(isExpansionInSystemHeader()), unless(notJudged())).bind("function"), this);
   }
   void check(const MatchFinder::MatchResult &Result) override {
     const auto *Function = Result.Nodes.getNodeAs<FunctionDecl>("function");
     const SourceManager &SM = *Result.SourceManager;
     if (!Collected) {
       collectState(Result.Context->getTranslationUnitDecl(), SM, StateNames);
-      // Each variable once, at its first declaration.
-      llvm::sort(StateNames, [&](const StateName &A, const StateName &B) {
-        return A.Name != B.Name ? A.Name < B.Name : SM.isBeforeInTranslationUnit(A.At, B.At);
-      });
-      StateNames.erase(std::unique(StateNames.begin(), StateNames.end(), [](const StateName &A, const StateName &B) { return A.Name == B.Name; }),
-                       StateNames.end());
+      llvm::sort(StateNames);
+      StateNames.erase(std::unique(StateNames.begin(), StateNames.end()), StateNames.end());
       Collected = true;
     }
     // The nodes the function runs: its body, and the initializers of a constructor.
@@ -1190,56 +1393,70 @@ public:
     llvm::SmallPtrSet<const Stmt *, 16> Written;
     for (const Stmt *Part : Parts)
       walkNodes(Part, SourceLocation(), SourceLocation(), [&](const Stmt *S, SourceLocation) {
-        llvm::SmallVector<Roots, 4> Targets;
-        if (const auto *Binary = dyn_cast<BinaryOperator>(S); Binary && Binary->isAssignmentOp()) {
-          Targets.push_back(rootsOf(Binary->getLHS()).Paths);
-        } else if (const auto *Unary = dyn_cast<UnaryOperator>(S); Unary && Unary->isIncrementDecrementOp()) {
-          Targets.push_back(rootsOf(Unary->getSubExpr()).Paths);
-        } else if (isa<CallExpr, CXXConstructExpr>(S)) {
-          llvm::SmallVector<Arg, 4> Args;
-          collectArgs(cast<Expr>(S), Args);
-          for (const Arg &A : Args)
-            if (A.Writes)
-              Targets.push_back(A.Where.Paths);
-        }
-        for (const Roots &Paths : Targets)
-          for (const RootPath &Path : Paths)
-            if (Path.At)
-              Written.insert(Path.At);
+        forEachWrite(S, [&](const RootPath &Path) {
+          if (Path.At)
+            Written.insert(Path.At);
+        });
       });
     // A reference from a function this file does not define is refused where the function reaches through it: a write, a read of
-    // the value, a dereference. A call that only passes the result along reaches nothing.
+    // the value, a dereference, and any argument or object that a call is given, const or not.
     llvm::SmallPtrSet<const CallExpr *, 4> Reached;
     for (const Stmt *W : Written)
       if (const auto *Call = dyn_cast<CallExpr>(W))
         Reached.insert(Call);
-    // The lines may sit on an earlier declaration, as a header has them, and not on the definition.
-    const Contract Own = contractOf(SM, Function);
-    const SourceLocation Start = firstTokenOf(Function);
-    const auto Refuse = [&](SourceLocation Loc, StringRef Name, bool Write) {
-      const auto Lists = [&](const std::vector<std::string> &Names) { return isListed(Names, Name, StateNames, SM, Start); };
-      if (Write ? Lists(Own.Modifies) : Lists(Own.Modifies) || Lists(Own.Reads))
+    // The lines may sit on an earlier declaration, as a header has them, and not on the definition. A lambda has none of its own.
+    const FunctionDecl *Owner = linesOwner(Function);
+    const Contract Own = contractOf(SM, Owner);
+    std::set<std::string> Modifies, Listed;
+    for (const std::string &Name : Own.Modifies)
+      if (const std::string *Var = resolve(Name, StateNames)) {
+        Modifies.insert(*Var);
+        Listed.insert(*Var);
+      }
+    for (const std::string &Name : Own.Reads)
+      if (const std::string *Var = resolve(Name, StateNames))
+        Listed.insert(*Var);
+    const auto Refuse = [&](SourceLocation Loc, const std::string &Var, bool Write) {
+      if ((Write ? Modifies : Listed).count(Var))
         return;
       if (Write)
-        diag(SM.getExpansionLoc(Loc), "global_state: %0 changes, and the modifies line does not list it.") << Name;
+        diag(SM.getExpansionLoc(Loc), "global_state: %0 changes, and the modifies line does not list it.") << StringRef(Var);
       else
-        diag(SM.getExpansionLoc(Loc), "global_state: %0 is read, and no reads or modifies line lists it.") << Name;
+        diag(SM.getExpansionLoc(Loc), "global_state: %0 is read, and no reads or modifies line lists it.") << StringRef(Var);
     };
-    // What a callee lists, at `Loc`. A callee lists its parameters on its lines too. Only a name that is a state variable of this
-    // file, and no parameter of the callee, is state.
+    // What a callee lists, at `Loc`. A name on its lines that matches a state variable is state, whatever the callee calls its
+    // parameters.
     const auto Bring = [&](const FunctionDecl *Callee, SourceLocation Loc) {
-      const auto IsState = [&](const std::string &Name) {
-        return !llvm::any_of(Callee->parameters(), [&](const ParmVarDecl *P) { return P->getName() == Name; }) &&
-               llvm::any_of(StateNames, [&](const StateName &Known) { return sameName(Known.Name, Name); });
-      };
       const Contract Brought = contractOf(SM, Callee);
       for (const std::string &Name : Brought.Modifies)
-        if (IsState(Name))
-          Refuse(Loc, Name, true);
+        if (const std::string *Var = resolve(Name, StateNames))
+          Refuse(Loc, *Var, true);
       for (const std::string &Name : Brought.Reads)
-        if (IsState(Name))
-          Refuse(Loc, Name, false);
+        if (const std::string *Var = resolve(Name, StateNames))
+          Refuse(Loc, *Var, false);
     };
+    // What an object of this type runs when it is made or destroyed: the destructors of a user class, and everything that a std
+    // template over user classes runs of them.
+    const auto BringType = [&](QualType Type, SourceLocation Loc) {
+      const CXXRecordDecl *Class = classOf(Type);
+      if (!Class)
+        return;
+      llvm::SmallVector<const FunctionDecl *, 8> Run;
+      if (!inSystemHeader(Class)) {
+        ClassSet Seen;
+        destructorsRunBy(Class, Seen, Run);
+      } else if (const auto *Specialization = dyn_cast<ClassTemplateSpecializationDecl>(Class)) {
+        ClassSet Users;
+        TypeSet Types;
+        userClassesInArgs(Specialization->getTemplateArgs().asArray(), Users, Types);
+        for (const CXXRecordDecl *User : Users)
+          classFunctions(User, Run);
+      }
+      for (const FunctionDecl *Function : Run)
+        Bring(Function, Loc);
+    };
+    // The callee of a call is no function passed by name.
+    llvm::SmallPtrSet<const Expr *, 16> CalleeRefs;
     for (const Stmt *Part : Parts)
       walkNodes(Part, SourceLocation(), SourceLocation(), [&](const Stmt *S, SourceLocation Where) {
         const SourceLocation Here = Where.isValid() ? Where : S->getBeginLoc();
@@ -1250,6 +1467,10 @@ public:
           Var = dyn_cast<VarDecl>(Member->getMemberDecl());
         if (Var && isState(Var))
           Refuse(Here, nameOf(Var), Written.contains(S));
+        // A function passed by name runs where the callee runs it, so its lines count here.
+        if (const auto *Ref = dyn_cast<DeclRefExpr>(S))
+          if (const auto *Named = dyn_cast<FunctionDecl>(Ref->getDecl()); Named && !CalleeRefs.contains(Ref))
+            Bring(Named, Here);
         const Expr *Through = nullptr;
         if (const auto *Cast = dyn_cast<ImplicitCastExpr>(S); Cast && Cast->getCastKind() == CK_LValueToRValue)
           Through = Cast->getSubExpr();
@@ -1264,37 +1485,58 @@ public:
             if (const auto *Call = dyn_cast_or_null<CallExpr>(Path.At); Call && Path.Steps[0] == &StateKey)
               Reached.insert(Call);
         // A local lives to the end of its scope, and a temporary to the end of its full expression. Each runs its destructor.
-        llvm::SmallVector<const FunctionDecl *, 4> Hidden;
         if (const auto *Declared = dyn_cast<DeclStmt>(S)) {
           for (const Decl *D : Declared->decls())
-            if (const auto *Local = dyn_cast<VarDecl>(D);
-                Local && Local->hasLocalStorage() && !Local->getType()->isReferenceType() && !Local->isImplicit()) {
-              Hidden.clear();
-              destructorsRunBy(classOf(Local->getType()), 0, Hidden);
-              for (const FunctionDecl *Destructor : Hidden)
-                Bring(Destructor, Local->getLocation());
-            }
+            if (const auto *Local = dyn_cast<VarDecl>(D); Local && Local->hasLocalStorage() && !Local->getType()->isReferenceType() && !Local->isImplicit())
+              BringType(Local->getType(), Local->getLocation());
         } else if (const auto *Temporary = dyn_cast<CXXBindTemporaryExpr>(S)) {
-          destructorsRunBy(classOf(Temporary->getType()), 0, Hidden);
-          for (const FunctionDecl *Destructor : Hidden)
-            Bring(Destructor, Here);
+          BringType(Temporary->getType(), Here);
+        } else if (const auto *Delete = dyn_cast<CXXDeleteExpr>(S)) {
+          // delete runs the destructor of the deleted type.
+          BringType(Delete->getDestroyedType(), Here);
         }
-        Hidden.clear();
         const FunctionDecl *Callee = nullptr;
+        llvm::SmallVector<const Expr *, 4> Arguments;
         if (const auto *Call = dyn_cast<CallExpr>(S)) {
           Callee = Call->getDirectCallee();
+          Arguments.assign(Call->arg_begin(), Call->arg_end());
+          CalleeRefs.insert(Call->getCallee()->IgnoreParenImpCasts());
         } else if (const auto *Construct = dyn_cast<CXXConstructExpr>(S)) {
           const CXXConstructorDecl *Constructor = Construct->getConstructor();
           Callee = Constructor;
+          Arguments.assign(Construct->arg_begin(), Construct->arg_end());
           // An implicit constructor runs the constructors of its bases and members.
           if (isImplicitMember(Constructor) && (Constructor->isDefaultConstructor() || Constructor->isCopyOrMoveConstructor())) {
-            constructorsRunBy(Constructor->getParent(), Constructor, 0, Hidden);
-            for (const FunctionDecl *Run : Hidden)
-              Bring(Run, Here);
+            llvm::SmallVector<const FunctionDecl *, 4> Run;
+            ClassSet Seen;
+            constructorsRunBy(Constructor->getParent(), Constructor, Seen, Run);
+            for (const FunctionDecl *Constructed : Run)
+              Bring(Constructed, Here);
           }
         }
-        if (Callee)
-          Bring(Callee, Here);
+        if (isa<CallExpr, CXXConstructExpr>(S)) {
+          llvm::SmallVector<Arg, 4> Args;
+          collectArgs(cast<Expr>(S), Args);
+          for (const Arg &A : Args)
+            for (const RootPath &Path : A.Where.Paths)
+              if (const auto *Call = dyn_cast_or_null<CallExpr>(Path.At); Call && Path.Steps[0] == &StateKey)
+                Reached.insert(Call);
+        }
+        if (!Callee)
+          return;
+        Bring(Callee, Here);
+        // A std template over a user class runs the class's own functions.
+        ClassSet Users;
+        stdTemplateUsers(Callee, SM, Arguments, Users);
+        for (const CXXRecordDecl *User : Users) {
+          llvm::SmallVector<const FunctionDecl *, 8> Run;
+          classFunctions(User, Run);
+          for (const FunctionDecl *Member : Run)
+            Bring(Member, Here);
+        }
+        if (isOpaque(SM, Callee) && !(isa<CallExpr>(S) && namedInStd(cast<CallExpr>(S), Callee)))
+          diag(SM.getExpansionLoc(Here), "global_state: %0 has no body here and no contract lines, so it may change any global.")
+              << StringRef(Callee->getNameAsString());
       });
     for (const CallExpr *Call : Reached)
       diag(SM.getExpansionLoc(Call->getBeginLoc()), "global_state: a reference from %0 may reach any global, and no line can list it.")
@@ -1303,22 +1545,22 @@ public:
 
 private:
   // The qualified names of the state of this file, found once per translation unit.
-  std::vector<StateName> StateNames;
+  std::vector<std::string> StateNames;
   bool Collected = false;
 
   // The state a file declares, outside the system headers: in a namespace, a linkage specification, a class or a class template.
-  static void collectState(const DeclContext *Context, const SourceManager &SM, std::vector<StateName> &Out) {
+  static void collectState(const DeclContext *Context, const SourceManager &SM, std::vector<std::string> &Out) {
     for (const Decl *D : Context->decls()) {
       if (SM.isInSystemHeader(D->getLocation()))
         continue;
       if (const auto *Var = dyn_cast<VarDecl>(D)) {
         if (isState(Var))
-          Out.push_back({nameOf(Var), Var->getLocation()});
+          Out.push_back(nameOf(Var));
       } else if (const auto *Template = dyn_cast<ClassTemplateDecl>(D)) {
         collectState(Template->getTemplatedDecl(), SM, Out);
       } else if (const auto *Template = dyn_cast<VarTemplateDecl>(D)) {
         if (isState(Template->getTemplatedDecl()))
-          Out.push_back({nameOf(Template->getTemplatedDecl()), Template->getLocation()});
+          Out.push_back(nameOf(Template->getTemplatedDecl()));
       } else if (isa<NamespaceDecl, LinkageSpecDecl, CXXRecordDecl>(D)) {
         collectState(cast<DeclContext>(D), SM, Out);
       }

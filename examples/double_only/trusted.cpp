@@ -3,7 +3,8 @@
 // Trusted: a sensor library returns a float, and a float converts to a double exactly. The conversion happens once, here at the
 // edge. The body keeps the contract, since a value that is no number or is out of range becomes 0.0. The gate refuses this file
 // under the double_only row, which is the point. Verified code sees only the contract in example.cpp.
-// The declaration in example.cpp carries the CPLUSP_TRUSTED marker.
+// The declaration in example.cpp carries the CPLUSP_TRUSTED marker. The sensor library's own contract changes no global.
+//@ ensures result is the last sample, which may be no number
 float raw_sensor();
 
 double sensor_reading() {

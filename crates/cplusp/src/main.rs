@@ -589,82 +589,67 @@ fn ban(path: PathBuf, line: usize, rule: &str, message: &str) -> Finding {
     Finding { path, line, rule: rule.to_string(), check: rule.to_string(), decision: Decision::Ban, message: message.to_string() }
 }
 
-/// The lines of `text` with a NOLINT, and the lines where a line directive starts, `#line` or `# 1 "x"`.
-/// A NOLINT is a comment, so the preprocessor's output has lost it. A directive written in the source looks like a marker
-/// the preprocessor made, so only the source text tells the two apart.
-fn scan_text(path: &Path, text: &str) -> Vec<Finding> {
-    let nolint = "NOLINT: not allowed in verified code. It silences the gate. Use CPLUSP_TRUSTED with a reason.";
-    let line = "line directive: not allowed in verified code. It moves the gate's view.";
-    let mut found: Vec<Finding> =
-        text.lines().enumerate().filter(|(_, l)| l.contains("NOLINT")).map(|(n, _)| ban(path.to_path_buf(), n + 1, "nolint", nolint)).collect();
-    found.extend(line_directives(text).into_iter().map(|n| ban(path.to_path_buf(), n, "line", line)));
-    found
+/// The lines of `text` with a NOLINT. It is a comment, so the preprocessor's output has lost it.
+fn nolints(path: &Path, text: &str) -> Vec<Finding> {
+    let message = "NOLINT: not allowed in verified code. It silences the gate. Use CPLUSP_TRUSTED with a reason.";
+    text.lines().enumerate().filter(|(_, l)| l.contains("NOLINT")).map(|(n, _)| ban(path.to_path_buf(), n + 1, "nolint", message)).collect()
 }
 
-/// The length of a backslash and a newline at the start of `b`, which the preprocessor deletes.
-fn splice(b: &[u8]) -> Option<usize> {
-    [&b"\\\n"[..], &b"\\\r\n"[..]].into_iter().find(|s| b.starts_with(s)).map(<[u8]>::len)
+/// A token of the compiler's raw lexer: its kind, its spelling, and the line it starts on.
+struct RawToken<'a> {
+    kind: &'a str,
+    spelling: &'a str,
+    line: usize,
 }
 
-/// The end of a string or character literal that opens at `i`. A literal ends at its quote or at a newline.
-fn quoted(b: &[u8], mut i: usize, line: &mut usize) -> usize {
-    let quote = b[i];
-    i += 1;
-    while i < b.len() && b[i] != b'\n' && b[i] != quote {
-        if let Some(n) = splice(&b[i..]) {
-            (i, *line) = (i + n, *line + 1);
-        } else {
-            i += if b[i] == b'\\' { 2 } else { 1 };
+/// Read the output of `clang -Xclang -dump-raw-tokens`: one token to a record, `kind 'spelling'<TAB> [flags]<TAB>Loc=<file:line:col>`.
+/// A spelling can hold newlines, so the records are cut at their `Loc`, not at the end of a line. None when the text is no token list.
+fn raw_tokens(text: &str) -> Option<Vec<RawToken<'_>>> {
+    let (mut tokens, mut rest) = (Vec::new(), text);
+    while !rest.is_empty() {
+        let (kind, after) = rest.split_once(" '")?;
+        let loc_at = after.find("\tLoc=<")?;
+        let loc_end = loc_at + after[loc_at..].find('>')?;
+        let spelling = &after[..after[..loc_at].rfind("'\t")?];
+        let line = after[loc_at + 6..loc_end].rsplit(':').nth(1)?.parse().ok()?;
+        tokens.push(RawToken { kind, spelling, line });
+        rest = after[loc_end + 1..].trim_start_matches('\n');
+    }
+    Some(tokens)
+}
+
+/// The lines where a `#line` or a line marker starts, as the compiler's own lexer reads the file: a directive is a `#` or `%:` that is the
+/// first token on its line, comments aside, and its first word is `line` or a number. The lexer knows the raw string, the comment, the
+/// digraph and the splice, because it is the one that reads them for the build, decision 0036. A run that fails refuses the file.
+fn line_directives(clang: &str, path: &Path, shown: &str) -> Result<Vec<usize>> {
+    let out = Command::new(clang)
+        .args(["-x", "c++", "-std=c++23", "-w", "-fsyntax-only", "-Xclang", "-dump-raw-tokens"])
+        .arg(path)
+        .stdin(Stdio::null())
+        .output()
+        .with_context(|| format!("cannot run {clang}"))?;
+    let text = String::from_utf8_lossy(&out.stderr);
+    if !out.status.success() {
+        bail!("cannot read {shown}: the lexer failed: {}", text.lines().find(|l| l.contains("error")).or(text.lines().next()).unwrap_or_default());
+    }
+    let tokens = raw_tokens(&text).with_context(|| format!("cannot read {shown}: the lexer output is no list of tokens"))?;
+    let is_blank = |t: &RawToken| t.kind == "comment" || (t.kind == "unknown" && t.spelling.trim().is_empty() && !t.spelling.contains('\n'));
+    let (mut found, mut first) = (Vec::new(), true);
+    for (i, token) in tokens.iter().enumerate() {
+        if token.kind == "unknown" && token.spelling.contains('\n') {
+            first = true;
+        } else if token.kind == "hash" && first {
+            // The next token that is no blank, on this line, names the directive.
+            let next = tokens[i + 1..].iter().find(|t| !is_blank(t));
+            if next.is_some_and(|t| (t.kind == "raw_identifier" && t.spelling == "line") || t.kind == "numeric_constant") {
+                found.push(token.line);
+            }
+            first = false;
+        } else if !is_blank(token) {
+            first = false;
         }
     }
-    (i + usize::from(i < b.len() && b[i] == quote)).min(b.len())
-}
-
-/// The lines where a `#line` or a line marker starts. A directive is the first token of a line, so blanks, block comments
-/// and splices may come before the `#` and between it and its first word. The digraph `%:` is `#`.
-// ponytail: a raw string literal is read as plain text. A line in it that starts like a directive counts, and a `/*` or a quote in
-// it can hide the code after it. A forged marker does not show in the preprocessor's output, so the text is the only evidence.
-// Upgrade: read the tokens with the plugin.
-fn line_directives(text: &str) -> Vec<usize> {
-    let b = text.as_bytes();
-    let (mut i, mut line, mut start, mut hash, mut found) = (0, 1, true, None, Vec::new());
-    while i < b.len() {
-        let rest = &b[i..];
-        if let Some(n) = splice(rest) {
-            (i, line) = (i + n, line + 1);
-        } else if rest.starts_with(b"/*") {
-            let end = text[i + 2..].find("*/").map_or(b.len(), |e| i + e + 4);
-            line += b[i..end].iter().filter(|&&c| c == b'\n').count();
-            i = end;
-        } else if rest.starts_with(b"//") {
-            // To the end of the line, and past a splice.
-            i += 2;
-            while i < b.len() && b[i] != b'\n' {
-                match splice(&b[i..]) {
-                    Some(n) => (i, line) = (i + n, line + 1),
-                    None => i += 1,
-                }
-            }
-        } else if b[i] == b'\n' {
-            (i, line, start, hash) = (i + 1, line + 1, true, None);
-        } else if b[i].is_ascii_whitespace() {
-            i += 1;
-        } else if start && hash.is_none() && (b[i] == b'#' || rest.starts_with(b"%:")) {
-            (i, start, hash) = (i + if b[i] == b'#' { 1 } else { 2 }, false, Some(line));
-        } else {
-            if let Some(at) = hash.take().filter(|_| rest.starts_with(b"line") || b[i].is_ascii_digit()) {
-                found.push(at);
-            }
-            start = false;
-            // A quote after a letter or a digit is a digit separator or a literal prefix, not the start of a literal.
-            i = match b[i] {
-                b'"' => quoted(b, i, &mut line),
-                b'\'' if !(i > 0 && b[i - 1].is_ascii_alphanumeric()) => quoted(b, i, &mut line),
-                _ => i + 1,
-            };
-        }
-    }
-    found
+    Ok(found)
 }
 
 /// A line marker of the preprocessor, `# N "path" flags`: the next line is line N of the path.
@@ -734,10 +719,11 @@ fn preprocess(clang: &str, (file, dir, flags): &Build, shown: impl Fn(&Path) -> 
             found.push(ban(at.clone(), line, "pragma", "pragma diagnostic: not allowed in verified code. It silences the gate."));
         } else if let Some(rest) = text.strip_prefix("#pragma").filter(|_| !system) {
             // Any other pragma changes the build that the proofs assume, such as the contraction of floating-point operations. The name
-            // is the first two words. A `system_header` pragma is a finding of its own, from the marker that follows it.
-            let words: Vec<&str> = rest.split(|c: char| !(c.is_alphanumeric() || c == '_')).filter(|w| !w.is_empty()).take(2).collect();
+            // is the first two words, before any parenthesis. A `system_header` pragma is a finding of its own, from the marker that follows it.
+            let name = rest.split('(').next().unwrap_or_default();
+            let words: Vec<&str> = name.split(|c: char| !(c.is_alphanumeric() || c == '_')).filter(|w| !w.is_empty()).take(2).collect();
             if words.get(1) != Some(&"system_header") {
-                let message = format!("pragma {}: not allowed in verified code. It changes the build the proofs assume.", words.join(" "));
+                let message = format!("pragma{}{}: not allowed in verified code. It changes the build the proofs assume.", if words.is_empty() { "" } else { " " }, words.join(" "));
                 found.push(ban(at.clone(), line, "pragma", &message));
             }
         }
@@ -803,7 +789,10 @@ fn gate(c: &Common, json: bool, build_dir: Option<&Path>, plugin: Option<&Path>,
             return Ok(Vec::new());
         }
         let source = fs::read(&path).with_context(|| format!("cannot read {}", shown(&path)))?;
-        Ok(scan_text(&path, &String::from_utf8_lossy(&source)))
+        let mut found = nolints(&path, &String::from_utf8_lossy(&source));
+        let message = "line directive: not allowed in verified code. It moves the gate's view.";
+        found.extend(line_directives(&clang, &path, &shown(&path))?.into_iter().map(|n| ban(path.clone(), n, "line", message)));
+        Ok(found)
     };
     for build in &builds {
         found.extend(scan(build.0.clone())?);

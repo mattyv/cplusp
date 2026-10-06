@@ -73,7 +73,7 @@ struct Taker {
   explicit Taker(int32_t& x) { x++; }
 };
 
-void take2(Taker a, Taker b);
+void take2(Taker a, Taker b) {}
 
 void both_constructed(int32_t& x) {
   take2(Taker(x), Taker(x));  // BANNED

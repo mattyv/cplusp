@@ -1,6 +1,7 @@
 #include <cstdint>
 #include <coroutine>
 
+//@ requires count >= 0
 int32_t sum_all(int32_t count, ...);
 
 int32_t three() {

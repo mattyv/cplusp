@@ -19,6 +19,8 @@ std::size_t read_count(std::map<int32_t, int32_t>& m, int32_t k) {
   return m.size() + static_cast<std::size_t>(v);
 }
 
+//@ requires p != nullptr
+//@ ensures result == *p
 int32_t read(const int32_t* p);
 
 int32_t first_by_pointer(std::vector<int32_t>& v) {
