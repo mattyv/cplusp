@@ -133,3 +133,29 @@ struct Quiet : Base {
 void act_on(Base& b) {
   b.act();
 }
+
+#include <memory>
+
+struct Bell {
+  //@ requires total < 0x7FFFFFFF
+  //@ modifies total
+  virtual ~Bell() {
+    total += 1;
+  }
+};
+
+struct Silent {
+  virtual ~Silent() = default;
+};
+
+//@ requires total < 0x7FFFFFFF
+//@ modifies total
+void drop_bell() {
+  std::unique_ptr<Bell> b = std::make_unique<Bell>();
+}
+
+// The delete inside default_delete<Silent> sits on the same line of <memory> as the one inside default_delete<Bell>. A virtual call is
+// matched inside the function that holds it, decision 0037, so deleting a Silent brings none of Bell's lines.
+void drop_silent() {
+  std::unique_ptr<Silent> s = std::make_unique<Silent>();
+}

@@ -488,6 +488,49 @@ fn gate_treats_a_forged_line_marker_as_a_finding() {
     }
 }
 
+/// A line marker that names the file by its own path and flags it a system header, `# 3 "this file" 3`, is a line directive like
+/// any other. It is the one spelling that looks like the note `#pragma GCC system_header` leaves behind, so the plugin must tell them
+/// apart. The file is written at test time, because the marker must hold the file's own path.
+#[test]
+fn gate_treats_a_marker_that_names_the_file_itself_as_a_finding() {
+    if !clang_tidy_available() {
+        return;
+    }
+    let dir = std::env::temp_dir().join(format!("cplusp-own-name-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let f = dir.join("forged-own-name.cpp");
+    std::fs::write(&f, format!("#include <cstdint>\n# 3 \"{}\" 3\nstruct S {{ uint32_t x : 3; }};\n", f.display())).unwrap();
+    let o = gated(&[f.to_str().unwrap(), "--", "-std=c++23", "-ffp-contract=off"]);
+    assert_eq!(o.status.code(), Some(1), "stdout: {} stderr: {}", stdout(&o), stderr(&o));
+    let out = stdout(&o);
+    assert!(out.lines().any(|l| l.ends_with("forged-own-name.cpp:2: line directive: not allowed in verified code. It moves the gate's view.")), "{out}");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// The sequencing check counts a callee that writes a global in its body as a change, with or without a `modifies` line, and whether
+/// or not the row `global_state` is enforced. Decision 0036 says a callee that writes a global changes state, and a team that loosens
+/// one row must not loosen another.
+#[test]
+fn the_sequencing_check_reads_a_callees_body_under_a_loosened_state_row() {
+    if !clang_tidy_available() {
+        return;
+    }
+    let f = fixture("sequencing-through-bodies.cpp");
+    let team = fixture("team-loosen-state.yaml");
+    let plugin = plugin();
+    for policy in [None, Some(team.to_str().unwrap())] {
+        let mut args = vec!["gate", "--plugin", plugin.to_str().unwrap()];
+        if let Some(p) = policy {
+            args.extend(["--policy", p]);
+        }
+        args.extend([f.to_str().unwrap(), "--", "-std=c++23", "-ffp-contract=off"]);
+        let o = cplusp(&args);
+        let out = stdout(&o);
+        assert_eq!(o.status.code(), Some(1), "{policy:?}: stdout: {out} stderr: {}", stderr(&o));
+        assert!(out.lines().any(|l| l.contains("sequencing-through-bodies.cpp:21: Two changes of state in one expression")), "{policy:?}: {out}");
+    }
+}
+
 /// The directives are read under the build's own flags, decision 0037. With `-trigraphs`, `??=` is `#`, and the marker it starts
 /// is the forged one. A reader with flags of its own would not see it.
 #[test]

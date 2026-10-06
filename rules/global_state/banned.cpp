@@ -371,3 +371,50 @@ struct Siren : Alarm {};
 void owned_base() {
   std::unique_ptr<Alarm> a = std::make_unique<Siren>();  // BANNED
 }  // BANNED
+
+#include <array>
+
+struct Clock {
+  virtual ~Clock() = default;
+  //@ requires total < 0x7FFFFFFF
+  //@ modifies total
+  virtual int32_t tick() const {
+    total += 1;
+    return total;
+  }
+};
+
+const std::array<Clock, 1> clocks{};
+
+int32_t take(int32_t x = clocks[0].tick()) {
+  return x;
+}
+
+// 9. A default argument runs at the call that uses it, and the compiler puts its code on the call's line. The virtual call inside it is
+// read there, decision 0037.
+void uses_default() {
+  take();  // BANNED
+}
+
+// 10. A destructor nobody wrote is an override too, and the gate holds it to the lines of the destructor it overrides. Base::~Base
+// lists nothing, and Owner's destructor runs Guard's. The call through the base brings the base's lines, so the caller is clean at the
+// brace. The temporary that make_unique returns deletes an Owner, and that runs Guard's destructor on its line.
+struct Owner : Base {  // BANNED
+  Guard g;
+};
+
+void owns_through_base() {
+  std::unique_ptr<Base> b = std::make_unique<Owner>();  // BANNED
+}
+
+// 11. A handle to the derived class deletes through the destructor nobody wrote for it, which runs the base's. What it runs counts,
+// not the lines it has not got. The result of make_unique is built in place, so no temporary dies on its line.
+void owned_derived() {
+  std::unique_ptr<Siren> s = std::make_unique<Siren>();
+}  // BANNED
+
+// 12. A shared_ptr disposes of its object through a virtual function of the library, which no line can list. What the library's
+// override runs counts.
+void shared_base() {
+  std::shared_ptr<Alarm> a = std::make_shared<Siren>();  // BANNED also: shared_ptr
+}  // BANNED

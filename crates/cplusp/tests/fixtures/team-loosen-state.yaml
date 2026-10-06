@@ -1,0 +1,6 @@
+version: 1
+extends: cplusp:default
+rules:
+  - id: global_state
+    decision: allow
+    loosened_because: The legacy module keeps its counters in globals and lists none of them.
