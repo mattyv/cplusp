@@ -150,10 +150,11 @@ Not provable: src/scan.cpp:12: Iterators: outside its limit. Limit: Range-for on
 
 The function name joins the location once the clang-tidy plugin's `cplusp-index` check exists. Until then the gate treats every finding as inside a verified function. Paths print relative to the working directory when they are under it.
 
-Two findings come from the gate itself, not from a policy row:
+These findings come from the gate itself, not from a policy row:
 
 - A `NOLINT` comment in a given file. It would silence clang-tidy. The gate reports it as a finding, with this message: `NOLINT: not allowed in verified code. It silences the gate. Use CPLUSP_TRUSTED with a reason.`
 - A diagnostic pragma: `#pragma clang diagnostic`, `#pragma GCC diagnostic`, `_Pragma`, `__pragma`, or a `system_header` pragma. Each silences a compiler warning the policy relies on, or a whole file. The gate reports it as `pragma diagnostic: not allowed in verified code. It silences the gate.`, or `pragma system_header: ...`. The gate reads the preprocessor's output, not the text. So a line splice, a comment between tokens, a digraph or a macro from the command line counts the same. The scan covers the given files and the headers they include outside the system paths, which the same output names. Third-party headers go behind `-isystem`, and the gate does not judge them.
+- Any other pragma in user code, such as `#pragma clang fp contract(fast)`, `#pragma STDC FP_CONTRACT ON` or `#pragma pack(push, 1)`. It changes the build the proofs assume. The gate reports `pragma {name}: not allowed in verified code. It changes the build the proofs assume.`, where the name is the pragma's first words before any parenthesis.
 - A `#line` directive, or a GNU line marker written in the source. It moves the gate's view of file and line, and can name a pseudo-file to hide behind. The gate reports `line directive: not allowed in verified code. It moves the gate's view.` and judges what follows under the name the directive gave.
 - A file the gate cannot read: `cannot read {file}`, exit 2.
 

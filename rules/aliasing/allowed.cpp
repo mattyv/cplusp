@@ -28,7 +28,7 @@ void fill(std::span<int32_t> out, std::span<const int32_t> in) {
   }
 }
 
-void sink(std::vector<int32_t> a, std::vector<int32_t> b);
+void sink(std::vector<int32_t> a, std::vector<int32_t> b) {}
 
 // Two different objects.
 void two_locals() {
@@ -124,4 +124,14 @@ struct Table {
 
 int32_t& first_again(std::vector<int32_t>& v) {
   return first_of(v);
+}
+
+// A template that passes one object twice to a call that writes nothing.
+template <class T>
+int32_t add_through(const T& a, const T& b) {
+  return add(a, b);
+}
+
+int32_t use_add_through(int32_t x) {
+  return add_through(x, x);
 }

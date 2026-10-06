@@ -472,6 +472,8 @@ fn gate_treats_a_forged_line_marker_as_a_finding() {
         ("forged-digraph.cpp", "forged-digraph.cpp:2"),
         ("forged-splice.cpp", "forged-splice.cpp:2"),
         ("forged-inner-comment.cpp", "forged-inner-comment.cpp:2"),
+        // A raw string holds a `/*` that is no comment. Only the compiler's own lexer reads it right, decision 0036.
+        ("forged-raw-string.cpp", "forged-raw-string.cpp:5"),
     ] {
         let f = fixture(file);
         let o = gated(&[f.to_str().unwrap(), "--", "-std=c++23", "-ffp-contract=off"]);
@@ -489,7 +491,7 @@ fn gate_treats_any_other_pragma_as_a_finding() {
     if !clang_tidy_available() {
         return;
     }
-    for (file, name) in [("pragma-fp.cpp", "pragma clang fp"), ("pragma-stdc.cpp", "pragma STDC FP_CONTRACT")] {
+    for (file, name) in [("pragma-fp.cpp", "pragma clang fp"), ("pragma-stdc.cpp", "pragma STDC FP_CONTRACT"), ("pragma-pack.cpp", "pragma pack")] {
         let f = fixture(file);
         let o = gated(&[f.to_str().unwrap(), "--", "-std=c++23", "-ffp-contract=off"]);
         assert_eq!(o.status.code(), Some(1), "{file}: stdout: {} stderr: {}", stdout(&o), stderr(&o));
@@ -513,6 +515,21 @@ fn a_loosened_row_that_claims_kinds_allows_them() {
     let out = stdout(&o);
     assert_eq!(o.status.code(), Some(0), "stdout: {out} stderr: {}", stderr(&o));
     assert!(!out.contains("GotoStmt") && !out.contains("LabelStmt"), "a loosened goto is no unlisted construct: {out}");
+}
+
+/// A team that loosens the allowlist itself keeps every ban. The kinds a row claims stay with the row, decision 0036.
+#[test]
+fn a_loosened_allowlist_keeps_every_ban() {
+    if !clang_tidy_available() {
+        return;
+    }
+    let team = fixture("team-loosen-unlisted.yaml");
+    let banned = root().join("rules/goto/banned.cpp");
+    let plugin = plugin();
+    let o = cplusp(&["gate", "--policy", team.to_str().unwrap(), "--plugin", plugin.to_str().unwrap(), banned.to_str().unwrap(), "--", "-std=c++23", "-ffp-contract=off"]);
+    let out = stdout(&o);
+    assert_eq!(o.status.code(), Some(1), "stdout: {out} stderr: {}", stderr(&o));
+    assert!(out.lines().any(|l| l.ends_with("banned.cpp:4: `goto`: not allowed in verified code. No benefit. Use a loop. The construct is GotoStmt.")), "{out}");
 }
 
 /// A flag that strips the line markers from the preprocessor output leaves the gate blind. The run is refused.

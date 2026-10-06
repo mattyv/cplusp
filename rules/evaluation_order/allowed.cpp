@@ -77,7 +77,7 @@ bool in_order(int32_t& x, int32_t& y) {
 
 #include <utility>
 
-void sink(std::vector<int32_t> a, std::vector<int32_t> b);
+void sink(std::vector<int32_t> a, std::vector<int32_t> b) {}
 
 void moved(std::vector<int32_t>& a, std::vector<int32_t>& b) {
   sink(std::move(a), std::move(b));
@@ -97,7 +97,7 @@ int32_t unevaluated(int32_t& x) {
 
 #include <tuple>
 
-void take(std::pair<int32_t, int32_t> p, std::pair<int32_t, int32_t> q);
+void take(std::pair<int32_t, int32_t> p, std::pair<int32_t, int32_t> q) {}
 
 void paired(int32_t a, int32_t b, int32_t c, int32_t d) {
   take(std::make_pair(a, b), std::make_pair(c, d));

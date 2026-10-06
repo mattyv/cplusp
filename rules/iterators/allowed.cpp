@@ -24,7 +24,9 @@ int32_t sum_then_grow(std::vector<int32_t>& v) {
   return s;
 }
 
-int32_t peek(const std::vector<int32_t>& v);
+int32_t peek(const std::vector<int32_t>& v) {
+  return v.empty() ? 0 : v[0];
+}
 
 int32_t sum_with_peek(std::vector<int32_t>& v) {
   int32_t s = 0;

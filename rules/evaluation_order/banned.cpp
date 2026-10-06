@@ -123,3 +123,40 @@ int32_t captured_beside(int32_t& x) {
 int32_t captured_change(int32_t& x) {
   return std::make_pair(next(x), [k = next(x)] { return k; }).first;  // BANNED
 }
+
+// A read beside a change inside a template, judged at its instantiation, decision 0036. Clang says true, GCC says false.
+template <class T>
+bool before_in_template(T& x) {
+  return before(next(x), x);  // BANNED
+}
+
+bool use_before_in_template(int32_t& x) {
+  return before_in_template(x);
+}
+
+//@ requires total < 0x7FFFFFFF
+//@ modifies total
+int32_t next_total() {
+  total += 1;
+  return total;
+}
+
+// 2. A call that changes a global is a change of state, though it has no mutable parameter. Clang says true, GCC false.
+//@ requires total < 0x7FFFFFFF
+//@ modifies total
+bool global_beside() {
+  return before(next_total(), total);  // BANNED
+}
+
+//@ requires total < 0x7FFFFFFE
+//@ modifies total
+int32_t two_global_changes() {
+  return next_total() + next_total();  // BANNED
+}
+
+int32_t opaque();
+
+// A callee with no body here and no contract lines may change anything, so two calls of it are two changes.
+int32_t opaque_twice() {
+  return opaque() + opaque();  // BANNED also: global_state
+}

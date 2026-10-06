@@ -1,0 +1,6 @@
+version: 1
+extends: cplusp:default
+rules:
+  - id: unlisted
+    decision: allow
+    loosened_because: A trial run over legacy code, to see the bans alone.

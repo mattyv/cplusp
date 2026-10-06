@@ -25,7 +25,9 @@ int32_t get_or_zero(const std::map<int32_t, int32_t>& m, int32_t k) {
   return m.contains(k) ? m.at(k) : 0;
 }
 
-int32_t read(const int32_t* p);
+int32_t read(const int32_t* p) {
+  return *p;
+}
 
 int32_t first_by_copy(std::vector<int32_t>& v) {
   int32_t first = v[0];

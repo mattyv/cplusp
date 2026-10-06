@@ -133,3 +133,14 @@ int32_t& name_of_counter() {
 int32_t& name_of_field() {
   return holder.v;  // BANNED also: global_state
 }
+
+// A template is judged where it is used, decision 0036. In the instantiation the callee and the types are known.
+template <class T>
+int32_t twice_through(T& x) {
+  return set_and_read(x, x);  // BANNED
+}
+
+int32_t use_twice_through() {
+  int32_t v = 0;
+  return twice_through(v);
+}

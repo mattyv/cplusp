@@ -166,3 +166,140 @@ void both() {
   A::n += 1;  // BANNED
   B::n += 1;  // BANNED
 }
+
+#include <memory>
+#include <utility>
+
+struct Deep0 {
+  //@ requires total < 0x7FFFFFFF
+  //@ modifies total
+  ~Deep0() {
+    total += 1;
+  }
+};
+
+struct Deep1 { Deep0 d; };
+struct Deep2 { Deep1 d; };
+struct Deep3 { Deep2 d; };
+struct Deep4 { Deep3 d; };
+struct Deep5 { Deep4 d; };
+struct Deep6 { Deep5 d; };
+struct Deep7 { Deep6 d; };
+struct Deep8 { Deep7 d; };
+struct Deep9 { Deep8 d; };
+
+// 3. The destructor nine members down runs as surely as one at the top. No depth ends in a pass, decision 0036.
+void deep_scope() {
+  Deep9 d{};  // BANNED
+}
+
+struct Mover {
+  int32_t v = 0;
+  Mover() = default;
+  //@ requires total < 0x7FFFFFFF
+  //@ modifies total
+  Mover(Mover&& other) : v(other.v) {
+    total += 1;
+  }
+  Mover& operator=(Mover&& other) = default;
+};
+
+// A std template over a user class runs the class's own constructors and destructor, and their lines count. std::swap
+// moves through the constructor.
+void swapped(Mover& a, Mover& b) {
+  std::swap(a, b);  // BANNED
+}
+
+void grown(std::vector<Guard>& v) {
+  v.emplace_back();  // BANNED
+}
+
+void owned() {
+  std::unique_ptr<Guard> g = std::make_unique<Guard>();  // BANNED
+}
+
+// A function passed by name runs inside the std call, so its lines count at the call.
+void each_by_name(const std::vector<int32_t>& v) {
+  std::ranges::for_each(v, bump_by);  // BANNED
+}
+
+// A parameter named after a global does not hide the global from the caller.
+//@ requires total < 0x7FFFFFFF
+//@ modifies total
+void sneaky(int32_t total) {
+  ::total += total;
+}
+
+void calls_sneaky() {
+  sneaky(1);  // BANNED
+}
+
+// An unqualified name names one variable in the whole translation unit, declared above the function or below it.
+struct Outer {
+  //@ modifies m
+  void f() {
+    m += 1;  // BANNED
+    Inner::m += 1;  // BANNED
+  }
+  struct Inner {
+    static int32_t m;
+  };
+  static int32_t m;
+};
+
+int32_t Outer::m = 0;
+int32_t Outer::Inner::m = 0;
+
+namespace ns1 {
+struct C {
+  static int32_t k;
+};
+int32_t C::k = 0;
+}  // namespace ns1
+
+namespace ns2 {
+struct C {
+  static int32_t k;
+};
+int32_t C::k = 0;
+}  // namespace ns2
+
+// A qualified name names one variable too. Two variables end in C::k, so the line names neither.
+//@ modifies C::k
+void two_cs() {
+  ns1::C::k += 1;  // BANNED
+  ns2::C::k += 1;  // BANNED
+}
+
+//@ ensures result == v
+int32_t take_const(const int32_t& v) {
+  return v;
+}
+
+// A reference from a function this file does not define may reach any global, read through a const parameter too.
+int32_t read_hidden() {
+  return take_const(hidden());  // BANNED
+}
+
+struct Holder2 {
+  int32_t v = 0;
+  int32_t get() const { return v; }
+};
+
+Holder2& hidden_holder();
+
+int32_t read_hidden_holder() {
+  return hidden_holder().get();  // BANNED
+}
+
+// delete runs the destructor of what it deletes.
+void drop(Guard* g) {
+  delete g;  // BANNED also: raw_allocation
+}
+
+void opaque_step();
+
+// 2. A callee with no body here and no contract lines may change any global, decision 0036.
+void calls_opaque() {
+  opaque_step();  // BANNED
+}

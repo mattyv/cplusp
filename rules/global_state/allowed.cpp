@@ -60,15 +60,38 @@ void count_short() {
 
 template <typename T>
 struct Box {
-  static int32_t n;
+  static int32_t items;
 };
 
 template <typename T>
-int32_t Box<T>::n = 0;
+int32_t Box<T>::items = 0;
 
 // The static member of a class template, named without the template arguments, as the bot writes it.
-//@ requires Box::n < 0x7FFFFFFF
-//@ modifies Box::n
+//@ requires Box::items < 0x7FFFFFFF
+//@ modifies Box::items
 void bump_box() {
-  Box<int32_t>::n += 1;
+  Box<int32_t>::items += 1;
+}
+
+#include <algorithm>
+#include <vector>
+
+// A lambda runs inside the function that passes it, so the function's lines cover what it does.
+//@ modifies total
+void sum_listed(const std::vector<int32_t>& v) {
+  std::ranges::for_each(v, [](int32_t x) { total += x; });
+}
+
+// A template's lines go above the template, as in examples/templates, and its instantiation is judged against them.
+//@ requires total < 0x7FFFFFFF
+//@ modifies total
+template <typename T>
+void bump_with(T) {
+  total += 1;
+}
+
+//@ requires total < 0x7FFFFFFF
+//@ modifies total
+void use_bump_with() {
+  bump_with(int32_t{1});
 }

@@ -44,3 +44,6 @@ int32_t with_cleanup() {
 struct __attribute__((may_alias)) Alias {  // BANNED
   int32_t v;
 };
+
+// A qualifier is no node kind and no attribute. __restrict promises the compiler that two pointers never alias.
+void restrict_ptr(int32_t* __restrict a);  // BANNED
