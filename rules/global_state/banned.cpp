@@ -497,7 +497,8 @@ struct T11 {};
 
 using Many = std::variant<Guard, T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11>;
 
-// 17. A variant of more than eleven alternatives destroys its value through the same table. Guard's destructor runs at the brace.
+// 17. A variant of more than eleven alternatives destroys its value through the same table. Guard's destructor runs at the brace. The
+// copy has a cleanup of its own for the half-built value should the copy throw, and that path is code the compiler wrote too.
 void copy_many(const Many& m) {
-  Many copy = m;
+  Many copy = m;  // BANNED
 }  // BANNED
