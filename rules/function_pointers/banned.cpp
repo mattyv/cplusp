@@ -40,9 +40,26 @@ int32_t count_boxed(const std::vector<std::function<int32_t(int32_t)>>& items) {
   return items.empty() ? 0 : 1;
 }
 
+//@ requires x < 0x7FFFFFFF
 int32_t next(int32_t& x);
 
 int32_t through_reference(int32_t& x) {
   int32_t (&fr)(int32_t&) = next;  // BANNED also: lvalue_references
   return fr(x);
+}
+
+int32_t total = 0;
+
+// A std::function holds its target behind a pointer. What the target changes counts where the function is made, decision 0037.
+//@ requires total < 0x7FFFFFFF
+//@ modifies total
+void boxed_write() {
+  std::function<void()> f = [] { total += 1; };  // BANNED also: lambdas
+  f();
+}
+
+// The same with no modifies line. The write hides behind the pointer, and the gate still sees it.
+void boxed_write_unlisted() {
+  std::function<void()> f = [] { total += 1; };  // BANNED also: lambdas, global_state
+  f();
 }

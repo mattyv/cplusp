@@ -31,6 +31,7 @@ int32_t first_of_vla(int32_t n) {
   return a[0];
 }
 
+//@ requires p != nullptr
 void done(int32_t* p);
 
 // Attributes are not node kinds, so they have a list of their own. A cleanup attribute runs a hidden call at scope exit.

@@ -355,3 +355,19 @@ struct Loud : Base {
 void act_on(Base& b) {
   b.act();
 }
+
+struct Alarm {
+  //@ requires total < 0x7FFFFFFF
+  //@ modifies total
+  virtual ~Alarm() {
+    total += 1;
+  }
+};
+
+struct Siren : Alarm {};
+
+// 8. A unique_ptr to a base deletes through the virtual destructor, inside the std code. The base's lines count at the brace that
+// ends the scope, decision 0037. The temporary that make_unique returns has a destructor of its own, on its line.
+void owned_base() {
+  std::unique_ptr<Alarm> a = std::make_unique<Siren>();  // BANNED
+}  // BANNED
