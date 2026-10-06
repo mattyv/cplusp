@@ -218,3 +218,32 @@ bool both_empty(std::vector<Noted> a, std::vector<Noted> b) {
 bool copied_twice(const std::vector<Noted>& v) {
   return both_empty(v, v);  // BANNED
 }
+
+#include <variant>
+
+struct Counter2 {
+  //@ requires total < 0x7FFFFFFF
+  //@ modifies total
+  int32_t operator()(const int32_t&, const int32_t&) const { return total += 1; }
+  //@ requires total < 0x7FFFFFFF
+  //@ modifies total
+  int32_t operator()(const int32_t&, const bool&) const { return total += 1; }
+  //@ requires total < 0x7FFFFFFF
+  //@ modifies total
+  int32_t operator()(const bool&, const int32_t&) const { return total += 1; }
+  //@ requires total < 0x7FFFFFFF
+  //@ modifies total
+  int32_t operator()(const bool&, const bool&) const { return total += 1; }
+};
+
+int32_t add2(int32_t a, int32_t b) {
+  return a + b;
+}
+
+// Two visits over two variants each. The library calls the visitor through a table of function pointers, and each visit changes total,
+// decision 0037.
+//@ requires total < 0x7FFFFFFE
+//@ modifies total
+int32_t two_visits(const std::variant<int32_t, bool>& x, const std::variant<int32_t, bool>& y) {
+  return add2(std::visit(Counter2{}, x, y), std::visit(Counter2{}, x, y));  // BANNED
+}

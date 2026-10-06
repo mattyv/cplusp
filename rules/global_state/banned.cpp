@@ -459,3 +459,45 @@ void stash() {
 void write_back() {
   *static_cast<int32_t*>(std::__once_callable) = 5;  // BANNED
 }
+
+#include <variant>
+
+struct Vis {
+  //@ requires total < 0x7FFFFFFF
+  //@ modifies total
+  void operator()(const int32_t&, const int32_t&) const { bump(); }
+  //@ requires total < 0x7FFFFFFF
+  //@ modifies total
+  void operator()(const int32_t&, const bool&) const { bump(); }
+  //@ requires total < 0x7FFFFFFF
+  //@ modifies total
+  void operator()(const bool&, const int32_t&) const { bump(); }
+  //@ requires total < 0x7FFFFFFF
+  //@ modifies total
+  void operator()(const bool&, const bool&) const { bump(); }
+};
+
+// 16. A visit over two variants goes through a table of function pointers that the library keeps in a constant. A call through a
+// pointer loaded from a constant brings every function the constant names, decision 0037.
+void visit_two(const std::variant<int32_t, bool>& x, const std::variant<int32_t, bool>& y) {
+  std::visit(Vis{}, x, y);  // BANNED
+}
+
+struct T1 {};
+struct T2 {};
+struct T3 {};
+struct T4 {};
+struct T5 {};
+struct T6 {};
+struct T7 {};
+struct T8 {};
+struct T9 {};
+struct T10 {};
+struct T11 {};
+
+using Many = std::variant<Guard, T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11>;
+
+// 17. A variant of more than eleven alternatives destroys its value through the same table. Guard's destructor runs at the brace.
+void copy_many(const Many& m) {
+  Many copy = m;
+}  // BANNED
