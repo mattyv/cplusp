@@ -5,7 +5,7 @@
 // The check compiles the pattern and reports every match with the rule id as its message.
 // The Rust side turns the rule id into the message for the bot.
 //
-// Eleven hand-written checks, for the rules that a pattern cannot say. The gate maps a finding to its rule by
+// Twelve hand-written checks, for the rules that a pattern cannot say. The gate maps a finding to its rule by
 // the name of the check, so their messages are short and plain. The sample pair of each rule is the evidence.
 
 #include "ClangTidyCheck.h"
@@ -14,11 +14,32 @@
 #include "clang/ASTMatchers/ASTMatchFinder.h"
 #include "clang/ASTMatchers/Dynamic/Diagnostics.h"
 #include "clang/ASTMatchers/Dynamic/Parser.h"
+#include "clang/AST/ASTLambda.h"
+#include "clang/AST/GlobalDecl.h"
+#include "clang/Basic/CodeGenOptions.h"
+#include "clang/Basic/Diagnostic.h"
+#include "clang/Basic/DiagnosticOptions.h"
+#include "clang/Basic/SourceManagerInternals.h"
+#include "clang/CodeGen/ModuleBuilder.h"
+#include "clang/Lex/HeaderSearchOptions.h"
+#include "clang/Lex/PPCallbacks.h"
+#include "clang/Lex/Preprocessor.h"
+#include "clang/Lex/PreprocessorOptions.h"
+#include "llvm/ADT/DenseSet.h"
+#include "llvm/ADT/SmallSet.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/SmallString.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/StringSet.h"
 #include "llvm/ADT/APFloat.h"
+#include "llvm/Analysis/ValueTracking.h"
+#include "llvm/IR/DebugInfoMetadata.h"
+#include "llvm/IR/Instructions.h"
+#include "llvm/IR/IntrinsicInst.h"
+#include "llvm/IR/Module.h"
+#include "llvm/Passes/PassBuilder.h"
+#include "llvm/Support/Path.h"
+#include "llvm/Transforms/Scalar/SROA.h"
 #include "clang/Lex/Lexer.h"
 
 #include <algorithm>
@@ -550,11 +571,14 @@ void collectArgs(const Expr *Node, llvm::SmallVectorImpl<Arg> &Out) {
 
 // A function that the semantic checks do not judge: the dependent pattern of a template, which is judged at each instantiation where
 // every type and every callee is known, and the body of an implicit function, which the compiler wrote. A lambda's call operator is
-// implicit and is judged, because the lambda runs where it is written. Decision 0036.
-AST_MATCHER(FunctionDecl, notJudged) {
+// implicit and is judged, because the lambda runs where it is written. The state check reads it as a carrier, decision 0037.
+// Decision 0036.
+bool notJudgedFunction(const FunctionDecl &Node) {
   const auto *Method = dyn_cast<CXXMethodDecl>(&Node);
   return Node.isDependentContext() || (Node.isImplicit() && !(Method && Method->getParent()->isLambda()));
 }
+
+AST_MATCHER(FunctionDecl, notJudged) { return notJudgedFunction(Node); }
 
 // The matchers of the semantic checks: a node in a user file, and not in a function that is not judged. The checks read the tree as the
 // compiler has it, with the instantiations of a template.
@@ -634,31 +658,44 @@ bool changesNothing(const FunctionDecl *Function) {
                             Function->getName());
 }
 
-// Whether a call of `Function` may change a global: it lists one on its `modifies` line, its body or the body of something it calls
-// writes one, or it is outside std with no body here and no contract lines. Defined with the state check, which reads the same lines.
-bool reachesState(const FunctionDecl *Function);
-void resetReach();
+// The table of the lowered form, decision 0037, which the state check reads too. Defined with it.
+// A call of `Callee` changes a global when its lines list one or its code in the table writes one or holds a refusal.
+// It also changes a global when it has no body and no lines.
+bool tableChanges(const FunctionDecl *Callee);
+void startTable();
+void giveTable(ASTContext *Context);
+// The matchers that feed the table, which whichever check is on registers, and the one place that reads their matches.
+void registerTableMatchers(MatchFinder *Finder, MatchFinder::MatchCallback *Callback);
+bool collectForTable(const MatchFinder::MatchResult &Result);
 
 // A node that changes state: an assignment, an increment, a call of a function that may change state, or a construction
 // with a parameter the constructor can write through. A std::span is a view, and cutting one changes nothing, so
-// `fill(v, v)` is a matter for the row aliasing. An operator call is judged by its callee only for `()`. Any other
-// operator counts as an assignment or an increment, so `v[i]` on a non-const vector is no change.
+// `fill(v, v)` is a matter for the row aliasing. The first part of the rule for a call, a mutable parameter or a non-const method, is
+// the callee's own kind. For an operator other than `()` it is an assignment or an increment. The table adds the rest: what the callee
+// lists, what its code does, and what an override of it does. The std functions of `changesNothing` are no change, whatever their code is.
 bool isChange(const Stmt *S) {
   if (const auto *Unary = dyn_cast<UnaryOperator>(S))
     return Unary->isIncrementDecrementOp();
   if (const auto *Binary = dyn_cast<BinaryOperator>(S))
     return Binary->isAssignmentOp();
-  if (const auto *Construct = dyn_cast<CXXConstructExpr>(S))
-    // A constructor of a system header builds a std object. The compiler builds some of them for a rewritten comparison, such as
-    // the `__unspec` of `o < 5` on an optional, and no author wrote them.
-    return !asSpan(Construct->getType()) && !Construct->getConstructor()->getASTContext().getSourceManager().isInSystemHeader(Construct->getConstructor()->getLocation()) &&
-           (hasMutableParameter(Construct->getConstructor()) || reachesState(Construct->getConstructor()));
-  if (const auto *Operator = dyn_cast<CXXOperatorCallExpr>(S))
-    if (Operator->getOperator() != OO_Call)
-      return isAssignmentOrIncrement(Operator->getOperator());
+  if (const auto *Construct = dyn_cast<CXXConstructExpr>(S)) {
+    // A constructor of a system header builds a std object. The compiler builds some of them for a rewritten comparison.
+    // The `__unspec` of `o < 5` on an optional is one, and no author wrote it. Its parameters are the library's business.
+    // What its code does counts, at any depth, and a line does not stop it.
+    // A copy of a container runs the copy constructors of its elements. One of them may write a global with no line to say so.
+    const CXXConstructorDecl *Constructor = Construct->getConstructor();
+    const bool Library = Constructor->getASTContext().getSourceManager().isInSystemHeader(Constructor->getLocation());
+    return !asSpan(Construct->getType()) && ((!Library && hasMutableParameter(Constructor)) || tableChanges(Constructor));
+  }
   if (const auto *Call = dyn_cast<CallExpr>(S)) {
     const FunctionDecl *Callee = Call->getDirectCallee();
-    return Callee && !changesNothing(Callee) && (mayChangeState(Callee) || reachesState(Callee));
+    if (!Callee || changesNothing(Callee))
+      return false;
+    // An operator other than () is a change by its own kind, an assignment or an increment, so `v[i]` on a non-const vector is none.
+    // Whatever the operator, what the callee lists and what its code does count too.
+    const auto *Operator = dyn_cast<CXXOperatorCallExpr>(S);
+    const bool ByKind = Operator && Operator->getOperator() != OO_Call ? isAssignmentOrIncrement(Operator->getOperator()) : mayChangeState(Callee);
+    return ByKind || tableChanges(Callee);
   }
   return false;
 }
@@ -774,13 +811,32 @@ void effects(const Stmt *S, Effects &E) {
 
 // cplusp-evaluation-order: a node with two unordered children that each change state, decision 0026. When exactly one changes
 // state, no other unordered child reads what the change can reach, decision 0033.
+// The table of the lowered form exists at the end of the translation unit, so the check collects the nodes and judges them then.
 class EvaluationOrderCheck : public ClangTidyCheck {
 public:
   using ClangTidyCheck::ClangTidyCheck;
-  void onStartOfTranslationUnit() override { resetReach(); }
-  void registerMatchers(MatchFinder *Finder) override { Finder->addMatcher(expr(judged()).bind("expr"), this); }
+  void onStartOfTranslationUnit() override {
+    startTable();
+    Nodes.clear();
+  }
+  void registerMatchers(MatchFinder *Finder) override {
+    registerTableMatchers(Finder, this);
+    Finder->addMatcher(expr(judged()).bind("expr"), this);
+  }
   void check(const MatchFinder::MatchResult &Result) override {
-    const auto *Node = Result.Nodes.getNodeAs<Expr>("expr");
+    giveTable(Result.Context);
+    if (!collectForTable(Result))
+      Nodes.push_back(Result.Nodes.getNodeAs<Expr>("expr"));
+  }
+  void onEndOfTranslationUnit() override {
+    for (const Expr *Node : Nodes)
+      judge(Node);
+  }
+
+private:
+  std::vector<const Expr *> Nodes;
+
+  void judge(const Expr *Node) {
     auto Children = unorderedChildren(Node);
     auto Changing = llvm::make_filter_range(Children, [](const Stmt *Child) { return Child && changes(Child); });
     const auto Count = std::distance(Changing.begin(), Changing.end());
@@ -894,6 +950,9 @@ public:
         return;
       for (const Attr *A : D->attrs())
         checkAttribute(A, *Result.SourceManager);
+      // A member function with `__restrict` after its parameters promises that `this` does not alias, and no type holds that qualifier.
+      if (const auto *Method = dyn_cast<CXXMethodDecl>(D); Method && Method->getMethodQualifiers().hasRestrict())
+        diag(Result.SourceManager->getFileLoc(D->getLocation()), "unlisted: The construct is __restrict.");
       Loc = D->getLocation();
       Kind = std::string(D->getDeclKindName()) + "Decl";
       Allowed = &Declarations;
@@ -991,10 +1050,11 @@ SourceLocation firstTokenOf(const FunctionDecl *Function) {
   return Function->getOuterLocStart();
 }
 
-// ponytail: one ceiling. A callee that has no lines in this translation unit adds nothing, so a callee in a header behind -isystem,
-// a callee through a function pointer, a virtual call that an override answers, and a callee in another file add nothing, unless it
-// has no body and no lines at all, which the gate refuses. Upgrade: a contract reader that runs on every file, and a record of the
-// lines of every function.
+// ponytail: one ceiling. The lines come from the files of this translation unit, outside the system headers.
+// A callee with no lines here brings no lines. So the contract of a callee in a header behind -isystem, or in another file, is not read.
+// What its code does still counts, if the translation unit has the body.
+// A callee with no body and no lines at all is refused.
+// Upgrade: a contract reader that runs on every file, and a record of the lines of every function.
 Contract contractOf(const SourceManager &SM, const FunctionDecl *Function) {
   Contract C;
   if (const FunctionDecl *Pattern = Function->getTemplateInstantiationPattern())
@@ -1009,20 +1069,6 @@ Contract contractOf(const SourceManager &SM, const FunctionDecl *Function) {
     C.Any |= One.Any;
   }
   return C;
-}
-
-// The function whose lines judge `Function`. A lambda has none of its own, so its call operator is judged against the function that
-// the lambda is written in.
-const FunctionDecl *linesOwner(const FunctionDecl *Function) {
-  while (const auto *Method = dyn_cast<CXXMethodDecl>(Function)) {
-    if (!Method->getParent()->isLambda())
-      break;
-    const auto *Outer = dyn_cast<FunctionDecl>(Method->getParent()->getDeclContext());
-    if (!Outer)
-      break;
-    Function = Outer;
-  }
-  return Function;
 }
 
 // The name of a variable as a contract line writes it: qualified, and without the arguments of a class template, so `Box<int>::n` is
@@ -1043,6 +1089,21 @@ std::string nameOf(const VarDecl *Var) {
 
 // A mutable global or a static data member. A constant, a member and a function-local static are not state here.
 bool isState(const VarDecl *Var) { return isMutableGlobal(Var) && !Var->isStaticLocal(); }
+
+// The methods whose lines hold the overrides of `Base`: `Base` itself, or, when nobody wrote `Base`, what it overrides, as far up as that
+// goes. The destructor that the compiler wrote for a class has no lines, and its overrides answer to the lines above it. A function
+// that is declared `= default` is written, and its lines are its own, empty or not.
+std::vector<const CXXMethodDecl *> lineHolders(const CXXMethodDecl *Base) {
+  std::vector<const CXXMethodDecl *> Out;
+  if (Base->isImplicit())
+    for (const CXXMethodDecl *Up : Base->overridden_methods()) {
+      const auto More = lineHolders(Up);
+      Out.insert(Out.end(), More.begin(), More.end());
+    }
+  if (Out.empty())
+    Out.push_back(Base);
+  return Out;
+}
 
 // The state variable that a listed name names. A name is the qualified name of the variable, or that name after a `::`, and it names
 // the variable only when no other state variable of the whole translation unit matches it too: two statics called `n` are named by
@@ -1066,506 +1127,1077 @@ bool hasBody(const FunctionDecl *Function) {
   return Function->isDefined() || (Pattern && Pattern->isDefined());
 }
 
-// A function that the gate cannot read: outside std and the system headers, with no body here and no contract lines. A call of it
-// may change any global. A builtin, a function that the compiler or a `= default` defines, and a pure virtual function, which an
-// override answers, are no such function.
-// ponytail: an override in another file is not read, so a virtual call adds only what the declaration lists. Upgrade: read every
-// override of the class hierarchy that the file can see.
-bool isOpaque(const SourceManager &SM, const FunctionDecl *Function) {
-  if (Function->isImplicit() || Function->isDefaulted() || Function->isPureVirtual() || Function->getBuiltinID() || inStdNamespace(Function) ||
-      SM.isInSystemHeader(Function->getLocation()) || hasBody(Function))
-    return false;
-  return !contractOf(SM, Function).Any;
+// The state variables that a list of lines names. A name that no variable has is a parameter or a typo, and the prover has it.
+std::set<std::string> namedState(const std::vector<std::string> &Lines, const std::vector<std::string> &State) {
+  std::set<std::string> Names;
+  for (const std::string &Line : Lines)
+    if (const std::string *Var = resolve(Line, State))
+      Names.insert(*Var);
+  return Names;
 }
 
-// A constructor or destructor that nobody wrote, so its lines are those of what it runs.
-bool isImplicitMember(const CXXMethodDecl *Method) { return Method->isImplicit() || (Method->isDefaulted() && !Method->isUserProvided()); }
-
-bool inSystemHeader(const CXXRecordDecl *Record) { return Record->getASTContext().getSourceManager().isInSystemHeader(Record->getLocation()); }
-
-const CXXRecordDecl *classOf(QualType Type) {
-  const CXXRecordDecl *Record = Type->getBaseElementTypeUnsafe()->getAsCXXRecordDecl();
-  return Record ? Record->getDefinition() : nullptr;
+// The declaration is in the C++ ABI of the compiler's runtime, which the library calls to throw and to catch.
+// ponytail: a name test. Another runtime library's namespace is not known. Upgrade: a list of the runtime's namespaces.
+bool inAbiNamespace(const Decl *Declaration) {
+  for (const DeclContext *Context = Declaration->getDeclContext(); Context; Context = Context->getParent())
+    if (const auto *Namespace = dyn_cast<NamespaceDecl>(Context); Namespace && Namespace->getName() == "__cxxabiv1")
+      return true;
+  return false;
 }
 
-// A walk over the bases and the members of a class goes to the end of them. A class holds its members by value, so the graph is finite,
-// and the set keeps a class that appears twice from being walked twice. No limit ends a walk in a pass, decision 0036.
-using ClassSet = llvm::SmallPtrSet<const CXXRecordDecl *, 16>;
-
-// The constructor of `Class` that is of the same kind as `Kind`, or null when the class declares none: an implicit one runs then. A
-// move that the class does not declare runs the copy.
-const CXXConstructorDecl *constructorLike(const CXXRecordDecl *Class, const CXXConstructorDecl *Kind) {
-  const auto Find = [&](bool (CXXConstructorDecl::*Is)() const) -> const CXXConstructorDecl * {
-    for (const CXXConstructorDecl *Constructor : Class->ctors())
-      if ((Constructor->*Is)())
-        return Constructor;
-    return nullptr;
-  };
-  if (Kind->isDefaultConstructor())
-    return Find(&CXXConstructorDecl::isDefaultConstructor);
-  const CXXConstructorDecl *Copy = Find(&CXXConstructorDecl::isCopyConstructor);
-  if (Kind->isCopyConstructor())
-    return Copy;
-  const CXXConstructorDecl *Move = Find(&CXXConstructorDecl::isMoveConstructor);
-  return Move ? Move : Copy;
-}
-
-// The expressions of the in-class initializers that an implicit default constructor of `Record` runs, for its members and its bases.
-// ponytail: this walk and the two below go over the same bases and members. Upgrade: one walk that takes what to collect.
-void inClassInitializers(const CXXRecordDecl *Record, const CXXConstructorDecl *Kind, ClassSet &Seen, llvm::SmallVectorImpl<const Expr *> &Out) {
-  if (!Record || inSystemHeader(Record) || !Seen.insert(Record).second)
-    return;
-  const auto Member = [&](QualType Type, const Expr *Init) {
-    if (Init) {
-      Out.push_back(Init);
-      return;
-    }
-    const CXXRecordDecl *Class = classOf(Type);
-    const CXXConstructorDecl *Constructor = Class ? constructorLike(Class, Kind) : nullptr;
-    if (Class && (!Constructor || isImplicitMember(Constructor)))
-      inClassInitializers(Class, Kind, Seen, Out);
-  };
-  for (const CXXBaseSpecifier &Base : Record->bases())
-    Member(Base.getType(), nullptr);
-  for (const FieldDecl *Field : Record->fields())
-    Member(Field->getType(), Field->getInClassInitializer());
-}
-
-// The user-written constructors that an implicit constructor of `Record` runs for its bases and members, of the kind it is.
-void constructorsRunBy(const CXXRecordDecl *Record, const CXXConstructorDecl *Kind, ClassSet &Seen,
-                       llvm::SmallVectorImpl<const FunctionDecl *> &Out) {
-  if (!Record || inSystemHeader(Record) || !Seen.insert(Record).second)
-    return;
-  const auto Member = [&](QualType Type, bool HasInit) {
-    const CXXRecordDecl *Class = classOf(Type);
-    if (!Class || (Kind->isDefaultConstructor() && HasInit))
-      return;
-    const CXXConstructorDecl *Constructor = constructorLike(Class, Kind);
-    if (!Constructor || isImplicitMember(Constructor))
-      constructorsRunBy(Class, Kind, Seen, Out);
-    else
-      Out.push_back(Constructor);
-  };
-  for (const CXXBaseSpecifier &Base : Record->bases())
-    Member(Base.getType(), false);
-  for (const FieldDecl *Field : Record->fields())
-    Member(Field->getType(), Field->hasInClassInitializer());
-}
-
-// The user classes among the template arguments of `Type`, and among its own parts: what a std template over them runs the code of.
-// A reference and an array are looked through. A pointer holds no object, so it runs nothing.
-using TypeSet = llvm::SmallPtrSet<const void *, 16>;
-void userClassesIn(QualType Type, ClassSet &Out, TypeSet &Seen);
-
-void userClassesInArgs(llvm::ArrayRef<TemplateArgument> Args, ClassSet &Out, TypeSet &Seen) {
-  for (const TemplateArgument &Arg : Args) {
-    if (Arg.getKind() == TemplateArgument::Type)
-      userClassesIn(Arg.getAsType(), Out, Seen);
-    else if (Arg.getKind() == TemplateArgument::Pack)
-      userClassesInArgs(Arg.pack_elements(), Out, Seen);
-  }
-}
-
-void userClassesIn(QualType Type, ClassSet &Out, TypeSet &Seen) {
-  if (Type.isNull())
-    return;
-  const clang::Type *Base = Type.getNonReferenceType()->getBaseElementTypeUnsafe();
-  if (!Seen.insert(Base->getCanonicalTypeInternal().getAsOpaquePtr()).second)
-    return;
-  const CXXRecordDecl *Record = Base->getAsCXXRecordDecl();
-  if (!Record)
-    return;
-  if (const CXXRecordDecl *Definition = Record->getDefinition())
-    Record = Definition;
-  if (!inSystemHeader(Record))
-    Out.insert(Record);
-  if (const auto *Specialization = dyn_cast<ClassTemplateSpecializationDecl>(Record))
-    userClassesInArgs(Specialization->getTemplateArgs().asArray(), Out, Seen);
-}
-
-// The user-written destructors that destroying an object of `Record` runs: its own, and those of its bases and members. A member that
-// is a std template over a user class runs that class's destructor too.
-void destructorsRunBy(const CXXRecordDecl *Record, ClassSet &Seen, llvm::SmallVectorImpl<const FunctionDecl *> &Out) {
-  if (!Record || inSystemHeader(Record) || !Seen.insert(Record).second)
-    return;
-  const CXXDestructorDecl *Destructor = Record->getDestructor();
-  if (Destructor && !isImplicitMember(Destructor))
-    Out.push_back(Destructor);
-  const auto Part = [&](QualType Type) {
-    const CXXRecordDecl *Class = classOf(Type);
-    if (!Class)
-      return;
-    if (!inSystemHeader(Class)) {
-      destructorsRunBy(Class, Seen, Out);
-    } else if (const auto *Specialization = dyn_cast<ClassTemplateSpecializationDecl>(Class)) {
-      ClassSet Users;
-      TypeSet Types;
-      userClassesInArgs(Specialization->getTemplateArgs().asArray(), Users, Types);
-      for (const CXXRecordDecl *User : Users)
-        destructorsRunBy(User, Seen, Out);
-    }
-  };
-  for (const CXXBaseSpecifier &Base : Record->bases())
-    Part(Base.getType());
-  for (const FieldDecl *Field : Record->fields())
-    Part(Field->getType());
-}
-
-// The functions of a user class that a std template may run: its constructors, its destructor and its assignment operators, with a
-// constructor that nobody wrote replaced by the constructors it runs.
-void classFunctions(const CXXRecordDecl *Class, llvm::SmallVectorImpl<const FunctionDecl *> &Out) {
-  for (const CXXConstructorDecl *Constructor : Class->ctors()) {
-    if (!isImplicitMember(Constructor)) {
-      Out.push_back(Constructor);
-    } else if (Constructor->isDefaultConstructor() || Constructor->isCopyOrMoveConstructor()) {
-      ClassSet Seen;
-      constructorsRunBy(Class, Constructor, Seen, Out);
-    }
-  }
-  ClassSet Seen;
-  destructorsRunBy(Class, Seen, Out);
-  for (const CXXMethodDecl *Method : Class->methods())
-    if ((Method->isCopyAssignmentOperator() || Method->isMoveAssignmentOperator()) && !isImplicitMember(Method))
-      Out.push_back(Method);
-}
-
-// The user classes that a call of `Callee` runs the code of when `Callee` is a template specialization declared in a system header: the
-// classes among its template arguments, and among the types of the arguments it is given. A std function that is no template runs none.
-void stdTemplateUsers(const FunctionDecl *Callee, const SourceManager &SM, llvm::ArrayRef<const Expr *> Args, ClassSet &Out) {
-  if (!Callee || !SM.isInSystemHeader(Callee->getLocation()))
-    return;
-  TypeSet Types;
-  bool Template = false;
-  if (const TemplateArgumentList *List = Callee->getTemplateSpecializationArgs()) {
-    userClassesInArgs(List->asArray(), Out, Types);
-    Template = true;
-  }
-  if (const auto *Method = dyn_cast<CXXMethodDecl>(Callee))
-    if (const auto *Specialization = dyn_cast<ClassTemplateSpecializationDecl>(Method->getParent())) {
-      userClassesInArgs(Specialization->getTemplateArgs().asArray(), Out, Types);
-      Template = true;
-    }
-  if (!Template)
-    return;
-  for (const Expr *Arg : Args)
-    userClassesIn(Arg->getType(), Out, Types);
-}
-
-// Calls Visit on every node the function runs: the nodes of a lambda body too, because the lambda runs inside the function that passes
-// it. An unevaluated operand is not run. A default argument runs at the call, so its nodes are reported at the call, and `Where` is
-// where to report, or invalid for the node's own place. A default member initializer runs where the object is made, in an
-// initializer list or in an implicit constructor, and its nodes stay where they are written.
-template <typename F> void walkNodes(const Stmt *S, SourceLocation Call, SourceLocation Where, const F &Visit) {
-  if (!S || isa<UnaryExprOrTypeTraitExpr, CXXNoexceptExpr, CXXTypeidExpr>(S))
-    return;
-  if (const auto *Default = dyn_cast<CXXDefaultArgExpr>(S)) {
-    walkNodes(Default->getExpr(), Call, Call, Visit);
-    return;
-  }
-  if (const auto *Init = dyn_cast<CXXDefaultInitExpr>(S)) {
-    walkNodes(Init->getExpr(), Call, Where, Visit);
-    return;
-  }
-  Visit(S, Where);
-  if (isa<CallExpr, CXXConstructExpr>(S))
-    Call = S->getBeginLoc();
-  for (const Stmt *Child : S->children())
-    walkNodes(Child, Call, Where, Visit);
-  if (const auto *Construct = dyn_cast<CXXConstructExpr>(S)) {
-    const CXXConstructorDecl *Constructor = Construct->getConstructor();
-    if (Constructor->isDefaultConstructor() && isImplicitMember(Constructor)) {
-      llvm::SmallVector<const Expr *, 4> Inits;
-      ClassSet Seen;
-      inClassInitializers(Constructor->getParent(), Constructor, Seen, Inits);
-      for (const Expr *Init : Inits)
-        walkNodes(Init, Call, Where, Visit);
-    }
-  }
-}
-
-// Calls Each on the root path of everything that S writes: an assignment target, an increment, an argument that binds to a non-const
-// reference, pointer or span, and the object of a non-const member call.
-template <typename F> void forEachWrite(const Stmt *S, const F &Each) {
-  if (const auto *Binary = dyn_cast<BinaryOperator>(S); Binary && Binary->isAssignmentOp()) {
-    for (const RootPath &Path : rootsOf(Binary->getLHS()).Paths)
-      Each(Path);
-  } else if (const auto *Unary = dyn_cast<UnaryOperator>(S); Unary && Unary->isIncrementDecrementOp()) {
-    for (const RootPath &Path : rootsOf(Unary->getSubExpr()).Paths)
-      Each(Path);
-  } else if (isa<CallExpr, CXXConstructExpr>(S)) {
-    llvm::SmallVector<Arg, 4> Args;
-    collectArgs(cast<Expr>(S), Args);
-    for (const Arg &A : Args)
-      if (A.Writes)
-        for (const RootPath &Path : A.Where.Paths)
-          Each(Path);
-  }
-}
-
-// What a call of a function may change, found once per function in a translation unit.
-llvm::DenseMap<const FunctionDecl *, bool> &reachCache() {
-  static llvm::DenseMap<const FunctionDecl *, bool> Cache;
-  return Cache;
-}
-
-void resetReach() { reachCache().clear(); }
-
-// The call graph from `Function`, to the end: a function that lists a global on its `modifies` line, that writes a mutable global, or that
-// the gate cannot read, may change a global, and so does every function that calls it. The lines of the visited functions are read as
-// the state check reads them.
-bool reachesState(const FunctionDecl *Function) {
-  auto &Cache = reachCache();
-  if (const auto Known = Cache.find(Function); Known != Cache.end())
-    return Known->second;
-  llvm::SmallPtrSet<const FunctionDecl *, 16> Seen;
-  llvm::SmallVector<const FunctionDecl *, 8> Work{Function};
-  bool Found = false;
-  while (!Work.empty() && !Found) {
-    const FunctionDecl *Current = Work.pop_back_val();
-    if (!Seen.insert(Current->getCanonicalDecl()).second)
+// The state a file declares, outside the system headers: in a namespace, a linkage specification, a class or a class template.
+void collectState(const DeclContext *Context, const SourceManager &SM, std::vector<std::string> &Out) {
+  for (const Decl *D : Context->decls()) {
+    if (SM.isInSystemHeader(D->getLocation()))
       continue;
-    const SourceManager &SM = Current->getASTContext().getSourceManager();
-    if (inStdNamespace(Current) || SM.isInSystemHeader(Current->getLocation()))
-      continue;
-    if (isOpaque(SM, Current) || !contractOf(SM, Current).Modifies.empty()) {
-      Found = true;
-      break;
+    if (const auto *Var = dyn_cast<VarDecl>(D)) {
+      if (isState(Var))
+        Out.push_back(nameOf(Var));
+    } else if (const auto *Template = dyn_cast<ClassTemplateDecl>(D)) {
+      collectState(Template->getTemplatedDecl(), SM, Out);
+    } else if (const auto *Template = dyn_cast<VarTemplateDecl>(D)) {
+      if (isState(Template->getTemplatedDecl()))
+        Out.push_back(nameOf(Template->getTemplatedDecl()));
+    } else if (isa<NamespaceDecl, LinkageSpecDecl, CXXRecordDecl>(D)) {
+      collectState(cast<DeclContext>(D), SM, Out);
     }
-    const FunctionDecl *Definition = nullptr;
-    Current->isDefined(Definition);
-    if (!Definition && Current->getTemplateInstantiationPattern())
-      Current->getTemplateInstantiationPattern()->isDefined(Definition);
-    if (!Definition || !Definition->getBody())
-      continue;
-    llvm::SmallVector<const Stmt *, 4> Parts{Definition->getBody()};
-    if (const auto *Constructor = dyn_cast<CXXConstructorDecl>(Definition))
-      for (const CXXCtorInitializer *Init : Constructor->inits())
-        Parts.push_back(Init->getInit());
-    for (const Stmt *Part : Parts)
-      walkNodes(Part, SourceLocation(), SourceLocation(), [&](const Stmt *S, SourceLocation) {
-        forEachWrite(S, [&](const RootPath &Path) { Found |= Path.Global; });
-        if (const auto *Call = dyn_cast<CallExpr>(S); Call && Call->getDirectCallee())
-          Work.push_back(Call->getDirectCallee());
-        else if (const auto *Construct = dyn_cast<CXXConstructExpr>(S))
-          Work.push_back(Construct->getConstructor());
-      });
   }
-  Cache[Function] = Found;
-  return Found;
 }
 
-// cplusp-unlisted-state: decisions 0035 and 0036. A function writes only the global state its `//@ modifies` line lists, and reads only
-// what its `//@ reads` or `modifies` line lists. State is a mutable global or static data member that a system header does not declare.
-// A write is an assignment target, an increment, the object of a non-const member call, or a binding to a non-const reference, pointer
-// or span. Any other mention is a read. A call adds what its callee lists. So do the constructors an implicit constructor runs, the
-// destructor of every local, temporary and deleted object, a function passed by name, and the user classes that a std template runs.
-// A call of a function that the gate cannot read is refused, and so is a reference from a function this file does not define: any
-// global may be behind it, and no line can list that. The message is `global_state: {sentence}`, one finding per access.
-// It reads the tree as the compiler has it, with the instantiations of a template, so a call that depends on a template argument has
-// its callee. The pattern is not judged.
-class UnlistedStateCheck : public ClangTidyCheck {
+// ------------------------------------------------------------ the lowered form, decision 0037
+
+// What a piece of code does to the state: the names it writes and reads, and its refusals. A refusal is a whole message, so the
+// function that is judged can report it at the instruction that brought it.
+struct Effect {
+  std::set<std::string> Writes, Reads, Refusals;
+  size_t size() const { return Writes.size() + Reads.size() + Refusals.size(); }
+  // Whether this grew.
+  bool add(const Effect &Other) {
+    const size_t Before = size();
+    Writes.insert(Other.Writes.begin(), Other.Writes.end());
+    Reads.insert(Other.Reads.begin(), Other.Reads.end());
+    Refusals.insert(Other.Refusals.begin(), Other.Refusals.end());
+    return size() != Before;
+  }
+};
+
+// A place in a file, as the debug line table gives it: the file, a line and a column.
+// The file is the entry of the file manager. So a header that is included twice is one file, and its lines are the same in both.
+struct Place {
+  const FileEntry *File = nullptr;
+  unsigned Line = 0, Col = 0;
+  bool before(const Place &O) const { return Line != O.Line ? Line < O.Line : Col < O.Col; }
+};
+
+// A virtual call of the tree: where it is written, the method that the source names, and the function that holds the expression.
+// The owner is the canonical declaration of that instantiation, or none if no function holds it.
+// The lowered form has an indirect call there. Two functions of a library may hold a call on the same line of a header.
+// So the owner tells them apart. The place is numbers, and no source location.
+// The second inclusion of a header is another file in the source manager, and the same file in the line table.
+struct VirtualCall {
+  Place Begin, End;
+  const CXXMethodDecl *Method;
+  const FunctionDecl *Owner;
+};
+
+struct Finding {
+  SourceLocation Loc;
+  std::string Message;
+};
+
+// The code that clang generates for a translation unit, and what each function in it does to the state. Both the state check and the
+// sequencing check ask it. It is built once, at the end of the translation unit, on the first question.
+class Lowered {
 public:
-  using ClangTidyCheck::ClangTidyCheck;
-  void onStartOfTranslationUnit() override {
-    StateNames.clear();
-    Collected = false;
-    resetReach();
+  // What the matchers give it. The virtual calls of the tree. The functions that the file wrote, which the module must hold whether
+  // anything calls them or not. Every instantiation of a template, which clang hands to its code generator as it makes it.
+  ASTContext *Ctx = nullptr;
+  std::vector<VirtualCall> Virtuals;
+  std::vector<const FunctionDecl *> Judged, Instances;
+  std::vector<const VarDecl *> VarInstances;
+
+  void addVirtual(SourceRange Where, const CXXMethodDecl *Method, const FunctionDecl *Owner) {
+    Virtuals.push_back({placeOfExpansion(Where.getBegin()), placeOfExpansion(Where.getEnd()), Method, Owner ? Owner->getCanonicalDecl() : nullptr});
   }
-  void registerMatchers(MatchFinder *Finder) override {
-    Finder->addMatcher(functionDecl(isDefinition(), unless(isExpansionInSystemHeader()), unless(notJudged())).bind("function"), this);
+
+  // Where a location of the tree is, as the line table would give it.
+  Place placeOfExpansion(SourceLocation Loc) const {
+    const SourceManager &SM = Ctx->getSourceManager();
+    const auto [File, Offset] = SM.getDecomposedExpansionLoc(Loc);
+    return {SM.getFileEntryForID(File), SM.getLineNumber(File, Offset), SM.getColumnNumber(File, Offset)};
   }
-  void check(const MatchFinder::MatchResult &Result) override {
-    const auto *Function = Result.Nodes.getNodeAs<FunctionDecl>("function");
-    const SourceManager &SM = *Result.SourceManager;
+
+  // The first check to match gives the context.
+  void use(ASTContext *Context) {
+    if (!Ctx)
+      Ctx = Context;
+  }
+
+  // The qualified names of the state of this file, found once per translation unit.
+  const std::vector<std::string> &state() {
     if (!Collected) {
-      collectState(Result.Context->getTranslationUnitDecl(), SM, StateNames);
-      llvm::sort(StateNames);
-      StateNames.erase(std::unique(StateNames.begin(), StateNames.end()), StateNames.end());
+      collectState(Ctx->getTranslationUnitDecl(), Ctx->getSourceManager(), State);
+      llvm::sort(State);
+      State.erase(std::unique(State.begin(), State.end()), State.end());
       Collected = true;
     }
-    // The nodes the function runs: its body, and the initializers of a constructor.
-    llvm::SmallVector<const Stmt *, 4> Parts;
-    Parts.push_back(Function->getBody());
-    if (const auto *Constructor = dyn_cast<CXXConstructorDecl>(Function))
-      for (const CXXCtorInitializer *Init : Constructor->inits())
-        Parts.push_back(Init->getInit());
-    // First the writes, because a loop variable writes a variable that the range names, and the range comes first in the tree.
-    llvm::SmallPtrSet<const Stmt *, 16> Written;
-    for (const Stmt *Part : Parts)
-      walkNodes(Part, SourceLocation(), SourceLocation(), [&](const Stmt *S, SourceLocation) {
-        forEachWrite(S, [&](const RootPath &Path) {
-          if (Path.At)
-            Written.insert(Path.At);
-        });
-      });
-    // A reference from a function this file does not define is refused where the function reaches through it: a write, a read of
-    // the value, a dereference, and any argument or object that a call is given, const or not.
-    llvm::SmallPtrSet<const CallExpr *, 4> Reached;
-    for (const Stmt *W : Written)
-      if (const auto *Call = dyn_cast<CallExpr>(W))
-        Reached.insert(Call);
-    // The lines may sit on an earlier declaration, as a header has them, and not on the definition. A lambda has none of its own.
-    const FunctionDecl *Owner = linesOwner(Function);
-    const Contract Own = contractOf(SM, Owner);
-    std::set<std::string> Modifies, Listed;
-    for (const std::string &Name : Own.Modifies)
-      if (const std::string *Var = resolve(Name, StateNames)) {
-        Modifies.insert(*Var);
-        Listed.insert(*Var);
-      }
-    for (const std::string &Name : Own.Reads)
-      if (const std::string *Var = resolve(Name, StateNames))
-        Listed.insert(*Var);
-    const auto Refuse = [&](SourceLocation Loc, const std::string &Var, bool Write) {
-      if ((Write ? Modifies : Listed).count(Var))
-        return;
-      if (Write)
-        diag(SM.getExpansionLoc(Loc), "global_state: %0 changes, and the modifies line does not list it.") << StringRef(Var);
-      else
-        diag(SM.getExpansionLoc(Loc), "global_state: %0 is read, and no reads or modifies line lists it.") << StringRef(Var);
-    };
-    // What a callee lists, at `Loc`. A name on its lines that matches a state variable is state, whatever the callee calls its
-    // parameters.
-    const auto Bring = [&](const FunctionDecl *Callee, SourceLocation Loc) {
-      const Contract Brought = contractOf(SM, Callee);
-      for (const std::string &Name : Brought.Modifies)
-        if (const std::string *Var = resolve(Name, StateNames))
-          Refuse(Loc, *Var, true);
-      for (const std::string &Name : Brought.Reads)
-        if (const std::string *Var = resolve(Name, StateNames))
-          Refuse(Loc, *Var, false);
-    };
-    // What an object of this type runs when it is made or destroyed: the destructors of a user class, and everything that a std
-    // template over user classes runs of them.
-    const auto BringType = [&](QualType Type, SourceLocation Loc) {
-      const CXXRecordDecl *Class = classOf(Type);
-      if (!Class)
-        return;
-      llvm::SmallVector<const FunctionDecl *, 8> Run;
-      if (!inSystemHeader(Class)) {
-        ClassSet Seen;
-        destructorsRunBy(Class, Seen, Run);
-      } else if (const auto *Specialization = dyn_cast<ClassTemplateSpecializationDecl>(Class)) {
-        ClassSet Users;
-        TypeSet Types;
-        userClassesInArgs(Specialization->getTemplateArgs().asArray(), Users, Types);
-        for (const CXXRecordDecl *User : Users)
-          classFunctions(User, Run);
-      }
-      for (const FunctionDecl *Function : Run)
-        Bring(Function, Loc);
-    };
-    // The callee of a call is no function passed by name.
-    llvm::SmallPtrSet<const Expr *, 16> CalleeRefs;
-    for (const Stmt *Part : Parts)
-      walkNodes(Part, SourceLocation(), SourceLocation(), [&](const Stmt *S, SourceLocation Where) {
-        const SourceLocation Here = Where.isValid() ? Where : S->getBeginLoc();
-        const VarDecl *Var = nullptr;
-        if (const auto *Ref = dyn_cast<DeclRefExpr>(S))
-          Var = dyn_cast<VarDecl>(Ref->getDecl());
-        else if (const auto *Member = dyn_cast<MemberExpr>(S))
-          Var = dyn_cast<VarDecl>(Member->getMemberDecl());
-        if (Var && isState(Var))
-          Refuse(Here, nameOf(Var), Written.contains(S));
-        // A function passed by name runs where the callee runs it, so its lines count here.
-        if (const auto *Ref = dyn_cast<DeclRefExpr>(S))
-          if (const auto *Named = dyn_cast<FunctionDecl>(Ref->getDecl()); Named && !CalleeRefs.contains(Ref))
-            Bring(Named, Here);
-        const Expr *Through = nullptr;
-        if (const auto *Cast = dyn_cast<ImplicitCastExpr>(S); Cast && Cast->getCastKind() == CK_LValueToRValue)
-          Through = Cast->getSubExpr();
-        else if (const auto *Unary = dyn_cast<UnaryOperator>(S); Unary && Unary->getOpcode() == UO_Deref)
-          Through = Unary->getSubExpr();
-        else if (const auto *Subscript = dyn_cast<ArraySubscriptExpr>(S))
-          Through = Subscript->getBase();
-        else if (const auto *Arrow = dyn_cast<MemberExpr>(S); Arrow && Arrow->isArrow())
-          Through = Arrow->getBase();
-        if (Through)
-          for (const RootPath &Path : rootsOf(Through).Paths)
-            if (const auto *Call = dyn_cast_or_null<CallExpr>(Path.At); Call && Path.Steps[0] == &StateKey)
-              Reached.insert(Call);
-        // A local lives to the end of its scope, and a temporary to the end of its full expression. Each runs its destructor.
-        if (const auto *Declared = dyn_cast<DeclStmt>(S)) {
-          for (const Decl *D : Declared->decls())
-            if (const auto *Local = dyn_cast<VarDecl>(D); Local && Local->hasLocalStorage() && !Local->getType()->isReferenceType() && !Local->isImplicit())
-              BringType(Local->getType(), Local->getLocation());
-        } else if (const auto *Temporary = dyn_cast<CXXBindTemporaryExpr>(S)) {
-          BringType(Temporary->getType(), Here);
-        } else if (const auto *Delete = dyn_cast<CXXDeleteExpr>(S)) {
-          // delete runs the destructor of the deleted type.
-          BringType(Delete->getDestroyedType(), Here);
-        }
-        const FunctionDecl *Callee = nullptr;
-        llvm::SmallVector<const Expr *, 4> Arguments;
-        if (const auto *Call = dyn_cast<CallExpr>(S)) {
-          Callee = Call->getDirectCallee();
-          Arguments.assign(Call->arg_begin(), Call->arg_end());
-          CalleeRefs.insert(Call->getCallee()->IgnoreParenImpCasts());
-        } else if (const auto *Construct = dyn_cast<CXXConstructExpr>(S)) {
-          const CXXConstructorDecl *Constructor = Construct->getConstructor();
-          Callee = Constructor;
-          Arguments.assign(Construct->arg_begin(), Construct->arg_end());
-          // An implicit constructor runs the constructors of its bases and members.
-          if (isImplicitMember(Constructor) && (Constructor->isDefaultConstructor() || Constructor->isCopyOrMoveConstructor())) {
-            llvm::SmallVector<const FunctionDecl *, 4> Run;
-            ClassSet Seen;
-            constructorsRunBy(Constructor->getParent(), Constructor, Seen, Run);
-            for (const FunctionDecl *Constructed : Run)
-              Bring(Constructed, Here);
-          }
-        }
-        if (isa<CallExpr, CXXConstructExpr>(S)) {
-          llvm::SmallVector<Arg, 4> Args;
-          collectArgs(cast<Expr>(S), Args);
-          for (const Arg &A : Args)
-            for (const RootPath &Path : A.Where.Paths)
-              if (const auto *Call = dyn_cast_or_null<CallExpr>(Path.At); Call && Path.Steps[0] == &StateKey)
-                Reached.insert(Call);
-        }
-        if (!Callee)
-          return;
-        Bring(Callee, Here);
-        // A std template over a user class runs the class's own functions.
-        ClassSet Users;
-        stdTemplateUsers(Callee, SM, Arguments, Users);
-        for (const CXXRecordDecl *User : Users) {
-          llvm::SmallVector<const FunctionDecl *, 8> Run;
-          classFunctions(User, Run);
-          for (const FunctionDecl *Member : Run)
-            Bring(Member, Here);
-        }
-        if (isOpaque(SM, Callee) && !(isa<CallExpr>(S) && namedInStd(cast<CallExpr>(S), Callee)))
-          diag(SM.getExpansionLoc(Here), "global_state: %0 has no body here and no contract lines, so it may change any global.")
-              << StringRef(Callee->getNameAsString());
-      });
-    for (const CallExpr *Call : Reached)
-      diag(SM.getExpansionLoc(Call->getBeginLoc()), "global_state: a reference from %0 may reach any global, and no line can list it.")
-          << StringRef(Call->getDirectCallee()->getNameAsString());
+    return State;
+  }
+
+  // The findings of the state check: one per message per line, found by judging every function that the file wrote.
+  const std::vector<Finding> &findings() {
+    build();
+    return Findings;
+  }
+
+  // Whether a call of `Callee` changes state, as far as its lines and the lowered form say. The first part of the sequencing check's
+  // rule, a mutable parameter or a non-const method, is the caller's.
+  bool changes(const FunctionDecl *Callee) {
+    build();
+    if (!contractOf(Ctx->getSourceManager(), Callee).Modifies.empty())
+      return true;
+    // A file that clang cannot generate code for is refused by the state check. A call that the table cannot read is a change, as a
+    // refusal is.
+    if (Failed)
+      return true;
+    const auto Found = ByDecl.find(Callee->getCanonicalDecl());
+    if (Found == ByDecl.end()) {
+      if (!hasBody(Callee) && opaque(Callee))
+        return true;
+    } else if (Fns.find(Found->second)->second.Is == Role::Edge ? !edge(Callee).Refusals.empty() : Fns.find(Found->second)->second.Deep) {
+      return true;
+    }
+    // A call through a base may run any override of it in the module.
+    if (const auto *Method = dyn_cast<CXXMethodDecl>(Callee))
+      for (const llvm::Function *F : Overriders.lookup(cast<CXXMethodDecl>(Method->getCanonicalDecl())))
+        if (Fns.find(F)->second.Deep || !contractOf(Ctx->getSourceManager(), Fns.find(F)->second.FD).Modifies.empty())
+          return true;
+    return false;
   }
 
 private:
-  // The qualified names of the state of this file, found once per translation unit.
-  std::vector<std::string> StateNames;
-  bool Collected = false;
+  enum class Role { Judged, Carrier, Edge };
+  // What a function calls, in the module. The carriers are for the fixpoint of the effects.
+  // Every function that has a body is for the bit that the sequencing check reads.
+  struct Calls {
+    std::vector<const llvm::Function *> Carriers, Bodies;
+  };
+  // A function of the module, with the declaration of the tree that it came from.
+  // A carrier has no lines of its own, so it brings its effect `E` to whoever calls it.
+  // A function that the file wrote has its effect too. A call of it brings its lines, and the state check reads one level of tags.
+  // That is decision 0037. The sequencing check asks `Deep`. It is set when the code of the function stores a global of the state or
+  // holds a refusal. It is also set when the code of anything with a body that it calls does, at any depth. No line stops it.
+  // It is also set when the lines of a callee list a name on `modifies`, because `bring` puts those names in `Writes`.
+  struct Fn {
+    const FunctionDecl *FD = nullptr;
+    Role Is = Role::Carrier;
+    Effect E;
+    Calls C;
+    bool Deep = false;
+  };
+  // Where a pointer comes from. A refusal holds its message, or none for a pointer the gate cannot follow.
+  struct Root {
+    enum Kind { Global, Local, Func, Refuse } K;
+    const llvm::Value *V;
+    std::string Why;
+  };
+  // The objects that a walk has been to, and whether it came through a load of a pointer.
+  using Seen = llvm::SmallSet<std::pair<const llvm::Value *, bool>, 16>;
 
-  // The state a file declares, outside the system headers: in a namespace, a linkage specification, a class or a class template.
-  static void collectState(const DeclContext *Context, const SourceManager &SM, std::vector<std::string> &Out) {
-    for (const Decl *D : Context->decls()) {
-      if (SM.isInSystemHeader(D->getLocation()))
+  // The generated module has to outlive nothing of the tree, so the maps below hold what the tree knows about it.
+  llvm::LLVMContext LLVM;
+  CodeGenOptions CGO;
+  HeaderSearchOptions HSO;
+  PreprocessorOptions PPO;
+  std::unique_ptr<DiagnosticsEngine> Diags;
+  std::unique_ptr<CodeGenerator> Gen;
+  std::unique_ptr<llvm::Module> Mod;
+  llvm::DenseMap<const llvm::Function *, Fn> Fns;
+  llvm::DenseMap<const FunctionDecl *, const llvm::Function *> ByDecl;
+  llvm::DenseMap<const llvm::GlobalVariable *, std::string> StateOf;
+  llvm::DenseSet<const llvm::GlobalVariable *> Known, Library;
+  // The loads that find the function of a virtual call, which the match of the call judges.
+  llvm::DenseSet<const llvm::Instruction *> Dispatch;
+  llvm::DenseMap<const llvm::CallBase *, std::vector<const VirtualCall *>> Matched;
+  llvm::DenseMap<const CXXMethodDecl *, std::vector<const llvm::Function *>> Overriders;
+  llvm::DenseMap<const llvm::DIFile *, const FileEntry *> Files;
+  std::set<std::pair<std::pair<unsigned, unsigned>, std::string>> Reported;
+  std::vector<std::string> State;
+  std::vector<Finding> Findings;
+  bool Collected = false, Built = false, Failed = false;
+
+  // ------------------------------------------------------------ build
+
+  void build() {
+    if (Built)
+      return;
+    Built = true;
+    SourceManager &SM = Ctx->getSourceManager();
+    const bool Generated = generate();
+    // The generator holds the tree, which is gone by the next translation unit.
+    Gen.reset();
+    if (!Generated) {
+      Failed = true;
+      Findings.push_back({SM.getLocForStartOfFile(SM.getMainFileID()),
+                          "global_state: the compiler could not generate code for this file, so the state check cannot run."});
+      return;
+    }
+    markDispatch();
+    // The effect of each function with a body, from its own instructions, then grown by what its carriers bring until nothing changes.
+    // Effects only grow and the names are finite, so it ends.
+    for (auto &[F, Info] : Fns)
+      if (Info.Is != Role::Edge)
+        for (const llvm::BasicBlock &BB : *F)
+          for (const llvm::Instruction &I : BB)
+            instruction(I, Info.E, &Info.C);
+    for (bool Changed = true; Changed;) {
+      Changed = false;
+      for (auto &[F, Info] : Fns)
+        for (const llvm::Function *Dep : Info.C.Carriers)
+          if (Dep != F)
+            Changed |= Info.E.add(Fns.find(Dep)->second.E);
+    }
+    // The bit for the sequencing check, by the same kind of fixpoint over every call that has a body.
+    for (auto &[F, Info] : Fns)
+      Info.Deep = !Info.E.Writes.empty() || !Info.E.Refusals.empty();
+    for (bool Changed = true; Changed;) {
+      Changed = false;
+      for (auto &[F, Info] : Fns)
+        if (!Info.Deep)
+          for (const llvm::Function *Dep : Info.C.Bodies)
+            if (Fns.find(Dep)->second.Deep) {
+              Info.Deep = Changed = true;
+              break;
+            }
+    }
+    for (const auto &[F, Info] : Fns)
+      if (Info.Is == Role::Judged)
+        judge(*F, Info.FD);
+    holdOverrides();
+  }
+
+  // Generate the module for the translation unit that the matchers have just read, and read the tree's names off it. False if clang
+  // cannot generate code for it.
+  bool generate() {
+    SourceManager &SM = Ctx->getSourceManager();
+    // The tree of a file that does not compile is no input for code generation.
+    if (Ctx->getDiagnostics().hasErrorOccurred())
+      return false;
+    // The diagnostics of code generation are the gate's business, and the gate says one thing about them. A fresh engine counts them.
+    Diags = std::make_unique<DiagnosticsEngine>(new DiagnosticIDs, new DiagnosticOptions, new IgnoringDiagConsumer);
+    Diags->setSourceManager(&SM);
+    // Clang marks a load of a pointer to a vtable `!invariant.group` only when it optimizes, and only when it is told to. It does the
+    // marking while it generates code. The module gets no pass but SROA below, so nothing is inlined.
+    CGO.OptimizationLevel = 1;
+    CGO.StrictVTablePointers = true;
+    CGO.setDebugInfo(llvm::codegenoptions::DebugLineTablesOnly);
+    CGO.DebugColumnInfo = true;
+    Gen.reset(CreateLLVMCodeGen(*Diags, "cplusp", SM.getFileManager().getVirtualFileSystemPtr(), HSO, PPO, CGO, LLVM));
+    Gen->Initialize(*Ctx);
+    // A copy, because code generation may add declarations to the translation unit.
+    const std::vector<Decl *> Top(Ctx->getTranslationUnitDecl()->decls_begin(), Ctx->getTranslationUnitDecl()->decls_end());
+    for (Decl *D : Top)
+      Gen->HandleTopLevelDecl(DeclGroupRef(D));
+    for (const FunctionDecl *FD : Instances)
+      Gen->HandleTopLevelDecl(DeclGroupRef(const_cast<FunctionDecl *>(FD)));
+    // A table of function pointers is an instantiated variable, and the call through it needs its initializer.
+    // Sema hands every instantiated variable definition to the generator this way, a static data member or a variable template.
+    for (const VarDecl *Var : VarInstances)
+      Gen->HandleCXXStaticMemberVarInstantiation(const_cast<VarDecl *>(Var));
+    // An inline function that nothing calls is no part of a build, and the gate judges it all the same. So is a static one.
+    for (const FunctionDecl *FD : Judged) {
+      const auto *Method = dyn_cast<CXXMethodDecl>(FD);
+      if (FD->isDeleted() || FD->isImmediateFunction() || (Method && isLambdaCallOperator(Method)))
         continue;
-      if (const auto *Var = dyn_cast<VarDecl>(D)) {
+      if (const auto *Constructor = dyn_cast<CXXConstructorDecl>(FD))
+        Gen->GetAddrOfGlobal(GlobalDecl(Constructor, Ctor_Complete), true);
+      else if (const auto *Destructor = dyn_cast<CXXDestructorDecl>(FD))
+        Gen->GetAddrOfGlobal(GlobalDecl(Destructor, Dtor_Complete), true);
+      else
+        Gen->GetAddrOfGlobal(GlobalDecl(FD), true);
+    }
+    Gen->HandleTranslationUnit(*Ctx);
+    llvm::Module *M = Gen->GetModule();
+    if (!M || Diags->hasErrorOccurred())
+      return false;
+    // SROA, so that a reference held in a local resolves to what it names.
+    llvm::PassBuilder PB;
+    llvm::LoopAnalysisManager LAM;
+    llvm::FunctionAnalysisManager FAM;
+    llvm::CGSCCAnalysisManager CGAM;
+    llvm::ModuleAnalysisManager MAM;
+    PB.registerModuleAnalyses(MAM);
+    PB.registerCGSCCAnalyses(CGAM);
+    PB.registerFunctionAnalyses(FAM);
+    PB.registerLoopAnalyses(LAM);
+    PB.crossRegisterProxies(LAM, FAM, CGAM, MAM);
+    llvm::FunctionPassManager FPM;
+    FPM.addPass(llvm::SROAPass(llvm::SROAOptions::ModifyCFG));
+    llvm::ModulePassManager MPM;
+    MPM.addPass(llvm::createModuleToFunctionPassAdaptor(std::move(FPM)));
+    for (llvm::Function &F : *M)
+      if (!F.isDeclaration())
+        F.removeFnAttr(llvm::Attribute::OptimizeNone);
+    MPM.run(*M, MAM);
+    for (llvm::Function &F : *M) {
+      Fn &Info = Fns[&F];
+      Info.FD = dyn_cast_or_null<FunctionDecl>(Gen->GetDeclForMangledName(F.getName()));
+      Info.Is = F.isDeclaration() ? Role::Edge : Info.FD && isJudged(Info.FD, SM) ? Role::Judged : Role::Carrier;
+      if (Info.FD)
+        ByDecl.try_emplace(Info.FD->getCanonicalDecl(), &F);
+    }
+    // A global that the tree does not know, such as a vtable, a string or a guard variable, is no state.
+    for (llvm::GlobalVariable &G : M->globals())
+      if (const auto *Var = dyn_cast_or_null<VarDecl>(Gen->GetDeclForMangledName(G.getName()))) {
+        // A global of a system header is the library's own, as the pointer to a callable that std::call_once keeps in one.
+        (SM.isInSystemHeader(Var->getLocation()) ? Library : Known).insert(&G);
         if (isState(Var))
-          Out.push_back(nameOf(Var));
-      } else if (const auto *Template = dyn_cast<ClassTemplateDecl>(D)) {
-        collectState(Template->getTemplatedDecl(), SM, Out);
-      } else if (const auto *Template = dyn_cast<VarTemplateDecl>(D)) {
-        if (isState(Template->getTemplatedDecl()))
-          Out.push_back(nameOf(Template->getTemplatedDecl()));
-      } else if (isa<NamespaceDecl, LinkageSpecDecl, CXXRecordDecl>(D)) {
-        collectState(cast<DeclContext>(D), SM, Out);
+          StateOf[&G] = nameOf(Var);
+      }
+    for (const auto &[F, Info] : Fns)
+      if (const auto *Method = dyn_cast_or_null<CXXMethodDecl>(Info.FD); Method && Info.Is != Role::Edge)
+        overrides(Method, F);
+    Mod.reset(Gen->ReleaseModule());
+    return true;
+  }
+
+  // `F` is the code of `Method`, and so of everything that `Method` overrides, however far up.
+  void overrides(const CXXMethodDecl *Method, const llvm::Function *F) {
+    for (const CXXMethodDecl *Base : Method->overridden_methods()) {
+      auto &List = Overriders[cast<CXXMethodDecl>(Base->getCanonicalDecl())];
+      if (!llvm::is_contained(List, F)) {
+        List.push_back(F);
+        overrides(Base, F);
       }
     }
   }
+
+  // The virtual calls of the tree that an indirect call of the module is. Only the calls that the function holds count.
+  // A call that no function holds counts wherever it is. One in a default member initializer is such a call.
+  // Every function that makes the object runs it.
+  const std::vector<const VirtualCall *> &matched(const llvm::CallBase &CB) {
+    const auto Cached = Matched.find(&CB);
+    if (Cached != Matched.end())
+      return Cached->second;
+    auto &Out = Matched[&CB];
+    const Place At = placeOf(CB);
+    const FunctionDecl *Holder = Fns.find(CB.getFunction())->second.FD;
+    if (Holder)
+      Holder = Holder->getCanonicalDecl();
+    if (At.File)
+      for (const VirtualCall &V : Virtuals)
+        if (V.Begin.File == At.File && (!V.Owner || V.Owner == Holder) && !At.before(V.Begin) && !V.End.before(At))
+          Out.push_back(&V);
+    return Out;
+  }
+
+  // The virtual dispatches that an indirect call may be. The callee is a slot read from a table.
+  // The pointer to the table is a load that clang marked `!invariant.group`.
+  // The callee may be a choice between a slot and something else, as a pointer to a member function is.
+  // Each dispatch is the load of the slot and the load of the table.
+  static llvm::SmallVector<std::pair<const llvm::LoadInst *, const llvm::LoadInst *>, 2> dispatchesOf(const llvm::CallBase &CB) {
+    llvm::SmallVector<std::pair<const llvm::LoadInst *, const llvm::LoadInst *>, 2> Out;
+    llvm::SmallVector<const llvm::Value *, 4> Objects;
+    llvm::getUnderlyingObjects(CB.getCalledOperand(), Objects, nullptr, 0);
+    for (const llvm::Value *O : Objects) {
+      const auto *Slot = dyn_cast<llvm::LoadInst>(O);
+      if (!Slot)
+        continue;
+      const llvm::Value *P = Slot->getPointerOperand();
+      while (const auto *G = dyn_cast<llvm::GEPOperator>(P))
+        P = G->getPointerOperand();
+      const auto *Table = dyn_cast<llvm::LoadInst>(P);
+      if (Table && Table->hasMetadata(llvm::LLVMContext::MD_invariant_group))
+        Out.push_back({Slot, Table});
+    }
+    return Out;
+  }
+
+  // The function that a virtual call finds is read from the object: the pointer to the table, then the slot in it.
+  // When the tree has the call, the match judges them. So the pointer to the table of a global object needs no following.
+  void markDispatch() {
+    for (const auto &[F, Info] : Fns) {
+      if (Info.Is == Role::Edge)
+        continue;
+      for (const llvm::BasicBlock &BB : *F)
+        for (const llvm::Instruction &I : BB) {
+          const auto *CB = dyn_cast<llvm::CallBase>(&I);
+          if (!CB || CB->isInlineAsm() || calleeOf(*CB) || matched(*CB).empty())
+            continue;
+          for (const auto &[Slot, Table] : dispatchesOf(*CB)) {
+            Dispatch.insert(Slot);
+            Dispatch.insert(Table);
+          }
+        }
+    }
+  }
+
+  // One finding for a line and a message.
+  void report(SourceLocation Loc, const std::string &Message) {
+    const SourceManager &SM = Ctx->getSourceManager();
+    if (Reported.insert({{SM.getFileID(Loc).getHashValue(), SM.getExpansionLineNumber(Loc)}, Message}).second)
+      Findings.push_back({SM.getExpansionLoc(Loc), Message});
+  }
+
+  // An override lists no more than the function it overrides. So a call through the base brings lines that hold for every override.
+  // The check of the tree holds a method that has lines. This holds the one that nobody wrote, by what it runs.
+  // The destructor of a class with a member that has a destructor of its own is such a method.
+  void holdOverrides() {
+    const SourceManager &SM = Ctx->getSourceManager();
+    for (const auto &[F, Info] : Fns) {
+      const auto *Method = dyn_cast_or_null<CXXMethodDecl>(Info.FD);
+      if (Info.Is != Role::Carrier || !Method)
+        continue;
+      const SourceLocation At = Method->getParent()->getLocation();
+      for (const CXXMethodDecl *Direct : Method->overridden_methods())
+        for (const CXXMethodDecl *Base : lineHolders(Direct)) {
+          if (SM.isInSystemHeader(Base->getLocation()))
+            continue;
+          const Effect Up = linesOf(Base);
+          const std::string Of = Method->getNameAsString(), Over = Base->getQualifiedNameAsString();
+          for (const std::string &Name : Info.E.Writes)
+            if (!Up.Writes.count(Name))
+              report(At, "global_state: " + Of + " changes " + Name + ", and the modifies line of " + Over + " does not list it.");
+          for (const std::string &Name : Info.E.Reads)
+            if (!Up.Writes.count(Name) && !Up.Reads.count(Name))
+              report(At, "global_state: " + Of + " reads " + Name + ", and no reads or modifies line of " + Over + " lists it.");
+        }
+    }
+  }
+
+  // A user-written function with a definition in a user file. A lambda's call operator has no lines of its own, so it is a carrier.
+  static bool isJudged(const FunctionDecl *FD, const SourceManager &SM) {
+    const auto *Method = dyn_cast<CXXMethodDecl>(FD);
+    return FD->isThisDeclarationADefinition() && !SM.isInSystemHeader(SM.getExpansionLoc(FD->getBeginLoc())) && !notJudgedFunction(*FD) &&
+           !(Method && isLambdaCallOperator(Method));
+  }
+
+  // ------------------------------------------------------------ lines and edges
+
+  // What the lines of a function name: the state it lists as changed and as read.
+  Effect linesOf(const FunctionDecl *FD) {
+    const Contract C = contractOf(Ctx->getSourceManager(), FD);
+    Effect E;
+    E.Writes = namedState(C.Modifies, state());
+    E.Reads = namedState(C.Reads, state());
+    return E;
+  }
+
+  // A function that the gate cannot read: no body in the lowered form, and no contract lines. A call of it may change any global. A
+  // function that the compiler or a `= default` defines, and a pure virtual function, which an override answers, are no such function.
+  bool opaque(const FunctionDecl *FD) {
+    return !(FD->isImplicit() || FD->isDefaulted() || FD->isPureVirtual()) && !contractOf(Ctx->getSourceManager(), FD).Any;
+  }
+
+  // A function with no body in the module. A system header declares it, or it is a builtin: it brings nothing. Otherwise it brings its
+  // lines, and without any the call is refused, whatever namespace the function is in.
+  Effect edge(const FunctionDecl *FD) {
+    Effect E;
+    const SourceManager &SM = Ctx->getSourceManager();
+    if (!FD || FD->getBuiltinID() || SM.isInSystemHeader(FD->getLocation()))
+      return E;
+    E.add(linesOf(FD));
+    if (opaque(FD))
+      E.Refusals.insert("global_state: " + FD->getNameAsString() + " has no body here and no contract lines, so it may change any global.");
+    return E;
+  }
+
+  // What a call of `F` brings: the lines of a function the file wrote, the effect of a carrier, what an edge says. A carrier's effect is
+  // still growing while the carriers are read, so then the callee is recorded for the fixpoint.
+  void bring(const llvm::Function *F, Effect &E, Calls *D) {
+    const Fn &Info = Fns.find(F)->second;
+    switch (Info.Is) {
+    case Role::Judged:
+      E.add(linesOf(Info.FD));
+      if (D)
+        D->Bodies.push_back(F);
+      break;
+    case Role::Carrier:
+      if (D) {
+        D->Carriers.push_back(F);
+        D->Bodies.push_back(F);
+      } else {
+        E.add(Info.E);
+      }
+      break;
+    case Role::Edge:
+      E.add(edge(Info.FD));
+      break;
+    }
+  }
+
+  // ------------------------------------------------------------ instructions
+
+  static const llvm::Function *calleeOf(const llvm::CallBase &CB) {
+    return dyn_cast<llvm::Function>(CB.getCalledOperand()->stripPointerCastsAndAliases());
+  }
+
+  // The functions that a constant names, as a table of function pointers does.
+  // An intrinsic is no function of the author's, as `llvm.launder.invariant.group` is not.
+  // A global is not followed, except a private one with an initializer. The compiler made it for an initializer of its own.
+  // A vtable is never private, so the store of its address in a constructor brings nothing.
+  static void functionsIn(const llvm::Constant *C, std::vector<const llvm::Function *> &Out, llvm::SmallPtrSetImpl<const llvm::Constant *> &Done) {
+    if (const auto *F = dyn_cast<llvm::Function>(C)) {
+      if (!F->isIntrinsic())
+        Out.push_back(F);
+    } else if (const auto *G = dyn_cast<llvm::GlobalVariable>(C); G && G->hasPrivateLinkage() && G->hasInitializer()) {
+      if (Done.insert(G).second)
+        functionsIn(G->getInitializer(), Out, Done);
+    } else if (!isa<llvm::GlobalValue, llvm::BlockAddress>(C) && Done.insert(C).second) {
+      for (const llvm::Use &U : C->operands())
+        if (const auto *Part = dyn_cast<llvm::Constant>(U.get()))
+          functionsIn(Part, Out, Done);
+    }
+  }
+
+  // A function whose address is an operand of an instruction, other than the callee of a direct call, may be called later.
+  // The pointer that holds it may be called by code that has no way to know what the function does.
+  // So the instruction brings what a call of it would bring. That covers a store of the address, a select, a phi, an argument and a
+  // part of a constant. A constant that the compiler made for an initializer is followed, as the table of an array of function pointers is.
+  // `call()` follows the table of the library, where the callee of an indirect call is read from such a global.
+  void named(const llvm::Constant *C, Effect &E, Calls *D, llvm::SmallPtrSetImpl<const llvm::Constant *> &Done) {
+    std::vector<const llvm::Function *> Functions;
+    functionsIn(C, Functions, Done);
+    for (const llvm::Function *F : Functions)
+      bring(F, E, D);
+  }
+
+  void instruction(const llvm::Instruction &I, Effect &E, Calls *D) {
+    llvm::SmallPtrSet<const llvm::Constant *, 8> Done;
+    for (const llvm::Use &U : I.operands()) {
+      const auto *CB = dyn_cast<llvm::CallBase>(&I);
+      if (const auto *C = dyn_cast<llvm::Constant>(U.get()); C && !(CB && &U == &CB->getCalledOperandUse() && calleeOf(*CB)))
+        named(C, E, D, Done);
+    }
+    if (const auto *Store = dyn_cast<llvm::StoreInst>(&I))
+      access(Store->getPointerOperand(), true, E);
+    else if (const auto *Load = dyn_cast<llvm::LoadInst>(&I)) {
+      if (!Dispatch.count(Load))
+        access(Load->getPointerOperand(), false, E);
+    }
+    else if (const auto *Rmw = dyn_cast<llvm::AtomicRMWInst>(&I))
+      access(Rmw->getPointerOperand(), true, E);
+    else if (const auto *Swap = dyn_cast<llvm::AtomicCmpXchgInst>(&I))
+      access(Swap->getPointerOperand(), true, E);
+    else if (const auto *CB = dyn_cast<llvm::CallBase>(&I))
+      call(*CB, E, D);
+    else if (const auto *Ret = dyn_cast<llvm::ReturnInst>(&I))
+      escape(*Ret, E);
+  }
+
+  // A function that returns a reference or a pointer to a global lets its caller reach the global. The type of the return value says
+  // how, as the type of a parameter does.
+  // ponytail: only a global counts. The aliasing check refuses a reference from a function that the file does not define. Upgrade: refuse a
+  // returned pointer whose root is a refusal here too.
+  void escape(const llvm::ReturnInst &Ret, Effect &E) {
+    if (!Ret.getReturnValue() || !Ret.getReturnValue()->getType()->isPointerTy())
+      return;
+    const FunctionDecl *FD = Fns.find(Ret.getFunction())->second.FD;
+    std::vector<Root> Rs;
+    Seen S;
+    roots(Ret.getReturnValue(), Rs, S);
+    for (const Root &R : Rs)
+      if (R.K == Root::Global)
+        reach(R, !FD || isMutableType(FD->getReturnType()), E);
+  }
+
+  // A store or a load. The roots of the pointer say what it reaches.
+  void access(const llvm::Value *Pointer, bool Write, Effect &E) {
+    std::vector<Root> Rs;
+    Seen S;
+    roots(Pointer, Rs, S);
+    for (const Root &R : Rs)
+      reach(R, Write, E);
+  }
+
+  void reach(const Root &R, bool Write, Effect &E) {
+    if (R.K == Root::Global) {
+      if (const auto Name = StateOf.find(cast<llvm::GlobalVariable>(R.V)); Name != StateOf.end())
+        (Write ? E.Writes : E.Reads).insert(Name->second);
+    } else if (R.K == Root::Refuse) {
+      E.Refusals.insert(!R.Why.empty() ? R.Why
+                                       : Write ? "global_state: a write through a pointer the gate cannot follow may reach any global, and no line can list it."
+                                               : "global_state: a read through a pointer the gate cannot follow may reach any global, and no line can list it.");
+    }
+  }
+
+  // The function is the library's own: a system header declares it, or it has no declaration, as the compiler's runtime has none.
+  bool inLibrary(const llvm::Function *F) const {
+    const FunctionDecl *FD = F ? Fns.find(F)->second.FD : nullptr;
+    return !FD || Ctx->getSourceManager().isInSystemHeader(FD->getLocation());
+  }
+
+  // What a pointer reaches: the global, local or parameter at its root.
+  // The result of a call reaches what the pointers given to the call reach, unless the gate cannot read the function.
+  // A pointer that is loaded from memory points where the object that holds it says.
+  // The gate follows it to the parameter or local that holds it, as the pointer in a std::vector or a vtable.
+  // If a global that the file declares holds it, the pointee is not the global, and nothing can name it.
+  // ponytail: a parameter that holds a pointer to a global hides the global. A struct with a raw pointer member is one.
+  // The rows raw_pointer, lvalue_references and array_span ban such a pointer in the code that is judged.
+  // A span over a global array is included. The row aliasing refuses a global that is passed to a call.
+  // Upgrade: follow the stores into the object that holds the pointer.
+  // `Via` is the function that does the load, when the pointer was loaded.
+  void roots(const llvm::Value *V, std::vector<Root> &Out, Seen &S, bool Loaded = false, const llvm::Function *Via = nullptr) {
+    llvm::SmallVector<const llvm::Value *, 4> Objects;
+    llvm::getUnderlyingObjects(V, Objects, nullptr, 0);
+    for (const llvm::Value *O : Objects) {
+      if (!S.insert({O, Loaded}).second)
+        continue;
+      if (const auto *G = dyn_cast<llvm::GlobalVariable>(O)) {
+        // A pointer in a global that the file declares may point at anything. So may one in a global of the library that user code reads.
+        // One in a global that the tree does not know, such as a vtable, is the compiler's. The library reads its own.
+        const bool Foreign = Known.count(G) || (Library.count(G) && !inLibrary(Via));
+        Out.push_back({!Loaded ? Root::Global : Foreign ? Root::Refuse : Root::Local, O, ""});
+      } else if (const auto *Load = dyn_cast<llvm::LoadInst>(O)) {
+        roots(Load->getPointerOperand(), Out, S, true, Load->getFunction());
+      } else if (isa<llvm::AllocaInst, llvm::Argument, llvm::ConstantPointerNull, llvm::UndefValue, llvm::LandingPadInst>(O)) {
+        Out.push_back({Root::Local, O, ""});
+      } else if (isa<llvm::Function>(O)) {
+        Out.push_back({Root::Func, O, ""});
+      } else if (const auto *Cast = dyn_cast<llvm::IntToPtrInst>(O)) {
+        // A pointer that is made from a number, such as the function in a pointer to a member function, is where the number came from.
+        roots(Cast->getOperand(0), Out, S, Loaded, Via);
+      } else if (const auto *Extract = dyn_cast<llvm::ExtractValueInst>(O)) {
+        roots(Extract->getAggregateOperand(), Out, S, Loaded, Via);
+      } else if (const auto *Insert = dyn_cast<llvm::InsertValueInst>(O)) {
+        roots(Insert->getAggregateOperand(), Out, S, Loaded, Via);
+        roots(Insert->getInsertedValueOperand(), Out, S, Loaded, Via);
+      } else if (const auto *CB = dyn_cast<llvm::CallBase>(O)) {
+        const llvm::Function *F = calleeOf(*CB);
+        const FunctionDecl *FD = F ? Fns.find(F)->second.FD : nullptr;
+        // A function that the compiler wrote and a runtime function with no declaration are known.
+        // So is an allocation function, which returns new memory that no other name reaches.
+        const bool Known = !F || !FD || !F->isDeclaration() || F->isIntrinsic() || F->returnDoesNotAlias() ||
+                           FD->isReplaceableGlobalAllocationFunction() ||
+                           ((inStdNamespace(FD) || inAbiNamespace(FD)) && Ctx->getSourceManager().isInSystemHeader(FD->getLocation()));
+        if (!Known) {
+          Out.push_back({Root::Refuse, O,
+                         "global_state: a reference from " + (FD ? FD->getNameAsString() : F->getName().str()) +
+                             " may reach any global, and no line can list it."});
+          continue;
+        }
+        for (const llvm::Value *A : CB->args())
+          if (A->getType()->isPointerTy())
+            roots(A, Out, S, Loaded, Via);
+      } else {
+        Out.push_back({Root::Refuse, O, ""});
+      }
+    }
+  }
+
+  void call(const llvm::CallBase &CB, Effect &E, Calls *D) {
+    // ponytail: an inline assembly call brings nothing. The row inline_asm_intrinsics bans it, and no line could list what it does.
+    if (CB.isInlineAsm())
+      return;
+    if (const auto *Mem = dyn_cast<llvm::MemIntrinsic>(&CB)) {
+      access(Mem->getRawDest(), true, E);
+      if (const auto *Copy = dyn_cast<llvm::MemTransferInst>(Mem))
+        access(Copy->getRawSource(), false, E);
+      return;
+    }
+    if (const llvm::Function *F = calleeOf(CB)) {
+      direct(F, CB, E, D);
+      return;
+    }
+    // An indirect call. First the virtual calls that the tree wrote at this place.
+    // A method that has a body here brings its lines.
+    // One that has none is read as a function with no body, as a direct call of it is.
+    // It brings its lines, or it is refused when it has none.
+    // ponytail: a virtual call brings the lines of the method that the source names.
+    // The checks of overrides hold the overrides of this file to them, the ones with lines and the ones that nobody wrote.
+    // An override in another file is not read. Upgrade: read every override of the hierarchy that the file can see.
+    const auto &Calls = matched(CB);
+    for (const VirtualCall *V : Calls) {
+      arguments(V->Method, CB, E);
+      E.add(hasBody(V->Method) ? linesOf(V->Method) : edge(V->Method));
+      overridden(V->Method, E, D);
+    }
+    if (!Calls.empty())
+      return;
+    // A dispatch through a table that no virtual call of the tree explains has no callee that the gate can read.
+    // A call through a pointer to a member function is one.
+    if (!dispatchesOf(CB).empty()) {
+      E.Refusals.insert("global_state: a call through a pointer has no callee the gate can read.");
+      return;
+    }
+    // Else a function that the caller passed, which the caller has accounted for, or a function that the callee value names.
+    // A function that is loaded out of an object that a parameter or a local holds counts as passed, as every loaded pointer does. That is
+    // sound because whoever stored the function address brought what the function does, `named` above.
+    std::vector<Root> Rs;
+    Seen S;
+    roots(CB.getCalledOperand(), Rs, S);
+    for (const Root &R : Rs) {
+      if (R.K == Root::Func)
+        direct(cast<llvm::Function>(R.V), CB, E, D);
+      else if (R.K == Root::Local && isa<llvm::GlobalVariable>(R.V))
+        table(cast<llvm::GlobalVariable>(R.V), CB, E, D);
+      else if (R.K != Root::Local) {
+        E.Refusals.insert("global_state: a call through a pointer has no callee the gate can read.");
+      }
+    }
+  }
+
+  // A call through a pointer that is loaded from a global of the library. The library visits a variant through a table of function
+  // pointers. The table is a constant, so the call may run any function that it names.
+  // A global with no initializer in the module names none, and the call is refused.
+  // This is for the indirect call only. A table of virtual functions is a constant too.
+  // The store of its address in a constructor must not bring every virtual function to the constructor.
+  void table(const llvm::GlobalVariable *G, const llvm::CallBase &CB, Effect &E, Calls *D) {
+    if (!G->hasInitializer()) {
+      E.Refusals.insert("global_state: a call through a pointer has no callee the gate can read.");
+      return;
+    }
+    std::vector<const llvm::Function *> Functions;
+    llvm::SmallPtrSet<const llvm::Constant *, 16> Done;
+    functionsIn(G->getInitializer(), Functions, Done);
+    for (const llvm::Function *F : Functions)
+      direct(F, CB, E, D);
+  }
+
+  // What a virtual call brings besides the lines of the method that the source names.
+  // It brings the code of the method, if nobody wrote it. The destructor that the compiler wrote is one, and it has no lines.
+  // If a system header declares the method, no line can be asked of the library. Then it brings the code of every override in the module.
+  // Every override is a body that the call may run, for the sequencing check.
+  // ponytail: every override in the module counts, not only the ones that the object could be. Upgrade: follow the type of the object.
+  void overridden(const CXXMethodDecl *Method, Effect &E, Calls *D) {
+    const CXXMethodDecl *Canonical = cast<CXXMethodDecl>(Method->getCanonicalDecl());
+    if (D)
+      for (const llvm::Function *F : Overriders.lookup(Canonical))
+        D->Bodies.push_back(F);
+    if (const auto Own = ByDecl.find(Canonical); Own != ByDecl.end() && Fns.find(Own->second)->second.Is == Role::Carrier)
+      bring(Own->second, E, D);
+    if (Ctx->getSourceManager().isInSystemHeader(Method->getLocation()))
+      for (const llvm::Function *F : Overriders.lookup(Canonical))
+        bring(F, E, D);
+  }
+
+  void direct(const llvm::Function *F, const llvm::CallBase &CB, Effect &E, Calls *D) {
+    if (F->isIntrinsic())
+      return;
+    const Fn &Info = Fns.find(F)->second;
+    // The compiler's own runtime has no declaration, so no parameter to bind an argument to. With no body it brings nothing, and with one
+    // it brings what its own code does.
+    // ponytail: a function with a body and no declaration is trusted to touch no state through its arguments.
+    if (!Info.FD) {
+      if (!F->isDeclaration())
+        bring(F, E, D);
+      return;
+    }
+    arguments(Info.FD, CB, E);
+    bring(F, E, D);
+  }
+
+  // The pointers a call is given. One that reaches a global writes it if the parameter it binds to can write, and reads it if not.
+  void arguments(const FunctionDecl *FD, const llvm::CallBase &CB, Effect &E) {
+    llvm::SmallVector<bool, 8> Mutable;
+    if (FD) {
+      if (const auto *Method = dyn_cast<CXXMethodDecl>(FD); Method && !Method->isStatic())
+        Mutable.push_back(!Method->isConst());
+      for (const ParmVarDecl *Parameter : FD->parameters())
+        Mutable.push_back(isMutableType(Parameter->getType()));
+    }
+    // The arguments that the IR adds are no parameter.
+    llvm::SmallVector<unsigned, 8> Real;
+    for (unsigned I = 0; I < CB.arg_size(); ++I)
+      if (!CB.paramHasAttr(I, llvm::Attribute::StructRet) && !CB.paramHasAttr(I, llvm::Attribute::InAlloca))
+        Real.push_back(I);
+    // ponytail: the arguments match the parameters in order. A parameter that the ABI splits in two, such as a std::span, or an argument
+    // that is a variable argument, throws the order off. Then every pointer is as mutable as the most mutable parameter. Upgrade:
+    // read the ABI's own list of arguments from clang.
+    const bool Match = Real.size() == Mutable.size();
+    const bool Any = llvm::any_of(Mutable, [](bool B) { return B; });
+    for (unsigned K = 0; K < Real.size(); ++K) {
+      const llvm::Value *A = CB.getArgOperand(Real[K]);
+      // An argument by value is a copy, so it is no name.
+      if (CB.paramHasAttr(Real[K], llvm::Attribute::ByVal) || !A->getType()->isPointerTy())
+        continue;
+      std::vector<Root> Rs;
+      Seen S;
+      roots(A, Rs, S);
+      for (const Root &R : Rs)
+        reach(R, Match ? Mutable[K] : Any, E);
+    }
+  }
+
+  // ------------------------------------------------------------ places
+
+  // Where an instruction is, from the debug line table. No file when it has no place.
+  Place placeOf(const llvm::Instruction &I) {
+    const llvm::DebugLoc &DL = I.getDebugLoc();
+    if (!DL || !DL.getLine())
+      return {};
+    const llvm::DIFile *File = DL->getFile();
+    auto Found = Files.find(File);
+    if (Found == Files.end()) {
+      llvm::SmallString<256> Path(File->getFilename());
+      if (!llvm::sys::path::is_absolute(Path))
+        Path = (File->getDirectory() + "/" + File->getFilename()).str();
+      const auto Entry = Ctx->getSourceManager().getFileManager().getOptionalFileRef(Path);
+      Found = Files.try_emplace(File, Entry ? &Entry->getFileEntry() : nullptr).first;
+    }
+    return {Found->second, DL.getLine(), DL.getCol() ? DL.getCol() : 1};
+  }
+
+  // Where an instruction is in the tree: the debug line table, turned back into a location. An instruction with no place is at its
+  // function.
+  SourceLocation locationOf(const llvm::Instruction &I, const FunctionDecl *FD) {
+    if (const Place P = placeOf(I); P.File) {
+      const SourceLocation Loc = Ctx->getSourceManager().translateFileLineCol(P.File, P.Line, P.Col);
+      if (Loc.isValid())
+        return Loc;
+    }
+    return FD ? FD->getLocation() : SourceLocation();
+  }
+
+  // ------------------------------------------------------------ judging
+
+  // The function is judged on its own instructions, against its own lines. The module may hold it twice, as the variants of a constructor
+  // or a destructor are, and each is judged. `Reported` keeps one finding for a line and a message.
+  void judge(const llvm::Function &F, const FunctionDecl *FD) {
+    const SourceManager &SM = Ctx->getSourceManager();
+    const Effect Own = linesOf(FD);
+    enum Kind { Write, Read, Refusal };
+    struct Item {
+      SourceLocation Loc;
+      Kind K;
+      std::string Text;
+    };
+    std::vector<Item> Items;
+    for (const llvm::BasicBlock &BB : F)
+      for (const llvm::Instruction &I : BB) {
+        Effect E;
+        instruction(I, E, nullptr);
+        if (!E.size())
+          continue;
+        const SourceLocation Loc = locationOf(I, FD);
+        for (const std::string &Name : E.Writes)
+          if (!Own.Writes.count(Name))
+            Items.push_back({Loc, Write, Name});
+        for (const std::string &Name : E.Reads)
+          if (!Own.Writes.count(Name) && !Own.Reads.count(Name))
+            Items.push_back({Loc, Read, Name});
+        for (const std::string &Message : E.Refusals)
+          Items.push_back({Loc, Refusal, Message});
+      }
+    const auto Line = [&](SourceLocation Loc) { return std::make_pair(SM.getFileID(Loc).getHashValue(), SM.getExpansionLineNumber(Loc)); };
+    // Where a line writes a name and reads it too, the write is the finding.
+    std::set<std::pair<std::pair<unsigned, unsigned>, std::string>> Written;
+    for (const Item &It : Items)
+      if (It.K == Write)
+        Written.insert({Line(It.Loc), It.Text});
+    for (const Item &It : Items) {
+      if (It.K == Read && Written.count({Line(It.Loc), It.Text}))
+        continue;
+      const std::string Message = It.K == Write  ? "global_state: " + It.Text + " changes, and the modifies line does not list it."
+                                  : It.K == Read ? "global_state: " + It.Text + " is read, and no reads or modifies line lists it."
+                                                 : It.Text;
+      report(It.Loc, Message);
+    }
+  }
+};
+
+// One table for the translation unit. It is never freed at exit: the libraries it holds may be gone by then.
+Lowered *Table = nullptr;
+// Whether some check has asked for the matchers of the table in this translation unit. One does, whichever checks are on.
+bool TableMatchers = false;
+Lowered &table() {
+  if (!Table)
+    Table = new Lowered;
+  return *Table;
+}
+void startTable() {
+  delete Table;
+  Table = nullptr;
+  TableMatchers = false;
+}
+bool tableChanges(const FunctionDecl *Callee) { return table().changes(Callee); }
+void giveTable(ASTContext *Context) { table().use(Context); }
+
+// The method that a call or a delete reaches through the vtable, as the source says it, or null.
+const CXXMethodDecl *virtualTarget(const Stmt *S) {
+  if (const auto *Call = dyn_cast<CallExpr>(S)) {
+    const auto *Method = dyn_cast_or_null<CXXMethodDecl>(Call->getCalleeDecl());
+    // A call with a qualifier names the function, and the call is no virtual one.
+    const auto *Member = dyn_cast<MemberExpr>(Call->getCallee()->IgnoreParens());
+    return Method && Method->isVirtual() && !(Member && Member->hasQualifier()) ? Method : nullptr;
+  }
+  if (const auto *Delete = dyn_cast<CXXDeleteExpr>(S)) {
+    // A delete of an object with a virtual destructor calls it through the vtable.
+    const QualType Destroyed = Delete->getDestroyedType();
+    const CXXRecordDecl *Class = Destroyed.isNull() ? nullptr : Destroyed->getAsCXXRecordDecl();
+    const CXXDestructorDecl *Destructor = Class && Class->hasDefinition() ? Class->getDestructor() : nullptr;
+    return Destructor && Destructor->isVirtual() ? Destructor : nullptr;
+  }
+  return nullptr;
+}
+
+// The virtual calls inside a default argument. The compiler puts the code of a default argument on the line of the call that uses it.
+// So they are recorded with the range of that call, and the function that holds that call.
+void collectDefault(const Stmt *S, SourceRange Where, const FunctionDecl *Owner) {
+  if (!S)
+    return;
+  if (const CXXMethodDecl *Method = virtualTarget(S))
+    table().addVirtual(Where, Method, Owner);
+  if (const auto *Default = dyn_cast<CXXDefaultArgExpr>(S))
+    collectDefault(Default->getExpr(), Where, Owner);
+  else if (const auto *Init = dyn_cast<CXXDefaultInitExpr>(S))
+    collectDefault(Init->getExpr(), Where, Owner);
+  else
+    for (const Stmt *Child : S->children())
+      collectDefault(Child, Where, Owner);
+}
+
+void registerTableMatchers(MatchFinder *Finder, MatchFinder::MatchCallback *Callback) {
+  if (TableMatchers)
+    return;
+  TableMatchers = true;
+  // The function that holds the expression, which tells the same line of two functions apart. A default member initializer has none: its
+  // code runs in every function that makes the object.
+  const auto Holder = optionally(allOf(unless(hasAncestor(fieldDecl())), forFunction(functionDecl().bind("owner"))));
+  const auto Defaulted = hasAnyArgument(ignoringImplicit(cxxDefaultArgExpr()));
+  Finder->addMatcher(functionDecl(isDefinition(), unless(isExpansionInSystemHeader()), unless(notJudged())).bind("judged"), Callback);
+  Finder->addMatcher(functionDecl(isDefinition(), isTemplateInstantiation()).bind("instance"), Callback);
+  Finder->addMatcher(varDecl(isDefinition(), hasGlobalStorage(), isTemplateInstantiation()).bind("varinstance"), Callback);
+  Finder->addMatcher(stmt(anyOf(callExpr(callee(cxxMethodDecl(isVirtual()))), cxxDeleteExpr()), Holder).bind("virtual"), Callback);
+  Finder->addMatcher(stmt(anyOf(callExpr(Defaulted), cxxConstructExpr(Defaulted)), Holder).bind("defaulted"), Callback);
+}
+
+bool collectForTable(const MatchFinder::MatchResult &Result) {
+  Lowered &T = table();
+  const SourceManager &SM = *Result.SourceManager;
+  const auto *Owner = Result.Nodes.getNodeAs<FunctionDecl>("owner");
+  if (const auto *Function = Result.Nodes.getNodeAs<FunctionDecl>("judged")) {
+    T.Judged.push_back(Function);
+  } else if (const auto *Function = Result.Nodes.getNodeAs<FunctionDecl>("instance")) {
+    T.Instances.push_back(Function);
+  } else if (const auto *Var = Result.Nodes.getNodeAs<VarDecl>("varinstance")) {
+    T.VarInstances.push_back(Var);
+  } else if (const auto *Node = Result.Nodes.getNodeAs<Stmt>("virtual")) {
+    if (const CXXMethodDecl *Method = virtualTarget(Node))
+      T.addVirtual(SM.getExpansionRange(Node->getSourceRange()).getAsRange(), Method, Owner);
+  } else if (const auto *Node = Result.Nodes.getNodeAs<Stmt>("defaulted")) {
+    const SourceRange Where = SM.getExpansionRange(Node->getSourceRange()).getAsRange();
+    const auto Each = [&](auto Arguments) {
+      for (const Expr *Argument : Arguments)
+        if (const auto *Default = dyn_cast<CXXDefaultArgExpr>(Argument->IgnoreImplicit()))
+          collectDefault(Default->getExpr(), Where, Owner);
+    };
+    if (const auto *Call = dyn_cast<CallExpr>(Node))
+      Each(Call->arguments());
+    else
+      Each(cast<CXXConstructExpr>(Node)->arguments());
+  } else {
+    return false;
+  }
+  return true;
+}
+
+// cplusp-unlisted-state: decisions 0035, 0036 and 0037. A function writes only the global state its `//@ modifies` line lists.
+// It reads only what its `//@ reads` or `modifies` line lists.
+// State is a mutable global or static data member that a system header does not declare.
+// The check judges the code that clang generates for the function, not the tree.
+// A store is a write, a load is a read, and a call brings what its callee lists or what the callee's own code does.
+// A call of a function that the gate cannot read is refused. So is a reference from a function this file does not define.
+// Any global may be behind it, and no line can list that.
+// The message is `global_state: {sentence}`, one finding per message per line.
+// The pattern of a template is not judged. Its instantiations are.
+class UnlistedStateCheck : public ClangTidyCheck {
+public:
+  using ClangTidyCheck::ClangTidyCheck;
+  void onStartOfTranslationUnit() override { startTable(); }
+  void registerMatchers(MatchFinder *Finder) override {
+    // The translation unit, so that the check runs once at least and has the context.
+    Finder->addMatcher(translationUnitDecl(), this);
+    registerTableMatchers(Finder, this);
+    Finder->addMatcher(cxxMethodDecl(unless(isExpansionInSystemHeader()), unless(isImplicit())).bind("method"), this);
+  }
+  void check(const MatchFinder::MatchResult &Result) override {
+    giveTable(Result.Context);
+    if (collectForTable(Result))
+      return;
+    if (const auto *Method = Result.Nodes.getNodeAs<CXXMethodDecl>("method"))
+      if (Method == Method->getCanonicalDecl())
+        checkOverride(Method, *Result.SourceManager);
+  }
+  void onEndOfTranslationUnit() override {
+    for (const Finding &F : table().findings())
+      diag(F.Loc, "%0") << StringRef(F.Message);
+  }
+
+private:
+  // An override lists no more than the function it overrides, so that a call through the base brings lines that hold for every override.
+  void checkOverride(const CXXMethodDecl *Method, const SourceManager &SM) {
+    if (Method->size_overridden_methods() == 0)
+      return;
+    const Contract Own = contractOf(SM, Method);
+    const auto &State = table().state();
+    for (const CXXMethodDecl *Direct : Method->overridden_methods())
+      for (const CXXMethodDecl *Base : lineHolders(Direct)) {
+        const Contract Up = contractOf(SM, Base);
+        const std::set<std::string> UpWrites = namedState(Up.Modifies, State), UpReads = namedState(Up.Reads, State);
+        for (const std::string &Var : namedState(Own.Modifies, State))
+          if (!UpWrites.count(Var))
+            diag(Method->getLocation(), "global_state: %0 changes %1, and the modifies line of %2 does not list it.")
+                << Method->getNameAsString() << StringRef(Var) << Base->getQualifiedNameAsString();
+        for (const std::string &Var : namedState(Own.Reads, State))
+          if (!UpWrites.count(Var) && !UpReads.count(Var))
+            diag(Method->getLocation(), "global_state: %0 reads %1, and no reads or modifies line of %2 lists it.")
+                << Method->getNameAsString() << StringRef(Var) << Base->getQualifiedNameAsString();
+      }
+  }
+};
+
+// cplusp-line-directive: decision 0037. Every `#line` and every line marker that the preprocessor processed, under the build's own flags.
+// The preprocessor holds them in the line table of the source manager.
+// The entry sits in the directive's line. So the finding sits at the first column of that line, before the directive.
+// A marker may declare the rest of its file a system header, which clang-tidy does not judge.
+// The entry that `#pragma GCC system_header` adds is no directive. The gate's scan of the preprocessor output reports the pragma.
+// The preprocessor tells where it made one. No other entry is skipped, so `# 3 "this file" 3` is a finding.
+// ponytail: the entry sits on the line of the number. A directive that a comment spreads over lines is reported on the line of its
+// number, not of its `#`. Upgrade: a callback of the preprocessor for each directive.
+class LineDirectiveCheck : public ClangTidyCheck {
+public:
+  using ClangTidyCheck::ClangTidyCheck;
+  void registerMatchers(MatchFinder *Finder) override { Finder->addMatcher(translationUnitDecl(), this); }
+  void registerPPCallbacks(const SourceManager &, Preprocessor *PP, Preprocessor *) override {
+    // The gate runs one clang-tidy over every file, and each unit has its own offsets.
+    Pragmas.clear();
+    PP->addPPCallbacks(std::make_unique<PragmaNotes>(Pragmas));
+  }
+  void check(const MatchFinder::MatchResult &Result) override { SM = Result.SourceManager; }
+  void onEndOfTranslationUnit() override {
+    LineTableInfo &Lines = SM->getLineTable();
+    for (const auto &[File, Entries] : Lines) {
+      // The predefined macros are a buffer that holds line markers of its own, and no file of the user's.
+      if (!SM->getFileEntryForID(File))
+        continue;
+      const StringRef Text = SM->getBufferData(File);
+      const auto Offset = [&](unsigned Line) { return SM->getFileOffset(SM->translateLineCol(File, Line, 1)); };
+      for (const LineEntry &Entry : Entries) {
+        unsigned Line = SM->getLineNumber(File, Entry.FileOffset);
+        const SourceLocation Own = SM->translateLineCol(File, Line, 1);
+        if (SM->isInSystemHeader(Own) || Pragmas.count(SM->getLocForStartOfFile(File).getLocWithOffset(Entry.FileOffset).getRawEncoding()))
+          continue;
+        // A line splice joins the lines of a directive, and the `#` is on the first of them.
+        while (Line > 1 && Text.slice(Offset(Line - 1), Offset(Line)).rtrim().ends_with("\\"))
+          --Line;
+        diag(SM->translateLineCol(File, Line, 1), "line directive: not allowed in verified code. It moves the gate's view.");
+      }
+    }
+  }
+
+private:
+  // Where the preprocessor made a line table entry for a `system_header` pragma.
+  struct PragmaNotes : PPCallbacks {
+    std::set<SourceLocation::UIntTy> &Where;
+    explicit PragmaNotes(std::set<SourceLocation::UIntTy> &Where) : Where(Where) {}
+    void FileChanged(SourceLocation Loc, FileChangeReason Reason, SrcMgr::CharacteristicKind, FileID) override {
+      if (Reason == SystemHeaderPragma)
+        Where.insert(Loc.getRawEncoding());
+    }
+  };
+  SourceManager *SM = nullptr;
+  std::set<SourceLocation::UIntTy> Pragmas;
 };
 
 class CplusPModule : public ClangTidyModule {
@@ -1583,6 +2215,7 @@ public:
     Factories.registerCheck<AllowlistCheck>("cplusp-allowlist");
     Factories.registerCheck<UnlistedStateCheck>("cplusp-unlisted-state");
     Factories.registerCheck<InexactLiteralCheck>("cplusp-inexact-literal");
+    Factories.registerCheck<LineDirectiveCheck>("cplusp-line-directive");
   }
 };
 

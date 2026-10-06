@@ -31,6 +31,10 @@ const MATCHER: &str = "cplusp-matcher";
 /// The allowlist check of the plugin. It claims the kinds of a ban row for the row, and a team may loosen that row.
 const ALLOWLIST: &str = "cplusp-allowlist";
 
+/// The check of the plugin that reports every `#line` and line marker the preprocessor processed. Its findings belong to no row of the
+/// policy. The gate enables it for every run and reports them under the rule `line`.
+const LINE_DIRECTIVE: &str = "cplusp-line-directive";
+
 /// The checks of the plugin whose message starts with the id of a rule: `{rule}: {sentence}`, or the bare id. The gate maps a finding
 /// to its rule by that id and puts the sentence after the message of the rule. Every other check maps by its own name.
 // ponytail: a hand-kept list. Upgrade: a prefix on the check name.
@@ -41,6 +45,7 @@ const RULE_FIRST: &[&str] = &[MATCHER, ALLOWLIST, "cplusp-unlisted-state"];
 const PLANNED_CHECKS: &[&str] = &[
     MATCHER, "cplusp-mutable", "cplusp-multiple-inheritance", "cplusp-iterator-arithmetic", "cplusp-impure-operator", "cplusp-lambda-limits",
     "cplusp-evaluation-order", "cplusp-inexact-literal", "cplusp-aliasing", "cplusp-const-handle", "cplusp-allowlist", "cplusp-unlisted-state",
+    LINE_DIRECTIVE,
 ];
 
 // ------------------------------------------------------------------ command line
@@ -595,63 +600,6 @@ fn nolints(path: &Path, text: &str) -> Vec<Finding> {
     text.lines().enumerate().filter(|(_, l)| l.contains("NOLINT")).map(|(n, _)| ban(path.to_path_buf(), n + 1, "nolint", message)).collect()
 }
 
-/// A token of the compiler's raw lexer: its kind, its spelling, and the line it starts on.
-struct RawToken<'a> {
-    kind: &'a str,
-    spelling: &'a str,
-    line: usize,
-}
-
-/// Read the output of `clang -Xclang -dump-raw-tokens`: one token to a record, `kind 'spelling'<TAB> [flags]<TAB>Loc=<file:line:col>`.
-/// A spelling can hold newlines, so the records are cut at their `Loc`, not at the end of a line. None when the text is no token list.
-fn raw_tokens(text: &str) -> Option<Vec<RawToken<'_>>> {
-    let (mut tokens, mut rest) = (Vec::new(), text);
-    while !rest.is_empty() {
-        let (kind, after) = rest.split_once(" '")?;
-        let loc_at = after.find("\tLoc=<")?;
-        let loc_end = loc_at + after[loc_at..].find('>')?;
-        let spelling = &after[..after[..loc_at].rfind("'\t")?];
-        let line = after[loc_at + 6..loc_end].rsplit(':').nth(1)?.parse().ok()?;
-        tokens.push(RawToken { kind, spelling, line });
-        rest = after[loc_end + 1..].trim_start_matches('\n');
-    }
-    Some(tokens)
-}
-
-/// The lines where a `#line` or a line marker starts, as the compiler's own lexer reads the file: a directive is a `#` or `%:` that is the
-/// first token on its line, comments aside, and its first word is `line` or a number. The lexer knows the raw string, the comment, the
-/// digraph and the splice, because it is the one that reads them for the build, decision 0036. A run that fails refuses the file.
-fn line_directives(clang: &str, path: &Path, shown: &str) -> Result<Vec<usize>> {
-    let out = Command::new(clang)
-        .args(["-x", "c++", "-std=c++23", "-w", "-fsyntax-only", "-Xclang", "-dump-raw-tokens"])
-        .arg(path)
-        .stdin(Stdio::null())
-        .output()
-        .with_context(|| format!("cannot run {clang}"))?;
-    let text = String::from_utf8_lossy(&out.stderr);
-    if !out.status.success() {
-        bail!("cannot read {shown}: the lexer failed: {}", text.lines().find(|l| l.contains("error")).or(text.lines().next()).unwrap_or_default());
-    }
-    let tokens = raw_tokens(&text).with_context(|| format!("cannot read {shown}: the lexer output is no list of tokens"))?;
-    let is_blank = |t: &RawToken| t.kind == "comment" || (t.kind == "unknown" && t.spelling.trim().is_empty() && !t.spelling.contains('\n'));
-    let (mut found, mut first) = (Vec::new(), true);
-    for (i, token) in tokens.iter().enumerate() {
-        if token.kind == "unknown" && token.spelling.contains('\n') {
-            first = true;
-        } else if token.kind == "hash" && first {
-            // The next token that is no blank, on this line, names the directive.
-            let next = tokens[i + 1..].iter().find(|t| !is_blank(t));
-            if next.is_some_and(|t| (t.kind == "raw_identifier" && t.spelling == "line") || t.kind == "numeric_constant") {
-                found.push(token.line);
-            }
-            first = false;
-        } else if !is_blank(token) {
-            first = false;
-        }
-    }
-    Ok(found)
-}
-
 /// A line marker of the preprocessor, `# N "path" flags`: the next line is line N of the path.
 /// Flag 1 enters an include, and flag 3 is a system header.
 fn line_marker(text: &str) -> Option<(usize, &str, Vec<&str>)> {
@@ -660,9 +608,10 @@ fn line_marker(text: &str) -> Option<(usize, &str, Vec<&str>)> {
     Some((n.parse().ok()?, path, flags.split_whitespace().collect()))
 }
 
-/// Run the preprocessor on a build and read its output. A diagnostic pragma, a `system_header` pragma and a `#line`
-/// directive are findings, and so is any other pragma. Every spelling of a pragma comes out as one form, which a text scan cannot
-/// promise.
+/// Run the preprocessor on a build and read its output. A diagnostic pragma and a `system_header` pragma are findings, and so is any
+/// other pragma. Every spelling of a pragma comes out as one form, which a text scan cannot promise. The `#line` directives are the
+/// plugin's, decision 0037. In the main file clang ignores a `system_header` pragma and drops it from this output. So the gate reports
+/// nothing for it, and it does not silence the gate.
 /// Also returns the files the build includes outside the system paths, for the NOLINT scan.
 // ponytail: a line of a raw string literal that starts with `#pragma` counts. A path with a quote in it
 // breaks the marker. Upgrade: read the tokens with the plugin.
@@ -699,16 +648,14 @@ fn preprocess(clang: &str, (file, dir, flags): &Build, shown: impl Fn(&Path) -> 
             // `<built-in>` and `<command line>` are not files.
             let pseudo = matches!(name, "<built-in>" | "<command line>");
             let path = dir.join(name);
-            if seen.insert(path.clone()) {
-                if !include && !at.as_os_str().is_empty() {
-                    let message = "line directive: not allowed in verified code. It moves the gate's view.";
-                    found.push(ban(at.clone(), line, "line", message));
-                } else if !pseudo {
-                    entered.insert(path.clone(), !sys);
-                }
+            if seen.insert(path.clone()) && (include || at.as_os_str().is_empty()) && !pseudo {
+                entered.insert(path.clone(), !sys);
             }
             let user = entered.get(&path) == Some(&true);
-            if sys && user && silenced.insert(path.clone()) {
+            // Clang ignores `#pragma GCC system_header` in the main file, so a marker there that turns the file system is one that the
+            // source wrote. The plugin reports it as a line directive. In a header the pragma and a marker that names the header look
+            // the same in this output, and the pragma finding stands.
+            if sys && user && same_file(&path) != same_file(file) && silenced.insert(path.clone()) {
                 let message = "pragma system_header: not allowed in verified code. It silences the gate.";
                 found.push(ban(path.clone(), n.saturating_sub(1), "pragma", message));
             }
@@ -752,7 +699,9 @@ fn gate(c: &Common, json: bool, build_dir: Option<&Path>, plugin: Option<&Path>,
         bail!("plugin {} did not load. It must provide {MATCHER}.", p.display());
     }
     let loaded = load(c.policy.as_deref(), Some(&listed))?;
-    let config = emit(&loaded.policy);
+    let mut config = emit(&loaded.policy);
+    // The plugin reads the line directives from the preprocessor under the build's own flags, for every run.
+    config.checks.push(LINE_DIRECTIVE.to_string());
     // The flags of each file, from after `--` or from the database. Judged before clang-tidy runs.
     let cwd = std::env::current_dir().context("cannot find the working directory")?;
     let builds = match build_dir {
@@ -789,10 +738,7 @@ fn gate(c: &Common, json: bool, build_dir: Option<&Path>, plugin: Option<&Path>,
             return Ok(Vec::new());
         }
         let source = fs::read(&path).with_context(|| format!("cannot read {}", shown(&path)))?;
-        let mut found = nolints(&path, &String::from_utf8_lossy(&source));
-        let message = "line directive: not allowed in verified code. It moves the gate's view.";
-        found.extend(line_directives(&clang, &path, &shown(&path))?.into_iter().map(|n| ban(path.clone(), n, "line", message)));
-        Ok(found)
+        Ok(nolints(&path, &String::from_utf8_lossy(&source)))
     };
     for build in &builds {
         found.extend(scan(build.0.clone())?);
@@ -862,6 +808,11 @@ fn gate(c: &Common, json: bool, build_dir: Option<&Path>, plugin: Option<&Path>,
     }
 
     for (path, d) in diagnostics {
+        if d.name == LINE_DIRECTIVE {
+            let message = "line directive: not allowed in verified code. It moves the gate's view.";
+            found.push(ban(path.clone(), line_of(&path, d.at.offset)?, "line", message));
+            continue;
+        }
         // A check in RULE_FIRST puts the rule id first in the message, and may follow it with a sentence for the bot.
         // Every other check maps by its name.
         let rule_first = RULE_FIRST.contains(&d.name.as_str());
@@ -927,7 +878,13 @@ fn gate(c: &Common, json: bool, build_dir: Option<&Path>, plugin: Option<&Path>,
 // Upgrade: read each file once, and fail on an offset past the end.
 fn line_of(path: &Path, offset: usize) -> Result<usize> {
     let source = fs::read(path).with_context(|| format!("cannot read {}", path.display()))?;
-    Ok(1 + source[..offset.min(source.len())].iter().filter(|&&b| b == b'\n').count())
+    // A line ends as the compiler counts it: with `\n`, with `\r\n`, or with a bare `\r`.
+    let breaks = source[..offset.min(source.len())]
+        .iter()
+        .enumerate()
+        .filter(|&(i, &b)| b == b'\n' || (b == b'\r' && source.get(i + 1) != Some(&b'\n')))
+        .count();
+    Ok(1 + breaks)
 }
 
 /// A JSON string.
