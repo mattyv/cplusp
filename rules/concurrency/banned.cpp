@@ -38,7 +38,7 @@ int32_t count_threads(const std::vector<std::thread>& threads) {  // BANNED
 
 int32_t via_async(int32_t x) {
   auto f = std::async(std::launch::deferred, square, x);  // BANNED also: global_state
-  return f.get();
+  return f.get();  // BANNED also: global_state
 }
 
 void via_thread(int32_t x) {
