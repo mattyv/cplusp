@@ -813,6 +813,7 @@ rules:
     detect:
       - matcher: typeLoc(loc(qualType(anyOf(hasCanonicalType(pointerType(pointee(functionType()))), hasCanonicalType(referenceType(pointee(functionType()))), hasCanonicalType(memberPointerType(pointee(functionType())))))), unless(hasAncestor(decl(isImplicit()))))
       - matcher: typeLoc(loc(qualType(hasDeclaration(cxxRecordDecl(hasName("::std::function"))))))
+      - matcher: expr(hasType(hasCanonicalType(memberPointerType())), unless(isExpansionInSystemHeader()), unless(hasAncestor(decl(isImplicit()))))
       - check: cplusp-allowlist
         options:
           function_pointers: MemberPointerType

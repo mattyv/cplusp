@@ -504,6 +504,8 @@ fn gate_treats_a_marker_that_names_the_file_itself_as_a_finding() {
     assert_eq!(o.status.code(), Some(1), "stdout: {} stderr: {}", stdout(&o), stderr(&o));
     let out = stdout(&o);
     assert!(out.lines().any(|l| l.ends_with("forged-own-name.cpp:2: line directive: not allowed in verified code. It moves the gate's view.")), "{out}");
+    // The marker is a line directive and nothing else. No pragma wrote it.
+    assert!(!out.contains("pragma system_header"), "{out}");
     let _ = std::fs::remove_dir_all(&dir);
 }
 
@@ -530,7 +532,24 @@ fn the_sequencing_check_reads_a_callees_body_under_a_loosened_state_row() {
         assert!(out.lines().any(|l| l.contains("sequencing-through-bodies.cpp:21: Two changes of state in one expression")), "{policy:?}: {out}");
         // The function the source names changes nothing. An override of it writes a global, and a call through the base may run it.
         assert!(out.lines().any(|l| l.contains("sequencing-through-bodies.cpp:40: Two changes of state in one expression")), "{policy:?}: {out}");
+        // The writer sits behind code the compiler wrote, a lambda inside a std call and a copy of a container.
+        assert!(out.lines().any(|l| l.contains("sequencing-through-bodies.cpp:52: Two changes of state in one expression")), "{policy:?}: {out}");
+        assert!(out.lines().any(|l| l.contains("sequencing-through-bodies.cpp:69: Two changes of state in one expression")), "{policy:?}: {out}");
     }
+}
+
+/// A header included twice holds the same lines twice. A virtual call in the second inclusion is a call the tree wrote, and the gate
+/// reads it there, decision 0037. Its finding names the header's line.
+#[test]
+fn gate_reads_a_virtual_call_in_the_second_inclusion_of_a_header() {
+    if !clang_tidy_available() {
+        return;
+    }
+    let f = fixture("includes-twice.cpp");
+    let o = gated(&[f.to_str().unwrap(), "--", "-std=c++23", "-ffp-contract=off"]);
+    assert_eq!(o.status.code(), Some(1), "stdout: {} stderr: {}", stdout(&o), stderr(&o));
+    let out = stdout(&o);
+    assert!(out.lines().any(|l| l.contains("twice-step.h:7: ") && l.ends_with("total changes, and the modifies line does not list it.")), "{out}");
 }
 
 /// The directives are read under the build's own flags, decision 0037. With `-trigraphs`, `??=` is `#`, and the marker it starts

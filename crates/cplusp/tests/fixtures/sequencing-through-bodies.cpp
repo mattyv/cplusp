@@ -39,3 +39,32 @@ struct Loud : Clock {
 int32_t twice(const Clock& c) {
   return add(c.tick(), c.tick());
 }
+
+#include <algorithm>
+#include <vector>
+
+bool any_and(bool a, bool b) {
+  return a && b;
+}
+
+// Two lambdas that each call a writer with no line. The std call runs the lambda, and the lambda runs the writer.
+bool two_lambdas(const std::vector<int32_t>& v) {
+  return any_and(std::ranges::any_of(v, [](int32_t x) { return a_write() > x; }), std::ranges::any_of(v, [](int32_t x) { return b_write() > x; }));
+}
+
+struct Copied {
+  int32_t v = 0;
+  Copied() = default;
+  Copied(const Copied& other) : v(other.v) {
+    total += 1;
+  }
+};
+
+bool both_empty(std::vector<Copied> a, std::vector<Copied> b) {
+  return a.empty() && b.empty();
+}
+
+// Two copies of a container, and the element's copy constructor writes with no line.
+bool copied_twice(const std::vector<Copied>& v) {
+  return both_empty(v, v);
+}

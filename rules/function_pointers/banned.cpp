@@ -17,7 +17,7 @@ int32_t apply_alias(Handler f, int32_t x) {  // BANNED
 }
 
 int32_t apply_member(int32_t (Widget::*f)(int32_t), Widget& w, int32_t x) {  // BANNED
-  return (w.*f)(x);
+  return (w.*f)(x);  // BANNED also: global_state
 }
 
 int32_t count_pointers(const std::vector<int32_t (*)(int32_t)>& items) {  // BANNED
@@ -62,4 +62,19 @@ void boxed_write() {
 void boxed_write_unlisted() {
   std::function<void()> f = [] { total += 1; };  // BANNED also: lambdas, global_state
   f();
+}
+
+struct Base {
+  virtual ~Base() = default;
+  //@ requires total < 0x7FFFFFFF
+  //@ modifies total
+  virtual void act() {
+    total += 1;
+  }
+};
+
+// A pointer to a virtual member function names no function the gate can read. The call through it is a vtable call that no call in
+// the tree explains, so the state check refuses it too, decision 0037.
+void invoke_member(Base& b) {
+  std::invoke(&Base::act, b);  // BANNED also: global_state
 }
