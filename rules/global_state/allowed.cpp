@@ -95,3 +95,41 @@ void bump_with(T) {
 void use_bump_with() {
   bump_with(int32_t{1});
 }
+
+#include <cstddef>
+
+struct Guard {
+  //@ requires total < 0x7FFFFFFF
+  //@ modifies total
+  ~Guard() {
+    total += 1;
+  }
+};
+
+// A const member call on a std container runs none of the element's own functions. Only the code the compiler generates for the
+// call counts, decision 0037.
+//@ ensures result == v.size()
+std::size_t how_many(const std::vector<Guard>& v) {
+  return v.size();
+}
+
+struct Base {
+  virtual ~Base() = default;
+  //@ requires total < 0x7FFFFFFF
+  //@ modifies total
+  virtual void act() {
+    total += 1;
+  }
+};
+
+// An override lists no more than the function it overrides. This one changes nothing.
+struct Quiet : Base {
+  void act() override {}
+};
+
+// A call through the base brings the base's lines, and they hold for every override.
+//@ requires total < 0x7FFFFFFF
+//@ modifies total
+void act_on(Base& b) {
+  b.act();
+}

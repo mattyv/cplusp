@@ -42,3 +42,4 @@ Status is `decided`, `proposed` (the default until someone objects or the thin s
 | [0034](0034-the-differential-run-is-the-first-match-check.md) | The differential run is the first match check. The model and the C++ run on the same inputs, and the naive model must part ways | decided |
 | [0035](0035-unlisted-state-is-the-gates.md) | Unlisted state is the gate's. It reads the `modifies` and `reads` lines and refuses an access they do not list | decided |
 | [0036](0036-an-analysis-that-cannot-finish-refuses.md) | An analysis that cannot finish refuses. Templates are judged where used, an unread callee changes state, no budget ends in a pass, the compiler reads the source | decided |
+| [0037](0037-the-gate-reads-the-compilers-lowered-form.md) | The gate reads the compiler's lowered form. The state check judges the code clang generates, where nothing is implicit, and the plugin reads the directives from the preprocessor | decided |

@@ -160,3 +160,40 @@ int32_t opaque();
 int32_t opaque_twice() {
   return opaque() + opaque();  // BANNED also: global_state
 }
+
+#include <algorithm>
+#include <vector>
+
+bool any_and(bool a, bool b) {
+  return a && b;
+}
+
+// A lambda inside a std call runs inside the call, so the call changes what the lambda changes, decision 0037. Two such calls
+// are two changes.
+//@ requires total < 0x7FFFFFFE
+//@ modifies total
+bool two_lambdas(const std::vector<int32_t>& v) {
+  return any_and(std::ranges::any_of(v, [](int32_t x) { total += 1; return x > 0; }), std::ranges::any_of(v, [](int32_t x) { total += 1; return x < 0; }));  // BANNED
+}
+
+struct Vec1 {
+  int32_t x = 0;
+};
+
+//@ requires total < 0x7FFFFFFF
+//@ modifies total
+Vec1 operator+(Vec1 a, Vec1 b) {
+  total += 1;
+  return Vec1{a.x + b.x};
+}
+
+int32_t sum_x(Vec1 a, Vec1 b) {
+  return a.x + b.x;
+}
+
+// An operator call is a call, judged by its callee's lines like any other, decision 0037.
+//@ requires total < 0x7FFFFFFE
+//@ modifies total
+int32_t two_sums(Vec1 a, Vec1 b, Vec1 c, Vec1 d) {
+  return sum_x(a + b, c + d);  // BANNED
+}

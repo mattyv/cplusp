@@ -63,10 +63,10 @@ struct Guard {
   }
 };
 
-// A destructor runs at the end of the scope. Its line counts at the local that owns it.
+// A destructor runs at the end of the scope, and the compiler puts the call at the brace that ends it, decision 0037.
 void scoped() {
-  Guard g;  // BANNED
-}
+  Guard g;
+}  // BANNED
 
 struct Noisy {
   //@ requires total < 0x7FFFFFFF
@@ -190,8 +190,8 @@ struct Deep9 { Deep8 d; };
 
 // 3. The destructor nine members down runs as surely as one at the top. No depth ends in a pass, decision 0036.
 void deep_scope() {
-  Deep9 d{};  // BANNED
-}
+  Deep9 d{};
+}  // BANNED
 
 struct Mover {
   int32_t v = 0;
@@ -215,8 +215,8 @@ void grown(std::vector<Guard>& v) {
 }
 
 void owned() {
-  std::unique_ptr<Guard> g = std::make_unique<Guard>();  // BANNED
-}
+  std::unique_ptr<Guard> g = std::make_unique<Guard>();
+}  // BANNED
 
 // A function passed by name runs inside the std call, so its lines count at the call.
 void each_by_name(const std::vector<int32_t>& v) {
@@ -302,4 +302,56 @@ void opaque_step();
 // 2. A callee with no body here and no contract lines may change any global, decision 0036.
 void calls_opaque() {
   opaque_step();  // BANNED
+}
+
+void opaque_each(int32_t x);
+
+// 4. A function with no body here and no lines, passed by name into a std algorithm. The algorithm calls it, so the gate refuses the
+// call where the algorithm is called, decision 0037.
+void each_opaque(const std::vector<int32_t>& v) {
+  std::ranges::for_each(v, opaque_each);  // BANNED
+}
+
+namespace std {
+void evil_step();
+}
+
+// 5. A function this file declares in namespace std is no part of the standard library. The location decides, not the namespace.
+void calls_evil() {
+  std::evil_step();  // BANNED
+}
+
+struct Copied {
+  int32_t v = 0;
+  Copied() = default;
+  //@ requires total < 0x7FFFFFFF
+  //@ modifies total
+  Copied(const Copied& other) : v(other.v) {
+    total += 1;
+  }
+  Copied& operator=(const Copied&) = default;
+};
+
+// 6. A copy assignment of a std container copies its elements, and the element's copy constructor has a line.
+void copy_all(std::vector<Copied>& a, const std::vector<Copied>& b) {
+  a = b;  // BANNED
+}
+
+struct Base {
+  virtual ~Base() = default;
+  virtual void act() {}
+};
+
+struct Loud : Base {
+  //@ requires total < 0x7FFFFFFF
+  //@ modifies total
+  void act() override {  // BANNED
+    total += 1;
+  }
+};
+
+// 7. An override lists no more than the function it overrides, decision 0037. A call through the base brings the base's lines, which
+// list nothing, so this caller needs no line.
+void act_on(Base& b) {
+  b.act();
 }

@@ -884,7 +884,7 @@ rules:
     area: state
     canonical: MISRA restricts globals
     decision: restrict
-    limit: On the contract's `//@ modifies` line when the body changes it. On `//@ reads` or `//@ modifies` when the body reads it, directly or through a call that lists it. Constants exempt. Members are implicit.
+    limit: On the contract's `//@ modifies` line when the body changes it. On `//@ reads` or `//@ modifies` when the body reads it, directly or through a call. A call brings what its callee lists, or what the compiler generates for it. An override lists no more than the function it overrides. Constants exempt. Members are implicit.
     why: Hidden state breaks modular proofs. A global is a field of the State value the function takes in and gives back, decisions 0011 and 0035. The model needs the list to know which functions take it.
     use_instead: a reads or modifies line naming the variable, or a parameter.
     stage: gate

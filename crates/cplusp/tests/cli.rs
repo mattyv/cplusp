@@ -474,6 +474,10 @@ fn gate_treats_a_forged_line_marker_as_a_finding() {
         ("forged-inner-comment.cpp", "forged-inner-comment.cpp:2"),
         // A raw string holds a `/*` that is no comment. Only the compiler's own lexer reads it right, decision 0036.
         ("forged-raw-string.cpp", "forged-raw-string.cpp:5"),
+        // Lines that end in a bare carriage return, and a comment whose text looks like a lexer's own record. The plugin reads the
+        // directives from the preprocessor itself, decision 0037, so no reader of its output sits between.
+        ("forged-cr.cpp", "forged-cr.cpp:2"),
+        ("forged-loc-comment.cpp", "forged-loc-comment.cpp:2"),
     ] {
         let f = fixture(file);
         let o = gated(&[f.to_str().unwrap(), "--", "-std=c++23", "-ffp-contract=off"]);
@@ -482,6 +486,20 @@ fn gate_treats_a_forged_line_marker_as_a_finding() {
         let expected = format!("{at}: line directive: not allowed in verified code. It moves the gate's view.");
         assert!(out.lines().any(|l| l.ends_with(&expected)), "{file}: {out}");
     }
+}
+
+/// The directives are read under the build's own flags, decision 0037. With `-trigraphs`, `??=` is `#`, and the marker it starts
+/// is the forged one. A reader with flags of its own would not see it.
+#[test]
+fn gate_reads_directives_under_the_builds_flags() {
+    if !clang_tidy_available() {
+        return;
+    }
+    let f = fixture("forged-trigraph.cpp");
+    let o = gated(&[f.to_str().unwrap(), "--", "-std=c++23", "-ffp-contract=off", "-trigraphs"]);
+    assert_eq!(o.status.code(), Some(1), "stdout: {} stderr: {}", stdout(&o), stderr(&o));
+    let out = stdout(&o);
+    assert!(out.lines().any(|l| l.ends_with("forged-trigraph.cpp:2: line directive: not allowed in verified code. It moves the gate's view.")), "{out}");
 }
 
 /// Any pragma but `once` changes the build the proofs assume, or silences the gate. Two that turn contraction back on

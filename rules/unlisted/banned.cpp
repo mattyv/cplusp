@@ -47,3 +47,8 @@ struct __attribute__((may_alias)) Alias {  // BANNED
 
 // A qualifier is no node kind and no attribute. __restrict promises the compiler that two pointers never alias.
 void restrict_ptr(int32_t* __restrict a);  // BANNED
+
+// The same qualifier on a member function restricts `this`.
+struct Restricted {
+  void f() __restrict;  // BANNED
+};

@@ -442,6 +442,7 @@ A global is a field of the State value.
 Every function that changes it takes the State in and gives it back. In the C++ contract that is `modifies total`.
 A trusted contract that omits it is false.
 The gate reads the `modifies` and `reads` lines, decision 0035, and refuses an access to a global they do not list, also through a call.
+It judges the code the compiler generates, decision 0037, so a destructor, a copy or a lambda inside a std call counts where it runs.
 The gate reads the lines of a trusted function too, so a trusted body that forgets one is refused. A reviewer still reads what the lines claim.
 
 ## static_local
