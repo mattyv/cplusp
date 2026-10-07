@@ -5,7 +5,7 @@ Date: 2026-10-07. Status: decided. Amends 0051 on what verified code may do with
 ## Decision
 
 - **No value of a plain type, and no value that holds one.** Verified code makes no object of a plain type. It makes no object of a library type that holds one either, by the walk of decision 0046. So `std::vector<Record>` in verified code is a use of `Record`.
-- **A plain object goes only to the file's code.** Verified code can hand one, or a reference to one, to a function of the file. That function is judged by its own kind. A call of the library that takes one is a use, because the library can read or copy it. `std::bit_cast` and `push_back` are two such calls.
+- **Only the file's code gets a plain object.** Verified code can pass one, or a reference to one, to a function of the file. That function is judged by its own kind. A call of the library that takes one is a use, because the library can read or copy it. `std::bit_cast` and `push_back` are two such calls.
 - **A read that the compiler writes counts.** A structured binding reads the fields of its object in code that the compiler writes. That read is a use too.
 - **A plain member is plain for overrides.** Decision 0047 refuses a plain override of a function that is not plain. A member of a plain type with no marker of its own is plain, written by the file or by the compiler.
 - **A member with its own marker keeps its declaration in view.** Its declaration is verified, as 0039 says, also inside a plain type.
