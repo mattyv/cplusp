@@ -126,3 +126,14 @@ auto boxed_entry() {
 void call_boxed_entry() {
   boxed_entry()();  // BANNED
 }
+
+#include <algorithm>
+
+bool less_than(int32_t a, int32_t b) {
+  return a < b;
+}
+
+// A function passed by name is a pointer that the library holds, and the library calls through it, decision 0050.
+void sort_by_name(std::vector<int32_t>& v) {
+  std::sort(v.begin(), v.end(), less_than);  // BANNED
+}
