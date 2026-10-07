@@ -55,3 +55,27 @@ int32_t wrapped(int32_t x) {
   g.v = x;
   return g.v;
 }
+
+// A virtual call reaches each override in the module, also one that a class template writes over a base it takes as a parameter.
+struct Figure {
+  virtual ~Figure() = default;
+  //@ ensures true
+  virtual int32_t sides() const = 0;
+};
+
+template <typename Base>
+struct Old : Base {
+  CPLUSP_PLAIN("an old figure")
+  int32_t sides() const override {
+    return 0;
+  }
+};
+
+int32_t sides_of(const Figure& f) {
+  return f.sides();
+}
+
+int32_t old_sides() {
+  Old<Figure> o;
+  return sides_of(o);
+}

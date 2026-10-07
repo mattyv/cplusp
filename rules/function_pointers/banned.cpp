@@ -100,3 +100,27 @@ void table_by_address(std::size_t i) {
 void table_by_name(std::size_t i) {
   auto arr = std::array{quiet, quiet}; arr[i]();  // BANNED
 }
+
+#include "../../include/cplusp.h"
+
+// A trusted body may make a pointer, and a deduced type carries it out with no pointer spelled. The call runs a target that the gate
+// cannot name, so the call is the finding, decision 0048.
+CPLUSP_TRUSTED("hands out an entry")
+//@ ensures true
+auto entry() {
+  return &quiet;
+}
+
+void call_entry() {
+  entry()();  // BANNED
+}
+
+CPLUSP_TRUSTED("hands out a boxed entry")
+//@ ensures true
+auto boxed_entry() {
+  return std::function<void()>(quiet);
+}
+
+void call_boxed_entry() {
+  boxed_entry()();  // BANNED
+}

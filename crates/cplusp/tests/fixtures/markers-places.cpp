@@ -53,3 +53,34 @@ CPLUSP_TRUSTED("ends in another file")
 int32_t ends_elsewhere(int32_t x) {
   delete new int32_t(x);
 #include "markers-tail.inc"
+
+// Every function keeps its first and last token in one file, a verified one too.
+CPLUSP_TRUSTED("builds a helper that ends in another file")
+//@ ensures result == x
+int32_t local_elsewhere(int32_t x) {
+  struct Local {
+    int32_t run(int32_t y) {
+      delete new int32_t(y);
+#include "markers-tail2.inc"
+  };
+  return Local{}.run(x);
+}
+
+// Code in a plain body is plain, a lambda and a local class too.
+CPLUSP_PLAIN("old code with helpers")
+int legacy_helpers(int x) {
+  auto f = [](int y) {
+    int* p = new int(y);
+    int r = *p;
+    delete p;
+    return r;
+  };
+  struct Box {
+    int* p = nullptr;
+  };
+  Box b;
+  b.p = new int(f(x));
+  int r = *b.p;
+  delete b.p;
+  return r;
+}

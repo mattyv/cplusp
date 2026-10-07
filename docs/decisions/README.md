@@ -53,3 +53,4 @@ Status is `decided`, `proposed` (the default until someone objects or the thin s
 | [0045](0045-a-library-constructor-reads-only-a-library-value.md) | A library constructor reads only a number or a value of the library. A type of the file copies through its own constructor, which may write | decided |
 | [0046](0046-a-library-type-is-a-library-value-only-when-what-it-holds-is.md) | A library type is a value of the library only when each type argument is a number, an enum or a value of the library | decided |
 | [0047](0047-verified-code-runs-no-plain-code-and-each-function-has-its-own-kind.md) | Verified code runs no plain code, read from the lowered form. Each function has its own kind, and each build is its own run | decided |
+| [0048](0048-an-indirect-call-counts-where-it-runs-and-code-in-a-plain-body-is-plain.md) | An indirect call counts where it runs, a virtual call reaches every override, code in a plain body is plain | decided |
