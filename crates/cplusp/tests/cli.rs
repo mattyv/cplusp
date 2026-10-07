@@ -1248,7 +1248,7 @@ fn gate_refuses_a_marker_it_cannot_honour() {
 /// Each function has its own kind, decision 0047. A local class, a lambda and an explicit specialization carry no marker of their own,
 /// so they are verified inside a trusted body. A marked function whose first or last token is in a macro or another file is refused,
 /// and its body is then verified. A function whose ends are in two files is refused whatever its kind, and code in a plain body is
-/// plain, decision 0048.
+/// plain, decision 0048. An abbreviated function template begins at its return type, decision 0049.
 #[test]
 fn a_finding_takes_the_kind_of_the_innermost_function_the_file_wrote() {
     if !clang_tidy_available() {
@@ -1347,6 +1347,28 @@ fn each_entry_of_a_compile_database_is_its_own_run() {
     let findings: Vec<&str> = out.lines().filter(|l| l.starts_with("Not provable: ")).collect();
     assert_eq!(findings.len(), 1, "{out}");
     assert!(findings[0].contains("twice.h:11: `new` / `delete`"), "{out}");
+}
+
+/// An indirect call is named by constants alone, decision 0049. A pointer that a trusted call gives out, that a callable holds, or that a
+/// trusted call stores in the caller's object has no name. So a call through it in verified code is a finding of `function_pointers`.
+/// Only that row and the markers count here, because other rows judge the fields that hold the pointers.
+#[test]
+fn an_indirect_call_has_a_name_only_from_constants() {
+    if !clang_tidy_available() {
+        return;
+    }
+    let f = fixture("indirect-calls.cpp");
+    let plugin = plugin();
+    let o = cplusp(&["gate", "--json", "--plugin", plugin.to_str().unwrap(), f.to_str().unwrap(), "--", "-std=c++23", "-ffp-contract=off"]);
+    let out = stdout(&o);
+    let reported: BTreeSet<(String, usize)> = out
+        .lines()
+        .map(|l| (field(l, "rule"), field(l, "line").parse::<usize>().unwrap()))
+        .filter(|(r, _)| r == "function_pointers" || r == "marker")
+        .collect();
+    let expected: BTreeSet<(String, usize)> =
+        [16, 27, 38, 67].into_iter().map(|n| ("function_pointers".to_string(), n)).collect();
+    assert_eq!(reported, expected, "{out}");
 }
 
 /// Pull `"key":"value"` or `"key":123` out of one JSON line without a JSON library.

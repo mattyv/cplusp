@@ -84,3 +84,16 @@ int legacy_helpers(int x) {
   delete b.p;
   return r;
 }
+
+// An abbreviated function template begins at its return type.
+CPLUSP_TRUSTED("copies a value")
+//@ ensures true
+void show(auto& v) {
+  v = v;
+}
+
+CPLUSP_PLAIN("old code")
+void old_show(auto& v) {
+  delete new int32_t(1);
+  v = v;
+}
