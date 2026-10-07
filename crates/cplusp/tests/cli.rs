@@ -1395,6 +1395,39 @@ fn a_plain_type_is_out_of_view_and_verified_code_does_not_touch_it() {
     }
 }
 
+/// A plain object goes only to the file's own code, decision 0052. A structured binding, a byte view through the library and a vector
+/// of a plain type are uses. A member of a plain type that overrides a function that is not plain is refused. A verified member of a
+/// plain type keeps its declaration in view, so the row `shared_ptr` sees its return type.
+#[test]
+fn a_plain_object_goes_only_to_the_files_own_code() {
+    if !clang_tidy_available() {
+        return;
+    }
+    let f = fixture("markers-types-reads.cpp");
+    let plugin = plugin();
+    let o = cplusp(&["gate", "--json", "--plugin", plugin.to_str().unwrap(), f.to_str().unwrap(), "--", "-std=c++23", "-ffp-contract=off"]);
+    let out = stdout(&o);
+    let reported: BTreeSet<(String, usize)> = out.lines().map(|l| (field(l, "rule"), field(l, "line").parse::<usize>().unwrap())).collect();
+    let expected: BTreeSet<(String, usize)> = [
+        ("shared_ptr", 13),
+        ("lvalue_references", 20),
+        ("marker", 20),
+        ("marker", 25),
+        ("marker", 30),
+        ("marker", 45),
+    ]
+    .into_iter()
+    .map(|(r, n)| (r.to_string(), n))
+    .collect();
+    assert_eq!(reported, expected, "{out}");
+    for message in [
+        "marker: verified code uses Record, which is plain. Reach it through a trusted member.",
+        "marker: Legacy::area is plain and overrides Shape::area, which is not plain. A verified call of Shape::area can run it.",
+    ] {
+        assert!(out.contains(message), "{message}: {out}");
+    }
+}
+
 /// Pull `"key":"value"` or `"key":123` out of one JSON line without a JSON library.
 fn field(line: &str, key: &str) -> String {
     let needle = format!("\"{key}\":");

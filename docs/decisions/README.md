@@ -57,3 +57,4 @@ Status is `decided`, `proposed` (the default until someone objects or the thin s
 | [0049](0049-an-indirect-call-is-named-by-constants-alone.md) | An indirect call is named by constants alone. A pointer from a parameter, a call or memory a call can write has no name | decided |
 | [0050](0050-a-function-passed-by-name-is-a-pointer-the-callee-holds.md) | A function passed by name is a pointer that the callee holds. A lambda passed straight to the std call is the way | decided |
 | [0051](0051-a-type-can-be-plain.md) | A type can be plain. Verified code makes no object of it and reads no field of it, and reaches it through a trusted member | decided |
+| [0052](0052-a-plain-object-goes-only-to-the-files-own-code.md) | A plain object goes only to the file's own code. No value that holds a plain type, and no call of the library with one | decided |
