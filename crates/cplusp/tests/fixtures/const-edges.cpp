@@ -1,4 +1,5 @@
 #include <cstdint>
+#include <map>
 #include <memory>
 #include <optional>
 #include <random>
@@ -88,4 +89,21 @@ int32_t pair_snapshot(const std::unique_ptr<std::pair<Counter, int32_t>>& p) {
 int32_t tuple_snapshot(const std::unique_ptr<std::tuple<Counter, int32_t>>& p) {
   std::tuple<Counter, int32_t> copy(*p);
   return std::get<0>(copy).n;
+}
+
+// A member class of a library type holds the type arguments of the type around it, decision 0046.
+struct Order {
+  int32_t n = 0;
+  Order() = default;
+  Order(Order& o) : n(o.n) {
+    o.n += 1;
+  }
+  bool operator()(int32_t a, int32_t b) const {
+    return a < b;
+  }
+};
+
+bool compare_snapshot(const std::unique_ptr<std::map<int32_t, int32_t, Order>::value_compare>& p) {
+  std::map<int32_t, int32_t, Order>::value_compare copy(*p);
+  return copy({1, 0}, {2, 0});
 }
