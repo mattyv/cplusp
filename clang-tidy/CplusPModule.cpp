@@ -16,6 +16,7 @@
 #include "clang/ASTMatchers/Dynamic/Parser.h"
 #include "clang/AST/ASTLambda.h"
 #include "clang/AST/GlobalDecl.h"
+#include "clang/AST/RecursiveASTVisitor.h"
 #include "clang/Basic/CodeGenOptions.h"
 #include "clang/Basic/Diagnostic.h"
 #include "clang/Basic/DiagnosticOptions.h"
@@ -46,6 +47,7 @@
 
 #include <algorithm>
 #include <initializer_list>
+#include <map>
 #include <optional>
 #include <set>
 #include <string>
@@ -1340,7 +1342,9 @@ Contract contractAbove(const SourceManager &SM, SourceLocation First) {
 // Where a function starts: its return type, or its name for a constructor. A function template starts at its `template`, and its
 // lines sit above that, as in examples/templates.
 SourceLocation firstTokenOf(const FunctionDecl *Function) {
-  if (const FunctionTemplateDecl *Template = Function->getDescribedFunctionTemplate())
+  // An abbreviated function template has no `template` keyword, and it begins at its return type, decision 0049.
+  if (const FunctionTemplateDecl *Template = Function->getDescribedFunctionTemplate();
+      Template && Template->getTemplateParameters()->getTemplateLoc().isValid())
     return Template->getBeginLoc();
   return Function->getOuterLocStart();
 }
@@ -1459,6 +1463,85 @@ void collectState(const DeclContext *Context, const SourceManager &SM, std::vect
   }
 }
 
+// ------------------------------------------------------------ the markers of a function, decisions 0039 and 0047
+
+// The kind a `cplusp:` annotation names, and none when the word is no marker. `cplusp:assume` marks one statement and waits for a case
+// that needs it, so on a declaration it is no marker.
+enum class MarkerKind { None, Verified, Trusted, Plain };
+
+MarkerKind markerKind(StringRef Annotation) {
+  if (Annotation == "cplusp:verified")
+    return MarkerKind::Verified;
+  if (Annotation == "cplusp:trusted")
+    return MarkerKind::Trusted;
+  if (Annotation == "cplusp:plain")
+    return MarkerKind::Plain;
+  return MarkerKind::None;
+}
+
+// The declarations of a function in the order the compiler met them. The declarations of a function template are linked the same way.
+std::vector<const FunctionDecl *> declarationsOf(const FunctionDecl *Function) {
+  std::vector<const FunctionDecl *> Out;
+  for (const FunctionDecl *D = Function->getMostRecentDecl(); D; D = D->getPreviousDecl())
+    Out.push_back(D);
+  std::reverse(Out.begin(), Out.end());
+  return Out;
+}
+
+// The compiler makes the first declaration of an explicit specialization from its template, with a copy of the attributes. The copy has
+// the place of the attribute that it was copied from, so a specialization has a marker only when it wrote one in a place of its own.
+bool copiedFromTemplate(const FunctionDecl *Declaration, const Attr *A) {
+  if (const FunctionDecl *Pattern = Declaration->getTemplateInstantiationPattern(false))
+    for (const FunctionDecl *Of : declarationsOf(Pattern))
+      for (const Attr *Original : Of->attrs())
+        if (Original->getLocation() == A->getLocation())
+          return true;
+  return false;
+}
+
+// The `cplusp:` annotations that a declaration wrote itself. A later declaration inherits a copy of each, and the copy is skipped.
+template <typename F> void forEachMarker(const Decl *Declaration, const F &Visit) {
+  const auto *Function = dyn_cast<FunctionDecl>(Declaration);
+  for (const Attr *A : Declaration->attrs())
+    if (const auto *Note = dyn_cast<AnnotateAttr>(A);
+        Note && !A->isInherited() && Note->getAnnotation().starts_with("cplusp:") && !(Function && copiedFromTemplate(Function, A)))
+      Visit(Note);
+}
+
+// The function an instantiation was made from. Any other function is its own, an explicit specialization too.
+const FunctionDecl *patternOf(const FunctionDecl *Function) {
+  const FunctionDecl *Pattern = Function->getTemplateInstantiationPattern();
+  return Pattern ? Pattern : Function;
+}
+
+// The kind of the markers written on the declarations of a function itself, decision 0047. None when no declaration has a marker, and
+// none when two name two kinds.
+MarkerKind declaredKind(const FunctionDecl *Function) {
+  MarkerKind Kind = MarkerKind::None;
+  bool Twice = false;
+  for (const FunctionDecl *D : declarationsOf(patternOf(Function)))
+    forEachMarker(D, [&](const AnnotateAttr *Note) {
+      const MarkerKind Named = markerKind(Note->getAnnotation());
+      if (Named == MarkerKind::None)
+        return;
+      if (Kind == MarkerKind::None)
+        Kind = Named;
+      else if (Kind != Named)
+        Twice = true;
+    });
+  return Twice ? MarkerKind::None : Kind;
+}
+
+// Code that is written in a plain function is plain, decision 0048: a lambda, a local class and its members, however deep. Clang takes no
+// marker on a lambda, and a plain body is out of the gate's view. `Context` is where the code is written, and the walk reads every
+// function around it. A lambda or a local class in a trusted body stays verified.
+bool insidePlain(const DeclContext *Context) {
+  for (; Context; Context = Context->getParent())
+    if (const auto *Enclosing = dyn_cast<FunctionDecl>(Context); Enclosing && declaredKind(Enclosing) == MarkerKind::Plain)
+      return true;
+  return false;
+}
+
 // ------------------------------------------------------------ the lowered form, decision 0037
 
 // What a piece of code does to the state: the names it writes and reads, and its refusals. A refusal is a whole message, so the
@@ -1545,6 +1628,31 @@ public:
     return Findings;
   }
 
+  // A call that runs a plain function, decision 0047: where the call is, and the qualified name of the plain function.
+  struct PlainCall {
+    SourceLocation Loc;
+    std::string Name;
+  };
+  // The calls of the code that the file wrote, from every function of it whatever its kind, that run a plain function. A call runs it
+  // when it names it, when the library or a member that the compiler wrote reaches it, when a virtual call can reach it, or when it
+  // passes it on as a function constant. The gate asks the kind of the place.
+  const std::vector<PlainCall> &plainCalls() {
+    build();
+    return PlainCalls;
+  }
+
+  // The calls of the code that the file wrote that can run an indirect call with no target that the gate can name, decision 0048.
+  const std::vector<SourceLocation> &indirectCalls() {
+    build();
+    return IndirectCalls;
+  }
+
+  // False when the compiler could not generate code for the file. Then no call is read.
+  bool generated() {
+    build();
+    return !Failed;
+  }
+
   // Whether a call of `Callee` changes state, as far as its lines and the lowered form say. The first part of the sequencing check's
   // rule, a mutable parameter or a non-const method, is the caller's.
   bool changes(const FunctionDecl *Callee) {
@@ -1610,6 +1718,7 @@ private:
   llvm::DenseMap<const llvm::Function *, Fn> Fns;
   llvm::DenseMap<const FunctionDecl *, const llvm::Function *> ByDecl;
   llvm::DenseMap<const llvm::GlobalVariable *, std::string> StateOf;
+  llvm::DenseMap<const llvm::GlobalVariable *, const VarDecl *> VarOf;
   llvm::DenseSet<const llvm::GlobalVariable *> Known, Library;
   // The loads that find the function of a virtual call, which the match of the call judges.
   llvm::DenseSet<const llvm::Instruction *> Dispatch;
@@ -1619,6 +1728,10 @@ private:
   std::set<std::pair<std::pair<unsigned, unsigned>, std::string>> Reported;
   std::vector<std::string> State;
   std::vector<Finding> Findings;
+  std::vector<PlainCall> PlainCalls;
+  std::set<std::pair<SourceLocation::UIntTy, std::string>> PlainSeen;
+  std::vector<SourceLocation> IndirectCalls;
+  std::set<SourceLocation::UIntTy> IndirectSeen;
   bool Collected = false, Built = false, Failed = false;
 
   // ------------------------------------------------------------ build
@@ -1669,6 +1782,8 @@ private:
       if (Info.Is == Role::Judged)
         judge(*F, Info.FD);
     holdOverrides();
+    plainCode();
+    indirectCode();
   }
 
   // Generate the module for the translation unit that the matchers have just read, and read the tree's names off it. False if clang
@@ -1746,6 +1861,7 @@ private:
       if (const auto *Var = dyn_cast_or_null<VarDecl>(Gen->GetDeclForMangledName(G.getName()))) {
         // A global of a system header is the library's own, as the pointer to a callable that std::call_once keeps in one.
         (SM.isInSystemHeader(Var->getLocation()) ? Library : Known).insert(&G);
+        VarOf[&G] = Var;
         if (isState(Var))
           StateOf[&G] = nameOf(Var);
       }
@@ -2244,6 +2360,320 @@ private:
     return FD ? FD->getLocation() : SourceLocation();
   }
 
+  // ------------------------------------------------------------ plain code, decision 0047
+
+  // A function of the file, for the gate's kinds: one it defines, and the call operator of a lambda it writes. Such a function has its own
+  // kind and its own calls, so a walk from a call stops at it. Anything else in the module is code the file did not write, and a walk
+  // goes through it: the library, and the members that the compiler writes.
+  bool written(const Fn &Info) const {
+    if (Info.Is == Role::Judged)
+      return true;
+    const auto *Method = dyn_cast_or_null<CXXMethodDecl>(Info.FD);
+    return Info.Is == Role::Carrier && Method && isLambdaCallOperator(Method) && !Ctx->getSourceManager().isInSystemHeader(Method->getLocation());
+  }
+
+  // The functions that an instruction names, in the module: the callee of a direct call, each function that a virtual call can reach, and
+  // each function constant among the operands, as a table of function pointers is. This is what `instruction` and `call` bring, as a
+  // list of functions.
+  // A virtual call reaches the method that the source names, and every override in the module: one that the file wrote, one that the
+  // compiler wrote, such as the destructor of a derived class, and one of a class template over a base that it takes as a parameter.
+  // ponytail: a virtual call inside the library has no call in the tree, so the overrides it can reach are not read. Upgrade: the type of
+  // the object.
+  void namedBy(const llvm::Instruction &I, std::vector<const llvm::Function *> &Out) {
+    llvm::SmallPtrSet<const llvm::Constant *, 8> Done;
+    const auto *CB = dyn_cast<llvm::CallBase>(&I);
+    for (const llvm::Use &U : I.operands())
+      if (const auto *C = dyn_cast<llvm::Constant>(U.get()); C && !(CB && &U == &CB->getCalledOperandUse() && calleeOf(*CB)))
+        functionsIn(C, Out, Done);
+    if (!CB || CB->isInlineAsm() || isa<llvm::MemIntrinsic>(CB))
+      return;
+    if (const llvm::Function *F = calleeOf(*CB)) {
+      if (!F->isIntrinsic())
+        Out.push_back(F);
+      return;
+    }
+    const auto &Virtual = matched(*CB);
+    for (const VirtualCall *V : Virtual) {
+      const CXXMethodDecl *Canonical = cast<CXXMethodDecl>(V->Method->getCanonicalDecl());
+      if (const auto Own = ByDecl.find(Canonical); Own != ByDecl.end())
+        Out.push_back(Own->second);
+      for (const llvm::Function *F : Overriders.lookup(Canonical))
+        Out.push_back(F);
+    }
+    if (!Virtual.empty() || !dispatchesOf(*CB).empty())
+      return;
+    std::vector<Root> Rs;
+    Seen S;
+    roots(CB->getCalledOperand(), Rs, S);
+    for (const Root &R : Rs) {
+      if (R.K == Root::Func) {
+        Out.push_back(cast<llvm::Function>(R.V));
+      } else if (const auto *G = dyn_cast<llvm::GlobalVariable>(R.V); R.K == Root::Local && G && G->hasInitializer()) {
+        llvm::SmallPtrSet<const llvm::Constant *, 16> Visited;
+        functionsIn(G->getInitializer(), Out, Visited);
+      }
+    }
+  }
+
+  // Every call of a function of the file, and of the code that starts the globals, that runs a plain function. A plain function is one
+  // that the file defines or declares, and the code in the module that the file did not write is followed until it reaches one. The
+  // plain functions that each such piece of code can run are found once, by a fixpoint like the one for the effects.
+  void plainCode() {
+    llvm::DenseSet<const llvm::Function *> Plain;
+    for (const auto &[F, Info] : Fns)
+      if (Info.FD && (Info.Is == Role::Edge || written(Info)) &&
+          (declaredKind(Info.FD) == MarkerKind::Plain || insidePlain(Info.FD->getDeclContext())))
+        Plain.insert(F);
+    if (Plain.empty())
+      return;
+    struct Runs {
+      std::set<const llvm::Function *> Plain, Next;
+    };
+    llvm::DenseMap<const llvm::Function *, Runs> Of;
+    std::vector<const llvm::Function *> Named;
+    for (const auto &[F, Info] : Fns) {
+      if (Info.Is != Role::Carrier || written(Info))
+        continue;
+      Runs &R = Of[F];
+      for (const llvm::BasicBlock &BB : *F)
+        for (const llvm::Instruction &I : BB) {
+          Named.clear();
+          namedBy(I, Named);
+          for (const llvm::Function *G : Named) {
+            const Fn &Callee = Fns.find(G)->second;
+            if (Plain.count(G))
+              R.Plain.insert(G);
+            else if (Callee.Is == Role::Carrier && !written(Callee))
+              R.Next.insert(G);
+          }
+        }
+    }
+    for (bool Changed = true; Changed;) {
+      Changed = false;
+      for (auto &[F, R] : Of)
+        for (const llvm::Function *Dep : R.Next)
+          if (Dep != F) {
+            const auto &Up = Of.find(Dep)->second.Plain;
+            const size_t Before = R.Plain.size();
+            R.Plain.insert(Up.begin(), Up.end());
+            Changed |= R.Plain.size() != Before;
+          }
+    }
+    // The code that starts the globals has no declaration, and it runs what the file wrote.
+    for (const auto &[F, Info] : Fns) {
+      if (Info.Is == Role::Edge || !(written(Info) || !Info.FD))
+        continue;
+      for (const llvm::BasicBlock &BB : *F)
+        for (const llvm::Instruction &I : BB) {
+          Named.clear();
+          namedBy(I, Named);
+          for (const llvm::Function *G : Named) {
+            if (Plain.count(G))
+              plainCall(I, Info.FD, G);
+            else if (const auto Up = Of.find(G); Up != Of.end())
+              for (const llvm::Function *P : Up->second.Plain)
+                plainCall(I, Info.FD, P);
+          }
+        }
+    }
+  }
+
+  // The code that starts a global has no place of its own, so its call stands at the variable that it starts.
+  // ponytail: the first variable of the user's files that the code names. Upgrade: the variable that the call is for.
+  SourceLocation globalStarted(const llvm::Function &F) const {
+    for (const llvm::BasicBlock &BB : F)
+      for (const llvm::Instruction &I : BB)
+        for (const llvm::Use &U : I.operands())
+          if (const auto *G = dyn_cast<llvm::GlobalVariable>(U.get()))
+            if (const auto Var = VarOf.find(G); Var != VarOf.end() && !Ctx->getSourceManager().isInSystemHeader(Var->second->getLocation()))
+              return Var->second->getLocation();
+    return {};
+  }
+
+  // Where a call of a function of the file stands, as a place in a file. None when the call has no place.
+  SourceLocation callPlace(const llvm::Instruction &I, const FunctionDecl *Holder) {
+    SourceLocation Loc = locationOf(I, Holder);
+    if (Loc.isInvalid() && !Holder)
+      Loc = globalStarted(*I.getFunction());
+    return Loc.isInvalid() ? Loc : Ctx->getSourceManager().getExpansionLoc(Loc);
+  }
+
+  void plainCall(const llvm::Instruction &I, const FunctionDecl *Holder, const llvm::Function *Plain) {
+    const SourceLocation At = callPlace(I, Holder);
+    if (At.isInvalid())
+      return;
+    const std::string Name = patternOf(Fns.find(Plain)->second.FD)->getQualifiedNameAsString();
+    if (PlainSeen.insert({At.getRawEncoding(), Name}).second)
+      PlainCalls.push_back({At, Name});
+  }
+
+  // ------------------------------------------------------------ indirect calls, decisions 0048 and 0049
+
+  // Whether the contents of a piece of memory are named: the pointer is read from a constant table, or from a local object that holds
+  // nothing but named values. Memory that a parameter, a call or a global that can change gives has no name.
+  // A call of code that the file did not write can hand out a place in a table that its caller gave, as the library does to find the
+  // function for a pair of variants. The place is then the one that the call was given: the pointer that it returns comes from its
+  // parameter or from a constant table, and the walk follows it into the call. `Frames` are the calls that the walk is inside.
+  bool namesMemory(const llvm::Value *Pointer, llvm::SmallPtrSetImpl<const llvm::Value *> &Done,
+                   llvm::SmallVectorImpl<const llvm::CallBase *> &Frames) {
+    llvm::SmallVector<const llvm::Value *, 4> Objects;
+    llvm::getUnderlyingObjects(Pointer, Objects, nullptr, 0);
+    for (const llvm::Value *O : Objects) {
+      if (const auto *G = dyn_cast<llvm::GlobalVariable>(O)) {
+        if (!G->isConstant() || !G->hasInitializer())
+          return false;
+      } else if (isa<llvm::AllocaInst>(O)) {
+        if (!Frames.empty() || (Done.insert(O).second && !namesLocal(O, Done)))
+          return false;
+      } else if (const auto *Parameter = dyn_cast<llvm::Argument>(O)) {
+        if (Frames.empty())
+          return false;
+        const llvm::CallBase *Call = Frames.pop_back_val();
+        const bool Named = namesMemory(Call->getArgOperand(Parameter->getArgNo()), Done, Frames);
+        Frames.push_back(Call);
+        if (!Named)
+          return false;
+      } else if (const auto *Call = dyn_cast<llvm::CallBase>(O)) {
+        const llvm::Function *Callee = calleeOf(*Call);
+        if (!Callee || Callee->isDeclaration() || written(Fns.find(Callee)->second) || !Done.insert(Call).second)
+          return false;
+        Frames.push_back(Call);
+        for (const llvm::BasicBlock &BB : *Callee)
+          if (const auto *Ret = dyn_cast<llvm::ReturnInst>(BB.getTerminator()))
+            if (!Ret->getReturnValue() || !namesMemory(Ret->getReturnValue(), Done, Frames))
+              return false;
+        Frames.pop_back();
+      } else {
+        return false;
+      }
+    }
+    return true;
+  }
+
+  // Whether a local object holds named values only. Every store into it and every copy into it brings a named value. Its address stays
+  // here: a call that gets the address can store any pointer in it, and so can anything that keeps the address.
+  bool namesLocal(const llvm::Value *Slot, llvm::SmallPtrSetImpl<const llvm::Value *> &Done) {
+    llvm::SmallVector<const llvm::CallBase *, 1> NoFrames;
+    llvm::SmallVector<const llvm::Value *, 8> Work{Slot};
+    llvm::SmallPtrSet<const llvm::Value *, 8> Derived{Slot};
+    while (!Work.empty()) {
+      const llvm::Value *P = Work.pop_back_val();
+      for (const llvm::User *U : P->users()) {
+        if (isa<llvm::LoadInst, llvm::ICmpInst>(U))
+          continue;
+        if (const auto *Store = dyn_cast<llvm::StoreInst>(U)) {
+          if (Store->getValueOperand() == P || !namesAll(Store->getValueOperand(), Done))
+            return false;
+        } else if (const auto *Copy = dyn_cast<llvm::MemTransferInst>(U)) {
+          if (Copy->getRawDest() == P && !namesMemory(Copy->getRawSource(), Done, NoFrames))
+            return false;
+        } else if (const auto *Intrinsic = dyn_cast<llvm::IntrinsicInst>(U)) {
+          if (!isa<llvm::MemSetInst, llvm::DbgInfoIntrinsic>(Intrinsic) && !Intrinsic->isLifetimeStartOrEnd())
+            return false;
+        } else if (isa<llvm::GetElementPtrInst, llvm::BitCastInst, llvm::AddrSpaceCastInst, llvm::PHINode, llvm::SelectInst>(U)) {
+          if (Derived.insert(U).second)
+            Work.push_back(U);
+        } else {
+          return false;
+        }
+      }
+    }
+    return true;
+  }
+
+  // Whether each value that can reach `V` is named, decision 0049: a function constant, or a pointer read from memory that is named. A
+  // parameter, `this`, the result of a call, a return slot and a pointer of a global that can change have no name. A virtual call and a
+  // table of decision 0037 are named by their vtables and their constants, and the caller does not ask about them.
+  bool namesAll(const llvm::Value *V, llvm::SmallPtrSetImpl<const llvm::Value *> &Done) {
+    llvm::SmallVector<const llvm::Value *, 4> Objects;
+    llvm::getUnderlyingObjects(V, Objects, nullptr, 0);
+    for (const llvm::Value *O : Objects) {
+      if (!Done.insert(O).second)
+        continue;
+      if (isa<llvm::Constant>(O) && !isa<llvm::GlobalVariable>(O))
+        continue;
+      if (const auto *Load = dyn_cast<llvm::LoadInst>(O)) {
+        llvm::SmallVector<const llvm::CallBase *, 4> Frames;
+        if (!namesMemory(Load->getPointerOperand(), Done, Frames))
+          return false;
+      } else if (const auto *Extract = dyn_cast<llvm::ExtractValueInst>(O)) {
+        if (!namesAll(Extract->getAggregateOperand(), Done))
+          return false;
+      } else if (const auto *Insert = dyn_cast<llvm::InsertValueInst>(O)) {
+        if (!namesAll(Insert->getAggregateOperand(), Done) || !namesAll(Insert->getInsertedValueOperand(), Done))
+          return false;
+      } else if (const auto *Cast = dyn_cast<llvm::IntToPtrInst>(O)) {
+        if (!namesAll(Cast->getOperand(0), Done))
+          return false;
+      } else {
+        return false;
+      }
+    }
+    return true;
+  }
+
+  // An indirect call that is no virtual call, and that has no name. The dispatch of a virtual call reads a vtable, and the tree names the
+  // method. A dispatch that no call of the tree explains is a pointer to a member function, which the row already refuses.
+  bool unnamedCall(const llvm::CallBase &CB) {
+    if (CB.isInlineAsm() || isa<llvm::MemIntrinsic>(CB) || calleeOf(CB) || !matched(CB).empty() || !dispatchesOf(CB).empty())
+      return false;
+    llvm::SmallPtrSet<const llvm::Value *, 16> Done;
+    return !namesAll(CB.getCalledOperand(), Done);
+  }
+
+  // Every call of a function of the file, and of the code that starts the globals, that runs an indirect call with no name. It makes the
+  // call itself, or it runs code that the file did not write and that makes it. The row `function_pointers` judges that call. A pointer
+  // is named by constants alone, so a pointer that a parameter holds, or a call gave, or a call can write, has no name, and a verified
+  // function that calls through it is refused. A trusted body may hold such a pointer, and the core drops the finding there.
+  // ponytail: the walk of a local object reads its stores and its copies. Any other use of the address is a call, and the object has no
+  // name from then on, whatever the call does with it. A pointer in a global that can change has no name either. Upgrade: read what the
+  // call may store, from the lowered form of its body.
+  void indirectCode() {
+    // The code that the file did not write and that has an unnamed indirect call, by a fixpoint like the one for the plain functions.
+    llvm::DenseSet<const llvm::Function *> Unnamed;
+    llvm::DenseMap<const llvm::Function *, std::vector<const llvm::Function *>> Next;
+    std::vector<const llvm::Function *> Named;
+    for (const auto &[F, Info] : Fns) {
+      if (Info.Is != Role::Carrier || written(Info))
+        continue;
+      auto &Mine = Next[F];
+      for (const llvm::BasicBlock &BB : *F)
+        for (const llvm::Instruction &I : BB) {
+          if (const auto *CB = dyn_cast<llvm::CallBase>(&I); CB && unnamedCall(*CB))
+            Unnamed.insert(F);
+          Named.clear();
+          namedBy(I, Named);
+          for (const llvm::Function *G : Named)
+            if (const Fn &Callee = Fns.find(G)->second; Callee.Is == Role::Carrier && !written(Callee))
+              Mine.push_back(G);
+        }
+    }
+    for (bool Changed = true; Changed;) {
+      Changed = false;
+      for (const auto &[F, Callees] : Next)
+        if (!Unnamed.count(F) && llvm::any_of(Callees, [&](const llvm::Function *G) { return Unnamed.count(G); }))
+          Changed |= Unnamed.insert(F).second;
+    }
+    for (const auto &[F, Info] : Fns) {
+      if (Info.Is == Role::Edge || !(written(Info) || !Info.FD))
+        continue;
+      for (const llvm::BasicBlock &BB : *F)
+        for (const llvm::Instruction &I : BB) {
+          const auto *CB = dyn_cast<llvm::CallBase>(&I);
+          bool Found = CB && unnamedCall(*CB);
+          if (!Found) {
+            Named.clear();
+            namedBy(I, Named);
+            Found = llvm::any_of(Named, [&](const llvm::Function *G) { return Unnamed.count(G); });
+          }
+          if (!Found)
+            continue;
+          if (const SourceLocation At = callPlace(I, Info.FD); At.isValid() && IndirectSeen.insert(At.getRawEncoding()).second)
+            IndirectCalls.push_back(At);
+        }
+    }
+  }
+
   // ------------------------------------------------------------ judging
 
   // The function is judged on its own instructions, against its own lines. The module may hold it twice, as the variants of a constructor
@@ -2496,6 +2926,17 @@ private:
   std::set<SourceLocation::UIntTy> Pragmas;
 };
 
+// A finding of the gate's own at `At`, which is a place in a file. The message is the presumed place, then the sentence, set apart by tabs.
+// The pragma check and the marker check report this way. The gate reads the line from the message and maps the finding to its rule.
+// A tab or a line break in the sentence would move the cut of the gate, so each becomes a space. A sentence can hold the text of the source.
+void reportAt(ClangTidyCheck &Check, const SourceManager &SM, SourceLocation At, const std::string &Sentence) {
+  const PresumedLoc Place = SM.getPresumedLoc(At);
+  std::string Clean = Sentence;
+  std::replace_if(Clean.begin(), Clean.end(), [](char C) { return C == '\t' || C == '\n' || C == '\r'; }, ' ');
+  if (Place.isValid())
+    Check.diag(At, "%0") << StringRef(std::string(Place.getFilename()) + "\t" + std::to_string(Place.getLine()) + "\t" + Clean);
+}
+
 // cplusp-pragma: decision 0038. Every `#pragma`, `_Pragma` and `__pragma` that the preprocessor reads, under the build's own flags.
 // It also refuses a header name with a backslash. The compiler reads such a name its own way, and the dependency list prints it as a slash.
 // The preprocessor says when it starts one, before any handler runs. So a raw string that looks like a pragma is no pragma.
@@ -2542,13 +2983,6 @@ public:
 
 private:
   ClangTidyContext *Ctx;
-
-  // A finding at `At`, which is a place in a file. The message is the presumed place, then the sentence, set apart by tabs.
-  static void reportAt(ClangTidyCheck &Check, const SourceManager &SM, SourceLocation At, const std::string &Sentence) {
-    const PresumedLoc Place = SM.getPresumedLoc(At);
-    if (Place.isValid())
-      Check.diag(At, "%0") << StringRef(std::string(Place.getFilename()) + "\t" + std::to_string(Place.getLine()) + "\t" + Sentence);
-  }
 
   // Precompiled state carries what an earlier run of the compiler read, and the gate did not see it. The finding sits at the start of
   // the main file. Both ways of finding it report the same place and the same words, and the diagnostics engine keeps one.
@@ -2755,6 +3189,272 @@ private:
   };
 };
 
+// ------------------------------------------------------------ markers, decisions 0039 and 0047
+
+// The reason of a marker is its first argument, a string literal with something in it.
+bool hasReason(const AnnotateAttr *Note) {
+  if (Note->args_size() == 0)
+    return false;
+  const auto *Text = dyn_cast<StringLiteral>((*Note->args_begin())->IgnoreImplicit()->IgnoreParens());
+  return Text && Text->getCharByteWidth() == 1 && !Text->getString().trim().empty();
+}
+
+// The reader of the markers. It walks the tree of one translation unit, outside the system headers, and reports in two forms under the
+// name `cplusp-markers`. The third form, `reach {name}`, comes from the table of the lowered form, see `MarkersCheck`.
+//  1. A region: the body of a function the file writes, or a plain declaration. The diagnostic sits on the first byte of the region, so
+//     the gate has that offset from clang-tidy as it has the offset of every finding. The message is
+//     `region {verified|trusted|plain} {end offset}`, with no tab. The end offset is the offset of the byte after the last token. Both
+//     offsets are those of the file place of the token. The region is no finding, and the gate keeps it and shows it to no bot.
+//     Every function the file writes has one: a function, a member of a local class, an explicit specialization, and a lambda's body.
+//     An instantiation and an implicit function have none. The core's `kind_at` picks the innermost region of a place.
+//  2. A finding of the gate's own, with the exact words of the test: `{presumed file}\t{presumed line}\t{sentence}`, as the pragma check
+//     reports. The sentence starts with `marker: `, and the gate maps it to the rule `marker`.
+// A function takes the kind of the markers written on its own declarations. A marker with no reason is still honoured and still
+// refused. Two kinds make the function verified. A trusted function has its body for its region, from the first written initializer or
+// the brace. A plain function has every declaration, from its first token, which is the marker or the `template`, to its last.
+// A trusted or plain function whose first or last token is in a macro is refused and has no region, so its body is verified. A function
+// of any kind whose first and last token are in two files is refused and has no region, a lambda too. Code in a plain body is plain:
+// a lambda, a local class and its members have no region of their own, and the region of the plain function covers them.
+// ponytail: two ceilings. The semicolon after a declaration is not in its region. A plain method of a class template with a base that
+// depends on the parameter is checked for its override at no instantiation, because the walk reads the pattern only. A virtual call
+// that can run it is a call of the plain method, which the table of the lowered form reports.
+// Upgrade: a visit of the instantiations for the override.
+class MarkerReader : public RecursiveASTVisitor<MarkerReader> {
+public:
+  MarkerReader(ClangTidyCheck &Check, ASTContext &Context) : Check(Check), Context(Context), SM(Context.getSourceManager()) {}
+
+  void read() { TraverseAST(Context); }
+
+  bool TraverseDecl(Decl *D) {
+    if (D && !isa<TranslationUnitDecl>(D) && isSystem(D->getLocation()))
+      return true;
+    return RecursiveASTVisitor<MarkerReader>::TraverseDecl(D);
+  }
+
+  // A declaration that is no function takes no marker.
+  bool VisitDecl(Decl *D) {
+    if (D->isImplicit() || isa<FunctionDecl, FunctionTemplateDecl>(D))
+      return true;
+    forEachMarker(D, [&](const AnnotateAttr *Note) {
+      if (markerKind(Note->getAnnotation()) == MarkerKind::None)
+        reportNoMarker(D, Note);
+      else
+        report(D, describe(D) + " has a marker, and only a function takes one.");
+    });
+    return true;
+  }
+
+  bool VisitFunctionDecl(FunctionDecl *F) {
+    // The compiler writes an implicit function, and an instantiation has the region of its pattern, which the walk meets too.
+    if (F->isImplicit() || F->isTemplateInstantiation())
+      return true;
+    const MarkerKind Kind = kindOf(F);
+    // Code in a plain body is plain, and the region of the plain function covers it, decision 0048.
+    if (insidePlain(F->getDeclContext()))
+      return true;
+    if (Kind == MarkerKind::Plain) {
+      SourceLocation Begin = firstTokenOf(F);
+      for (const Attr *A : F->attrs())
+        if (!A->isInherited() && !A->isImplicit())
+          Begin = earlier(Begin, A->getRange().getBegin());
+      place(F, Kind, {firstTokenOf(F), F->getEndLoc()}, Begin);
+    } else if (F->doesThisDeclarationHaveABody()) {
+      const SourceRange Body = bodyRange(F);
+      place(F, Kind == MarkerKind::Trusted ? Kind : MarkerKind::Verified, Body, Body.getBegin());
+    }
+    return true;
+  }
+
+  // A lambda is a function of its own with no marker, so it is verified inside a verified or a trusted body, and plain inside a plain
+  // one. Its body is its region.
+  bool VisitLambdaExpr(LambdaExpr *E) {
+    const SourceRange Body = E->getBody()->getSourceRange();
+    if (insidePlain(E->getLambdaClass()->getDeclContext()))
+      return true;
+    if (!keepsEnds(false, Body))
+      reportAt(Check, SM, startOf(E->getBeginLoc()), "marker: this lambda " + std::string(EndsInTwoFiles));
+    else
+      addRegion(Body, MarkerKind::Verified);
+    return true;
+  }
+
+private:
+  ClangTidyCheck &Check;
+  ASTContext &Context;
+  const SourceManager &SM;
+  std::map<const FunctionDecl *, MarkerKind> Kinds;  // by first declaration, so that each function is read and refused once
+
+  bool isSystem(SourceLocation Loc) const { return Loc.isValid() && SM.isInSystemHeader(SM.getExpansionLoc(Loc)); }
+  // Where a token starts in its file, and the place after it. A token from a macro stands at the call of the macro.
+  SourceLocation startOf(SourceLocation Loc) const { return Loc.isValid() ? SM.getExpansionRange(Loc).getBegin() : Loc; }
+  SourceLocation afterEndOf(SourceLocation Loc) const {
+    return Loc.isValid() ? Lexer::getLocForEndOfToken(SM.getExpansionRange(Loc).getEnd(), 0, SM, Context.getLangOpts()) : Loc;
+  }
+  SourceLocation earlier(SourceLocation A, SourceLocation B) const {
+    return B.isValid() && (A.isInvalid() || SM.isBeforeInTranslationUnit(B, A)) ? B : A;
+  }
+
+  static std::string describe(const Decl *D) {
+    const auto *Named = dyn_cast<NamedDecl>(D);
+    return Named && !Named->getName().empty() ? Named->getNameAsString() : "this declaration";
+  }
+  void report(const Decl *At, const std::string &Sentence) { reportAt(Check, SM, startOf(At->getLocation()), "marker: " + Sentence); }
+  void reportNoMarker(const Decl *At, const AnnotateAttr *Note) {
+    const std::string Word = Note->getAnnotation().str();
+    report(At, Word == "cplusp:assume" ? Word + " waits until a case needs it. Mark the function trusted with a reason."
+                                       : Word + " is no marker. The markers are in include/cplusp.h.");
+  }
+
+  // The kind of a function. The first read refuses what is wrong with its markers, on every declaration in a user file.
+  MarkerKind kindOf(const FunctionDecl *Function) {
+    const auto Known = Kinds.find(Function->getFirstDecl());
+    if (Known != Kinds.end())
+      return Known->second;
+    const std::string Name = Function->getQualifiedNameAsString();
+    MarkerKind First = MarkerKind::None;
+    const FunctionDecl *Brings = nullptr;  // the declaration with the first marker
+    bool Twice = false;
+    for (const FunctionDecl *D : declarationsOf(Function)) {
+      if (isSystem(D->getLocation()))
+        continue;
+      forEachMarker(D, [&](const AnnotateAttr *Note) {
+        const MarkerKind Named = markerKind(Note->getAnnotation());
+        if (Named == MarkerKind::None)
+          return reportNoMarker(D, Note);
+        if (Named != MarkerKind::Verified && !hasReason(Note))
+          report(D, Name + " has a marker with no reason. A trusted or plain marker gives its reason.");
+        if (First == MarkerKind::None) {
+          First = Named;
+          Brings = D;
+        } else if (First != Named && !Twice) {
+          Twice = true;
+          report(D, Name + " has two kinds of marker. A function has one kind.");
+        }
+      });
+    }
+    const MarkerKind Kind = declaredKind(Function);
+    if (Kind == MarkerKind::Trusted && Brings && !contractOf(SM, Function).Any)
+      report(Brings, Name + " is trusted and has no contract. Its callers rest on the contract alone.");
+    // A call of the base can run the override. A verified function may call the base, so the override must be as good as the base.
+    if (Kind == MarkerKind::Plain && Brings)
+      if (const auto *Method = dyn_cast<CXXMethodDecl>(Function))
+        for (const CXXMethodDecl *Base : cast<CXXMethodDecl>(Method->getCanonicalDecl())->overridden_methods())
+          if (declaredKind(Base) != MarkerKind::Plain) {
+            const std::string Over = Base->getQualifiedNameAsString();
+            report(Brings, Method->getQualifiedNameAsString() + " is plain and overrides " + Over + ", which is not plain. A verified call of " + Over +
+                               " can run it.");
+          }
+    return Kinds[Function->getFirstDecl()] = Kind;
+  }
+
+  // A body: the written constructor initializers, which the compiler sorts by member, and the block, as written. A macro stays a macro.
+  SourceRange bodyRange(const FunctionDecl *F) const {
+    const Stmt *Body = F->getBody();
+    SourceLocation First = Body->getBeginLoc();
+    if (const auto *Constructor = dyn_cast<CXXConstructorDecl>(F))
+      for (const CXXCtorInitializer *Init : Constructor->inits())
+        if (Init->isWritten())
+          First = earlier(First, Init->getSourceRange().getBegin());
+    return {First, Body->getEndLoc()};
+  }
+
+  static constexpr const char *EndsInTwoFiles =
+      "starts or ends in a macro or in another file. Write its first and last token in its own file.";
+
+  // Whether the first and last token of a function, as written, are in one file. A marked function keeps them outside a macro too.
+  bool keepsEnds(bool Marked, SourceRange Edges) const {
+    const SourceLocation First = Edges.getBegin(), Last = Edges.getEnd();
+    if (First.isInvalid() || Last.isInvalid() || (Marked && (First.isMacroID() || Last.isMacroID())))
+      return false;
+    return SM.isWrittenInSameFile(startOf(First), startOf(Last));
+  }
+
+  // The region of a function. `Edges` are its first and last token as written, and `Begin` is where the region starts, which is earlier
+  // than the first token when a marker comes before it. The marker before the first token is a macro itself, and it is no edge. A function
+  // that does not keep its ends has no region and is refused, whatever its kind, decisions 0047 and 0048.
+  void place(const FunctionDecl *F, MarkerKind Kind, SourceRange Edges, SourceLocation Begin) {
+    if (!keepsEnds(Kind != MarkerKind::Verified, Edges)) {
+      report(F, F->getQualifiedNameAsString() + " " + EndsInTwoFiles);
+      return;
+    }
+    addRegion({Begin, Edges.getEnd()}, Kind);
+  }
+
+  void addRegion(SourceRange Range, MarkerKind Kind) {
+    const SourceLocation Begin = startOf(Range.getBegin()), After = afterEndOf(Range.getEnd());
+    if (Begin.isInvalid() || After.isInvalid() || !SM.isWrittenInSameFile(Begin, After) || SM.getFileOffset(After) <= SM.getFileOffset(Begin))
+      return;
+    const char *Word = Kind == MarkerKind::Trusted ? "trusted" : Kind == MarkerKind::Plain ? "plain" : "verified";
+    Check.diag(Begin, "region %0 %1") << Word << StringRef(std::to_string(SM.getFileOffset(After)));
+  }
+};
+
+// cplusp-markers: decisions 0039 and 0047. The plugin reads the markers of include/cplusp.h. See `MarkerReader` for what it reports.
+// It reports the calls that run plain code too, from the table of the lowered form, as `reach {qualified name}` at the call. The name
+// runs to the end of the message and may hold a space. The gate keeps such a report when the place of the call is verified. Every
+// function that the file wrote reports its calls, whatever its kind, because the kind of the place is the gate's to ask.
+// A file that the compiler cannot generate code for is refused, because the gate then cannot read what runs.
+class MarkersCheck : public ClangTidyCheck {
+public:
+  using ClangTidyCheck::ClangTidyCheck;
+  void onStartOfTranslationUnit() override { startTable(); }
+  void registerMatchers(MatchFinder *Finder) override {
+    registerTableMatchers(Finder, this);
+    Finder->addMatcher(translationUnitDecl(), this);
+  }
+  void check(const MatchFinder::MatchResult &Result) override {
+    giveTable(Result.Context);
+    if (collectForTable(Result))
+      return;
+    Context = Result.Context;
+    MarkerReader(*this, *Result.Context).read();
+  }
+  void onEndOfTranslationUnit() override {
+    Lowered &T = table();
+    if (!Context)
+      return;
+    if (!T.generated()) {
+      const SourceManager &SM = Context->getSourceManager();
+      reportAt(*this, SM, SM.getLocForStartOfFile(SM.getMainFileID()),
+               "marker: the compiler could not generate code for this file, so the gate cannot read what runs.");
+    }
+    for (const Lowered::PlainCall &Call : T.plainCalls())
+      diag(Call.Loc, "reach %0") << StringRef(Call.Name);
+  }
+
+private:
+  ASTContext *Context = nullptr;
+};
+
+// cplusp-indirect-call: decision 0048. The row `function_pointers` judges a call too, not only the spelling of a type. Verified code can
+// run an indirect call, itself or through code that the file does not write, and a deduced type carries a pointer out of a trusted body
+// with none spelled. When the lowered form cannot name each target, the call is a finding of the row, at its line. The gate writes the
+// message of the row, so the text here only has to map. The row is trusted only, so the core drops the finding in a trusted or plain place.
+class IndirectCallCheck : public ClangTidyCheck {
+public:
+  using ClangTidyCheck::ClangTidyCheck;
+  void onStartOfTranslationUnit() override { startTable(); }
+  void registerMatchers(MatchFinder *Finder) override {
+    registerTableMatchers(Finder, this);
+    Finder->addMatcher(translationUnitDecl(), this);
+  }
+  void check(const MatchFinder::MatchResult &Result) override {
+    giveTable(Result.Context);
+    if (collectForTable(Result))
+      return;
+    Seen = true;
+  }
+  void onEndOfTranslationUnit() override {
+    if (!Seen)
+      return;
+    for (const SourceLocation &At : table().indirectCalls())
+      diag(At, "an indirect call that the gate cannot name the target of");
+  }
+
+private:
+  bool Seen = false;
+};
+
 class CplusPModule : public ClangTidyModule {
 public:
   void addCheckFactories(ClangTidyCheckFactories &Factories) override {
@@ -2772,6 +3472,8 @@ public:
     Factories.registerCheck<InexactLiteralCheck>("cplusp-inexact-literal");
     Factories.registerCheck<LineDirectiveCheck>("cplusp-line-directive");
     Factories.registerCheck<PragmaCheck>("cplusp-pragma");
+    Factories.registerCheck<MarkersCheck>("cplusp-markers");
+    Factories.registerCheck<IndirectCallCheck>("cplusp-indirect-call");
   }
 };
 

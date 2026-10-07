@@ -114,7 +114,7 @@ For each entry with a decision other than `allow`, the gate:
 
 1. Turns on every check in `detect`, with its options, in a generated clang-tidy config.
 2. Maps each finding from those checks back to the entry by check name.
-3. Decides whether the finding stands. A `trusted_only` finding inside a trusted function is dropped. Everything else stands.
+3. Decides whether the finding stands. The finding takes the kind of the function that holds it, decision 0039. In a verified function every finding stands. In a trusted body a `trusted_only` finding is dropped, and every other finding stands. In a plain function no finding of an entry stands.
 4. Writes the message from the entry's fields.
 
 The generated config is a build artifact. Nobody edits it. The gate writes it to a temporary file for each run, and `cplusp policy emit` prints it.

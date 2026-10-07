@@ -10,8 +10,8 @@ use std::process::{Command, ExitCode, Stdio};
 use anyhow::{anyhow, bail, Context, Result};
 use clap::{Args, Parser, Subcommand};
 use cplusp_core::{
-    apply_overrides, emit, is_active, keep_finding, rule_by_id, rule_for_check, validate, CheckOption, CheckRef, Config, Decision,
-    Kind, Override, Policy, PolicyError, Rule,
+    apply_overrides, emit, is_active, keep_finding, kind_at, rule_by_id, rule_for_check, validate, CheckOption, CheckRef, Config, Decision,
+    Kind, Override, Policy, PolicyError, Region, Rule,
 };
 use serde::de::{DeserializeOwned, IgnoredAny};
 use serde::Deserialize;
@@ -39,6 +39,15 @@ const LINE_DIRECTIVE: &str = "cplusp-line-directive";
 /// belong to no row of the policy. The gate enables it for every run and reports them under the rule `pragma`.
 const PRAGMA: &str = "cplusp-pragma";
 
+/// The check of the plugin that reads the markers of include/cplusp.h, decisions 0039 and 0047. The gate enables it for every run. It
+/// reports in three forms. All offsets are clang-tidy's own `FileOffset`, as for every finding, and an end is one past the last byte.
+/// A region is the body of a function the file writes, or a plain declaration: `region {verified|trusted|plain} {end offset}`, at the
+/// first byte of the region. The gate keeps the regions of a run and shows them to no bot.
+/// A call that runs plain code is `reach {qualified name}`, at the call. The gate keeps it when the core gives the place the verified kind.
+/// The third form is a finding of the gate's own, `{presumed file}\t{presumed line}\t{sentence}` as for the pragmas. The gate reports
+/// it under the rule `marker`.
+const MARKERS: &str = "cplusp-markers";
+
 /// The checks of the plugin whose message starts with the id of a rule: `{rule}: {sentence}`, or the bare id. The gate maps a finding
 /// to its rule by that id and puts the sentence after the message of the rule. Every other check maps by its own name.
 // ponytail: a hand-kept list. Upgrade: a prefix on the check name.
@@ -49,7 +58,7 @@ const RULE_FIRST: &[&str] = &[MATCHER, ALLOWLIST, "cplusp-unlisted-state"];
 const PLANNED_CHECKS: &[&str] = &[
     MATCHER, "cplusp-mutable", "cplusp-multiple-inheritance", "cplusp-iterator-arithmetic", "cplusp-impure-operator", "cplusp-lambda-limits",
     "cplusp-evaluation-order", "cplusp-inexact-literal", "cplusp-aliasing", "cplusp-const-handle", "cplusp-allowlist", "cplusp-unlisted-state",
-    LINE_DIRECTIVE, PRAGMA,
+    "cplusp-indirect-call", LINE_DIRECTIVE, PRAGMA,
 ];
 
 // ------------------------------------------------------------------ command line
@@ -712,8 +721,10 @@ fn gate(c: &Common, json: bool, build_dir: Option<&Path>, plugin: Option<&Path>,
     let loaded = load(c.policy.as_deref(), Some(&listed))?;
     let mut config = emit(&loaded.policy);
     // The plugin reads the line directives and the pragmas from the preprocessor under the build's own flags, for every run.
+    // It reads the markers from the tree, for every run too.
     config.checks.push(LINE_DIRECTIVE.to_string());
     config.checks.push(PRAGMA.to_string());
+    config.checks.push(MARKERS.to_string());
     // The flags of each file, from after `--` or from the database. Judged before clang-tidy runs.
     let cwd = std::env::current_dir().context("cannot find the working directory")?;
     let builds = match build_dir {
@@ -761,29 +772,58 @@ fn gate(c: &Common, json: bool, build_dir: Option<&Path>, plugin: Option<&Path>,
     }
 
     let tmp = tempfile::tempdir().context("cannot create a temporary directory")?;
-    let (config_file, fixes_file) = (tmp.path().join("clang-tidy.yaml"), tmp.path().join("fixes.yaml"));
+    let config_file = tmp.path().join("clang-tidy.yaml");
     fs::write(&config_file, config_text(&config))?;
-    let mut cmd = Command::new(&tool);
-    cmd.args(load_arg(plugin));
-    cmd.arg(format!("--config-file={}", config_file.display())).arg(format!("--export-fixes={}", fixes_file.display())).arg("--quiet");
-    if let Some(d) = build_dir {
-        cmd.arg("-p").arg(d);
-    }
-    cmd.args(files);
-    if !clang_args.is_empty() {
-        cmd.arg("--").args(clang_args);
-    }
-    let out = cmd.stdin(Stdio::null()).output().with_context(|| format!("cannot run {tool}"))?;
-    // clang-tidy exits 1 whenever a finding exists, so only the fixes file tells. A clean run writes none.
-    let fixes: Fixes = match fs::read_to_string(&fixes_file) {
-        Ok(yaml) => parse(&yaml, "the clang-tidy fixes")?,
-        Err(e) if e.kind() == ErrorKind::NotFound => Fixes::default(),
-        Err(e) => return Err(e).context("cannot read the clang-tidy fixes"),
-    };
-    if !out.status.success() && fixes.diagnostics.is_empty() {
-        bail!("clang-tidy failed ({}):\n{}", out.status, String::from_utf8_lossy(&out.stderr));
+    // Each build is its own run, decision 0047, and so is each entry of a compile database, decision 0048. The places that a run reports
+    // judge only the findings of that run, because two builds can read one header with a marker in one and none in the other.
+    // A run is `clang-tidy FILE -- FLAGS` from the directory of the build, so the flags of an entry read the paths that they were made for.
+    for (n, (file, dir, flags)) in builds.iter().enumerate() {
+        let fixes_file = tmp.path().join(format!("fixes-{n}.yaml"));
+        let mut cmd = Command::new(&tool);
+        cmd.current_dir(dir).args(load_arg(plugin));
+        cmd.arg(format!("--config-file={}", config_file.display())).arg(format!("--export-fixes={}", fixes_file.display())).arg("--quiet");
+        cmd.arg(file).arg("--").args(flags);
+        let out = cmd.stdin(Stdio::null()).output().with_context(|| format!("cannot run {tool}"))?;
+        // clang-tidy exits 1 whenever a finding exists, so only the fixes file tells. A clean run writes none.
+        let fixes: Fixes = match fs::read_to_string(&fixes_file) {
+            Ok(yaml) => parse(&yaml, "the clang-tidy fixes")?,
+            Err(e) if e.kind() == ErrorKind::NotFound => Fixes::default(),
+            Err(e) => return Err(e).context("cannot read the clang-tidy fixes"),
+        };
+        if !out.status.success() && fixes.diagnostics.is_empty() {
+            bail!("clang-tidy failed ({}):\n{}", out.status, String::from_utf8_lossy(&out.stderr));
+        }
+        found.extend(judge(&loaded, fixes, &shown)?);
     }
 
+    // The message is part of the key: a check in RULE_FIRST says something different about each construct on a line.
+    found.sort_by(|a, b| (&a.path, a.line, &a.rule, &a.message).cmp(&(&b.path, b.line, &b.rule, &b.message)));
+    found.dedup_by(|a, b| (&a.path, a.line, &a.rule, &a.message) == (&b.path, b.line, &b.rule, &b.message));
+
+    for f in &found {
+        if json {
+            println!(
+                r#"{{"rule":{},"check":{},"file":{},"line":{},"decision":"{}","message":{}}}"#,
+                quote(&f.rule),
+                quote(&f.check),
+                quote(&shown(&f.path)),
+                f.line,
+                decision_word(f.decision),
+                quote(&f.message)
+            );
+        } else {
+            println!("Not provable: {}:{}: {}", shown(&f.path), f.line, f.message);
+        }
+    }
+    if found.is_empty() && !json {
+        println!("ok: no findings");
+    }
+    Ok(if found.is_empty() { ExitCode::SUCCESS } else { ExitCode::from(1) })
+}
+
+/// The findings of one run of clang-tidy. `fixes` is what the run reported. The places of the run decide the kind of each of its findings.
+fn judge(loaded: &Loaded, fixes: Fixes, shown: &dyn Fn(&Path) -> String) -> Result<Vec<Finding>> {
+    let mut found = Vec::new();
     let mut seen = HashSet::new();
     let diagnostics: Vec<_> = fixes
         .diagnostics
@@ -818,17 +858,35 @@ fn gate(c: &Common, json: bool, build_dir: Option<&Path>, plugin: Option<&Path>,
         bail!("{}", broken.join("\n"));
     }
 
+    // The functions of each file, from the regions the plugin reports for this run. A finding takes the kind of the innermost one that
+    // holds it, and the core says which that is.
+    let mut regions: BTreeMap<PathBuf, Vec<Region>> = BTreeMap::new();
+    for (path, d) in diagnostics.iter().filter(|(_, d)| d.name == MARKERS) {
+        if let Some(region) = region(&d.at) {
+            regions.entry(path.clone()).or_default().push(region);
+        }
+    }
+    let nowhere = Vec::new();
+
     for (path, d) in diagnostics {
-        // The message of the plugin is the presumed file, the presumed line and the sentence, set apart by tabs. A `#line` moves the
-        // presumed place, and a finding shows the place that the author gave. The sentence holds no tab and the line is digits.
-        // The file name may hold a tab, so the message is cut from the right.
         if d.name == PRAGMA {
-            let mut parts = d.at.message.rsplitn(3, '\t');
-            let (Some(message), Some(line), Some(file)) = (parts.next(), parts.next().and_then(|n| n.parse().ok()), parts.next()) else {
-                bail!("{PRAGMA} reported {}, which is not a finding of that check", d.at.message);
-            };
+            let (file, line, message) = presumed(&d)?;
             let rule = if message.starts_with("include:") { "include" } else { "pragma" };
-            found.push(ban(Path::new(&d.dir).join(file), line, rule, message));
+            found.push(ban(file, line, rule, message));
+            continue;
+        }
+        // A marker finding stands in every kind of function. A region is no finding. A call that reaches plain code is a finding in a
+        // verified place only: a trusted body may run plain code, and a plain function runs it.
+        if d.name == MARKERS {
+            if let Some(name) = reach(&d.at) {
+                if kind_at(regions.get(&path).unwrap_or(&nowhere), d.at.offset as u64) == Kind::Verified {
+                    let message = format!("marker: verified code calls {name}, which is plain. Give it a contract and mark it trusted.");
+                    found.push(ban(path.clone(), line_of(&path, d.at.offset)?, "marker", &message));
+                }
+            } else if region(&d.at).is_none() {
+                let (file, line, message) = presumed(&d)?;
+                found.push(ban(file, line, "marker", message));
+            }
             continue;
         }
         if d.name == LINE_DIRECTIVE {
@@ -852,9 +910,8 @@ fn gate(c: &Common, json: bool, build_dir: Option<&Path>, plugin: Option<&Path>,
         };
         let Some(i) = i else { continue };
         let (rule, doc) = (&loaded.policy.rules[i], &loaded.docs[i]);
-        // ponytail: every finding counts as inside a verified function until the clang-tidy plugin
-        // reports function kinds. Upgrade: read the kind from the plugin's `cplusp-markers` output.
-        if !keep_finding(rule.decision, Kind::Verified) {
+        // The kind of the function that holds the finding decides, and the core says whether the finding stands there.
+        if !keep_finding(rule.decision, kind_at(regions.get(&path).unwrap_or(&nowhere), d.at.offset as u64)) {
             continue;
         }
         // The core promises a limit and a use_instead on every rule it maps a finding to.
@@ -871,29 +928,37 @@ fn gate(c: &Common, json: bool, build_dir: Option<&Path>, plugin: Option<&Path>,
         let line = line_of(&path, d.at.offset)?;
         found.push(Finding { path, line, rule: rule.id.clone(), check: d.name, decision: rule.decision, message });
     }
-    // The message is part of the key: a check in RULE_FIRST says something different about each construct on a line.
-    found.sort_by(|a, b| (&a.path, a.line, &a.rule, &a.message).cmp(&(&b.path, b.line, &b.rule, &b.message)));
-    found.dedup_by(|a, b| (&a.path, a.line, &a.rule, &a.message) == (&b.path, b.line, &b.rule, &b.message));
+    Ok(found)
+}
 
-    for f in &found {
-        if json {
-            println!(
-                r#"{{"rule":{},"check":{},"file":{},"line":{},"decision":"{}","message":{}}}"#,
-                quote(&f.rule),
-                quote(&f.check),
-                quote(&shown(&f.path)),
-                f.line,
-                decision_word(f.decision),
-                quote(&f.message)
-            );
-        } else {
-            println!("Not provable: {}:{}: {}", shown(&f.path), f.line, f.message);
-        }
-    }
-    if found.is_empty() && !json {
-        println!("ok: no findings");
-    }
-    Ok(if found.is_empty() { ExitCode::SUCCESS } else { ExitCode::from(1) })
+/// The place and the sentence of a finding of the gate's own. The message of the plugin is the presumed file, the presumed line and the
+/// sentence, set apart by tabs. A `#line` moves the presumed place, and a finding shows the place that the author gave. The sentence
+/// holds no tab and the line is digits. The file name may hold a tab, so the message is cut from the right.
+fn presumed(d: &Diagnostic) -> Result<(PathBuf, usize, &str)> {
+    let mut parts = d.at.message.rsplitn(3, '\t');
+    let (Some(message), Some(line), Some(file)) = (parts.next(), parts.next().and_then(|n| n.parse().ok()), parts.next()) else {
+        bail!("{} reported {}, which is not a finding of that check", d.name, d.at.message);
+    };
+    Ok((Path::new(&d.dir).join(file), line, message))
+}
+
+/// The region that a report of `cplusp-markers` gives: `region {verified|trusted|plain} {end}`, at the first byte of the region.
+/// A finding of the check starts with a file name and has tabs, so it does not parse as a region.
+fn region(at: &At) -> Option<Region> {
+    let (kind, end) = at.message.strip_prefix("region ")?.split_once(' ')?;
+    let kind = match kind {
+        "verified" => Kind::Verified,
+        "trusted" => Kind::Trusted,
+        "plain" => Kind::Plain,
+        _ => return None,
+    };
+    Some(Region { begin: at.offset as u64, end: end.parse().ok()?, kind })
+}
+
+/// The name in a report of `cplusp-markers` of the form `reach {qualified name}`, at a call that runs a plain function. The name runs to
+/// the end and can hold a space, as in `operator int`. A finding of the check has tabs, so it is none.
+fn reach(at: &At) -> Option<&str> {
+    at.message.strip_prefix("reach ").filter(|name| !name.contains('\t'))
 }
 
 // ponytail: reads the whole file to turn a byte offset into a line, once per diagnostic.

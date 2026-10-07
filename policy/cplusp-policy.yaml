@@ -951,7 +951,7 @@ rules:
     area: platform
     canonical: "Decision 0032. An allowlist, not a blocklist"
     decision: ban
-    why: The gate refuses what it does not know. Every kind of statement, expression, declaration and type that verified code may use is on the lists in this row, and so is every attribute. A kind outside them has no rule yet, so no proof covers it. The kinds a ban row claims are listed here too, under the row's name, so a team that loosens the row loosens its kinds with it.
+    why: The gate refuses what it does not know. Every kind of statement, expression, declaration and type that verified code may use is on the lists in this row. So is every attribute. A kind outside them has no rule yet, so no proof covers it. The kinds a ban row claims are listed here too, under the row's name. So a team that loosens the row loosens its kinds with it.
     use_instead: "a construct the subset lists, or ask for a row."
     stage: gate
     detect:

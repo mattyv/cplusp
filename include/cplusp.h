@@ -1,8 +1,8 @@
 // The markers of docs/plan.md, section "Markers and the escape hatch". They are the only way a function changes kind.
 // A new function is verified by default. CPLUSP_TRUSTED keeps a contract and skips the proof, with a reason.
 // CPLUSP_PLAIN opts a function out, and verified code cannot call it. CPLUSP_ASSUME covers one statement.
-// The gate does not read the markers yet, so every function counts as verified today. The attribute is kept so
-// that it will, and so that the examples show the shape the bot writes.
+// The gate reads them, decisions 0039 and 0047. A finding takes the kind of the function that holds it. CPLUSP_ASSUME
+// waits until a case needs it. Clang 18 takes the attribute on no statement.
 #pragma once
 
 #ifdef __clang__
