@@ -756,11 +756,12 @@ bool isLibraryValue(QualType Type) {
   const CXXRecordDecl *Record = Type->getAsCXXRecordDecl();
   if (!Record || !inLibrary(Record))
     return false;
-  // A member class holds what the type around it holds, decision 0046. `map<K, V, C>::value_compare` holds the comparator `C`.
-  if (const auto *Spec = dyn_cast<ClassTemplateSpecializationDecl>(Record))
-    return argumentsAreLibraryValues(Spec->getTemplateArgs().asArray());
+  // A member class, a template or not, holds what the type around it holds, decision 0046.
+  // `map<K, V, C>::value_compare` holds the comparator `C`, and `elements_view<V, N>::_Iterator<false>` holds the view `V`.
+  const auto *Spec = dyn_cast<ClassTemplateSpecializationDecl>(Record);
   const auto *Outer = dyn_cast<CXXRecordDecl>(Record->getDeclContext());
-  return !Outer || isLibraryValue(Record->getASTContext().getRecordType(Outer));
+  return (!Spec || argumentsAreLibraryValues(Spec->getTemplateArgs().asArray())) &&
+         (!Outer || isLibraryValue(Record->getASTContext().getRecordType(Outer)));
 }
 
 bool isBuiltOrArgument(QualType Argument, QualType Built) {
