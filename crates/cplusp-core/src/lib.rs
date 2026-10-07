@@ -11,6 +11,8 @@
 //! - `rule_for_check` and `keep_finding`: a finding maps to the first rule that
 //!   enabled its check, and is dropped inside a trusted function only when that
 //!   rule is Trusted only.
+//! - `kind_at`: a place takes the kind of the innermost marked function that
+//!   holds it, and is verified when none does.
 
 use vstd::prelude::*;
 
@@ -1026,6 +1028,68 @@ pub fn keep_finding(d: Decision, kind: Kind) -> (res: bool)
         Kind::Verified => true,
         Kind::Trusted => d != Decision::TrustedOnly,
         Kind::Plain => false,
+    }
+}
+
+/// A marked function's place in a file: from the offset `begin` up to, and not including, the offset `end`, decision 0039.
+#[derive(Clone, Copy, Debug)]
+pub struct Region {
+    pub begin: u64,
+    pub end: u64,
+    pub kind: Kind,
+}
+
+pub open spec fn spec_holds(r: Region, at: u64) -> bool {
+    r.begin <= at && at < r.end
+}
+
+/// The kind of the place `at`: the kind of the innermost region that holds it, or Verified when no region holds it. Functions
+/// nest in C++ only as a whole, so of the regions that hold a place, the innermost is the one that begins last.
+pub fn kind_at(regions: &Vec<Region>, at: u64) -> (k: Kind)
+    ensures
+        (forall|i: int| 0 <= i < regions.len() ==> !spec_holds(#[trigger] regions@[i], at)) ==> k == Kind::Verified,
+        (exists|i: int| 0 <= i < regions.len() && spec_holds(#[trigger] regions@[i], at)) ==> exists|i: int|
+            0 <= i < regions.len() && spec_holds(#[trigger] regions@[i], at) && regions@[i].kind == k
+            && forall|j: int| 0 <= j < regions.len() && spec_holds(#[trigger] regions@[j], at) ==> regions@[j].begin <= regions@[i].begin,
+{
+    let mut best: Option<usize> = None;
+    let mut i: usize = 0;
+    while i < regions.len()
+        invariant
+            0 <= i <= regions.len(),
+            match best {
+                None => forall|j: int| 0 <= j < i ==> !spec_holds(#[trigger] regions@[j], at),
+                Some(b) => {
+                    &&& b < i
+                    &&& spec_holds(regions@[b as int], at)
+                    &&& forall|j: int| 0 <= j < i && spec_holds(#[trigger] regions@[j], at) ==> regions@[j].begin <= regions@[b as int].begin
+                },
+            },
+        decreases regions.len() - i,
+    {
+        if regions[i].begin <= at && at < regions[i].end {
+            match best {
+                None => {
+                    best = Some(i);
+                },
+                Some(b) => {
+                    // Of two regions that begin at one place, the first in the list stays.
+                    if regions[i].begin > regions[b].begin {
+                        best = Some(i);
+                    }
+                },
+            }
+        }
+        i += 1;
+    }
+    match best {
+        None => Kind::Verified,
+        Some(b) => {
+            proof {
+                assert(spec_holds(regions@[b as int], at));
+            }
+            regions[b].kind
+        },
     }
 }
 

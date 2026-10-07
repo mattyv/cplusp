@@ -315,3 +315,35 @@ fn in_a_plain_function_nothing_is_reported() {
         assert!(!keep_finding(d, Kind::Plain), "{:?} in plain", d);
     }
 }
+
+// ------------------------------------------------------------------ the kind of a place, decision 0039
+
+fn region(begin: u64, end: u64, kind: Kind) -> Region {
+    Region { begin, end, kind }
+}
+
+#[test]
+fn a_place_in_no_marked_function_is_verified() {
+    let r = vec![region(10, 20, Kind::Trusted)];
+    assert_eq!(kind_at(&r, 0), Kind::Verified);
+    assert_eq!(kind_at(&r, 9), Kind::Verified);
+    assert_eq!(kind_at(&r, 20), Kind::Verified, "the end is the first place after the function");
+    assert_eq!(kind_at(&vec![], 5), Kind::Verified);
+}
+
+#[test]
+fn a_place_in_a_marked_function_takes_its_kind() {
+    let r = vec![region(10, 20, Kind::Trusted), region(30, 40, Kind::Plain)];
+    assert_eq!(kind_at(&r, 10), Kind::Trusted);
+    assert_eq!(kind_at(&r, 19), Kind::Trusted);
+    assert_eq!(kind_at(&r, 35), Kind::Plain);
+}
+
+#[test]
+fn the_innermost_marked_function_decides() {
+    // A trusted local function inside a plain one, in either order of the list.
+    for r in [vec![region(0, 100, Kind::Plain), region(10, 20, Kind::Trusted)], vec![region(10, 20, Kind::Trusted), region(0, 100, Kind::Plain)]] {
+        assert_eq!(kind_at(&r, 15), Kind::Trusted);
+        assert_eq!(kind_at(&r, 50), Kind::Plain);
+    }
+}
