@@ -4,6 +4,7 @@
 #include <array>
 #include <cstdint>
 #include <memory>
+#include <tuple>
 #include <optional>
 #include <vector>
 
@@ -132,4 +133,27 @@ bool present(const std::optional<std::unique_ptr<int32_t>>& o) {
 //@ ensures result == p->has_value()
 bool inner_present(const std::unique_ptr<std::optional<std::unique_ptr<int32_t>>>& p) {
   return present(*p);
+}
+
+struct Pairs {
+  std::pair<int32_t, int32_t> pr;
+  std::tuple<int32_t, int32_t> tp;
+  int32_t x = 0;
+};
+
+// A copy that carries no way to write is a read of its value, decisions 0040 and 0041, whatever constructor of the library the copy
+// takes. In C++23 the library copies a non-const pair through a constructor that takes a non-const reference, and it writes nothing.
+//@ requires p != nullptr
+//@ ensures result == p->pr.first + std::get<0>(p->tp)
+int32_t firsts(const std::unique_ptr<Pairs>& p) {
+  std::pair<int32_t, int32_t> c = p->pr;
+  std::tuple<int32_t, int32_t> t = p->tp;
+  return c.first + std::get<0>(t);
+}
+
+//@ requires p != nullptr
+//@ ensures result == p->x
+int32_t boxed(const std::unique_ptr<Pairs>& p) {
+  std::optional<int32_t> o = p->x;
+  return o.value_or(0);
 }
