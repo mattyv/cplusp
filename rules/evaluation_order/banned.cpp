@@ -247,3 +247,39 @@ int32_t add2(int32_t a, int32_t b) {
 int32_t two_visits(const std::variant<int32_t, bool>& x, const std::variant<int32_t, bool>& y) {
   return add2(std::visit(Counter2{}, x, y), std::visit(Counter2{}, x, y));  // BANNED
 }
+
+// make_pair copies its argument, and the copy runs Noted's copy constructor, which changes total. Beside it, a read of total,
+// decision 0038.
+//@ requires total < 0x7FFFFFFF
+//@ modifies total
+bool pair_beside_a_read(const Noted& n) {
+  return before(std::make_pair(n, int32_t{0}).second, total);  // BANNED
+}
+
+//@ requires total < 0x7FFFFFFF
+//@ modifies total
+int32_t take_next() {
+  return total += 1;
+}
+
+struct Ticket {
+  int32_t n = take_next();
+};
+
+bool ticket_first(Ticket t, int32_t b) {
+  return t.n < b;
+}
+
+// A default member initializer runs where the object is made, so Ticket{} changes total. Beside it, a read of total.
+//@ requires total < 0x7FFFFFFF
+//@ modifies total
+bool default_init_beside_a_read() {
+  return ticket_first(Ticket{}, total);  // BANNED
+}
+
+// The capture initializer of a lambda runs where the lambda is written. Beside it, a read of total.
+//@ requires total < 0x7FFFFFFF
+//@ modifies total
+bool capture_beside_a_read() {
+  return before(std::make_pair([k = take_next()] { return k; }, int32_t{0}).second, total);  // BANNED
+}

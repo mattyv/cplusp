@@ -61,3 +61,13 @@ void poke(const std::unique_ptr<T>& p) {
 void use_poke(const std::unique_ptr<int32_t>& p) {
   poke(p);
 }
+
+// A return carries the const of the handle too. A function may not hand out a non-const reference through a const handle, decision
+// 0038. Its caller would write through it, and the call shows no handle.
+int32_t& through_return(const std::unique_ptr<int32_t>& p) {
+  return *p;  // BANNED
+}
+
+void write_returned(const std::unique_ptr<int32_t>& p) {
+  through_return(p) = 42;
+}

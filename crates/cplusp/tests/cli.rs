@@ -614,19 +614,50 @@ fn a_loosened_allowlist_keeps_every_ban() {
     assert!(out.lines().any(|l| l.ends_with("banned.cpp:4: `goto`: not allowed in verified code. No benefit. Use a loop. The construct is GotoStmt.")), "{out}");
 }
 
-/// A flag that strips the line markers from the preprocessor output leaves the gate blind. The run is refused.
+/// The gate runs the compiler itself and reads what it reports, decision 0038. A flag that changes what the compiler reads or reports
+/// would leave the gate blind or make it judge something else. The run is refused.
 #[test]
-fn gate_refuses_a_preprocessor_run_without_line_markers() {
+fn gate_refuses_flags_that_change_what_the_compiler_reports() {
     if !clang_tidy_available() {
         return;
     }
-    for flag in ["-P", "-Wp,-P", "-dM", "-M", "-MM", "-###", "-fdriver-only"] {
+    for flag in ["-E", "-P", "-Wp,-P", "-dM", "-M", "-MM", "-###", "-fdriver-only"] {
         let o = gated(&["rules/goto/allowed.cpp", "--", "-std=c++23", "-ffp-contract=off", flag]);
         assert_eq!(o.status.code(), Some(2), "{flag}: stdout {} stderr {}", stdout(&o), stderr(&o));
         assert_eq!(stdout(&o).trim(), "", "{flag}: nothing on stdout for a refused run");
-        let expected = "cannot preprocess rules/goto/allowed.cpp: the preprocessor output has no line marker for it";
+        let expected = format!("{flag}: not allowed with the gate. It changes what the compiler reads or reports, and the gate runs the compiler itself.");
         assert!(stderr(&o).lines().any(|l| l == expected), "{flag}: stderr {}", stderr(&o));
     }
+}
+
+/// A raw string can hold text that looks like a line marker of the preprocessor. It is no marker, and it must not make a header look
+/// like a system header to the gate. The plugin reads the pragma from the preprocessor itself, and the NOLINT scan reads the files the
+/// compiler's include graph names, decision 0038. The files are written at test time, because the fake marker holds the header's path.
+#[test]
+fn gate_finds_a_system_header_pragma_behind_a_marker_in_a_raw_string() {
+    if !clang_tidy_available() {
+        return;
+    }
+    let dir = std::env::temp_dir().join(format!("cplusp-raw-marker-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let header = dir.join("hidden.hpp");
+    std::fs::write(&header, "#pragma GCC system_header\n#include <cstdint>\nstruct Hidden { uint32_t value : 3; };  // NOLINT\n").unwrap();
+    let main = dir.join("raw-marker.cpp");
+    let text = format!(
+        "#include <cstdint>\nstatic_assert(sizeof(R\"(\n# 1 \"{}\" 1 3\n)\") > 0);\n#include \"hidden.hpp\"\nuint32_t low(Hidden h) {{ return h.value; }}\n",
+        header.display()
+    );
+    std::fs::write(&main, text).unwrap();
+    let o = gated(&[main.to_str().unwrap(), "--", "-std=c++23", "-ffp-contract=off"]);
+    let out = stdout(&o);
+    assert_eq!(o.status.code(), Some(1), "stdout: {out} stderr: {}", stderr(&o));
+    for expected in [
+        "hidden.hpp:1: pragma system_header: not allowed in verified code. It silences the gate.",
+        "hidden.hpp:3: NOLINT: not allowed in verified code. It silences the gate. Use CPLUSP_TRUSTED with a reason.",
+    ] {
+        assert!(out.lines().any(|l| l.ends_with(expected)), "{expected}: {out}");
+    }
+    let _ = std::fs::remove_dir_all(&dir);
 }
 
 /// A file the preprocessor cannot read cannot be judged. The message has the shape of the other refusals.
