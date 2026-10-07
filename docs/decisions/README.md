@@ -51,3 +51,4 @@ Status is `decided`, `proposed` (the default until someone objects or the thin s
 | [0043](0043-a-library-type-counts-by-what-it-holds.md) | A library type counts by what it holds. Fields and bases count for every record, const reaches the fields, owning containers count by their elements, an incomplete type carries | decided |
 | [0044](0044-an-owning-container-counts-by-all-its-type-arguments.md) | An owning container counts by all its type arguments. A library constructor reads only a value of its own type or of a type argument | decided |
 | [0045](0045-a-library-constructor-reads-only-a-library-value.md) | A library constructor reads only a number or a value of the library. A type of the file copies through its own constructor, which may write | decided |
+| [0046](0046-a-library-type-is-a-library-value-only-when-what-it-holds-is.md) | A library type is a value of the library only when each type argument is a number, an enum or a value of the library | decided |

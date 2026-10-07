@@ -2,6 +2,8 @@
 #include <memory>
 #include <optional>
 #include <random>
+#include <tuple>
+#include <utility>
 
 namespace std {
 struct deque {
@@ -75,4 +77,15 @@ struct Counter {
 int32_t snapshot(const std::unique_ptr<Counter>& p) {
   std::optional<Counter> copy(*p);
   return copy->n;
+}
+
+// A library type that holds a type of the file copies through that type's constructor too, decision 0046.
+int32_t pair_snapshot(const std::unique_ptr<std::pair<Counter, int32_t>>& p) {
+  std::pair<Counter, int32_t> copy(*p);
+  return copy.first.n;
+}
+
+int32_t tuple_snapshot(const std::unique_ptr<std::tuple<Counter, int32_t>>& p) {
+  std::tuple<Counter, int32_t> copy(*p);
+  return std::get<0>(copy).n;
 }
