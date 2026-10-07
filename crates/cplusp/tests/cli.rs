@@ -1236,7 +1236,7 @@ fn gate_refuses_a_marker_it_cannot_honour() {
         "markers-errors.cpp:12: marker: blank_reason has a marker with no reason. A trusted or plain marker gives its reason.",
         "markers-errors.cpp:19: marker: two_kinds has two kinds of marker. A function has one kind.",
         "markers-errors.cpp:23: marker: cplusp:trustd is no marker. The markers are in include/cplusp.h.",
-        "markers-errors.cpp:25: marker: Box has a marker, and only a function takes one.",
+        "markers-errors.cpp:25: marker: Box has a marker, and only a function or a plain type takes one.",
         "markers-errors.cpp:31: marker: cplusp:x y is no marker. The markers are in include/cplusp.h.",
         "markers-errors.cpp:34: marker: cplusp:assume waits until a case needs it. Mark the function trusted with a reason.",
     ] {
@@ -1369,6 +1369,30 @@ fn an_indirect_call_has_a_name_only_from_constants() {
     let expected: BTreeSet<(String, usize)> =
         [16, 27, 38, 67].into_iter().map(|n| ("function_pointers".to_string(), n)).collect();
     assert_eq!(reported, expected, "{out}");
+}
+
+/// A type can be plain, decision 0051. Its fields, its static members and its member functions are out of view, and plain code may use
+/// it. Verified code makes no object of it and reads no field of it. A call of a plain member is a call of plain code, decision 0047. A
+/// reference to a plain type and a call of its trusted member are allowed.
+#[test]
+fn a_plain_type_is_out_of_view_and_verified_code_does_not_touch_it() {
+    if !clang_tidy_available() {
+        return;
+    }
+    let f = fixture("markers-types.cpp");
+    let plugin = plugin();
+    let o = cplusp(&["gate", "--json", "--plugin", plugin.to_str().unwrap(), f.to_str().unwrap(), "--", "-std=c++23", "-ffp-contract=off"]);
+    let out = stdout(&o);
+    assert_eq!(o.status.code(), Some(1), "stdout: {out} stderr: {}", stderr(&o));
+    let reported: BTreeSet<(String, usize)> = out.lines().map(|l| (field(l, "rule"), field(l, "line").parse::<usize>().unwrap())).collect();
+    let expected: BTreeSet<(String, usize)> = [29, 34, 39].into_iter().map(|n| ("marker".to_string(), n)).collect();
+    assert_eq!(reported, expected, "{out}");
+    for message in [
+        "marker: verified code uses Record, which is plain. Reach it through a trusted member.",
+        "marker: verified code calls Record::twice, which is plain. Give it a contract and mark it trusted.",
+    ] {
+        assert!(out.contains(message), "{message}: {out}");
+    }
 }
 
 /// Pull `"key":"value"` or `"key":123` out of one JSON line without a JSON library.
