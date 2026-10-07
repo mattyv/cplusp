@@ -1428,6 +1428,29 @@ fn a_plain_object_goes_only_to_the_files_own_code() {
     }
 }
 
+/// A pointer to a plain object counts as the object, and a friend defined in a plain type is plain, decision 0053. The library reads a
+/// plain object through a pointer, and verified code calls a plain friend. A trusted friend keeps its contract, and the word `friend`
+/// in a plain type is out of view.
+#[test]
+fn a_pointer_counts_as_the_object_and_a_friend_of_a_plain_type_is_plain() {
+    if !clang_tidy_available() {
+        return;
+    }
+    let f = fixture("markers-types-friends.cpp");
+    let plugin = plugin();
+    let o = cplusp(&["gate", "--json", "--plugin", plugin.to_str().unwrap(), f.to_str().unwrap(), "--", "-std=c++23", "-ffp-contract=off"]);
+    let out = stdout(&o);
+    let reported: BTreeSet<(String, usize)> = out.lines().map(|l| (field(l, "rule"), field(l, "line").parse::<usize>().unwrap())).collect();
+    let expected: BTreeSet<(String, usize)> = [("marker", 11), ("marker", 33)].into_iter().map(|(r, n)| (r.to_string(), n)).collect();
+    assert_eq!(reported, expected, "{out}");
+    for message in [
+        "marker: verified code uses Record, which is plain. Reach it through a trusted member.",
+        "marker: verified code calls twice_of, which is plain. Give it a contract and mark it trusted.",
+    ] {
+        assert!(out.contains(message), "{message}: {out}");
+    }
+}
+
 /// Pull `"key":"value"` or `"key":123` out of one JSON line without a JSON library.
 fn field(line: &str, key: &str) -> String {
     let needle = format!("\"{key}\":");
