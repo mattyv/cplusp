@@ -86,6 +86,13 @@ What the markers show:
 - **The tree runs the test allocator.** Three findings are new. `verified code calls ThrowingAllocationAllocator::allocate, which is plain`, and the same for `deallocate` and the constructor. The tests instantiate the tree with the allocator that throws, so the tree runs plain code. That is decision 0047 at work on code that nobody wrote for it. The allocator needs a contract and a trusted mark, or the verified build uses `std::allocator`.
 - **The tree's own findings stay.** The two headers have 397. The largest rows are unlisted 121, metaprogramming 66, strings 42 and raw_pointer 31. Then function_pointers 29, operator_overloading 19, plain_int 11 and exceptions 11. Then iostreams 10, lvalue_references 10, templates 8 and iterators 8. The rest is 31 in thirteen rows. This is the work for a bot, or the share of the tree to mark trusted.
 
+## The fourth run, with plain types
+
+On 2026-10-07, under decisions 0051 to 0054. The copy of the third run also marks two types plain: the test allocator and the driver's `Data`.
+
+- **The plain files are out of view.** One finding stays in them: `static int throwOnAllocCount`, a global outside any type. A variable takes no marker.
+- **The tree touches the plain allocator.** The tree gains 13 findings, 267 in FlashRadixTree.hpp. Each is a place where the tree holds the allocator or hands it to `std::allocator_traits`: `verified code uses ThrowingAllocationAllocator, which is plain`. The three calls of its members stay. So a tree instantiated with a plain allocator is refused at each place that touches it. The way out is the same as before: a contract and a trusted mark on the allocator, or `std::allocator` in the verified build.
+
 ## The thin slice: radix_find
 
 On 2026-10-07. The tree itself cannot take byte keys: a concept refuses `std::span`, and its find uses rows that the gate refuses. So the slice is a new find in the subset, with the shape of the tree's exact find. It is the battery case `radix_find`. A node holds a byte prefix, an optional value and a vector of children, and the find recurses with a span of the key.
@@ -102,4 +109,4 @@ The cause is in `_findExact`. When the key ends at a node with no value, the loo
 1. Fix `_findExact` in FlashRadixTree, and take the next function through the slice: `insert`, with a model of the contents the tree stores.
 2. Enum template parameters wait for a verified function that needs one. The exact find has no match mode.
 3. Give the node a deleter type with no state, so that each release is a direct call. Or mark `make_unique_alloc` trusted, with the deleter inside it.
-4. A type of test code takes a plain marker, decisions 0051 to 0054. Mark the test allocator and the driver's `Data` plain, and run the trial again.
+4. Give the test allocator a contract and trusted members, or build the verified tree with `std::allocator`, and run the trial again.
