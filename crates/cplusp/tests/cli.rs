@@ -736,6 +736,51 @@ fn gate_asks_the_compiler_whether_a_system_header_changed_the_warnings() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// clang's driver loads `h.h.pch` in place of `h.h` when it sits beside it, and a diagnostic pragma in the header then never reaches a
+/// callback. The plugin asks the compiler whether it loaded a precompiled header, decision 0038, and refuses the run if it did. The files
+/// are written at test time.
+#[test]
+fn gate_refuses_a_precompiled_header_that_the_compiler_loads_on_its_own() {
+    if !clang_tidy_available() {
+        return;
+    }
+    let dir = std::env::temp_dir().join(format!("cplusp-pch-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let header = dir.join("h.h");
+    std::fs::write(&header, "#pragma clang diagnostic ignored \"-Wreturn-stack-address\"\n").unwrap();
+    let built = Command::new("clang++-18")
+        .args(["-x", "c++-header", "-std=c++23", "-ffp-contract=off"])
+        .arg(&header)
+        .arg("-o")
+        .arg(dir.join("h.h.pch"))
+        .output()
+        .expect("clang++-18 runs");
+    assert!(built.status.success(), "the precompiled header must build: {}", String::from_utf8_lossy(&built.stderr));
+    let main = dir.join("uses-pch.cpp");
+    std::fs::write(&main, "#include <cstdint>\nconst int32_t& f() {\n  int32_t x = 1;\n  return x;\n}\n").unwrap();
+    let o = gated(&[main.to_str().unwrap(), "--", "-std=c++23", "-ffp-contract=off", "-include", header.to_str().unwrap()]);
+    let out = stdout(&o);
+    assert_eq!(o.status.code(), Some(1), "stdout: {out} stderr: {}", stderr(&o));
+    let expected = "uses-pch.cpp:1: include: a precompiled header is loaded. It carries state from an earlier run of the compiler.";
+    assert!(out.lines().any(|l| l.ends_with(expected)), "{out}");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// A range-for over a range through a const handle calls the range's `begin` and `end`. A non-const one outside std is a non-const
+/// call on what the handle owns, decision 0040, and the finding sits at the `for`.
+#[test]
+fn a_range_for_over_a_const_handle_calls_only_const_begin_and_end() {
+    if !clang_tidy_available() {
+        return;
+    }
+    let f = fixture("range-begin-writes.cpp");
+    let plugin = plugin();
+    let o = cplusp(&["gate", "--json", "--plugin", plugin.to_str().unwrap(), f.to_str().unwrap(), "--", "-std=c++23", "-ffp-contract=off"]);
+    let out = stdout(&o);
+    assert_eq!(o.status.code(), Some(1), "stdout: {out} stderr: {}", stderr(&o));
+    assert!(out.lines().any(|l| field(l, "rule") == "unique_ptr" && field(l, "line") == "19"), "{out}");
+}
+
 /// Any pragma but `once` changes the build the proofs assume, or silences the gate. Two that turn contraction back on
 /// behind the flags: clang's own and the standard's. The message names the pragma by its first two words.
 #[test]

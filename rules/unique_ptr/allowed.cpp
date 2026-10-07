@@ -95,3 +95,10 @@ int32_t read_by_pointer(const std::unique_ptr<int32_t>& p) {
   }
   return positive_at(p.get()) ? *p.get() : 0;
 }
+
+// An explicit conversion to a pointer to const is the conversion the decision lists as a read.
+//@ requires p != nullptr
+//@ ensures result == (*p > 0)
+bool positive_by_cast(const std::unique_ptr<int32_t>& p) {
+  return positive_at(static_cast<const int32_t*>(p.get()));
+}

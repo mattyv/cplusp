@@ -1,4 +1,6 @@
 #include <cstddef>
+#include <span>
+#include <array>
 #include <cstdint>
 #include <vector>
 
@@ -105,4 +107,16 @@ void paired(int32_t a, int32_t b, int32_t c, int32_t d) {
 
 int32_t both_of(std::tuple<int32_t, int32_t>& t) {
   return std::get<0>(t) + std::get<1>(t);
+}
+
+//@ requires s.size() > 0
+//@ ensures result == s[0]
+int32_t head(std::span<const int32_t> s) {
+  return s[0];
+}
+
+// A view of const elements reads what it is made from, so it is no change beside a read.
+//@ ensures result == a[0] + a[1]
+int32_t head_and_second(std::array<int32_t, 4>& a) {
+  return head(a) + a[1];
 }

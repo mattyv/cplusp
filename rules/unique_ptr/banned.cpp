@@ -3,6 +3,7 @@
 #include <cstdint>
 #include <memory>
 #include <optional>
+#include <span>
 #include <vector>
 #include <sys/uio.h>
 
@@ -134,4 +135,15 @@ void passed(const std::unique_ptr<int32_t>& p) {
 
 void wrapped(const std::unique_ptr<int32_t>& p) {
   std::optional<iovec> o{iovec{p.get(), 4}};  // BANNED
+}
+
+// A const handle that owns a handle or a span. A const method of what it owns can still hand out a way to write, and the walk follows
+// it, decision 0040.
+void nested(const std::unique_ptr<std::unique_ptr<int32_t>>& p) {
+  *p->get() = 1;  // BANNED
+}
+
+void owned_span(const std::unique_ptr<std::span<int32_t>>& p) {
+  p->subspan(0)[0] = 1;  // BANNED
+  p->front() = 1;  // BANNED
 }

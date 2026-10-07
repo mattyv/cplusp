@@ -293,7 +293,7 @@ rules:
     decision: restrict
     limit: Const access only through a const handle or a const container of handles. No write through one. No assignment, increment or non-const call on what it owns, and no binding of that to a non-const reference, pointer or span.
     why: Simple single ownership, behind a trusted contract. A const reference is a value in, decisions 0029 and 0033, so what it owns may not change through it.
-    use_instead: "a non-const reference to the owner when the owned object changes."
+    use_instead: "a non-const reference to the owner when the owned object changes, or `std::as_const(*p)`, `cbegin` and `cend` to hand what it owns to a std algorithm or a lookup."
     stage: gate
     detect:
       - check: cplusp-const-handle
