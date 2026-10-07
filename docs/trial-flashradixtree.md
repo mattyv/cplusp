@@ -86,9 +86,20 @@ What the markers show:
 - **The tree runs the test allocator.** Three findings are new. `verified code calls ThrowingAllocationAllocator::allocate, which is plain`, and the same for `deallocate` and the constructor. The tests instantiate the tree with the allocator that throws, so the tree runs plain code. That is decision 0047 at work on code that nobody wrote for it. The allocator needs a contract and a trusted mark, or the verified build uses `std::allocator`.
 - **The tree's own findings stay.** The two headers have 397. The largest rows are unlisted 121, metaprogramming 66, strings 42 and raw_pointer 31. Then function_pointers 29, operator_overloading 19, plain_int 11 and exceptions 11. Then iostreams 10, lvalue_references 10, templates 8 and iterators 8. The rest is 31 in thirteen rows. This is the work for a bot, or the share of the tree to mark trusted.
 
+## The thin slice: radix_find
+
+On 2026-10-07. The tree itself cannot take byte keys: a concept refuses `std::span`, and its find uses rows that the gate refuses. So the slice is a new find in the subset, with the shape of the tree's exact find. It is the battery case `radix_find`. A node holds a byte prefix, an optional value and a vector of children, and the find recurses with a span of the key.
+
+- **The gate** passes the find as written.
+- **The model** proves that the find gives a value exactly when the tree stores the key with that value. The tree must be well formed and at most 1000 high.
+- **The differential run** agrees with the C++ on 200 keys over three bytes.
+- **FlashRadixTree as the oracle.** A program outside this repo puts the same five keys in the real tree. It asks both finds for every key of length 0 to 6 over three letters, 1093 keys in all. They differ on one: `"ab"`. The real tree gives 2, the value of `"abaab"`, and the verified find gives none.
+
+The cause is in `_findExact`. When the key ends at a node with no value, the loop does not stop. It looks again below that node with the same key, and it stops at the first node whose prefix is the rest of the key. An `else return nullptr;` after the test `key.size() > (seen += ...)` stops it. The tree is GPL-3.0, so this repo holds no copy of it, and the comparison is not part of the battery.
+
 ## What to do next
 
-1. Pick one function of the tree, instantiate it for `std::span<const uint8_t>` keys and `int32_t` values, and take it through the thin slice: gate, model, differential run.
-2. Decide on enum template parameters, with a case in the battery.
+1. Fix `_findExact` in FlashRadixTree, and take the next function through the slice: `insert`, with a model of the contents the tree stores.
+2. Enum template parameters wait for a verified function that needs one. The exact find has no match mode.
 3. Give the node a deleter type with no state, so that each release is a direct call. Or mark `make_unique_alloc` trusted, with the deleter inside it.
-4. Decide whether a type of test code can take a plain marker.
+4. A type of test code takes a plain marker, decision 0051. Mark the test allocator and the driver's `Data` plain, and run the trial again.
