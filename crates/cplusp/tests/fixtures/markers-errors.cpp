@@ -25,3 +25,10 @@ int32_t typo(int32_t a);
 struct CPLUSP_TRUSTED("a class is no function") Box {
   int32_t v;
 };
+
+[[clang::annotate("cplusp:x\ty")]]
+//@ ensures result == a
+int32_t tabbed(int32_t a);
+
+CPLUSP_ASSUME("one statement")
+int32_t assumed(int32_t a);

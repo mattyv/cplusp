@@ -1237,10 +1237,87 @@ fn gate_refuses_a_marker_it_cannot_honour() {
         "markers-errors.cpp:19: marker: two_kinds has two kinds of marker. A function has one kind.",
         "markers-errors.cpp:23: marker: cplusp:trustd is no marker. The markers are in include/cplusp.h.",
         "markers-errors.cpp:25: marker: Box has a marker, and only a function takes one.",
+        "markers-errors.cpp:31: marker: cplusp:x y is no marker. The markers are in include/cplusp.h.",
+        "markers-errors.cpp:34: marker: cplusp:assume waits until a case needs it. Mark the function trusted with a reason.",
     ] {
         assert!(out.lines().any(|l| l.starts_with("Not provable: ") && l.ends_with(expected)), "{expected}: {out}");
     }
-    assert_eq!(out.lines().filter(|l| l.starts_with("Not provable: ")).count(), 6, "{out}");
+    assert_eq!(out.lines().filter(|l| l.starts_with("Not provable: ")).count(), 8, "{out}");
+}
+
+/// Each function has its own kind, decision 0047. A local class, a lambda and an explicit specialization carry no marker of their own,
+/// so they are verified inside a trusted body. A marked function whose first or last token is in a macro or another file is refused,
+/// and its body is then verified.
+#[test]
+fn a_finding_takes_the_kind_of_the_innermost_function_the_file_wrote() {
+    if !clang_tidy_available() {
+        return;
+    }
+    let f = fixture("markers-places.cpp");
+    let plugin = plugin();
+    let o = cplusp(&["gate", "--json", "--plugin", plugin.to_str().unwrap(), f.to_str().unwrap(), "--", "-std=c++23", "-ffp-contract=off"]);
+    let out = stdout(&o);
+    let reported: BTreeSet<(String, usize)> = out.lines().map(|l| (field(l, "rule"), field(l, "line").parse::<usize>().unwrap())).collect();
+    let expected: BTreeSet<(String, usize)> = [
+        ("raw_allocation", 10),
+        ("lambdas", 21),
+        ("raw_allocation", 22),
+        ("templates", 36),
+        ("raw_allocation", 38),
+        ("marker", 46),
+        ("raw_allocation", 47),
+        ("raw_allocation", 49),
+        ("marker", 53),
+        ("raw_allocation", 54),
+    ]
+    .into_iter()
+    .map(|(r, n)| (r.to_string(), n))
+    .collect();
+    assert_eq!(reported, expected, "{out}");
+    for name in ["ends_in_macro", "ends_elsewhere"] {
+        let message = format!("marker: {name} starts or ends in a macro or in another file. A trusted or plain function keeps its first and last token in its own file.");
+        assert!(out.contains(&message), "{message}: {out}");
+    }
+}
+
+/// Verified code runs no plain code, decision 0047. The gate reads the calls that run from the lowered form: a destructor that no call
+/// names, an operator that the library calls, and a plain override that a call of its base can reach. A trusted body may run plain code.
+#[test]
+fn verified_code_runs_no_plain_code() {
+    if !clang_tidy_available() {
+        return;
+    }
+    let f = fixture("markers-reach.cpp");
+    let plugin = plugin();
+    let o = cplusp(&["gate", "--json", "--plugin", plugin.to_str().unwrap(), f.to_str().unwrap(), "--", "-std=c++23", "-ffp-contract=off"]);
+    let out = stdout(&o);
+    assert_eq!(o.status.code(), Some(1), "stdout: {out} stderr: {}", stderr(&o));
+    let reported: BTreeSet<(String, usize)> = out.lines().map(|l| (field(l, "rule"), field(l, "line").parse::<usize>().unwrap())).collect();
+    let expected: BTreeSet<(String, usize)> = [("marker", 17), ("marker", 29), ("marker", 41)].into_iter().map(|(r, n)| (r.to_string(), n)).collect();
+    assert_eq!(reported, expected, "{out}");
+    for message in [
+        "marker: verified code calls Guard::~Guard, which is plain. Give it a contract and mark it trusted.",
+        "marker: verified code calls Key::operator<, which is plain. Give it a contract and mark it trusted.",
+        "marker: Legacy::area is plain and overrides Shape::area, which is not plain. A verified call of Shape::area can run it.",
+    ] {
+        assert!(out.contains(message), "{message}: {out}");
+    }
+}
+
+/// Each build is its own run, decision 0047. One build marks a header's body plain and the other does not, so the finding of the other
+/// stands.
+#[test]
+fn each_build_judges_its_own_findings() {
+    if !clang_tidy_available() {
+        return;
+    }
+    let (a, b) = (fixture("twice-a.cpp"), fixture("twice-b.cpp"));
+    let o = gated(&[a.to_str().unwrap(), b.to_str().unwrap(), "--", "-std=c++23", "-ffp-contract=off"]);
+    let out = stdout(&o);
+    assert_eq!(o.status.code(), Some(1), "stdout: {out} stderr: {}", stderr(&o));
+    let findings: Vec<&str> = out.lines().filter(|l| l.starts_with("Not provable: ")).collect();
+    assert_eq!(findings.len(), 1, "{out}");
+    assert!(findings[0].contains("twice.h:10: `new` / `delete`"), "{out}");
 }
 
 /// Pull `"key":"value"` or `"key":123` out of one JSON line without a JSON library.
