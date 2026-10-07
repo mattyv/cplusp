@@ -3,6 +3,7 @@
 #include <memory>
 #include <optional>
 #include <random>
+#include <ranges>
 #include <tuple>
 #include <utility>
 
@@ -106,4 +107,49 @@ struct Order {
 bool compare_snapshot(const std::unique_ptr<std::map<int32_t, int32_t, Order>::value_compare>& p) {
   std::map<int32_t, int32_t, Order>::value_compare copy(*p);
   return copy({1, 0}, {2, 0});
+}
+
+// A member class template holds what the type around it holds too, decision 0046. An input iterator needs no const copy.
+struct Done {};
+
+struct Ticket {
+  using difference_type = std::int64_t;
+  using value_type = std::pair<int32_t, int32_t>;
+  using iterator_concept = std::input_iterator_tag;
+  int32_t n = 0;
+  Ticket() = default;
+  Ticket(Ticket& o) : n(o.n) {
+    o.n += 1;
+  }
+  Ticket(Ticket&&) = default;
+  Ticket& operator=(Ticket&&) = default;
+  value_type operator*() const {
+    return {n, n};
+  }
+  Ticket& operator++() {
+    n += 1;
+    return *this;
+  }
+  void operator++(int) {
+    n += 1;
+  }
+  bool operator==(Done) const {
+    return n >= 3;
+  }
+};
+
+struct Tickets : std::ranges::view_base {
+  Ticket begin() const {
+    return {};
+  }
+  Done end() const {
+    return {};
+  }
+};
+
+using TicketIt = std::ranges::iterator_t<std::ranges::elements_view<Tickets, 0>>;
+
+int32_t iterator_snapshot(const std::unique_ptr<TicketIt>& p) {
+  TicketIt copy(*p);
+  return *copy;
 }
