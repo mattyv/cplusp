@@ -276,6 +276,11 @@ Dafny proves that a recursion ends, not that the stack holds it.
 Bound the depth in the contract.
 The bound is an assumption about the target, and docs/soundness.md gap 1 records it.
 
+## radix_find
+
+A node that holds a std::vector of nodes is one recursive datatype with a seq of children.
+A find in a tree proves what the tree stores, with Wellformed for the shape it relies on.
+
 ## constexpr_runtime
 
 `constexpr` changes nothing in the model.

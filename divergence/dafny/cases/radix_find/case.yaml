@@ -1,0 +1,21 @@
+construct: "A recursive find in a radix tree over byte keys, the shape of the find in mattyv/FlashRadixTree"
+standard: "[span.sub]: subspan(offset) requires offset <= size(), and gives the elements from offset to the end."
+row: recursion
+gap: 3
+cpp: "`find` walks one child per step, the one whose first byte is the next byte of the key. It checks that the prefix fits the key before `subspan`. It gives the value under the key, or none."
+naive_does: "The find over one recursive datatype, with `seq` slices for `subspan`. Dafny proves that the result is `Some(v)` exactly when the tree stores the key with the value v. The model is exact."
+naive: verifies
+mitigated: verifies
+side: none
+mitigation: "None. With the height bound of the case stack_depth, the literal model is exact. Wellformed says what the find relies on: no empty prefix below the root, and no two children with the same first byte."
+witness:
+  input: "the key 01, where two stored keys pass through a node with no value"
+  ubsan: false
+  prints: "none"
+differential:
+  runs: 200
+  args:
+    - {type: "[uint8]", len: [0, 6], min: 0, max: 2}
+rule: |
+  A node that holds a std::vector of nodes is one recursive datatype with a seq of children.
+  A find in a tree proves what the tree stores, with Wellformed for the shape it relies on.
