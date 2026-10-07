@@ -566,6 +566,88 @@ fn gate_reads_directives_under_the_builds_flags() {
     assert!(out.lines().any(|l| l.ends_with("forged-trigraph.cpp:2: line directive: not allowed in verified code. It moves the gate's view.")), "{out}");
 }
 
+/// `__pragma` expands macros before the pragma runs, so its words are the ones the preprocessor hands on, not the ones in the source.
+/// A macro or a flag that turns `once` into a diagnostic pragma silences a row, and the gate must name what runs, decision 0038.
+#[test]
+fn gate_reads_the_words_a_pragma_runs_with() {
+    if !clang_tidy_available() {
+        return;
+    }
+    for (file, extra) in [("pragma-once-macro.cpp", None), ("pragma-once-flag.cpp", Some("-Donce=clang diagnostic ignored \"-Wreturn-stack-address\""))] {
+        let f = fixture(file);
+        let mut args = vec![f.to_str().unwrap(), "--", "-std=c++23", "-ffp-contract=off", "-fms-extensions"];
+        args.extend(extra);
+        let o = gated(&args);
+        let out = stdout(&o);
+        assert_eq!(o.status.code(), Some(1), "{file}: stdout: {out} stderr: {}", stderr(&o));
+        let line = if extra.is_some() { 2 } else { 3 };
+        let expected = format!("{file}:{line}: pragma diagnostic: not allowed in verified code. It silences the gate.");
+        assert!(out.lines().any(|l| l.ends_with(&expected)), "{file}: {out}");
+    }
+}
+
+/// A `#line` directive may give a file name with a tab in it. The findings after it still print under that name.
+#[test]
+fn gate_prints_findings_under_a_file_name_with_a_tab() {
+    if !clang_tidy_available() {
+        return;
+    }
+    let f = fixture("line-tab.cpp");
+    let o = gated(&[f.to_str().unwrap(), "--", "-std=c++23", "-ffp-contract=off"]);
+    let out = stdout(&o);
+    assert_eq!(o.status.code(), Some(1), "stdout: {out} stderr: {}", stderr(&o));
+    assert!(out.lines().any(|l| l.ends_with("line-tab.cpp:2: line directive: not allowed in verified code. It moves the gate's view.")), "{out}");
+    assert!(out.lines().any(|l| l.ends_with("a\tb:7: pragma clang fp: not allowed in verified code. It changes the build the proofs assume.")), "{out}");
+}
+
+/// A backslash in a header name is read by the compiler in a way of its own, and the dependency list prints it as a slash. A header
+/// could hide from the NOLINT scan behind its twin. The include is refused, decision 0038. The files are written at test time.
+#[test]
+fn gate_refuses_a_header_name_with_a_backslash() {
+    if !clang_tidy_available() {
+        return;
+    }
+    let dir = std::env::temp_dir().join(format!("cplusp-backslash-{}", std::process::id()));
+    std::fs::create_dir_all(dir.join("back")).unwrap();
+    std::fs::write(dir.join("back\\slash.h"), "#include <cstdint>\nint plain();  // NOLINT\n").unwrap();
+    std::fs::write(dir.join("back").join("slash.h"), "#include <cstdint>\n").unwrap();
+    let main = dir.join("includes-backslash.cpp");
+    std::fs::write(&main, "#include <cstdint>\n#include \"back\\slash.h\"\nint32_t f() { return 0; }\n").unwrap();
+    let o = gated(&[main.to_str().unwrap(), "--", "-std=c++23", "-ffp-contract=off"]);
+    let out = stdout(&o);
+    assert_eq!(o.status.code(), Some(1), "stdout: {out} stderr: {}", stderr(&o));
+    let expected = "includes-backslash.cpp:2: include: a header name with a backslash is not allowed in verified code. The compiler may read it as another file.";
+    assert!(out.lines().any(|l| l.ends_with(expected)), "{out}");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// The flags that write a dependency file are the build's business, also in their joined spelling. The gate's own dependency run
+/// drops them, so they neither write a file nor hide the list.
+#[test]
+fn gate_drops_the_flags_that_write_a_file() {
+    if !clang_tidy_available() {
+        return;
+    }
+    let dir = std::env::temp_dir().join(format!("cplusp-mf-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let mf = format!("-MF{}", dir.join("deps.d").display());
+    let o = gated(&["rules/goto/allowed.cpp", "--", "-std=c++23", "-ffp-contract=off", "-MMD", &mf]);
+    assert_eq!(o.status.code(), Some(0), "stdout: {} stderr: {}", stdout(&o), stderr(&o));
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// A dependency list that does not name the file leaves the NOLINT scan blind. The run is refused.
+#[test]
+fn gate_refuses_a_dependency_list_that_does_not_name_the_file() {
+    if !clang_tidy_available() {
+        return;
+    }
+    let o = gated(&["rules/goto/allowed.cpp", "--", "-std=c++23", "-ffp-contract=off", "-Xclang", "-dependency-file", "-Xclang", "/dev/null"]);
+    assert_eq!(o.status.code(), Some(2), "stdout: {} stderr: {}", stdout(&o), stderr(&o));
+    assert_eq!(stdout(&o).trim(), "", "nothing on stdout for a refused run");
+    assert!(stderr(&o).lines().any(|l| l == "cannot preprocess rules/goto/allowed.cpp: the dependency list does not name it."), "stderr {}", stderr(&o));
+}
+
 /// Any pragma but `once` changes the build the proofs assume, or silences the gate. Two that turn contraction back on
 /// behind the flags: clang's own and the standard's. The message names the pragma by its first two words.
 #[test]

@@ -613,7 +613,7 @@ Provisional. Parked as "maybe" where the first slice does not need a decision, a
 
 | Piece | Choice | Status |
 | --- | --- | --- |
-| Gate checks and index | C++20 clang-tidy module. CMake and Ninja. LLVM 18 pinned, builds against 17 to 20. The gate also runs `clang++-18 -E` for the preprocessor's view of a file | Forced: a clang-tidy module can only be C++ |
+| Gate checks and index | C++20 clang-tidy module. CMake and Ninja. LLVM 18 pinned, builds against 17 to 20. The gate also runs `clang++-18 -MM` for the compiler's list of the files a build includes, decision 0038 | Forced: a clang-tidy module can only be C++ |
 | Driver `cplusp` | Rust written in Verus from day one, one static binary. No Python anywhere. TypeScript not in the core. See Proofs about cplusp itself | Decided |
 | Policy to clang-tidy conversion | A pure core inside the driver: policy in, config out, findings matched back to rules, filter by function kind. Proved in Verus: every check of every non-allow rule is enabled, and nothing else | Decided |
 | Prover, candidate A | Dafny underneath, with the gated C++ translated to it and errors mapped back to C++ lines. Strong automation and the most LLM training data of any verifier. The translator is the new trusted component. We test it by compiling the Dafny and running both on the same inputs | Open. The thin slice decides which is built first |

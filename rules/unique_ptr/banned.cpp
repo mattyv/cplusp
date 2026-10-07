@@ -1,3 +1,4 @@
+#include <array>
 #include <cstdint>
 #include <memory>
 #include <vector>
@@ -70,4 +71,17 @@ int32_t& through_return(const std::unique_ptr<int32_t>& p) {
 
 void write_returned(const std::unique_ptr<int32_t>& p) {
   through_return(p) = 42;
+}
+
+// A range-for by reference binds each element to a non-const reference, and the range reaches through a const handle. The binding
+// is the first write, and the assignment through it the second.
+void range_through(const std::unique_ptr<std::array<int32_t, 4>>& p) {
+  for (int32_t& x : *p) {  // BANNED
+    x = 1;  // BANNED
+  }
+}
+
+// A pointer stored into an out parameter leaves the handle as a return does, decision 0038.
+void hand_out(const std::unique_ptr<int32_t>& p, int32_t*& out) {
+  out = p.get();  // BANNED
 }
