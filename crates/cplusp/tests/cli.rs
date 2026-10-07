@@ -1451,6 +1451,23 @@ fn a_pointer_counts_as_the_object_and_a_friend_of_a_plain_type_is_plain() {
     }
 }
 
+/// A cast of a pointer to a plain object into another pointer type is a use, decision 0054. Two casts through `const void*` hand the
+/// bytes to the library, and an implicit cast hands them to a function of the file with a `const void*` parameter.
+#[test]
+fn a_cast_of_a_pointer_to_a_plain_object_is_a_use() {
+    if !clang_tidy_available() {
+        return;
+    }
+    let f = fixture("markers-types-casts.cpp");
+    let plugin = plugin();
+    let o = cplusp(&["gate", "--json", "--plugin", plugin.to_str().unwrap(), f.to_str().unwrap(), "--", "-std=c++23", "-ffp-contract=off"]);
+    let out = stdout(&o);
+    let reported: BTreeSet<(String, usize)> = out.lines().map(|l| (field(l, "rule"), field(l, "line").parse::<usize>().unwrap())).collect();
+    let expected: BTreeSet<(String, usize)> = [("marker", 17), ("marker", 26)].into_iter().map(|(r, n)| (r.to_string(), n)).collect();
+    assert_eq!(reported, expected, "{out}");
+    assert!(out.contains("marker: verified code uses Record, which is plain. Reach it through a trusted member."), "{out}");
+}
+
 /// Pull `"key":"value"` or `"key":123` out of one JSON line without a JSON library.
 fn field(line: &str, key: &str) -> String {
     let needle = format!("\"{key}\":");

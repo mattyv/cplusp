@@ -59,3 +59,4 @@ Status is `decided`, `proposed` (the default until someone objects or the thin s
 | [0051](0051-a-type-can-be-plain.md) | A type can be plain. Verified code makes no object of it and reads no field of it, and reaches it through a trusted member | decided |
 | [0052](0052-a-plain-object-goes-only-to-the-files-own-code.md) | A plain object goes only to the file's own code. No value that holds a plain type, and no call of the library with one | decided |
 | [0053](0053-a-pointer-counts-as-the-object-and-a-friend-of-a-plain-type-is-plain.md) | A pointer to a plain object counts as the object. A friend defined in a plain type is plain | decided |
+| [0054](0054-a-cast-of-a-pointer-to-a-plain-object-is-a-use.md) | A cast of a pointer to a plain object into another pointer type is a use | decided |
