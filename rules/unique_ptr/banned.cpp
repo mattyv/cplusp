@@ -3,6 +3,7 @@
 #include <cstdint>
 #include <memory>
 #include <vector>
+#include <sys/uio.h>
 
 struct Command {
   virtual ~Command() = default;
@@ -92,3 +93,20 @@ void hand_out(const std::unique_ptr<int32_t>& p, int32_t*& out) {
 void capture_out(const std::unique_ptr<int32_t>& p, const std::vector<int32_t>& v) {
   std::ranges::for_each(v, [q = p.get()](int32_t e) { *q = e; });  // BANNED
 }
+
+// A brace initializer stores into each member it names. A struct of a system header has a pointer member that no row reads, and the
+// pointer leaves the handle through it, decision 0038.
+void write_at(int32_t* q) {
+  *q = 1;
+}
+
+void through_aggregate(const std::unique_ptr<int32_t>& p) {
+  iovec v{p.get(), 4};  // BANNED
+  write_at(static_cast<int32_t*>(v.iov_base));
+}
+
+// A default member initializer stores as a constructor's member initializer does.
+struct Holds {
+  const std::unique_ptr<int32_t> p;
+  int32_t* q = p.get();  // BANNED also: raw_pointer
+};

@@ -700,6 +700,54 @@ fn gate_refuses_a_system_header_that_changes_the_warnings_of_its_includer() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// The gate asks the compiler what the warnings are when user code resumes after a system header, decision 0038. A pair of headers
+/// may pop the includer's push and change a warning, and a pair may change a warning inside a push and pop of the outer one. Only the
+/// first changes what user code sees. A header that `-include` brings in is refused at the top of the file. The files are written at
+/// test time.
+#[test]
+fn gate_asks_the_compiler_whether_a_system_header_changed_the_warnings() {
+    if !clang_tidy_available() {
+        return;
+    }
+    let dir = std::env::temp_dir().join(format!("cplusp-leak2-{}", std::process::id()));
+    let sys = dir.join("sys");
+    std::fs::create_dir_all(&sys).unwrap();
+    let ignore = "#pragma clang diagnostic ignored \"-Wreturn-stack-address\"\n";
+    std::fs::write(sys.join("pusher.h"), "#pragma clang diagnostic push\n#include <evil.h>\n").unwrap();
+    std::fs::write(sys.join("evil.h"), format!("#pragma clang diagnostic pop\n{ignore}#pragma clang diagnostic push\n")).unwrap();
+    std::fs::write(sys.join("outer.h"), "#pragma clang diagnostic push\n#include <inner.h>\n#pragma clang diagnostic pop\n").unwrap();
+    std::fs::write(sys.join("inner.h"), ignore).unwrap();
+    std::fs::write(sys.join("leak.h"), ignore).unwrap();
+    let body = "const int32_t& f() {\n  int32_t x = 1;\n  return x;\n}\n";
+    let leaks = dir.join("pair-leaks.cpp");
+    std::fs::write(&leaks, format!("#include <cstdint>\n#include <pusher.h>\n{body}")).unwrap();
+    let encloses = dir.join("pair-encloses.cpp");
+    std::fs::write(&encloses, format!("#include <cstdint>\n#include <outer.h>\n{body}")).unwrap();
+    let flagged = dir.join("flag-includes.cpp");
+    std::fs::write(&flagged, format!("#include <cstdint>\n{body}")).unwrap();
+    let message = "pragma diagnostic: a system header changes the warnings of the code that includes it. It silences the gate.";
+    let run = |file: &Path, extra: &[&str]| {
+        let mut args = vec![file.to_str().unwrap(), "--", "-std=c++23", "-ffp-contract=off", "-isystem", sys.to_str().unwrap()];
+        args.extend_from_slice(extra);
+        gated(&args)
+    };
+    let o = run(&leaks, &[]);
+    let out = stdout(&o);
+    assert_eq!(o.status.code(), Some(1), "pair-leaks: stdout: {out} stderr: {}", stderr(&o));
+    assert!(out.lines().any(|l| l.ends_with(&format!("pair-leaks.cpp:2: {message}"))), "pair-leaks: {out}");
+    // The outer header pops what the inner one changed. The row still sees the return, and nothing leaked.
+    let o = run(&encloses, &[]);
+    let out = stdout(&o);
+    assert_eq!(o.status.code(), Some(1), "pair-encloses: stdout: {out} stderr: {}", stderr(&o));
+    assert!(!out.contains("a system header changes the warnings"), "pair-encloses: {out}");
+    assert!(out.lines().any(|l| l.contains("pair-encloses.cpp:5: ")), "pair-encloses: the row must still see the return: {out}");
+    let o = run(&flagged, &["-include", "leak.h"]);
+    let out = stdout(&o);
+    assert_eq!(o.status.code(), Some(1), "flag-includes: stdout: {out} stderr: {}", stderr(&o));
+    assert!(out.lines().any(|l| l.ends_with(&format!("flag-includes.cpp:1: {message}"))), "flag-includes: {out}");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 /// Any pragma but `once` changes the build the proofs assume, or silences the gate. Two that turn contraction back on
 /// behind the flags: clang's own and the standard's. The message names the pragma by its first two words.
 #[test]
