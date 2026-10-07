@@ -819,6 +819,7 @@ rules:
       - check: cplusp-allowlist
         options:
           function_pointers: MemberPointerType
+      - check: cplusp-indirect-call
 
   - id: varargs_coroutines
     construct: Varargs, coroutines
