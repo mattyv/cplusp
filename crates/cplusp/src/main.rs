@@ -35,6 +35,10 @@ const ALLOWLIST: &str = "cplusp-allowlist";
 /// policy. The gate enables it for every run and reports them under the rule `line`.
 const LINE_DIRECTIVE: &str = "cplusp-line-directive";
 
+/// The check of the plugin that reports every pragma from the preprocessor's callbacks, decision 0038. Like the line directives, its findings
+/// belong to no row of the policy. The gate enables it for every run and reports them under the rule `pragma`.
+const PRAGMA: &str = "cplusp-pragma";
+
 /// The checks of the plugin whose message starts with the id of a rule: `{rule}: {sentence}`, or the bare id. The gate maps a finding
 /// to its rule by that id and puts the sentence after the message of the rule. Every other check maps by its own name.
 // ponytail: a hand-kept list. Upgrade: a prefix on the check name.
@@ -45,7 +49,7 @@ const RULE_FIRST: &[&str] = &[MATCHER, ALLOWLIST, "cplusp-unlisted-state"];
 const PLANNED_CHECKS: &[&str] = &[
     MATCHER, "cplusp-mutable", "cplusp-multiple-inheritance", "cplusp-iterator-arithmetic", "cplusp-impure-operator", "cplusp-lambda-limits",
     "cplusp-evaluation-order", "cplusp-inexact-literal", "cplusp-aliasing", "cplusp-const-handle", "cplusp-allowlist", "cplusp-unlisted-state",
-    LINE_DIRECTIVE,
+    LINE_DIRECTIVE, PRAGMA,
 ];
 
 // ------------------------------------------------------------------ command line
@@ -416,6 +420,12 @@ const FLOAT_FLAGS: &[&str] = &[
     "-freciprocal-math", "-fno-signed-zeros", "-fno-honor-nans", "-fno-honor-infinities", "-ffp-model=fast", "-mfpmath=387", "-m32",
 ];
 
+/// Flags that make the compiler print something else than its diagnostics, run another tool, or read state that the gate does not see.
+/// A precompiled header and a module hold text that no scan of the source reaches. `-Xclang` hands the compiler any flag at all.
+/// The gate reads what the compiler reports.
+const CHANGES_WHAT_THE_COMPILER_REPORTS: &[&str] =
+    &["-E", "-P", "-M", "-MM", "-MV", "-dM", "-dD", "-dI", "-###", "-fdriver-only", "-Xpreprocessor", "-Xclang", "-include-pch"];
+
 /// The `-std` values at C++23 or later. The baseline is decision 0022.
 const STD_VALUES: &[&str] = &["c++23", "c++2b", "c++26", "c++2c", "gnu++23", "gnu++2b", "gnu++26", "gnu++2c"];
 
@@ -449,6 +459,8 @@ fn refused_flags(flags: &[String], checks: &[String]) -> Vec<String> {
             "It changes floating-point results, and the proofs assume IEEE 754 round to nearest."
         } else if std_value(f).is_some_and(|v| !STD_VALUES.contains(&v)) {
             "The proofs assume C++23 or later."
+        } else if CHANGES_WHAT_THE_COMPILER_REPORTS.contains(&f.as_str()) || f.starts_with("-Wp,") || f.starts_with("-fmodule") {
+            "It changes what the compiler reads or reports, and the gate runs the compiler itself."
         } else if f.starts_with('@') {
             "The gate cannot read a response file."
         } else if f == "--config" || f.starts_with("--config=") {
@@ -600,37 +612,32 @@ fn nolints(path: &Path, text: &str) -> Vec<Finding> {
     text.lines().enumerate().filter(|(_, l)| l.contains("NOLINT")).map(|(n, _)| ban(path.to_path_buf(), n + 1, "nolint", message)).collect()
 }
 
-/// A line marker of the preprocessor, `# N "path" flags`: the next line is line N of the path.
-/// Flag 1 enters an include, and flag 3 is a system header.
-fn line_marker(text: &str) -> Option<(usize, &str, Vec<&str>)> {
-    let (n, rest) = text.strip_prefix("# ")?.split_once(' ')?;
-    let (path, flags) = rest.strip_prefix('"')?.split_once('"')?;
-    Some((n.parse().ok()?, path, flags.split_whitespace().collect()))
-}
+/// The flags that name a file the compiler writes. The dependency run drops them, alone or joined to their file name.
+// ponytail: a flag that only starts with `-o` goes too, as `-objc`. It matters to no C++ build. Upgrade: ask the compiler for its flags.
+const WRITES_A_FILE: [&str; 5] = ["-MF", "-MT", "-MQ", "-MJ", "-o"];
 
-/// Run the preprocessor on a build and read its output. A diagnostic pragma and a `system_header` pragma are findings, and so is any
-/// other pragma. Every spelling of a pragma comes out as one form, which a text scan cannot promise. The `#line` directives are the
-/// plugin's, decision 0037. In the main file clang ignores a `system_header` pragma and drops it from this output. So the gate reports
-/// nothing for it, and it does not silence the gate.
-/// Also returns the files the build includes outside the system paths, for the NOLINT scan.
-// ponytail: a line of a raw string literal that starts with `#pragma` counts. A path with a quote in it
-// breaks the marker. Upgrade: read the tokens with the plugin.
-fn preprocess(clang: &str, (file, dir, flags): &Build, shown: impl Fn(&Path) -> String) -> Result<(Vec<Finding>, Vec<PathBuf>)> {
-    // The flags that write a file are the build's business. This run prints to stdout and writes nothing.
+/// The files that the compiler's include graph names for a build. The NOLINT scan reads them: the file itself and every header outside
+/// the system directories. The compiler makes the list with `-MM`, from the build's own flags. The flags that write a file are the
+/// build's business. This run prints to stdout and writes nothing. A header that a pragma makes system stays in the list.
+fn dependencies(clang: &str, (file, dir, flags): &Build, shown: impl Fn(&Path) -> String) -> Result<Vec<PathBuf>> {
     let (mut args, mut rest) = (Vec::new(), flags.iter());
     while let Some(f) = rest.next() {
-        match f.as_str() {
-            "-MD" | "-MMD" | "-MP" | "-c" => {}
-            "-MF" | "-MT" | "-MQ" | "-o" => {
+        if matches!(f.as_str(), "-MD" | "-MMD" | "-MP" | "-c") {
+            continue;
+        }
+        // A flag that names a file takes the next argument when it stands alone, and holds the name when it is joined.
+        if let Some(own) = WRITES_A_FILE.iter().find(|own| f.starts_with(**own)) {
+            if f == own {
                 rest.next();
             }
-            _ => args.push(f),
+            continue;
         }
+        args.push(f);
     }
     let out = Command::new(clang)
         .current_dir(dir)
         .args(args)
-        .args(["-E", "-o", "-"])
+        .args(["-MM", "-MT", "cplusp"])
         .arg(file)
         .stdin(Stdio::null())
         .output()
@@ -638,49 +645,53 @@ fn preprocess(clang: &str, (file, dir, flags): &Build, shown: impl Fn(&Path) -> 
     if !out.status.success() {
         bail!("cannot preprocess {}: {}", shown(file), String::from_utf8_lossy(&out.stderr).lines().next().unwrap_or_default());
     }
-    // `seen` has every name a marker gave. `entered` has the files, with whether the first marker for each had no flag 3.
-    // A name that is no include and no first marker came from a directive in the source. It is no file, so it is only in `seen`.
-    let (mut found, mut seen, mut entered, mut silenced) = (Vec::new(), HashSet::new(), BTreeMap::new(), HashSet::new());
-    let (mut at, mut line, mut system) = (PathBuf::new(), 0, true);
-    for text in String::from_utf8_lossy(&out.stdout).lines() {
-        if let Some((n, name, flags)) = line_marker(text) {
-            let (include, sys) = (flags.contains(&"1"), flags.contains(&"3"));
-            // `<built-in>` and `<command line>` are not files.
-            let pseudo = matches!(name, "<built-in>" | "<command line>");
-            let path = dir.join(name);
-            if seen.insert(path.clone()) && (include || at.as_os_str().is_empty()) && !pseudo {
-                entered.insert(path.clone(), !sys);
-            }
-            let user = entered.get(&path) == Some(&true);
-            // Clang ignores `#pragma GCC system_header` in the main file, so a marker there that turns the file system is one that the
-            // source wrote. The plugin reports it as a line directive. In a header the pragma and a marker that names the header look
-            // the same in this output, and the pragma finding stands.
-            if sys && user && same_file(&path) != same_file(file) && silenced.insert(path.clone()) {
-                let message = "pragma system_header: not allowed in verified code. It silences the gate.";
-                found.push(ban(path.clone(), n.saturating_sub(1), "pragma", message));
-            }
-            (at, line, system) = (path, n, sys || pseudo);
-            continue;
-        }
-        if !system && ["#pragma clang diagnostic", "#pragma GCC diagnostic"].iter().any(|p| text.starts_with(p)) {
-            found.push(ban(at.clone(), line, "pragma", "pragma diagnostic: not allowed in verified code. It silences the gate."));
-        } else if let Some(rest) = text.strip_prefix("#pragma").filter(|_| !system) {
-            // Any other pragma changes the build that the proofs assume, such as the contraction of floating-point operations. The name
-            // is the first two words, before any parenthesis. A `system_header` pragma is a finding of its own, from the marker that follows it.
-            let name = rest.split('(').next().unwrap_or_default();
-            let words: Vec<&str> = name.split(|c: char| !(c.is_alphanumeric() || c == '_')).filter(|w| !w.is_empty()).take(2).collect();
-            if words.get(1) != Some(&"system_header") {
-                let message = format!("pragma{}{}: not allowed in verified code. It changes the build the proofs assume.", if words.is_empty() { "" } else { " " }, words.join(" "));
-                found.push(ban(at.clone(), line, "pragma", &message));
-            }
-        }
-        line += 1;
+    let list = String::from_utf8_lossy(&out.stdout);
+    // The compiler escapes a space, `#` and `$` in a name, and no other white space. A name with a tab or a newline would split in the
+    // list, and files named after the pieces could stand in for the header. A line break ends a name only at the end of the rule, or after
+    // the backslash that joins two lines.
+    let body = list.trim_end_matches('\n');
+    let unreadable = body.chars().any(|c| c.is_whitespace() && c != ' ' && c != '\n')
+        || body.match_indices('\n').any(|(i, _)| !body[..i].ends_with('\\'));
+    if unreadable {
+        bail!("cannot preprocess {}: the dependency list holds a name the gate cannot read.", shown(file));
     }
-    // `-P`, `-M`, `-dM` and the like print no markers. The gate cannot see where anything is.
-    if !seen.contains(file) {
-        bail!("cannot preprocess {}: the preprocessor output has no line marker for it", shown(file));
+    let paths: Vec<PathBuf> = rule_files(&list).into_iter().map(|p| dir.join(p)).collect();
+    if !paths.iter().any(|p| same_file(p) == same_file(file)) {
+        bail!("cannot preprocess {}: the dependency list does not name it.", shown(file));
     }
-    Ok((found, entered.into_iter().filter(|(_, user)| *user).map(|(path, _)| path).collect()))
+    Ok(paths)
+}
+
+/// The files that a make rule names, after its target and colon. A backslash that ends a line joins it with the next. Whitespace splits
+/// the names, unless a backslash escapes it. The compiler writes `\ ` for a space, `\#` for `#` and `$$` for `$`.
+fn rule_files(rule: &str) -> Vec<String> {
+    let after = rule.split_once(':').map_or("", |(_, rest)| rest);
+    let (mut files, mut name, mut chars) = (Vec::new(), String::new(), after.chars().peekable());
+    let mut flush = |name: &mut String| {
+        if !name.is_empty() {
+            files.push(std::mem::take(name));
+        }
+    };
+    while let Some(c) = chars.next() {
+        match (c, chars.peek()) {
+            ('\\', Some('\n')) => {
+                chars.next();
+                flush(&mut name);
+            }
+            ('\\', Some(&e @ (' ' | '#'))) => {
+                chars.next();
+                name.push(e);
+            }
+            ('$', Some('$')) => {
+                chars.next();
+                name.push('$');
+            }
+            (c, _) if c.is_whitespace() => flush(&mut name),
+            (c, _) => name.push(c),
+        }
+    }
+    flush(&mut name);
+    files
 }
 
 fn gate(c: &Common, json: bool, build_dir: Option<&Path>, plugin: Option<&Path>, files: &[PathBuf], clang_args: &[String]) -> Result<ExitCode> {
@@ -700,8 +711,9 @@ fn gate(c: &Common, json: bool, build_dir: Option<&Path>, plugin: Option<&Path>,
     }
     let loaded = load(c.policy.as_deref(), Some(&listed))?;
     let mut config = emit(&loaded.policy);
-    // The plugin reads the line directives from the preprocessor under the build's own flags, for every run.
+    // The plugin reads the line directives and the pragmas from the preprocessor under the build's own flags, for every run.
     config.checks.push(LINE_DIRECTIVE.to_string());
+    config.checks.push(PRAGMA.to_string());
     // The flags of each file, from after `--` or from the database. Judged before clang-tidy runs.
     let cwd = std::env::current_dir().context("cannot find the working directory")?;
     let builds = match build_dir {
@@ -728,8 +740,8 @@ fn gate(c: &Common, json: bool, build_dir: Option<&Path>, plugin: Option<&Path>,
         );
     }
 
-    // A NOLINT or a diagnostic pragma silences clang-tidy, so it would hide a finding from the gate. It is a finding itself.
-    // The scan covers each given file and the headers it includes outside the system paths.
+    // A NOLINT silences clang-tidy, so it would hide a finding from the gate. It is a finding itself.
+    // The scan covers each given file and the headers that the compiler's include graph names outside the system paths.
     let clang = locate(CLANG).context("clang++ not found. Install clang-18.")?;
     let shown = |p: &Path| p.strip_prefix(&cwd).unwrap_or(p).display().to_string();
     let (mut found, mut scanned) = (Vec::new(), HashSet::new());
@@ -741,11 +753,10 @@ fn gate(c: &Common, json: bool, build_dir: Option<&Path>, plugin: Option<&Path>,
         Ok(nolints(&path, &String::from_utf8_lossy(&source)))
     };
     for build in &builds {
+        // The file itself first, so a file that is not there is named before the compiler is asked.
         found.extend(scan(build.0.clone())?);
-        let (pragmas, headers) = preprocess(&clang, build, shown)?;
-        found.extend(pragmas);
-        for header in headers {
-            found.extend(scan(header)?);
+        for path in dependencies(&clang, build, shown)? {
+            found.extend(scan(path)?);
         }
     }
 
@@ -808,6 +819,18 @@ fn gate(c: &Common, json: bool, build_dir: Option<&Path>, plugin: Option<&Path>,
     }
 
     for (path, d) in diagnostics {
+        // The message of the plugin is the presumed file, the presumed line and the sentence, set apart by tabs. A `#line` moves the
+        // presumed place, and a finding shows the place that the author gave. The sentence holds no tab and the line is digits.
+        // The file name may hold a tab, so the message is cut from the right.
+        if d.name == PRAGMA {
+            let mut parts = d.at.message.rsplitn(3, '\t');
+            let (Some(message), Some(line), Some(file)) = (parts.next(), parts.next().and_then(|n| n.parse().ok()), parts.next()) else {
+                bail!("{PRAGMA} reported {}, which is not a finding of that check", d.at.message);
+            };
+            let rule = if message.starts_with("include:") { "include" } else { "pragma" };
+            found.push(ban(Path::new(&d.dir).join(file), line, rule, message));
+            continue;
+        }
         if d.name == LINE_DIRECTIVE {
             let message = "line directive: not allowed in verified code. It moves the gate's view.";
             found.push(ban(path.clone(), line_of(&path, d.at.offset)?, "line", message));

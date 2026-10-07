@@ -41,6 +41,8 @@
 #include "llvm/Support/Path.h"
 #include "llvm/Transforms/Scalar/SROA.h"
 #include "clang/Lex/Lexer.h"
+#include "clang/Serialization/ASTReader.h"
+#include "clang/Serialization/ModuleManager.h"
 
 #include <algorithm>
 #include <initializer_list>
@@ -359,6 +361,11 @@ bool keepsRoot(const FunctionDecl *Function) {
                             Function->getName());
 }
 
+// `std::as_const` is a cast to const.
+bool isAsConst(const FunctionDecl *Function) {
+  return Function && inStdNamespace(Function) && Function->getDeclName().isIdentifier() && Function->getName() == "as_const";
+}
+
 // The object of a member call, or of an operator that is a member. Null for a free function and a static member.
 const Expr *objectOf(const CallExpr *Call) {
   const auto *Method = dyn_cast_or_null<CXXMethodDecl>(Call->getDirectCallee());
@@ -367,6 +374,25 @@ const Expr *objectOf(const CallExpr *Call) {
   if (const auto *Member = dyn_cast<CXXMemberCallExpr>(Call))
     return Member->getImplicitObjectArgument();
   return isa<CXXOperatorCallExpr>(Call) ? Call->getArg(0) : nullptr;
+}
+
+// The type of the object of a member call, looked at through a pointer. The object of `p->get()` is the pointer that `p->` returns.
+QualType objectType(const Expr *Object) {
+  const QualType Type = Object->IgnoreParenImpCasts()->getType();
+  return Type->isPointerType() ? Type->getPointeeType() : Type;
+}
+
+// A call that reaches through an owner, a unique_ptr or shared_ptr: its `operator*`, `operator->`, `get`, or the subscript of an array owner.
+// The operator of a shared_ptr is a member of its base, so the object is cast. The type of the owner is under the cast.
+// `std::to_address` of an owner is no access here. The row `containers` bans it.
+bool isOwnerAccess(const CallExpr *Call) {
+  const FunctionDecl *Function = Call->getDirectCallee();
+  const Expr *Object = Function ? objectOf(Call) : nullptr;
+  if (!Object || !isOwner(objectType(Object)))
+    return false;
+  const OverloadedOperatorKind Operator = Function->getOverloadedOperator();
+  return Operator == OO_Star || Operator == OO_Arrow || Operator == OO_Subscript ||
+         (Function->getDeclName().isIdentifier() && Function->getName() == "get");
 }
 
 // What a parameter writes through, for the rule of one writer. A parameter of rvalue reference type writes too: `f(std::move(a),
@@ -407,9 +433,10 @@ Walk rangeRoots(const VarDecl *Var) {
     if (const auto *Deref = dyn_cast<UnaryOperator>(Init))
       return rootsOf(Deref->getSubExpr());
   } else if (const auto *Call = dyn_cast<CallExpr>(Init)) {
-    if (const Expr *Object = objectOf(Call))
-      return rootsOf(Object);
-    return Call->getNumArgs() ? rootsOf(Call->getArg(0)) : Walk();
+    // The roots are those of the object or the first argument. The handle that the call reaches through is the call's own to say.
+    Walk W = objectOf(Call) ? rootsOf(objectOf(Call)) : Call->getNumArgs() ? rootsOf(Call->getArg(0)) : Walk();
+    W.ConstHandle |= rootsOf(Init).ConstHandle;
+    return W;
   }
   return rootsOf(Init);
 }
@@ -513,14 +540,12 @@ Walk rootsOf(const Expr *E) {
     return W;
   const Expr *Object = objectOf(Call);
   const OverloadedOperatorKind Operator = Function->getOverloadedOperator();
-  const bool Deref = Object && isHandle(Object->getType()) && (Operator == OO_Star || Operator == OO_Arrow);
+  const bool Deref = Object && isHandle(objectType(Object)) && (Operator == OO_Star || Operator == OO_Arrow);
   if (Object && (Deref || Operator == OO_Subscript || keepsRoot(Function))) {
     W = rootsOf(Object);
     // The owner is const as declared, not as the implicit cast to the const operator makes it. A write through `get()` or
-    // through the subscript of an array owner is as much a write through the handle as one through `*`. An operator has no name.
-    const QualType Owner = Object->IgnoreParenImpCasts()->getType();
-    const bool Get = Function->getDeclName().isIdentifier() && Function->getName() == "get";
-    if (Owner.isConstQualified() && isOwner(Owner) && (Deref || Get || Operator == OO_Subscript))
+    // through the subscript of an array owner is as much a write through the handle as one through `*`.
+    if (isOwnerAccess(Call) && objectType(Object).isConstQualified())
       W.ConstHandle = true;
     return W;
   }
@@ -546,6 +571,7 @@ Walk rootsOf(const Expr *E) {
 // member call. An argument by value is a copy, so it is no name. A constructor has no object.
 void collectArgs(const Expr *Node, llvm::SmallVectorImpl<Arg> &Out) {
   const FunctionDecl *Function = nullptr;
+  bool ReadOnly = false;
   llvm::SmallVector<const Expr *, 4> Args;
   if (const auto *Call = dyn_cast<CallExpr>(Node)) {
     Function = Call->getDirectCallee();
@@ -558,13 +584,15 @@ void collectArgs(const Expr *Node, llvm::SmallVectorImpl<Arg> &Out) {
   } else if (const auto *Construct = dyn_cast<CXXConstructExpr>(Node)) {
     Function = Construct->getConstructor();
     Args.assign(Construct->arg_begin(), Construct->arg_end());
+    // A span of const elements reads what it is made from, though the library takes a non-const reference to make it.
+    ReadOnly = asSpan(Construct->getType()) && !isMutableType(Construct->getType());
   }
   if (!Function)
     return;
   for (unsigned I = 0; I < Args.size() && I < Function->getNumParams(); ++I) {
     const QualType Type = Function->getParamDecl(I)->getType();
     if (bindsToName(Type))
-      Out.push_back({rootsOf(Args[I]), writesThrough(Type), false,
+      Out.push_back({rootsOf(Args[I]), writesThrough(Type) && !ReadOnly, false,
                      Type->isReferenceType() && Type->getPointeeType().isConstQualified() && inStdNamespace(Function)});
   }
 }
@@ -624,38 +652,313 @@ public:
   }
 };
 
-// cplusp-const-handle: decision 0033. A write whose path passes through a const unique_ptr or shared_ptr. A write is an
-// assignment, an increment, a non-const member call, or a binding to a non-const reference, pointer or span.
+// A declaration of the library: it is in std, and in a system header. The place decides, not the namespace. A file may open `namespace std`.
+bool inLibrary(const Decl *Declaration) {
+  return inStdNamespace(Declaration) && Declaration->getASTContext().getSourceManager().isInSystemHeader(Declaration->getLocation());
+}
+
+// Whether a type carries a way to write, decisions 0041 and 0043. It reads what the type holds.
+// A pointer or a reference to non-const carries one. To const, it carries what its pointee carries. A pointer to a function carries
+// nothing. An array carries what its element carries. A record, of the file or of the library, template or not, carries what its fields
+// and bases carry. A template of the library also carries what its type arguments carry.
+// A container of the library that owns its elements on the heap counts by all its type arguments, decision 0044.
+// They are the elements, the comparator, the hasher and the allocator. A copy of it copies each of them.
+// So its own pointers are no second name for anything.
+// Const reaches the fields, the bases, and the arguments of an owning container. A pointer member of a const record still carries,
+// because const does not reach its pointee. A mutable field of a const record carries too, whatever its type.
+// A const unique_ptr carries nothing, decision 0042. It cannot be copied, and every use of what it owns is judged as a source of its own.
+// A type that the check cannot see whole carries a way to write. An incomplete record is one.
+// `Seen` holds the types under judgement, with their qualifiers, and stops a record that holds itself.
+using SeenTypes = llvm::SmallDenseSet<QualType, 8>;
+
+bool carriesWrite(QualType Type, SeenTypes &Seen);
+
+bool argumentsCarryWrite(ArrayRef<TemplateArgument> Args, bool Const, SeenTypes &Seen) {
+  return llvm::any_of(Args, [&](const TemplateArgument &A) {
+    return A.getKind() == TemplateArgument::Pack ? argumentsCarryWrite(A.pack_elements(), Const, Seen)
+                                                 : A.getKind() == TemplateArgument::Type &&
+                                                       carriesWrite(Const ? A.getAsType().withConst() : A.getAsType(), Seen);
+  });
+}
+
+bool carriesWrite(QualType Type, SeenTypes &Seen) {
+  Type = Type.getCanonicalType();
+  if (Type->isPointerType() || Type->isReferenceType()) {
+    const QualType Pointee = Type->getPointeeType();
+    return !Pointee->isFunctionType() && (!Pointee.isConstQualified() || carriesWrite(Pointee, Seen));
+  }
+  const bool Const = Type.isConstQualified();
+  const auto Held = [&](QualType Member, bool Mutable = false) { return carriesWrite(Const && !Mutable ? Member.withConst() : Member, Seen); };
+  if (const auto *Array = Type->getAsArrayTypeUnsafe())
+    return Held(Array->getElementType());
+  const CXXRecordDecl *Record = Type->getAsCXXRecordDecl();
+  if (!Record)
+    return false;
+  const bool Library = inLibrary(Record), Named = Record->getDeclName().isIdentifier();
+  if (Library && Const && Named && Record->getName() == "unique_ptr")
+    return false;
+  if (!Record->hasDefinition())
+    return true;
+  if (!Seen.insert(Type).second)
+    return false;
+  const auto *Spec = dyn_cast<ClassTemplateSpecializationDecl>(Record);
+  if (Library && Spec && Named &&
+      llvm::is_contained({"basic_string", "vector", "deque", "list", "forward_list", "map", "multimap", "set", "multiset", "unordered_map",
+                          "unordered_multimap", "unordered_set", "unordered_multiset"},
+                         Record->getName()))
+    return argumentsCarryWrite(Spec->getTemplateArgs().asArray(), Const, Seen);
+  return llvm::any_of(Record->bases(), [&](const CXXBaseSpecifier &Base) { return Held(Base.getType()); }) ||
+         llvm::any_of(Record->fields(),
+                      [&](const FieldDecl *Field) { return (Const && Field->isMutable()) || Held(Field->getType(), Field->isMutable()); }) ||
+         (Library && Spec && argumentsCarryWrite(Spec->getTemplateArgs().asArray(), Const, Seen));
+}
+
+bool givesWrite(QualType Type) {
+  SeenTypes Seen;
+  return carriesWrite(Type, Seen);
+}
+
+// Whether `Argument` is the type `Built`, or one of its template type arguments, all without qualifiers.
+bool argumentsInclude(ArrayRef<TemplateArgument> Args, QualType Argument) {
+  return llvm::any_of(Args, [&](const TemplateArgument &A) {
+    return A.getKind() == TemplateArgument::Pack ? argumentsInclude(A.pack_elements(), Argument)
+                                                 : A.getKind() == TemplateArgument::Type &&
+                                                       A.getAsType().getCanonicalType().getUnqualifiedType() == Argument;
+  });
+}
+
+// A value that the library reads without running code of the file. It is a number, or an enum, which has no constructor.
+// Or it is a type of the library whose type arguments all count the same way. Decisions 0045 and 0046.
+// A type of the file takes its copy through a constructor of its own. That is code of the file, and it may write its argument.
+// So does a library type that holds one, because C++23 gives `pair` and `tuple` a constructor that forwards a non-const reference.
+// Any other type fails closed.
+bool isLibraryValue(QualType Type);
+
+bool argumentsAreLibraryValues(ArrayRef<TemplateArgument> Args) {
+  return llvm::all_of(Args, [](const TemplateArgument &A) {
+    switch (A.getKind()) {
+    case TemplateArgument::Type:
+      return isLibraryValue(A.getAsType());
+    case TemplateArgument::Pack:
+      return argumentsAreLibraryValues(A.pack_elements());
+    case TemplateArgument::Integral:
+      return true;
+    default:
+      return false;
+    }
+  });
+}
+
+bool isLibraryValue(QualType Type) {
+  Type = Type.getCanonicalType().getUnqualifiedType();
+  if (Type->isArithmeticType() || Type->isEnumeralType())
+    return true;
+  const CXXRecordDecl *Record = Type->getAsCXXRecordDecl();
+  if (!Record || !inLibrary(Record))
+    return false;
+  const auto *Spec = dyn_cast<ClassTemplateSpecializationDecl>(Record);
+  return !Spec || argumentsAreLibraryValues(Spec->getTemplateArgs().asArray());
+}
+
+bool isBuiltOrArgument(QualType Argument, QualType Built) {
+  Argument = Argument.getCanonicalType().getUnqualifiedType();
+  const auto *Spec = dyn_cast_or_null<ClassTemplateSpecializationDecl>(Built->getAsCXXRecordDecl());
+  return Argument == Built.getCanonicalType().getUnqualifiedType() || (Spec && argumentsInclude(Spec->getTemplateArgs().asArray(), Argument));
+}
+
+// A value gives a way to write when it is a non-const lvalue. It does so too when its type carries one, as a const lvalue does.
+// A copy of a class that carries no way to write is a read of its value, decision 0041.
+bool grantsWrite(const Expr *E) { return (E->isGLValue() && !E->getType().isConstQualified()) || givesWrite(E->getType()); }
+
+// The element access of a sequence of the library on its object: `operator[]`, `at`, `front` and `back`. It gives an element and writes
+// nothing, also the non-const one. A span gives a reference to its element from a const call. `std::map` is no sequence: its subscript
+// inserts. The place decides, not the namespace, as for the rest of the library.
+bool isElementAccess(const FunctionDecl *Function) {
+  const auto *Method = dyn_cast_or_null<CXXMethodDecl>(Function);
+  const CXXRecordDecl *Owner = Method ? Method->getParent() : nullptr;
+  return Owner && Owner->getDeclName().isIdentifier() && inLibrary(Owner) &&
+         llvm::is_contained({"array", "vector", "deque", "basic_string", "span"}, Owner->getName()) &&
+         (Method->getOverloadedOperator() == OO_Subscript ||
+          (Method->getDeclName().isIdentifier() && llvm::is_contained({"at", "front", "back"}, Method->getName())));
+}
+
+// An expression that reaches through a const handle. One kind is an access of an owner, as `isOwnerAccess` says.
+// Its owner is const as declared, or is itself reached through a const handle.
+// The other kind is the name of a reference loop variable of a range-for whose range does. It names an element of the range.
+bool reachesThroughConstHandle(const Expr *E) {
+  if (const auto *Ref = dyn_cast<DeclRefExpr>(E)) {
+    const auto *Var = dyn_cast<VarDecl>(Ref->getDecl());
+    return Var && Var->isCXXForRangeDecl() && Var->getType()->isReferenceType() && rootsOf(Ref).ConstHandle;
+  }
+  const auto *Call = dyn_cast<CallExpr>(E);
+  return Call && isOwnerAccess(Call) && rootsOf(Call).ConstHandle;
+}
+
+// Whether a value that reaches through a const handle ends in a use that is no read, decision 0040.
+// The value goes up through the nodes that pass it on. They are a bracket, an implicit cast, a member, an element, an address,
+// a dereference, an operand, an arm of a conditional, and `std::as_const`.
+// It stops where it gives no way to write: a const lvalue that carries none, a number, a pointer to const, a span of const.
+// These are reads: a const method on it, a view of const elements, a statement that drops it, and an operand that no code runs.
+// A const method on it is a read when its result gives no way to write. A result that gives one is followed from the call.
+// Any other use is refused. That is a store, an argument, a return, a capture, a brace list, an explicit cast, and a use that no case knows.
+// ponytail: any implicit variable with an initializer is the range of a range-for, which the check of the `for` judges.
+// Upgrade: ask whether the variable is the range of a range-for.
+bool leaks(ASTContext &Context, const Expr *Node) {
+  if (!grantsWrite(Node))
+    return false;
+  const DynTypedNodeList Parents = Context.getParents(*Node);
+  if (Parents.empty())
+    return true;
+  for (const DynTypedNode &Parent : Parents) {
+    const auto *S = Parent.get<Stmt>();
+    if (!S) {
+      const auto *Var = Parent.get<VarDecl>();
+      if ((Parent.get<Decl>() || Parent.get<CXXCtorInitializer>()) && !(Var && Var->isImplicit()))
+        return true;
+      continue;
+    }
+    // A method called on the object. A static method reads nothing of it. A non-const method is a use that is no read. A const method and
+    // an element access are reads when the result carries no way to write. Else the walk goes on from the call, decision 0041.
+    const auto MethodLeaks = [&](const CXXMethodDecl *Method, const CallExpr *Call) {
+      return !Method->isStatic() && ((!Method->isConst() && !isElementAccess(Method)) || leaks(Context, Call));
+    };
+    bool Leak = true;
+    if (const auto *Member = dyn_cast<MemberExpr>(S)) {
+      if (const auto *Method = dyn_cast<CXXMethodDecl>(Member->getMemberDecl()))
+        // The member is the callee. The call is the parent of the member.
+        Leak = llvm::any_of(Context.getParents(*Member), [&](const DynTypedNode &Up) {
+          return Up.get<CallExpr>() ? MethodLeaks(Method, Up.get<CallExpr>()) : !Method->isStatic();
+        });
+      else
+        Leak = !isa<VarDecl>(Member->getMemberDecl()) && leaks(Context, Member);
+    } else if (const auto *Cast = dyn_cast<ExplicitCastExpr>(S)) {
+      // A cast of a pointer to an integer is no read. The walk refuses it here, so it need not follow the integer.
+      Leak = Cast->getCastKind() == CK_PointerToIntegral || grantsWrite(Cast);
+    } else if (const auto *Call = dyn_cast<CallExpr>(S)) {
+      // A member operator is a method called on its first operand, as `*h` and `h[i]` are.
+      const auto *Method = dyn_cast_or_null<CXXMethodDecl>(Call->getDirectCallee());
+      if (Method && !Method->isStatic() && isa<CXXOperatorCallExpr>(Call) && Call->getArg(0) == Node)
+        Leak = MethodLeaks(Method, Call);
+      else
+        Leak = !isAsConst(Call->getDirectCallee()) || leaks(Context, Call);
+    } else if (const auto *Construct = dyn_cast<CXXConstructExpr>(S)) {
+      // A constructor of the library that builds a value of the library which carries no way to write, from an lvalue, is a copy.
+      // It reads the lvalue, whatever reference the constructor takes. C++23 adds `pair(pair<U1, U2>&)`, and `optional(U&&)` takes
+      // a forwarding reference. An xvalue is no read, because a move takes from the object. A function of the library is no constructor:
+      // what its result carries says nothing of what it did to its arguments.
+      // The argument is of the type that is built, or of one of its type arguments, decision 0044.
+      // Another constructor may call a method of the file on what it is given.
+      // `std::mt19937` calls `generate` on a seed sequence, and `std::thread` runs a callable.
+      // The argument is also a value of the library, decisions 0045 and 0046. `std::optional<W>` forwards a non-const `W&` to the
+      // constructors of `W`, and a `W(W&)` of the file may write its argument.
+      const CXXRecordDecl *Built = Construct->getType()->getAsCXXRecordDecl();
+      const bool Copy = Node->isLValue() && Built && inLibrary(Built) && inLibrary(Construct->getConstructor()) &&
+                        isLibraryValue(Node->getType()) && isBuiltOrArgument(Node->getType(), Construct->getType()) &&
+                        !givesWrite(Construct->getType());
+      Leak = !Copy && (!asSpan(Construct->getType()) || isMutableType(Construct->getType()));
+    } else if (const auto *Binary = dyn_cast<BinaryOperator>(S)) {
+      // A pointer to member reaches a member that no name shows.
+      Leak = Binary->isAssignmentOp() || Binary->getOpcode() == BO_PtrMemD || Binary->getOpcode() == BO_PtrMemI ||
+             (!(Binary->isCommaOp() && Binary->getLHS() == Node) && leaks(Context, Binary));
+    } else if (const auto *Unary = dyn_cast<UnaryOperator>(S)) {
+      Leak = Unary->isIncrementDecrementOp() || Unary->getOpcode() == UO_Coawait || leaks(Context, Unary);
+    } else if (const auto *Conditional = dyn_cast<AbstractConditionalOperator>(S)) {
+      Leak = Conditional->getCond() != Node && leaks(Context, Conditional);
+    } else if (isa<ParenExpr, FullExpr, MaterializeTemporaryExpr, CXXBindTemporaryExpr, ImplicitCastExpr, ArraySubscriptExpr>(S)) {
+      Leak = leaks(Context, cast<Expr>(S));
+    } else if (const auto *List = dyn_cast<InitListExpr>(S)) {
+      // A brace list has two forms. The syntactic one holds the expressions as written, and the semantic one holds them with their
+      // conversions, a copy among them. The parent map names the semantic list as the parent of both. The use is the one where the
+      // node is an element of the list, which is the semantic form with the conversions applied.
+      Leak = llvm::is_contained(List->inits(), Node);
+    } else if (const auto *Block = dyn_cast<CompoundStmt>(S)) {
+      // The last statement of a statement expression is its value.
+      Leak = Block->body_back() == Node && llvm::any_of(Context.getParents(*Block), [](const DynTypedNode &Up) { return Up.get<StmtExpr>(); });
+    } else if (isa<IfStmt, WhileStmt, DoStmt, ForStmt, SwitchStmt, CaseStmt, DefaultStmt, LabelStmt, AttributedStmt, UnaryExprOrTypeTraitExpr,
+                   CXXNoexceptExpr, CXXTypeidExpr>(S)) {
+      Leak = false;
+    }
+    if (Leak)
+      return true;
+  }
+  return false;
+}
+
+// cplusp-const-handle: decisions 0033, 0038 and 0040. A const handle gives reads only.
+// The check finds each expression that reaches through a const unique_ptr or shared_ptr.
+// It follows the expression up to the first node that is no step of a path. That node is refused unless it is a read.
+// `leaks` lists the steps and the reads. The check does not list the ways a write leaves a handle.
+// A range-for whose range reaches through a const handle is refused in two cases.
+// Its loop variable is a non-const reference, or a value that carries a way to write. Or the compiler's call of `begin` or `end` may change state.
+// That is a call outside std, and it is a non-const call on what the handle owns.
 class ConstHandleCheck : public ClangTidyCheck {
 public:
   using ClangTidyCheck::ClangTidyCheck;
-  void registerMatchers(MatchFinder *Finder) override { Finder->addMatcher(expr(judged()).bind("expr"), this); }
+  void registerMatchers(MatchFinder *Finder) override {
+    Finder->addMatcher(expr(anyOf(callExpr(), declRefExpr()), judged()).bind("source"), this);
+    Finder->addMatcher(cxxForRangeStmt(judged()).bind("for"), this);
+  }
   void check(const MatchFinder::MatchResult &Result) override {
-    const auto *Node = Result.Nodes.getNodeAs<Expr>("expr");
-    bool Writes = false;
-    if (const auto *Binary = dyn_cast<BinaryOperator>(Node)) {
-      Writes = Binary->isAssignmentOp() && rootsOf(Binary->getLHS()).ConstHandle;
-    } else if (const auto *Unary = dyn_cast<UnaryOperator>(Node)) {
-      Writes = Unary->isIncrementDecrementOp() && rootsOf(Unary->getSubExpr()).ConstHandle;
-    } else if (isa<CallExpr, CXXConstructExpr>(Node)) {
-      llvm::SmallVector<Arg, 4> Args;
-      collectArgs(Node, Args);
-      Writes = llvm::any_of(Args, [](const Arg &A) { return A.Writes && A.Where.ConstHandle; });
+    if (const auto *Loop = Result.Nodes.getNodeAs<CXXForRangeStmt>("for")) {
+      const VarDecl *Variable = Loop->getLoopVariable();
+      // A loop variable that is a mutable reference, or a value that carries a way to write, as the proxy of a `vector<bool>` does.
+      if (((Variable && (isMutableType(Variable->getType()) || givesWrite(Variable->getType()))) || callsMutableBeginOrEnd(Loop, *Result.SourceManager)) &&
+          rootsOf(Loop->getRangeInit()).ConstHandle)
+        diag(Loop->getBeginLoc(), "a write through a const handle");
+      return;
     }
-    if (Writes)
-      diag(Node->getBeginLoc(), "a write through a const handle");
+    const auto *Source = Result.Nodes.getNodeAs<Expr>("source");
+    if (reachesThroughConstHandle(Source) && leaks(*Result.Context, Source))
+      diag(Source->getBeginLoc(), "a write through a const handle");
+  }
+
+private:
+  // The compiler's calls of `begin` and `end` on the range are the initializers of `__begin` and `__end`. A callee of the library is a
+  // container that the library wrote, and a non-const `begin` of it changes nothing. The location decides, not the namespace: a file may
+  // open `namespace std` and declare a `begin` that writes. Any other callee that may change state is refused.
+  static bool callsMutableBeginOrEnd(const CXXForRangeStmt *Loop, const SourceManager &SM) {
+    for (const Stmt *Part : {Loop->getBeginStmt(), Loop->getEndStmt()}) {
+      const auto *Declaration = dyn_cast_or_null<DeclStmt>(Part);
+      const auto *Var = Declaration ? dyn_cast_or_null<VarDecl>(Declaration->getSingleDecl()) : nullptr;
+      const auto *Call = Var && Var->getInit() ? dyn_cast<CallExpr>(Var->getInit()->IgnoreImplicit()->IgnoreParens()) : nullptr;
+      const FunctionDecl *Function = Call ? Call->getDirectCallee() : nullptr;
+      if (Function && !SM.isInSystemHeader(Function->getLocation()) && mayChangeState(Function))
+        return true;
+    }
+    return false;
   }
 };
 
-// Names in std that return an iterator, a reference, a cast or a new value and change nothing, though the object or the argument
-// is non-const. A forwarding reference instantiates as a non-const reference, which is why `make_pair` and `get` are here.
-// So `std::sort(v.begin(), v.end())`, `v.front() + v.back()` and `f(std::move(a), std::move(b))` are no pair of changes.
+// Names in std that return an iterator, a reference, a cast or a new value, and change nothing through their parameters.
+// The object or the argument may be non-const. A forwarding reference instantiates as a non-const reference, which is why `make_pair`
+// and `get` are here. So `std::sort(v.begin(), v.end())` and `v.front() + v.back()` are no pair of changes by their parameters.
+// What their code runs still counts, decision 0038. A copy that `make_pair` makes runs the copy constructor.
 // A function of the same name outside std is a change.
 bool changesNothing(const FunctionDecl *Function) {
   return inStdNamespace(Function) && Function->getDeclName().isIdentifier() &&
          llvm::is_contained({"begin", "end", "cbegin", "cend", "rbegin", "rend", "crbegin", "crend", "at", "front", "back", "move", "forward",
                              "as_const", "make_pair", "make_tuple", "get", "tie"},
                             Function->getName());
+}
+
+// Calls Visit on a node and on everything that runs where the node is written, decision 0038. That is its children, the expression of a
+// default argument, the expression of a default member initializer, and the capture initializers of a lambda. It is not the body of
+// the lambda, which runs where the lambda is called. An unevaluated operand does not run: `sizeof`, `alignof`, `noexcept` and `typeid`.
+// A default argument and a default member initializer have no children of their own, and the code that runs is their expression.
+template <typename F> void visitRuns(const Stmt *S, const F &Visit) {
+  if (!S || isa<UnaryExprOrTypeTraitExpr, CXXNoexceptExpr, CXXTypeidExpr>(S))
+    return;
+  Visit(S);
+  if (const auto *Default = dyn_cast<CXXDefaultArgExpr>(S))
+    visitRuns(Default->getExpr(), Visit);
+  else if (const auto *Init = dyn_cast<CXXDefaultInitExpr>(S))
+    visitRuns(Init->getExpr(), Visit);
+  else if (const auto *Lambda = dyn_cast<LambdaExpr>(S))
+    for (const Expr *Capture : Lambda->capture_inits())
+      visitRuns(Capture, Visit);
+  else
+    for (const Stmt *Child : S->children())
+      visitRuns(Child, Visit);
 }
 
 // The table of the lowered form, decision 0037, which the state check reads too. Defined with it.
@@ -672,7 +975,8 @@ bool collectForTable(const MatchFinder::MatchResult &Result);
 // with a parameter the constructor can write through. A std::span is a view, and cutting one changes nothing, so
 // `fill(v, v)` is a matter for the row aliasing. The first part of the rule for a call, a mutable parameter or a non-const method, is
 // the callee's own kind. For an operator other than `()` it is an assignment or an increment. The table adds the rest: what the callee
-// lists, what its code does, and what an override of it does. The std functions of `changesNothing` are no change, whatever their code is.
+// lists, what its code does, and what an override of it does. The std functions of `changesNothing` are no change by their parameters.
+// Their code still counts, through the table.
 bool isChange(const Stmt *S) {
   if (const auto *Unary = dyn_cast<UnaryOperator>(S))
     return Unary->isIncrementDecrementOp();
@@ -689,29 +993,24 @@ bool isChange(const Stmt *S) {
   }
   if (const auto *Call = dyn_cast<CallExpr>(S)) {
     const FunctionDecl *Callee = Call->getDirectCallee();
-    if (!Callee || changesNothing(Callee))
+    if (!Callee)
       return false;
     // An operator other than () is a change by its own kind, an assignment or an increment, so `v[i]` on a non-const vector is none.
     // Whatever the operator, what the callee lists and what its code does count too.
     const auto *Operator = dyn_cast<CXXOperatorCallExpr>(S);
     const bool ByKind = Operator && Operator->getOperator() != OO_Call ? isAssignmentOrIncrement(Operator->getOperator()) : mayChangeState(Callee);
-    return ByKind || tableChanges(Callee);
+    return (!changesNothing(Callee) && ByKind) || tableChanges(Callee);
   }
   return false;
 }
 
-// ponytail: three ceilings. A lambda changes nothing where it is written, so a capture initializer that does is missed.
-// A reference member lets a const method change state, and the check calls that method pure. A call through a function pointer
-// or a member pointer has no callee the check can read.
-// Upgrade: count the capture initializers, and read the type of a pointer.
-// An unevaluated operand changes nothing: `sizeof`, `alignof`, `noexcept` and `typeid` do not run it.
-// A default argument has no children of its own, and the call runs its expression.
+// ponytail: two ceilings. A reference member lets a const method change state, and the check calls that method pure.
+// A call through a function pointer or a member pointer has no callee the check can read.
+// Upgrade: read the type of a pointer.
 bool changes(const Stmt *S) {
-  if (isa<LambdaExpr, UnaryExprOrTypeTraitExpr, CXXNoexceptExpr, CXXTypeidExpr>(S))
-    return false;
-  if (const auto *Default = dyn_cast<CXXDefaultArgExpr>(S))
-    return changes(Default->getExpr());
-  return isChange(S) || llvm::any_of(S->children(), [](const Stmt *Child) { return Child && changes(Child); });
+  bool Found = false;
+  visitRuns(S, [&](const Stmt *Node) { Found = Found || isChange(Node); });
+  return Found;
 }
 
 // The children of a node that the standard leaves unordered among themselves. Everything else is ordered,
@@ -775,19 +1074,8 @@ bool isRealCall(const Stmt *S) {
   return !Function || !Function->isTrivial();
 }
 
-void effects(const Stmt *S, Effects &E) {
-  if (!S || isa<UnaryExprOrTypeTraitExpr, CXXNoexceptExpr, CXXTypeidExpr>(S))
-    return;
-  // Where a lambda is written only its capture initializers run. A default argument has no children of its own.
-  if (const auto *Lambda = dyn_cast<LambdaExpr>(S)) {
-    for (const Expr *Init : Lambda->capture_inits())
-      effects(Init, E);
-    return;
-  }
-  if (const auto *Default = dyn_cast<CXXDefaultArgExpr>(S)) {
-    effects(Default->getExpr(), E);
-    return;
-  }
+// What one node adds to the effects. The nodes under it are the visitor's business.
+void nodeEffects(const Stmt *S, Effects &E) {
   if (isa<DeclRefExpr, MemberExpr, CXXThisExpr>(S))
     addPaths(E.Reads, rootsOf(cast<Expr>(S)).Paths);
   if (isa<CallExpr, CXXConstructExpr>(S)) {
@@ -805,8 +1093,11 @@ void effects(const Stmt *S, Effects &E) {
     addPaths(E.Writes, rootsOf(Binary->getLHS()).Paths);
   if (const auto *Unary = dyn_cast<UnaryOperator>(S); Unary && Unary->isIncrementDecrementOp())
     addPaths(E.Writes, rootsOf(Unary->getSubExpr()).Paths);
-  for (const Stmt *Child : S->children())
-    effects(Child, E);
+}
+
+// The effects of everything that runs where the node is written, the same nodes as `changes` visits.
+void effects(const Stmt *S, Effects &E) {
+  visitRuns(S, [&](const Stmt *Node) { nodeEffects(Node, E); });
 }
 
 // cplusp-evaluation-order: a node with two unordered children that each change state, decision 0026. When exactly one changes
@@ -2151,8 +2442,9 @@ private:
 // The preprocessor holds them in the line table of the source manager.
 // The entry sits in the directive's line. So the finding sits at the first column of that line, before the directive.
 // A marker may declare the rest of its file a system header, which clang-tidy does not judge.
-// The entry that `#pragma GCC system_header` adds is no directive. The gate's scan of the preprocessor output reports the pragma.
+// The entry that `#pragma GCC system_header` adds is no directive. The check `cplusp-pragma` reports the pragma.
 // The preprocessor tells where it made one. No other entry is skipped, so `# 3 "this file" 3` is a finding.
+// A NOLINT on the line of a directive suppresses this finding. The gate reports the NOLINT, and that stands.
 // ponytail: the entry sits on the line of the number. A directive that a comment spreads over lines is reported on the line of its
 // number, not of its `#`. Upgrade: a callback of the preprocessor for each directive.
 class LineDirectiveCheck : public ClangTidyCheck {
@@ -2200,6 +2492,265 @@ private:
   std::set<SourceLocation::UIntTy> Pragmas;
 };
 
+// cplusp-pragma: decision 0038. Every `#pragma`, `_Pragma` and `__pragma` that the preprocessor reads, under the build's own flags.
+// It also refuses a header name with a backslash. The compiler reads such a name its own way, and the dependency list prints it as a slash.
+// The preprocessor says when it starts one, before any handler runs. So a raw string that looks like a pragma is no pragma.
+// The gate reads no compiler output that holds source text. A pragma in a system header is the library's own.
+// The finding of a `#pragma` sits at the end of its first word, in the file that holds it. The pragma's own line is still a user line.
+// A header turns system from the next line on, and that is after this callback.
+// A `system_header` pragma in the main file is a finding too. Clang ignores it there, and it is still not allowed.
+// The message is the presumed file, the presumed line and the sentence for the bot, set apart by tabs.
+// A `#line` moves the presumed place, and the finding shows the place that the author gave.
+// A NOLINT on the line of a pragma or an include suppresses the finding of this check. The gate reports the NOLINT, and that stands.
+// A diagnostic pragma in a system header may change the warnings of the code that includes it.
+// The compiler keeps the state of every warning, with its pushes and pops. So the check asks it, and keeps no count of its own.
+// The preprocessor enters a system header from a file that is none. The check asks the level of each warning that the policy enforces,
+// at the include. The header ends and the file resumes. The check asks again at the place where the file resumes.
+// A warning that was on and is off is the finding. User code cannot change a warning, because every pragma in it is refused.
+// The finding sits at the include that brought the outermost header in.
+// When that include is no file, as with `-include`, it sits at the start of the main file.
+// A header that pushes and pops around its change, as libstdc++ does, stays quiet.
+// ponytail: the words come from the source, read by the compiler's lexer at the introducer. A `__pragma` expands macros first.
+// So the words of a `__pragma` may not be the ones that run. Only a `#pragma` is `once` for the gate, which reads no more than that.
+// The diagnostic pragmas that run are reported by their own callbacks, whatever the words said. Another pragma that a macro makes
+// is still a finding, and its sentence names the source words. Upgrade: read the tokens that the handler reads.
+// Reading them ahead with a backtrack in the callback changes the build. A macro in the pragma is no longer expanded.
+// A pragma that nobody knows leaves its words to the parser.
+class PragmaCheck : public ClangTidyCheck {
+public:
+  // The base class keeps the context private, so the check keeps its own pointer.
+  PragmaCheck(StringRef Name, ClangTidyContext *Context) : ClangTidyCheck(Name, Context), Ctx(Context) {}
+  void registerPPCallbacks(const SourceManager &SM, Preprocessor *PP, Preprocessor *) override {
+    // The driver turns `-include h.h` into `-include-pch h.h.pch` when that file sits beside the header. The compiler tells it.
+    if (!PP->getPreprocessorOpts().ImplicitPCHInclude.empty())
+      refusePrecompiled(*this, SM);
+    PP->addPPCallbacks(std::make_unique<Notes>(*this, *Ctx, SM, *PP));
+  }
+  void registerMatchers(MatchFinder *Finder) override { Finder->addMatcher(translationUnitDecl(), this); }
+  // A precompiled header and a module are read by the AST reader, whichever way the build came to load one.
+  // clang-tidy gives every run a reader, and it holds no file until a precompiled header or a module is loaded.
+  // An external source of any other kind is refused too.
+  void check(const MatchFinder::MatchResult &Result) override {
+    ExternalASTSource *Source = Result.Context->getExternalSource();
+    if (Source && (!isa<ASTReader>(Source) || cast<ASTReader>(Source)->getModuleManager().size()))
+      refusePrecompiled(*this, *Result.SourceManager);
+  }
+
+private:
+  ClangTidyContext *Ctx;
+
+  // A finding at `At`, which is a place in a file. The message is the presumed place, then the sentence, set apart by tabs.
+  static void reportAt(ClangTidyCheck &Check, const SourceManager &SM, SourceLocation At, const std::string &Sentence) {
+    const PresumedLoc Place = SM.getPresumedLoc(At);
+    if (Place.isValid())
+      Check.diag(At, "%0") << StringRef(std::string(Place.getFilename()) + "\t" + std::to_string(Place.getLine()) + "\t" + Sentence);
+  }
+
+  // Precompiled state carries what an earlier run of the compiler read, and the gate did not see it. The finding sits at the start of
+  // the main file. Both ways of finding it report the same place and the same words, and the diagnostics engine keeps one.
+  static void refusePrecompiled(ClangTidyCheck &Check, const SourceManager &SM) {
+    reportAt(Check, SM, SM.getLocForStartOfFile(SM.getMainFileID()),
+             "include: a precompiled header is loaded. It carries state from an earlier run of the compiler.");
+  }
+
+  struct Notes : PPCallbacks {
+    ClangTidyCheck &Check;
+    ClangTidyContext &Context;
+    const SourceManager &SM;
+    Preprocessor &PP;
+    // Whether the `#pragma` that started last was already reported as a diagnostic pragma, so that its callback does not report it twice.
+    bool DiagnosticSeen = false;
+    // The files that are being read. A system header entered from a file that is none holds the levels of the warnings.
+    // They are the warnings that the policy enforces, as they were at its include.
+    struct Frame {
+      bool System = false;
+      bool Outermost = false;
+      std::vector<bool> Enforced;
+    };
+    std::vector<Frame> Frames;
+    unsigned SystemFrames = 0;
+    // The warnings that the policy enforces: those whose `clang-diagnostic-{name}` check is on in this run. Found once.
+    std::vector<unsigned> Enforced;
+    bool EnforcedKnown = false;
+    Notes(ClangTidyCheck &Check, ClangTidyContext &Context, const SourceManager &SM, Preprocessor &PP)
+        : Check(Check), Context(Context), SM(SM), PP(PP) {}
+
+    void report(SourceLocation At, const std::string &Sentence) { reportAt(Check, SM, At, Sentence); }
+
+    // A diagnostic pragma that the preprocessor runs, whatever words said that it would.
+    void diagnostic(SourceLocation Loc) {
+      const SourceLocation At = SM.getExpansionLoc(Loc);
+      if (!DiagnosticSeen && At.isValid() && !SM.isInSystemHeader(At))
+        report(At, "pragma diagnostic: not allowed in verified code. It silences the gate.");
+    }
+
+    const std::vector<unsigned> &enforced() {
+      if (!EnforcedKnown) {
+        EnforcedKnown = true;
+        std::vector<diag::kind> All;
+        DiagnosticIDs::getAllDiagnostics(diag::Flavor::WarningOrError, All);
+        for (const unsigned ID : All) {
+          const StringRef Option = DiagnosticIDs::getWarningOptionForDiag(ID);
+          if (!Option.empty() && Context.isCheckEnabled(("clang-diagnostic-" + Option).str()))
+            Enforced.push_back(ID);
+        }
+      }
+      return Enforced;
+    }
+
+    // Which of the warnings that the policy enforces are on at `At`.
+    std::vector<bool> levels(SourceLocation At) {
+      std::vector<bool> On;
+      for (const unsigned ID : enforced())
+        On.push_back(PP.getDiagnostics().getDiagnosticLevel(ID, At) != DiagnosticsEngine::Ignored);
+      return On;
+    }
+
+    // A system header changed the warnings of the code that includes it. The finding sits at the include that brought it in.
+    // An include that is no file, as `-include` makes, has no place of its own. Then the finding sits at the start of the main file.
+    void leak(FileID Header) {
+      SourceLocation Include = SM.getIncludeLoc(Header);
+      if (Include.isInvalid() || !SM.getFileEntryForID(SM.getFileID(Include)))
+        Include = SM.getLocForStartOfFile(SM.getMainFileID());
+      report(SM.getExpansionLoc(Include), "pragma diagnostic: a system header changes the warnings of the code that includes it. It silences the gate.");
+    }
+
+    void FileChanged(SourceLocation Loc, FileChangeReason Reason, SrcMgr::CharacteristicKind Kind, FileID Previous) override {
+      const bool System = SrcMgr::isSystem(Kind);
+      if (Reason == EnterFile) {
+        Frame Entered;
+        Entered.System = System;
+        // A buffer that is no file, as `<built-in>`, holds no header.
+        if (System && !SystemFrames && SM.getFileEntryForID(SM.getFileID(Loc))) {
+          Entered.Outermost = true;
+          Entered.Enforced = levels(SM.getIncludeLoc(SM.getFileID(Loc)));
+        }
+        SystemFrames += System;
+        Frames.push_back(std::move(Entered));
+      } else if (Reason == ExitFile && !Frames.empty()) {
+        const Frame Ended = std::move(Frames.back());
+        Frames.pop_back();
+        SystemFrames -= Ended.System;
+        if (!Ended.Outermost || System)
+          return;
+        // The file resumes. A warning that the header found on and that is off here, the header turned off.
+        const std::vector<bool> Now = levels(Loc);
+        for (size_t I = 0; I < Now.size() && I < Ended.Enforced.size(); ++I)
+          if (Ended.Enforced[I] && !Now[I]) {
+            leak(Previous);
+            return;
+          }
+      }
+    }
+
+    void PragmaDiagnostic(SourceLocation Loc, StringRef, diag::Severity, StringRef) override { diagnostic(Loc); }
+    void PragmaDiagnosticPush(SourceLocation Loc, StringRef) override { diagnostic(Loc); }
+    void PragmaDiagnosticPop(SourceLocation Loc, StringRef) override { diagnostic(Loc); }
+
+    void InclusionDirective(SourceLocation HashLoc, const Token &, StringRef FileName, bool, CharSourceRange, OptionalFileEntryRef, StringRef,
+                            StringRef, const Module *, SrcMgr::CharacteristicKind) override {
+      const SourceLocation At = SM.getExpansionLoc(HashLoc);
+      if (FileName.contains('\\') && At.isValid() && !SM.isInSystemHeader(At))
+        report(At, "include: a header name with a backslash is not allowed in verified code. The compiler may read it as another file.");
+    }
+
+    // Where a pragma starts. A `#pragma` starts at its hash, and its words follow the word `pragma`.
+    // A `__pragma` starts at its introducer, and its words follow `__pragma(`. The text of a `_Pragma` starts at its words.
+    enum class Start { Hash, Microsoft, Text };
+
+    // The words of the pragma that starts at `Where`, with the place of the first one.
+    // The compiler's lexer reads them, in raw mode. So a splice, a comment, a digraph and a trigraph are what the build says.
+    // The words are the tokens up to a parenthesis.
+    // A fresh raw lexer marks its first token as the start of a line. So it starts at the introducer, and the first token is skipped.
+    std::vector<std::string> wordsFrom(SourceLocation Where, Start How, SourceLocation &First) const {
+      const SourceLocation Spelling = SM.getSpellingLoc(Where);
+      const auto [File, Offset] = SM.getDecomposedLoc(Spelling);
+      bool Invalid = false;
+      const StringRef Buffer = SM.getBufferData(File, &Invalid);
+      if (Invalid || Offset > Buffer.size())
+        return {};
+      const char *Start = Buffer.data() + Offset, *End = Buffer.end();
+      // A scratch buffer holds many strings, and each ends at its own null character.
+      if (SM.isWrittenInScratchSpace(Spelling)) {
+        const size_t Nul = StringRef(Start, Buffer.end() - Start).find('\0');
+        if (Nul != StringRef::npos)
+          End = Start + Nul;
+      }
+      Lexer Raw(SM.getLocForStartOfFile(File), PP.getLangOpts(), Buffer.begin(), Start, End);
+      std::string Text;
+      Token Tok;
+      bool FirstToken = true, InIntroducer = How == Start::Hash;
+      unsigned Skip = How == Start::Microsoft ? 2 : 0, Budget = 4;
+      for (bool AtEnd = false; !AtEnd;) {
+        AtEnd = Raw.LexFromRawLexer(Tok);
+        if (Tok.is(tok::eof) || (!FirstToken && Tok.isAtStartOfLine()))
+          break;
+        FirstToken = false;
+        if (InIntroducer) {
+          // The hash, then `pragma`. Nothing else may stand between them but what the lexer skips.
+          if (Lexer::getSpelling(Tok, SM, PP.getLangOpts()) == "pragma")
+            InIntroducer = false;
+          else if (!--Budget)
+            return {};
+          continue;
+        }
+        if (Skip) {
+          --Skip;
+          continue;
+        }
+        if (Tok.isOneOf(tok::l_paren, tok::r_paren))
+          break;
+        // The last character of the word. A splice before the word belongs to the line that the word ends on.
+        if (First.isInvalid())
+          First = Tok.getLocation().getLocWithOffset(Tok.getLength() ? Tok.getLength() - 1 : 0);
+        Text += Lexer::getSpelling(Tok, SM, PP.getLangOpts()) + " ";
+      }
+      std::vector<std::string> Words;
+      std::string Word;
+      for (const char C : Text + " ") {
+        if (isalnum(static_cast<unsigned char>(C)) || C == '_') {
+          Word += C;
+        } else if (!Word.empty()) {
+          Words.push_back(std::move(Word));
+          Word.clear();
+        }
+      }
+      if (Words.size() > 2)
+        Words.resize(2);
+      return Words;
+    }
+
+    void PragmaDirective(SourceLocation Loc, PragmaIntroducerKind Kind) override {
+      DiagnosticSeen = false;
+      SourceLocation First;
+      std::vector<std::string> Words;
+      if (Kind == PIK___pragma)
+        Words = wordsFrom(Loc, Start::Microsoft, First);
+      else if (Kind == PIK_HashPragma)
+        Words = wordsFrom(Loc, Start::Hash, First);
+      else if (PreprocessorLexer *Current = PP.getCurrentLexer())
+        // The only lexer of the preprocessor is the compiler's `Lexer`. The text of a `_Pragma` has one of its own.
+        Words = wordsFrom(static_cast<Lexer *>(Current)->getSourceLocation(), Start::Text, First);
+      // A `#pragma` is reported at its first word, and the others where the compiler read them.
+      const SourceLocation At = SM.getExpansionLoc(Kind == PIK_HashPragma && First.isValid() ? First : Loc);
+      // A `#pragma` reads its name with no macro expansion, so `#pragma once` is the real one. The words of a `__pragma` are expanded first.
+      if (At.isInvalid() || SM.isInSystemHeader(At) || (Kind == PIK_HashPragma && !Words.empty() && Words[0] == "once"))
+        return;
+      std::string Sentence;
+      if (Words.size() == 2 && (Words[0] == "clang" || Words[0] == "GCC") && Words[1] == "diagnostic") {
+        Sentence = "pragma diagnostic: not allowed in verified code. It silences the gate.";
+        DiagnosticSeen = true;
+      }
+      else if (Words.size() == 2 && Words[1] == "system_header")
+        Sentence = "pragma system_header: not allowed in verified code. It silences the gate.";
+      else
+        Sentence = std::string("pragma") + (Words.empty() ? "" : " " + Words[0] + (Words.size() > 1 ? " " + Words[1] : "")) +
+                   ": not allowed in verified code. It changes the build the proofs assume.";
+      report(At, Sentence);
+    }
+  };
+};
+
 class CplusPModule : public ClangTidyModule {
 public:
   void addCheckFactories(ClangTidyCheckFactories &Factories) override {
@@ -2216,6 +2767,7 @@ public:
     Factories.registerCheck<UnlistedStateCheck>("cplusp-unlisted-state");
     Factories.registerCheck<InexactLiteralCheck>("cplusp-inexact-literal");
     Factories.registerCheck<LineDirectiveCheck>("cplusp-line-directive");
+    Factories.registerCheck<PragmaCheck>("cplusp-pragma");
   }
 };
 
