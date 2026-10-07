@@ -46,3 +46,4 @@ Status is `decided`, `proposed` (the default until someone objects or the thin s
 | [0038](0038-what-runs-counts-and-only-the-compiler-reads.md) | What runs counts, and only the compiler reads the source. Pragmas come from the preprocessor's callbacks, every operation that runs adds its effect, const reaches through a return | decided |
 | [0039](0039-the-gate-reads-the-markers.md) | The gate reads the markers. A finding takes the kind of the function that holds it, the core decides what stands, and the gate refuses a broken marker | decided |
 | [0040](0040-a-const-handle-gives-reads-only.md) | A const handle gives reads only. The const-handle check lists the reads and refuses every other use of what a const handle gives | decided |
+| [0041](0041-what-carries-a-way-to-write-is-no-read.md) | What carries a way to write is no read. A const method's result, a copy or a const reference that holds a pointer, a span or a handle is followed, not read | decided |

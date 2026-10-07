@@ -781,6 +781,37 @@ fn a_range_for_over_a_const_handle_calls_only_const_begin_and_end() {
     assert!(out.lines().any(|l| field(l, "rule") == "unique_ptr" && field(l, "line") == "19"), "{out}");
 }
 
+/// A value that carries a way to write is no read, decision 0041: a const method's result that hands out a pointer, a reference or a
+/// span, a copy of a type with a pointer member, a const reference to one. The types come from a library header, which no row judges,
+/// so the const-handle check is the only guard. A read that hands out nothing stays clean.
+#[test]
+fn what_carries_a_way_to_write_is_no_read() {
+    if !clang_tidy_available() {
+        return;
+    }
+    let f = fixture("const-carriers.cpp");
+    let sys = fixture("carriers");
+    let plugin = plugin();
+    let o = cplusp(&["gate", "--json", "--plugin", plugin.to_str().unwrap(), f.to_str().unwrap(), "--", "-std=c++23", "-ffp-contract=off", "-isystem", sys.to_str().unwrap()]);
+    let out = stdout(&o);
+    let found: BTreeSet<usize> = out.lines().filter(|l| field(l, "rule") == "unique_ptr").map(|l| field(l, "line").parse::<usize>().unwrap()).collect();
+    assert_eq!(found, BTreeSet::from([7, 8, 9, 13, 18]), "{out}");
+}
+
+/// A `begin` declared in a `namespace std` that the file opens itself is the file's own, and it may write. The location decides, not
+/// the namespace, as for every other test of std.
+#[test]
+fn a_range_for_trusts_only_a_begin_of_the_library() {
+    if !clang_tidy_available() {
+        return;
+    }
+    let f = fixture("std-begin.cpp");
+    let plugin = plugin();
+    let o = cplusp(&["gate", "--json", "--plugin", plugin.to_str().unwrap(), f.to_str().unwrap(), "--", "-std=c++23", "-ffp-contract=off"]);
+    let out = stdout(&o);
+    assert!(out.lines().any(|l| field(l, "rule") == "unique_ptr" && field(l, "line") == "21"), "{out}");
+}
+
 /// Any pragma but `once` changes the build the proofs assume, or silences the gate. Two that turn contraction back on
 /// behind the flags: clang's own and the standard's. The message names the pragma by its first two words.
 #[test]
