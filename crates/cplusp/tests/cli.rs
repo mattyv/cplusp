@@ -1197,6 +1197,52 @@ fn every_sample_pair_agrees_with_its_rule() {
     assert!(checked >= 66, "expected at least 66 sample pairs, found {checked}");
 }
 
+
+// ------------------------------------------------------------------ markers, decision 0039
+
+/// The plugin reads the markers of include/cplusp.h. A finding takes the kind of the function that holds it, and the core decides
+/// what each kind keeps. Every finding stands in verified code. A finding of a Trusted only row goes in a trusted body, here `new`
+/// and a stream, and a ban stands there, here `goto`. Nothing of a row stands in plain code. Verified code may not call plain code.
+#[test]
+fn a_finding_takes_the_kind_of_the_function_that_holds_it() {
+    if !clang_tidy_available() {
+        return;
+    }
+    let f = fixture("markers.cpp");
+    let plugin = plugin();
+    let o = cplusp(&["gate", "--json", "--plugin", plugin.to_str().unwrap(), f.to_str().unwrap(), "--", "-std=c++23", "-ffp-contract=off"]);
+    let out = stdout(&o);
+    assert_eq!(o.status.code(), Some(1), "stdout: {out} stderr: {}", stderr(&o));
+    let reported: BTreeSet<(String, usize)> = out.lines().map(|l| (field(l, "rule"), field(l, "line").parse::<usize>().unwrap())).collect();
+    let expected: BTreeSet<(String, usize)> =
+        [("goto", 17), ("goto", 18), ("marker", 34), ("plain_int", 47)].into_iter().map(|(r, n)| (r.to_string(), n)).collect();
+    assert_eq!(reported, expected, "{out}");
+    assert!(out.contains("marker: verified code calls legacy_parse, which is plain. Give it a contract and mark it trusted."), "{out}");
+}
+
+/// A marker that the gate cannot honour is refused, each at the line of the name it marks.
+#[test]
+fn gate_refuses_a_marker_it_cannot_honour() {
+    if !clang_tidy_available() {
+        return;
+    }
+    let f = fixture("markers-errors.cpp");
+    let o = gated(&[f.to_str().unwrap(), "--", "-std=c++23", "-ffp-contract=off"]);
+    let out = stdout(&o);
+    assert_eq!(o.status.code(), Some(1), "stdout: {out} stderr: {}", stderr(&o));
+    for expected in [
+        "markers-errors.cpp:5: marker: fast_sum is trusted and has no contract. Its callers rest on the contract alone.",
+        "markers-errors.cpp:9: marker: no_reason has a marker with no reason. A trusted or plain marker gives its reason.",
+        "markers-errors.cpp:12: marker: blank_reason has a marker with no reason. A trusted or plain marker gives its reason.",
+        "markers-errors.cpp:19: marker: two_kinds has two kinds of marker. A function has one kind.",
+        "markers-errors.cpp:23: marker: cplusp:trustd is no marker. The markers are in include/cplusp.h.",
+        "markers-errors.cpp:25: marker: Box has a marker, and only a function takes one.",
+    ] {
+        assert!(out.lines().any(|l| l.starts_with("Not provable: ") && l.ends_with(expected)), "{expected}: {out}");
+    }
+    assert_eq!(out.lines().filter(|l| l.starts_with("Not provable: ")).count(), 6, "{out}");
+}
+
 /// Pull `"key":"value"` or `"key":123` out of one JSON line without a JSON library.
 fn field(line: &str, key: &str) -> String {
     let needle = format!("\"{key}\":");
