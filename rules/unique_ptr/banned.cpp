@@ -147,3 +147,10 @@ void owned_span(const std::unique_ptr<std::span<int32_t>>& p) {
   p->subspan(0)[0] = 1;  // BANNED
   p->front() = 1;  // BANNED
 }
+
+// A loop variable copied by value is a copy, and a proxy of vector<bool> carries a way to write, decision 0041.
+void clear_all(const std::unique_ptr<std::vector<bool>>& p) {
+  for (auto bit : *p) {  // BANNED
+    bit = false;
+  }
+}
