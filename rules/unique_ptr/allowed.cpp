@@ -1,4 +1,7 @@
 #include <cstddef>
+#include <utility>
+#include <span>
+#include <array>
 #include <cstdint>
 #include <memory>
 #include <vector>
@@ -57,4 +60,23 @@ void write_through(std::unique_ptr<int32_t>& p) {
 //@ ensures p->x == 42
 void escape_through(std::unique_ptr<S>& p) {
   mutate(p->x);
+}
+
+// A read through a const handle by a const view, or by std::as_const, writes nothing.
+//@ requires s.size() > 0
+//@ ensures result == s[0]
+int32_t first_of(std::span<const int32_t> s) {
+  return s[0];
+}
+
+//@ requires p != nullptr
+//@ ensures result == (*p)[0]
+int32_t read_by_view(const std::unique_ptr<std::array<int32_t, 4>>& p) {
+  return first_of(*p);
+}
+
+//@ requires p != nullptr
+//@ ensures result == *p
+int32_t read_as_const(const std::unique_ptr<int32_t>& p) {
+  return std::as_const(*p);
 }

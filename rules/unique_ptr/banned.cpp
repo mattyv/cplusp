@@ -1,3 +1,4 @@
+#include <algorithm>
 #include <array>
 #include <cstdint>
 #include <memory>
@@ -84,4 +85,10 @@ void range_through(const std::unique_ptr<std::array<int32_t, 4>>& p) {
 // A pointer stored into an out parameter leaves the handle as a return does, decision 0038.
 void hand_out(const std::unique_ptr<int32_t>& p, int32_t*& out) {
   out = p.get();  // BANNED
+}
+
+// A capture initializer stores what it takes, as an assignment does. Here it takes a pointer through a const handle, and the lambda
+// writes through it, decision 0038.
+void capture_out(const std::unique_ptr<int32_t>& p, const std::vector<int32_t>& v) {
+  std::ranges::for_each(v, [q = p.get()](int32_t e) { *q = e; });  // BANNED
 }

@@ -648,6 +648,58 @@ fn gate_refuses_a_dependency_list_that_does_not_name_the_file() {
     assert!(stderr(&o).lines().any(|l| l == "cannot preprocess rules/goto/allowed.cpp: the dependency list does not name it."), "stderr {}", stderr(&o));
 }
 
+/// The dependency list escapes a space, `#` and `$`, and not a tab. A tab in a header path would split the name, and files named after
+/// the pieces would stand in for the header in the NOLINT scan. A list with any white space but a space and a line break is refused.
+/// The files are written at test time.
+#[test]
+fn gate_refuses_a_dependency_list_it_cannot_read() {
+    if !clang_tidy_available() {
+        return;
+    }
+    let dir = std::env::temp_dir().join(format!("cplusp-tab-{}", std::process::id()));
+    std::fs::create_dir_all(dir.join("di\tr")).unwrap();
+    std::fs::create_dir_all(dir.join("r")).unwrap();
+    std::fs::write(dir.join("di\tr").join("x.h"), "#include <cstdint>\nint dr();  // NOLINT\n").unwrap();
+    std::fs::write(dir.join("di"), "").unwrap();
+    std::fs::write(dir.join("r").join("x.h"), "").unwrap();
+    let main = dir.join("tab-dir.cpp");
+    std::fs::write(&main, "#include <cstdint>\n#include \"di\tr/x.h\"\nint32_t f() { return 0; }\n").unwrap();
+    let plugin = plugin();
+    let o = Command::new(env!("CARGO_BIN_EXE_cplusp"))
+        .args(["gate", "--plugin", plugin.to_str().unwrap(), "tab-dir.cpp", "--", "-std=c++23", "-ffp-contract=off"])
+        .current_dir(&dir)
+        .output()
+        .expect("cplusp runs");
+    assert_eq!(o.status.code(), Some(2), "stdout: {} stderr: {}", stdout(&o), stderr(&o));
+    assert!(stderr(&o).lines().any(|l| l == "cannot preprocess tab-dir.cpp: the dependency list holds a name the gate cannot read."), "{}", stderr(&o));
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// A system header may change the warnings of the code that includes it: a diagnostic pragma that no push and pop of its own encloses
+/// stays in force after the header ends. It silences a row in user code, so it is refused at the include that brings it in. The files
+/// are written at test time.
+#[test]
+fn gate_refuses_a_system_header_that_changes_the_warnings_of_its_includer() {
+    if !clang_tidy_available() {
+        return;
+    }
+    let dir = std::env::temp_dir().join(format!("cplusp-leak-{}", std::process::id()));
+    std::fs::create_dir_all(dir.join("sys")).unwrap();
+    std::fs::write(dir.join("sys").join("leak.h"), "#pragma clang diagnostic ignored \"-Wreturn-stack-address\"\n").unwrap();
+    std::fs::write(dir.join("sys").join("tidy.h"), "#pragma clang diagnostic push\n#pragma clang diagnostic ignored \"-Wreturn-stack-address\"\n#pragma clang diagnostic pop\n").unwrap();
+    let main = dir.join("includes-leak.cpp");
+    std::fs::write(&main, "#include <cstdint>\n#include <leak.h>\n#include <tidy.h>\nconst int32_t& f() {\n  int32_t x = 1;\n  return x;\n}\n").unwrap();
+    let sys = dir.join("sys");
+    let o = gated(&[main.to_str().unwrap(), "--", "-std=c++23", "-ffp-contract=off", "-isystem", sys.to_str().unwrap()]);
+    let out = stdout(&o);
+    assert_eq!(o.status.code(), Some(1), "stdout: {out} stderr: {}", stderr(&o));
+    let expected = "includes-leak.cpp:2: pragma diagnostic: a system header changes the warnings of the code that includes it. It silences the gate.";
+    assert!(out.lines().any(|l| l.ends_with(expected)), "{out}");
+    // A header that restores what it changed leaves the includer alone.
+    assert!(!out.lines().any(|l| l.contains("includes-leak.cpp:3:")), "{out}");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 /// Any pragma but `once` changes the build the proofs assume, or silences the gate. Two that turn contraction back on
 /// behind the flags: clang's own and the standard's. The message names the pragma by its first two words.
 #[test]
@@ -703,7 +755,7 @@ fn gate_refuses_flags_that_change_what_the_compiler_reports() {
     if !clang_tidy_available() {
         return;
     }
-    for flag in ["-E", "-P", "-Wp,-P", "-dM", "-M", "-MM", "-###", "-fdriver-only"] {
+    for flag in ["-E", "-P", "-Wp,-P", "-dM", "-M", "-MM", "-MV", "-Xpreprocessor", "-###", "-fdriver-only"] {
         let o = gated(&["rules/goto/allowed.cpp", "--", "-std=c++23", "-ffp-contract=off", flag]);
         assert_eq!(o.status.code(), Some(2), "{flag}: stdout {} stderr {}", stdout(&o), stderr(&o));
         assert_eq!(stdout(&o).trim(), "", "{flag}: nothing on stdout for a refused run");
