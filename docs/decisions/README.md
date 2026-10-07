@@ -47,3 +47,4 @@ Status is `decided`, `proposed` (the default until someone objects or the thin s
 | [0039](0039-the-gate-reads-the-markers.md) | The gate reads the markers. A finding takes the kind of the function that holds it, the core decides what stands, and the gate refuses a broken marker | decided |
 | [0040](0040-a-const-handle-gives-reads-only.md) | A const handle gives reads only. The const-handle check lists the reads and refuses every other use of what a const handle gives | decided |
 | [0041](0041-what-carries-a-way-to-write-is-no-read.md) | What carries a way to write is no read. A const method's result, a copy or a const reference that holds a pointer, a span or a handle is followed, not read | decided |
+| [0042](0042-a-const-unique-ptr-carries-nothing-unjudged.md) | A const unique_ptr carries nothing unjudged. It cannot be copied, and every use of what it owns is judged, so a const reference to one is a read | decided |
