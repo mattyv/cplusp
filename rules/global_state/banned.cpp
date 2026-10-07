@@ -220,7 +220,7 @@ void owned() {
 
 // A function passed by name runs inside the std call, so its lines count at the call.
 void each_by_name(const std::vector<int32_t>& v) {
-  std::ranges::for_each(v, bump_by);  // BANNED
+  std::ranges::for_each(v, bump_by);  // BANNED also: function_pointers
 }
 
 // A parameter named after a global does not hide the global from the caller.
@@ -309,7 +309,7 @@ void opaque_each(int32_t x);
 // 4. A function with no body here and no lines, passed by name into a std algorithm. The algorithm calls it, so the gate refuses the
 // call where the algorithm is called, decision 0037.
 void each_opaque(const std::vector<int32_t>& v) {
-  std::ranges::for_each(v, opaque_each);  // BANNED
+  std::ranges::for_each(v, opaque_each);  // BANNED also: function_pointers
 }
 
 namespace std {

@@ -38,7 +38,7 @@ int32_t count_threads(const std::vector<std::thread>& threads) {  // BANNED
 
 int32_t via_async(int32_t x) {
   // The gate refuses the dispatch inside the library too: a pointer to a member function that no call in the tree explains.
-  return std::async(std::launch::deferred, square, x).get();  // BANNED also: global_state
+  return std::async(std::launch::deferred, square, x).get();  // BANNED also: global_state, function_pointers
 }
 
 void via_thread(int32_t x) {

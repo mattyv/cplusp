@@ -8,12 +8,13 @@ struct Widget {
 
 using Handler = int32_t (*)(int32_t);  // BANNED
 
+// A call through a pointer that a parameter holds has no name, so the call is refused as well as the type, decision 0049.
 int32_t apply(int32_t (*f)(int32_t), int32_t x) {  // BANNED
-  return f(x);
+  return f(x);  // BANNED
 }
 
 int32_t apply_alias(Handler f, int32_t x) {  // BANNED
-  return f(x);
+  return f(x);  // BANNED
 }
 
 int32_t apply_member(int32_t (Widget::*f)(int32_t), Widget& w, int32_t x) {  // BANNED
@@ -25,15 +26,15 @@ int32_t count_pointers(const std::vector<int32_t (*)(int32_t)>& items) {  // BAN
 }
 
 int32_t apply_boxed(std::function<int32_t(int32_t)> f, int32_t x) {  // BANNED
-  return f(x);
+  return f(x);  // BANNED
 }
 
 int32_t apply_boxed_ref(const std::function<int32_t(int32_t)>& f, int32_t x) {  // BANNED
-  return f(x);
+  return f(x);  // BANNED
 }
 
 int32_t apply_boxed_ptr(const std::function<int32_t(int32_t)>* f, int32_t x) {  // BANNED
-  return (*f)(x);
+  return (*f)(x);  // BANNED
 }
 
 int32_t count_boxed(const std::vector<std::function<int32_t(int32_t)>>& items) {  // BANNED
@@ -51,18 +52,19 @@ int32_t through_reference(int32_t& x) {
 int32_t total = 0;
 
 // A std::function holds its target behind a pointer. What the target changes counts where the function is made, decision 0037.
+// The call runs through that pointer, and so does the destructor at the closing brace, decision 0049.
 //@ requires total < 0x7FFFFFFF
 //@ modifies total
 void boxed_write() {
   std::function<void()> f = [] { total += 1; };  // BANNED also: lambdas
-  f();
-}
+  f();  // BANNED
+}  // BANNED
 
 // The same with no modifies line. The write hides behind the pointer, and the gate still sees it.
 void boxed_write_unlisted() {
   std::function<void()> f = [] { total += 1; };  // BANNED also: lambdas, global_state
-  f();
-}
+  f();  // BANNED
+}  // BANNED
 
 struct Base {
   virtual ~Base() = default;
