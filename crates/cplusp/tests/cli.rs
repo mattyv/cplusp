@@ -832,7 +832,8 @@ fn a_library_type_counts_by_what_it_holds() {
 /// `namespace std` is the file's own, so its writing `at` is no element access. A type the check cannot see whole carries a way to write.
 /// A mutable field stays writable through a const reference. A constructor of the library may call a method of the file on its
 /// argument, as an engine calls `generate`, so it reads only a value of its own type or of its type arguments. A cast to an integer is
-/// no read.
+/// no read. A type of the file copies through its own constructor, which may write, so a library constructor reads only a number or
+/// a value of the library, decision 0045.
 #[test]
 fn the_const_handle_check_trusts_the_library_by_place_and_refuses_what_it_cannot_see() {
     if !clang_tidy_available() {
@@ -843,7 +844,7 @@ fn the_const_handle_check_trusts_the_library_by_place_and_refuses_what_it_cannot
     let o = cplusp(&["gate", "--json", "--plugin", plugin.to_str().unwrap(), f.to_str().unwrap(), "--", "-std=c++23", "-ffp-contract=off"]);
     let out = stdout(&o);
     let found: BTreeSet<usize> = out.lines().filter(|l| field(l, "rule") == "unique_ptr").map(|l| field(l, "line").parse::<usize>().unwrap()).collect();
-    assert_eq!(found, BTreeSet::from([16, 25, 38, 55, 60]), "{out}");
+    assert_eq!(found, BTreeSet::from([17, 26, 39, 56, 61, 76]), "{out}");
 }
 
 /// Any pragma but `once` changes the build the proofs assume, or silences the gate. Two that turn contraction back on

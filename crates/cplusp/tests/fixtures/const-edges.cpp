@@ -1,5 +1,6 @@
 #include <cstdint>
 #include <memory>
+#include <optional>
 #include <random>
 
 namespace std {
@@ -59,4 +60,19 @@ void seeded(const std::unique_ptr<Seq>& p) {
 void as_number(const std::unique_ptr<int32_t>& p) {
   std::uintptr_t a = reinterpret_cast<std::uintptr_t>(p.get());
   *reinterpret_cast<int32_t*>(a) = 1;
+}
+
+// A library constructor copies a type of the file through that type's own constructor, which may write, decision 0045.
+struct Counter {
+  int32_t n = 0;
+  Counter() = default;
+  Counter(Counter& o) : n(o.n) {
+    o.n += 1;
+  }
+  Counter(const Counter& o) : n(o.n) {}
+};
+
+int32_t snapshot(const std::unique_ptr<Counter>& p) {
+  std::optional<Counter> copy(*p);
+  return copy->n;
 }
