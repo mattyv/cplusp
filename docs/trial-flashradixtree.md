@@ -102,4 +102,4 @@ The cause is in `_findExact`. When the key ends at a node with no value, the loo
 1. Fix `_findExact` in FlashRadixTree, and take the next function through the slice: `insert`, with a model of the contents the tree stores.
 2. Enum template parameters wait for a verified function that needs one. The exact find has no match mode.
 3. Give the node a deleter type with no state, so that each release is a direct call. Or mark `make_unique_alloc` trusted, with the deleter inside it.
-4. A type of test code takes a plain marker, decision 0051. Mark the test allocator and the driver's `Data` plain, and run the trial again.
+4. A type of test code takes a plain marker, decisions 0051 to 0054. Mark the test allocator and the driver's `Data` plain, and run the trial again.

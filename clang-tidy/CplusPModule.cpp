@@ -1184,6 +1184,8 @@ public:
   }
 };
 
+bool insidePlain(const Decl *D);  // below, with the markers
+
 // cplusp-allowlist: decision 0032. The gate refuses every kind of node it does not know. The options are three lists of allowed kinds,
 // `statements`, `declarations` and `types`, a list of allowed attributes, `attributes`, and one option per row of the policy,
 // `{row}: kinds`, that names the kinds the row claims. An attribute is no node, so it has its own list and the message
@@ -1244,6 +1246,9 @@ public:
     } else if (const auto *D = Result.Nodes.getNodeAs<Decl>("decl")) {
       // The kinds of an implicit declaration come from the compiler, not from the source.
       if (D->isImplicit() || isa<TranslationUnitDecl>(D))
+        return;
+      // The word `friend` in a plain type is out of view, whatever the friend is. The bot cannot change the type, decision 0053.
+      if (isa<FriendDecl>(D) && insidePlain(cast<Decl>(D->getLexicalDeclContext())))
         return;
       for (const Attr *A : D->attrs())
         checkAttribute(A, *Result.SourceManager);
@@ -1532,15 +1537,54 @@ MarkerKind declaredKind(const FunctionDecl *Function) {
   return Twice ? MarkerKind::None : Kind;
 }
 
-// Code that is written in a plain function is plain, decision 0048: a lambda, a local class and its members, however deep. Clang takes no
-// marker on a lambda, and a plain body is out of the gate's view. `Context` is where the code is written, and the walk reads every
-// function around it. A lambda or a local class in a trusted body stays verified.
-bool insidePlain(const DeclContext *Context) {
-  for (; Context; Context = Context->getParent())
-    if (const auto *Enclosing = dyn_cast<FunctionDecl>(Context); Enclosing && declaredKind(Enclosing) == MarkerKind::Plain)
-      return true;
+// Whether a class carries a plain marker on a declaration of its own, decision 0051. An instantiation of a class template has a copy of
+// the marker of its pattern. An explicit or a partial specialization is a class of its own and needs a marker of its own, as decision
+// 0047 says of the specialization of a function.
+bool markedPlain(const CXXRecordDecl *Record) {
+  for (const TagDecl *D : Record->redecls())
+    for (const Attr *A : D->attrs())
+      if (const auto *Note = dyn_cast<AnnotateAttr>(A); Note && markerKind(Note->getAnnotation()) == MarkerKind::Plain)
+        return true;
   return false;
 }
+
+// The declaration around `D` that holds its name, or the one that holds its text.
+const Decl *outerOf(const Decl *D, bool Written) {
+  const DeclContext *Outer = Written ? D->getLexicalDeclContext() : D->getDeclContext();
+  return Outer ? Decl::castFromDeclContext(Outer) : nullptr;
+}
+
+// A friend function whose definition is this declaration.
+bool definedFriend(const Decl *D) {
+  const auto *F = dyn_cast<FunctionDecl>(D);
+  return F && F->getFriendObjectKind() != Decl::FOK_None && F->isThisDeclarationADefinition();
+}
+
+// Whether `D` is plain, `D` itself included. Code in a plain function is plain, decision 0048: a lambda, a local class and its members,
+// however deep. Clang takes no marker on a lambda, and a plain body is out of the gate's view. A plain class is the same, decision 0051:
+// its members, its nested types and the lambdas in it are plain. So is a member defined outside it and a member that the compiler writes.
+// The walk goes by where the name lives. A member with a marker of its own, trusted or verified, has that kind, so the class does not
+// hold it or the code inside it, as decision 0047 says. A lambda or a local class in a trusted body stays verified.
+// A friend is no member, but one that the class defines is code in the body of the class, decision 0053. Its name lives outside the
+// class, so the walk goes by where it is written, which keeps the regions and the rule on calls of one mind. A friend that the class only
+// declares keeps the kind of its definition.
+bool insidePlain(const Decl *D) {
+  bool Marked = false;
+  for (; D; D = outerOf(D, definedFriend(D)))
+    if (const auto *Enclosing = dyn_cast<FunctionDecl>(D)) {
+      const MarkerKind Own = declaredKind(Enclosing);
+      if (Own == MarkerKind::Plain)
+        return true;
+      Marked |= Own != MarkerKind::None;
+    } else if (const auto *Class = dyn_cast<CXXRecordDecl>(D); Class && !Marked && markedPlain(Class)) {
+      return true;
+    }
+  return false;
+}
+
+// Whether the text of `D` is inside the region of something plain that holds it, so that `D` needs no region of its own. A member
+// defined outside its class is plain and it is written outside the class.
+bool coveredByPlain(const Decl *D) { return insidePlain(D) && insidePlain(outerOf(D, true)); }
 
 // ------------------------------------------------------------ the lowered form, decision 0037
 
@@ -1866,7 +1910,7 @@ private:
           StateOf[&G] = nameOf(Var);
       }
     for (const auto &[F, Info] : Fns)
-      if (const auto *Method = dyn_cast_or_null<CXXMethodDecl>(Info.FD); Method && Info.Is != Role::Edge)
+      if (const auto *Method = dyn_cast_or_null<CXXMethodDecl>(Info.FD))
         overrides(Method, F);
     Mod.reset(Gen->ReleaseModule());
     return true;
@@ -2416,13 +2460,14 @@ private:
   }
 
   // Every call of a function of the file, and of the code that starts the globals, that runs a plain function. A plain function is one
-  // that the file defines or declares, and the code in the module that the file did not write is followed until it reaches one. The
+  // that the file defines or declares, or a member that the compiler writes for a plain class, decision 0051. The code in the module that
+  // the file did not write is followed until it reaches one. The
   // plain functions that each such piece of code can run are found once, by a fixpoint like the one for the effects.
   void plainCode() {
     llvm::DenseSet<const llvm::Function *> Plain;
     for (const auto &[F, Info] : Fns)
-      if (Info.FD && (Info.Is == Role::Edge || written(Info)) &&
-          (declaredKind(Info.FD) == MarkerKind::Plain || insidePlain(Info.FD->getDeclContext())))
+      if (Info.FD && (Info.Is == Role::Edge || written(Info) || Info.FD->isImplicit()) &&
+          insidePlain(Info.FD->getDefinition() ? Info.FD->getDefinition() : Info.FD))
         Plain.insert(F);
     if (Plain.empty())
       return;
@@ -3200,8 +3245,10 @@ bool hasReason(const AnnotateAttr *Note) {
 }
 
 // The reader of the markers. It walks the tree of one translation unit, outside the system headers, and reports in two forms under the
-// name `cplusp-markers`. The third form, `reach {name}`, comes from the table of the lowered form, see `MarkersCheck`.
-//  1. A region: the body of a function the file writes, or a plain declaration. The diagnostic sits on the first byte of the region, so
+// name `cplusp-markers`. A third form, `reach {name}`, comes from the table of the lowered form, see `MarkersCheck`. A fourth,
+// `uses {name}`, comes from `PlainUses`.
+//  1. A region: the body of a function the file writes, or a plain declaration: a plain function, a plain class, a member of a plain
+//     class that is written outside it, and the definition of its static data member. The diagnostic sits on the first byte of the region, so
 //     the gate has that offset from clang-tidy as it has the offset of every finding. The message is
 //     `region {verified|trusted|plain} {end offset}`, with no tab. The end offset is the offset of the byte after the last token. Both
 //     offsets are those of the file place of the token. The region is no finding, and the gate keeps it and shows it to no bot.
@@ -3231,16 +3278,45 @@ public:
     return RecursiveASTVisitor<MarkerReader>::TraverseDecl(D);
   }
 
-  // A declaration that is no function takes no marker.
+  // A declaration that is no function and no class takes no marker. A class takes a plain marker, decision 0051.
   bool VisitDecl(Decl *D) {
     if (D->isImplicit() || isa<FunctionDecl, FunctionTemplateDecl>(D))
       return true;
     forEachMarker(D, [&](const AnnotateAttr *Note) {
-      if (markerKind(Note->getAnnotation()) == MarkerKind::None)
+      const MarkerKind Named = markerKind(Note->getAnnotation());
+      if (Named == MarkerKind::None)
         reportNoMarker(D, Note);
+      else if (const auto *Class = dyn_cast<CXXRecordDecl>(D); Class && Named == MarkerKind::Plain)
+        reportNoReason(Class, Note);
       else
-        report(D, describe(D) + " has a marker, and only a function takes one.");
+        report(D, describe(D) + " has a marker, and only a function or a plain type takes one.");
     });
+    return true;
+  }
+
+  // A plain class is plain from its first token to its last, with what it holds. A class nested in a plain class or defined in a plain
+  // function has the region of that, and so has a member defined in the class. A class defined outside the plain class that holds it
+  // gets a region of its own.
+  bool VisitCXXRecordDecl(CXXRecordDecl *R) {
+    if (!R->isThisDeclarationADefinition() || R->isImplicit() || R->isLambda() || !insidePlain(R) || coveredByPlain(R))
+      return true;
+    SourceLocation First = R->getBeginLoc();
+    if (const ClassTemplateDecl *Template = R->getDescribedClassTemplate())
+      First = Template->getBeginLoc();
+    else if (const auto *Partial = dyn_cast<ClassTemplatePartialSpecializationDecl>(R))
+      First = earlier(First, Partial->getTemplateParameters()->getTemplateLoc());
+    SourceLocation Begin = First;
+    for (const Attr *A : R->attrs())
+      if (!A->isInherited() && !A->isImplicit())
+        Begin = earlier(Begin, A->getRange().getBegin());
+    place(R, MarkerKind::Plain, {First, R->getEndLoc()}, Begin);
+    return true;
+  }
+
+  // The definition of a static data member outside its plain class is plain code too, `int Record::made = 0;`.
+  bool VisitVarDecl(VarDecl *V) {
+    if (V->isStaticDataMember() && V->isThisDeclarationADefinition() && !V->isImplicit() && insidePlain(V) && !coveredByPlain(V))
+      place(V, MarkerKind::Plain, {V->getOuterLocStart(), V->getEndLoc()}, V->getOuterLocStart());
     return true;
   }
 
@@ -3249,16 +3325,20 @@ public:
     if (F->isImplicit() || F->isTemplateInstantiation())
       return true;
     const MarkerKind Kind = kindOf(F);
-    // Code in a plain body is plain, and the region of the plain function covers it, decision 0048.
-    if (insidePlain(F->getDeclContext()))
+    // Code in a plain body is plain, and the region of the plain function or class covers it, decisions 0048 and 0051.
+    if (coveredByPlain(F))
       return true;
-    if (Kind == MarkerKind::Plain) {
-      SourceLocation Begin = firstTokenOf(F);
-      for (const Attr *A : F->attrs())
-        if (!A->isInherited() && !A->isImplicit())
-          Begin = earlier(Begin, A->getRange().getBegin());
-      place(F, Kind, {firstTokenOf(F), F->getEndLoc()}, Begin);
-    } else if (F->doesThisDeclarationHaveABody()) {
+    // A plain function has a region over every declaration. So has a member of a plain class that is written outside it.
+    if (insidePlain(F)) {
+      place(F, MarkerKind::Plain, {firstTokenOf(F), F->getEndLoc()}, firstMarkerOf(F));
+      return true;
+    }
+    // A function written in a plain class or function that is not plain itself keeps its declaration in view, decision 0052: a member
+    // with a marker of its own, and a friend that the class defines. Its declaration is verified, and a trusted body sits on top of that.
+    // A friend declaration has no code of its own, so it stays plain.
+    if (insidePlain(outerOf(F, true)) && (F->getFriendObjectKind() == Decl::FOK_None || F->doesThisDeclarationHaveABody()))
+      place(F, MarkerKind::Verified, {firstTokenOf(F), F->getEndLoc()}, firstMarkerOf(F));
+    if (F->doesThisDeclarationHaveABody()) {
       const SourceRange Body = bodyRange(F);
       place(F, Kind == MarkerKind::Trusted ? Kind : MarkerKind::Verified, Body, Body.getBegin());
     }
@@ -3269,7 +3349,7 @@ public:
   // one. Its body is its region.
   bool VisitLambdaExpr(LambdaExpr *E) {
     const SourceRange Body = E->getBody()->getSourceRange();
-    if (insidePlain(E->getLambdaClass()->getDeclContext()))
+    if (insidePlain(E->getLambdaClass()))
       return true;
     if (!keepsEnds(false, Body))
       reportAt(Check, SM, startOf(E->getBeginLoc()), "marker: this lambda " + std::string(EndsInTwoFiles));
@@ -3299,6 +3379,10 @@ private:
     return Named && !Named->getName().empty() ? Named->getNameAsString() : "this declaration";
   }
   void report(const Decl *At, const std::string &Sentence) { reportAt(Check, SM, startOf(At->getLocation()), "marker: " + Sentence); }
+  void reportNoReason(const NamedDecl *At, const AnnotateAttr *Note) {
+    if (!hasReason(Note))
+      report(At, At->getQualifiedNameAsString() + " has a marker with no reason. A trusted or plain marker gives its reason.");
+  }
   void reportNoMarker(const Decl *At, const AnnotateAttr *Note) {
     const std::string Word = Note->getAnnotation().str();
     report(At, Word == "cplusp:assume" ? Word + " waits until a case needs it. Mark the function trusted with a reason."
@@ -3335,15 +3419,15 @@ private:
     const MarkerKind Kind = declaredKind(Function);
     if (Kind == MarkerKind::Trusted && Brings && !contractOf(SM, Function).Any)
       report(Brings, Name + " is trusted and has no contract. Its callers rest on the contract alone.");
-    // A call of the base can run the override. A verified function may call the base, so the override must be as good as the base.
-    if (Kind == MarkerKind::Plain && Brings)
-      if (const auto *Method = dyn_cast<CXXMethodDecl>(Function))
-        for (const CXXMethodDecl *Base : cast<CXXMethodDecl>(Method->getCanonicalDecl())->overridden_methods())
-          if (declaredKind(Base) != MarkerKind::Plain) {
-            const std::string Over = Base->getQualifiedNameAsString();
-            report(Brings, Method->getQualifiedNameAsString() + " is plain and overrides " + Over + ", which is not plain. A verified call of " + Over +
-                               " can run it.");
-          }
+    // A call of the base can run the override. A verified function may call the base, so the override must be as good as the base. A
+    // member of a plain class is plain whether or not a marker says it, decision 0052. A marker brings the report to its declaration.
+    if (const auto *Method = dyn_cast<CXXMethodDecl>(Function); Method && insidePlain(Function))
+      for (const CXXMethodDecl *Base : cast<CXXMethodDecl>(Method->getCanonicalDecl())->overridden_methods())
+        if (!insidePlain(Base)) {
+          const std::string Over = Base->getQualifiedNameAsString();
+          report(Brings ? Brings : Function, Method->getQualifiedNameAsString() + " is plain and overrides " + Over +
+                                                  ", which is not plain. A verified call of " + Over + " can run it.");
+        }
     return Kinds[Function->getFirstDecl()] = Kind;
   }
 
@@ -3369,10 +3453,19 @@ private:
     return SM.isWrittenInSameFile(startOf(First), startOf(Last));
   }
 
+  // Where a function starts, with the markers before it. The marker before the first token is a macro itself.
+  SourceLocation firstMarkerOf(const FunctionDecl *F) const {
+    SourceLocation Begin = firstTokenOf(F);
+    for (const Attr *A : F->attrs())
+      if (!A->isInherited() && !A->isImplicit())
+        Begin = earlier(Begin, A->getRange().getBegin());
+    return Begin;
+  }
+
   // The region of a function. `Edges` are its first and last token as written, and `Begin` is where the region starts, which is earlier
   // than the first token when a marker comes before it. The marker before the first token is a macro itself, and it is no edge. A function
   // that does not keep its ends has no region and is refused, whatever its kind, decisions 0047 and 0048.
-  void place(const FunctionDecl *F, MarkerKind Kind, SourceRange Edges, SourceLocation Begin) {
+  void place(const NamedDecl *F, MarkerKind Kind, SourceRange Edges, SourceLocation Begin) {
     if (!keepsEnds(Kind != MarkerKind::Verified, Edges)) {
       report(F, F->getQualifiedNameAsString() + " " + EndsInTwoFiles);
       return;
@@ -3386,6 +3479,152 @@ private:
       return;
     const char *Word = Kind == MarkerKind::Trusted ? "trusted" : Kind == MarkerKind::Plain ? "plain" : "verified";
     Check.diag(Begin, "region %0 %1") << Word << StringRef(std::to_string(SM.getFileOffset(After)));
+  }
+};
+
+// Whether a declaration is the library's: a system header declares it. A type of the library holds what its type arguments hold, and the
+// library reads what it holds. The place decides, as for `inLibrary`, but the namespace does not: `__gnu_cxx` is the library too.
+bool inSystemHeader(const Decl *D) {
+  const SourceManager &SM = D->getASTContext().getSourceManager();
+  return D->getLocation().isInvalid() || SM.isInSystemHeader(SM.getExpansionLoc(D->getLocation()));
+}
+
+const CXXRecordDecl *plainHeld(QualType Type);
+
+// The plain class that a type argument of the library holds, or null. A pack holds what its elements hold.
+const CXXRecordDecl *plainInArguments(ArrayRef<TemplateArgument> Args) {
+  for (const TemplateArgument &A : Args)
+    if (const CXXRecordDecl *Class = A.getKind() == TemplateArgument::Type   ? plainHeld(A.getAsType())
+                                     : A.getKind() == TemplateArgument::Pack ? plainInArguments(A.pack_elements())
+                                                                             : nullptr)
+      return Class;
+  return nullptr;
+}
+
+// The plain class that a value of a type is or holds, or null, decisions 0051 and 0052. An array holds its elements. A reference and a
+// pointer hold nothing. A type of the library holds what its type arguments and the type around it hold, as the walk of decision 0046
+// goes, so `std::vector<Record>` holds a `Record`. A type of the file that is not plain holds nothing here, because its own fields say.
+const CXXRecordDecl *plainHeld(QualType Type) {
+  const CXXRecordDecl *Class = Type.isNull() ? nullptr : Type->getBaseElementTypeUnsafe()->getAsCXXRecordDecl();
+  if (!Class)
+    return nullptr;
+  if (insidePlain(Class))
+    return Class;
+  if (!inSystemHeader(Class))
+    return nullptr;
+  if (const auto *Spec = dyn_cast<ClassTemplateSpecializationDecl>(Class))
+    if (const CXXRecordDecl *Held = plainInArguments(Spec->getTemplateArgs().asArray()))
+      return Held;
+  if (const auto *Outer = dyn_cast<CXXRecordDecl>(Class->getDeclContext()))
+    return plainHeld(Class->getASTContext().getRecordType(Outer));
+  return nullptr;
+}
+
+// The class that holds a member, and for a member of an anonymous union the class around it that has a name.
+const CXXRecordDecl *plainOwner(const NamedDecl *Member) {
+  const auto *Class = dyn_cast<CXXRecordDecl>(Member->getDeclContext());
+  while (Class && Class->getDeclName().isEmpty() && isa<CXXRecordDecl>(Class->getDeclContext()))
+    Class = cast<CXXRecordDecl>(Class->getDeclContext());
+  return Class && insidePlain(Class) ? Class : nullptr;
+}
+
+// The uses of a plain type, decisions 0051 to 0054. Verified code makes no object of one: a variable, a field, a temporary, a `new` or a
+// base. The same holds for a type of the library that holds one. It reads no field and no static data member of one, also in code that the
+// compiler writes, as a structured binding does. It hands a plain object, or a pointer to one, only to a function that the file writes,
+// because the library can read or copy what it gets. It casts such a pointer to no other type, because after the cast no callee can be
+// judged. A reference and a pointer of the same type are allowed, and so is a call of a member that the file writes, which the reach rule
+// judges. The reader reports `uses {class}` at each of these, wherever it is, and the gate keeps the ones in a verified place. A
+// template is read at each instantiation too, and the place of an instantiation is the place of its pattern.
+// ponytail: one ceiling. A use in an unevaluated operand, as in `sizeof(Record())`, is reported as well. Upgrade: a check of the types and
+// the calls that the lowered form makes.
+class PlainUses : public RecursiveASTVisitor<PlainUses> {
+public:
+  PlainUses(ClangTidyCheck &Check, ASTContext &Context) : Check(Check), Context(Context), SM(Context.getSourceManager()) {}
+
+  void read() { TraverseAST(Context); }
+  bool shouldVisitTemplateInstantiations() const { return true; }
+  bool shouldVisitImplicitCode() const { return true; }
+
+  bool TraverseDecl(Decl *D) {
+    if (D && !isa<TranslationUnitDecl>(D) && D->getLocation().isValid() && SM.isInSystemHeader(SM.getExpansionLoc(D->getLocation())))
+      return true;
+    return RecursiveASTVisitor<PlainUses>::TraverseDecl(D);
+  }
+
+  bool VisitVarDecl(VarDecl *V) { return byValue(V->getType(), V->getLocation()); }
+  bool VisitFieldDecl(FieldDecl *F) { return byValue(F->getType(), F->getLocation()); }
+  bool VisitCXXNewExpr(CXXNewExpr *E) { return byValue(E->getAllocatedType(), E->getBeginLoc()); }
+  // A temporary is an expression that is a value of the type. This holds a call that returns the type, a conversion and a copy.
+  bool VisitExpr(Expr *E) { return E->isPRValue() ? byValue(E->getType(), E->getBeginLoc()) : true; }
+  bool VisitCXXRecordDecl(CXXRecordDecl *R) {
+    if (R->hasDefinition() && R->isThisDeclarationADefinition())
+      for (const CXXBaseSpecifier &Base : R->bases())
+        byValue(Base.getType(), Base.getBaseTypeLoc());
+    return true;
+  }
+  bool VisitMemberExpr(MemberExpr *E) { return member(E->getMemberDecl(), E->getMemberLoc()); }
+  bool VisitDeclRefExpr(DeclRefExpr *E) { return member(E->getDecl(), E->getLocation()); }
+  // A call, also of a member or an operator, and a construction. The object of a member call is an argument too.
+  bool VisitCallExpr(CallExpr *E) {
+    if (const auto *Member = dyn_cast<CXXMemberCallExpr>(E))
+      given(E->getDirectCallee(), Member->getImplicitObjectArgument());
+    for (const Expr *Argument : E->arguments())
+      given(E->getDirectCallee(), Argument);
+    return true;
+  }
+  // A cast of a pointer to a plain object into a pointer of another type, written or made by the compiler, decision 0054. A `const void*`
+  // keeps no type, so after the cast no callee can be judged on what it gets. A conversion to a base of the class counts too.
+  bool VisitCastExpr(CastExpr *E) {
+    const QualType From = E->getSubExpr()->getType();
+    if (From->isPointerType() && E->getType()->isPointerType())
+      if (const CXXRecordDecl *Class = plainPointee(From); Class && !sameClass(Class, plainPointee(E->getType())))
+        use(Class, E->getBeginLoc());
+    return true;
+  }
+  bool VisitCXXConstructExpr(CXXConstructExpr *E) {
+    for (const Expr *Argument : E->arguments())
+      given(E->getConstructor(), Argument);
+    return true;
+  }
+
+private:
+  ClangTidyCheck &Check;
+  ASTContext &Context;
+  const SourceManager &SM;
+  std::set<std::pair<SourceLocation::UIntTy, const CXXRecordDecl *>> Seen;
+
+  bool byValue(QualType Type, SourceLocation At) {
+    use(plainHeld(Type), At);
+    return true;
+  }
+  // A field, or a static data member.
+  bool member(const ValueDecl *Member, SourceLocation At) {
+    if (isa<FieldDecl>(Member) || (isa<VarDecl>(Member) && cast<VarDecl>(Member)->isStaticDataMember()))
+      use(plainOwner(Member), At);
+    return true;
+  }
+  // A plain object, by value or by reference, or a pointer to one, goes to a callee that the file does not write, decision 0053. A callee
+  // with no name, as a pointer to a function is, may be the library's, so it counts. A function the file writes is judged by its own
+  // kind, and the reach rule judges the call. A pointer counts as its object, because a C call such as `std::fwrite` takes an object so.
+  // A pointer that is cast to another type is a use at the cast, `VisitCastExpr`.
+  void given(const FunctionDecl *Callee, const Expr *Argument) {
+    if (!Argument || (Callee && !inSystemHeader(Callee)))
+      return;
+    const CXXRecordDecl *Class = plainPointee(Argument->getType());
+    use(Class ? Class : plainPointee(Argument->IgnoreParenImpCasts()->getType()), Argument->getBeginLoc());
+  }
+  static bool sameClass(const CXXRecordDecl *A, const CXXRecordDecl *B) { return B && A->getCanonicalDecl() == B->getCanonicalDecl(); }
+  static const CXXRecordDecl *plainPointee(QualType Type) {
+    while (!Type.isNull() && Type->isPointerType())
+      Type = Type->getPointeeType();
+    return plainHeld(Type);
+  }
+  void use(const CXXRecordDecl *Class, SourceLocation At) {
+    if (!Class || At.isInvalid() || SM.isInSystemHeader(SM.getExpansionLoc(At)))
+      return;
+    At = SM.getExpansionLoc(At);
+    if (Seen.insert({At.getRawEncoding(), Class->getCanonicalDecl()}).second)
+      Check.diag(At, "uses %0") << StringRef(Class->getQualifiedNameAsString());
   }
 };
 
@@ -3408,6 +3647,7 @@ public:
       return;
     Context = Result.Context;
     MarkerReader(*this, *Result.Context).read();
+    PlainUses(*this, *Result.Context).read();
   }
   void onEndOfTranslationUnit() override {
     Lowered &T = table();

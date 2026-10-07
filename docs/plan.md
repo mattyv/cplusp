@@ -382,7 +382,7 @@ int64_t fast_sum(std::span<const int64_t> a);
 
 - `CPLUSP_VERIFIED` promotes an existing function into the verified set. New functions need no marker. They are verified by default. A lambda, a local class and an explicit specialization take only the markers written on them, decision 0047. In a plain body they are plain, decision 0048.
 - `CPLUSP_TRUSTED(why)` keeps a contract and skips the proof. The gate does not check its body against the Trusted only rows. The gate still enforces its contract on every caller.
-- `CPLUSP_PLAIN(why)` opts a new function out entirely. Verified code cannot call it.
+- `CPLUSP_PLAIN(why)` opts a new function out entirely. Verified code cannot call it. A class takes it too, decision 0051. Verified code then makes no object of the class, reads none of its fields, and hands it to no library call, decisions 0052 to 0054. It reaches the class through a trusted member.
 - `CPLUSP_ASSUME(why)` covers a single statement, such as one `reinterpret_cast` in an otherwise provable function. It waits until a case needs it.
 
 `clang::annotate` survives into the AST, so the gate and the prover both see it. We checked this on clang 18, including the reason string. GCC builds compile it away.

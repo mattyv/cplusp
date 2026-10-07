@@ -40,11 +40,12 @@ const LINE_DIRECTIVE: &str = "cplusp-line-directive";
 const PRAGMA: &str = "cplusp-pragma";
 
 /// The check of the plugin that reads the markers of include/cplusp.h, decisions 0039 and 0047. The gate enables it for every run. It
-/// reports in three forms. All offsets are clang-tidy's own `FileOffset`, as for every finding, and an end is one past the last byte.
+/// reports in four forms. All offsets are clang-tidy's own `FileOffset`, as for every finding, and an end is one past the last byte.
 /// A region is the body of a function the file writes, or a plain declaration: `region {verified|trusted|plain} {end offset}`, at the
 /// first byte of the region. The gate keeps the regions of a run and shows them to no bot.
-/// A call that runs plain code is `reach {qualified name}`, at the call. The gate keeps it when the core gives the place the verified kind.
-/// The third form is a finding of the gate's own, `{presumed file}\t{presumed line}\t{sentence}` as for the pragmas. The gate reports
+/// A call that runs plain code is `reach {qualified name}`, at the call. A use of a plain type, decision 0051, is `uses {qualified name}`, at
+/// the use. The gate keeps either when the core gives the place the verified kind.
+/// The last form is a finding of the gate's own, `{presumed file}\t{presumed line}\t{sentence}` as for the pragmas. The gate reports
 /// it under the rule `marker`.
 const MARKERS: &str = "cplusp-markers";
 
@@ -875,13 +876,15 @@ fn judge(loaded: &Loaded, fixes: Fixes, shown: &dyn Fn(&Path) -> String) -> Resu
             found.push(ban(file, line, rule, message));
             continue;
         }
-        // A marker finding stands in every kind of function. A region is no finding. A call that reaches plain code is a finding in a
-        // verified place only: a trusted body may run plain code, and a plain function runs it.
+        // A marker finding stands in every kind of function. A region is no finding. A call that reaches plain code and a use of a plain
+        // type are findings in a verified place only: a trusted body may run plain code, and a plain function runs it and uses it.
         if d.name == MARKERS {
-            if let Some(name) = reach(&d.at) {
+            let sentence = named(&d.at, "reach ")
+                .map(|name| format!("calls {name}, which is plain. Give it a contract and mark it trusted."))
+                .or_else(|| named(&d.at, "uses ").map(|name| format!("uses {name}, which is plain. Reach it through a trusted member.")));
+            if let Some(sentence) = sentence {
                 if kind_at(regions.get(&path).unwrap_or(&nowhere), d.at.offset as u64) == Kind::Verified {
-                    let message = format!("marker: verified code calls {name}, which is plain. Give it a contract and mark it trusted.");
-                    found.push(ban(path.clone(), line_of(&path, d.at.offset)?, "marker", &message));
+                    found.push(ban(path.clone(), line_of(&path, d.at.offset)?, "marker", &format!("marker: verified code {sentence}")));
                 }
             } else if region(&d.at).is_none() {
                 let (file, line, message) = presumed(&d)?;
@@ -955,10 +958,11 @@ fn region(at: &At) -> Option<Region> {
     Some(Region { begin: at.offset as u64, end: end.parse().ok()?, kind })
 }
 
-/// The name in a report of `cplusp-markers` of the form `reach {qualified name}`, at a call that runs a plain function. The name runs to
-/// the end and can hold a space, as in `operator int`. A finding of the check has tabs, so it is none.
-fn reach(at: &At) -> Option<&str> {
-    at.message.strip_prefix("reach ").filter(|name| !name.contains('\t'))
+/// The name in a report of `cplusp-markers` of the form `reach {qualified name}`, at a call that runs a plain function, or of the form
+/// `uses {qualified name}`, at a use of a plain type. The name runs to the end and can hold a space, as in `operator int`. A finding of the
+/// check has tabs, so it is none.
+fn named<'a>(at: &'a At, form: &str) -> Option<&'a str> {
+    at.message.strip_prefix(form).filter(|name| !name.contains('\t'))
 }
 
 // ponytail: reads the whole file to turn a byte offset into a line, once per diagnostic.
