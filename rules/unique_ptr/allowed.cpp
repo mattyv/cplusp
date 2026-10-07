@@ -4,6 +4,7 @@
 #include <array>
 #include <cstdint>
 #include <memory>
+#include <optional>
 #include <vector>
 
 struct Command {
@@ -101,4 +102,34 @@ int32_t read_by_pointer(const std::unique_ptr<int32_t>& p) {
 //@ ensures result == (*p > 0)
 bool positive_by_cast(const std::unique_ptr<int32_t>& p) {
   return positive_at(static_cast<const int32_t*>(p.get()));
+}
+
+// Const reaches the fields of what a const handle owns. A node of unique_ptr members, read through a const reference, carries nothing
+// unjudged, decisions 0042 and 0043. So does a const optional of a unique_ptr.
+struct Node {
+  int32_t value = 0;
+  std::unique_ptr<Node> left;
+  std::unique_ptr<Node> right;
+};
+
+//@ ensures result == n.value
+int32_t value_of(const Node& n) {
+  return n.value;
+}
+
+//@ requires root != nullptr
+//@ ensures result == root->value
+int32_t root_value(const std::unique_ptr<Node>& root) {
+  return value_of(*root);
+}
+
+//@ ensures result == o.has_value()
+bool present(const std::optional<std::unique_ptr<int32_t>>& o) {
+  return o.has_value();
+}
+
+//@ requires p != nullptr
+//@ ensures result == p->has_value()
+bool inner_present(const std::unique_ptr<std::optional<std::unique_ptr<int32_t>>>& p) {
+  return present(*p);
 }

@@ -812,6 +812,37 @@ fn a_range_for_trusts_only_a_begin_of_the_library() {
     assert!(out.lines().any(|l| field(l, "rule") == "unique_ptr" && field(l, "line") == "21"), "{out}");
 }
 
+/// A library type counts by what it holds, decision 0043. A view, a proxy reference and a type-erased box each hold a pointer to
+/// non-const whatever their arguments say, so a copy of one out of a const handle is no read. A copy of a container that owns its
+/// elements stays clean.
+#[test]
+fn a_library_type_counts_by_what_it_holds() {
+    if !clang_tidy_available() {
+        return;
+    }
+    let f = fixture("const-library-carriers.cpp");
+    let plugin = plugin();
+    let o = cplusp(&["gate", "--json", "--plugin", plugin.to_str().unwrap(), f.to_str().unwrap(), "--", "-std=c++23", "-ffp-contract=off"]);
+    let out = stdout(&o);
+    let found: BTreeSet<usize> = out.lines().filter(|l| field(l, "rule") == "unique_ptr").map(|l| field(l, "line").parse::<usize>().unwrap()).collect();
+    assert_eq!(found, BTreeSet::from([10, 15, 20, 25]), "{out}");
+}
+
+/// The library is a place, and an analysis that cannot finish refuses, decisions 0036 and 0043. A `deque` that the file declares in
+/// `namespace std` is the file's own, so its writing `at` is no element access. A type the check cannot see whole carries a way to write.
+#[test]
+fn the_const_handle_check_trusts_the_library_by_place_and_refuses_what_it_cannot_see() {
+    if !clang_tidy_available() {
+        return;
+    }
+    let f = fixture("const-edges.cpp");
+    let plugin = plugin();
+    let o = cplusp(&["gate", "--json", "--plugin", plugin.to_str().unwrap(), f.to_str().unwrap(), "--", "-std=c++23", "-ffp-contract=off"]);
+    let out = stdout(&o);
+    let found: BTreeSet<usize> = out.lines().filter(|l| field(l, "rule") == "unique_ptr").map(|l| field(l, "line").parse::<usize>().unwrap()).collect();
+    assert_eq!(found, BTreeSet::from([15, 24]), "{out}");
+}
+
 /// Any pragma but `once` changes the build the proofs assume, or silences the gate. Two that turn contraction back on
 /// behind the flags: clang's own and the standard's. The message names the pragma by its first two words.
 #[test]
