@@ -80,3 +80,18 @@ int32_t read_by_view(const std::unique_ptr<std::array<int32_t, 4>>& p) {
 int32_t read_as_const(const std::unique_ptr<int32_t>& p) {
   return std::as_const(*p);
 }
+
+//@ ensures result == (q != nullptr && *q > 0)
+bool positive_at(const int32_t* q) {
+  return q != nullptr && *q > 0;
+}
+
+// A pointer through a const handle may be compared, read through, or handed on as a pointer to const, decision 0040.
+//@ requires p != nullptr
+//@ ensures result == (*p > 0 ? *p : 0)
+int32_t read_by_pointer(const std::unique_ptr<int32_t>& p) {
+  if (p.get() == nullptr) {
+    return 0;
+  }
+  return positive_at(p.get()) ? *p.get() : 0;
+}

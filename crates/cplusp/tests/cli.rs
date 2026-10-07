@@ -636,18 +636,6 @@ fn gate_drops_the_flags_that_write_a_file() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
-/// A dependency list that does not name the file leaves the NOLINT scan blind. The run is refused.
-#[test]
-fn gate_refuses_a_dependency_list_that_does_not_name_the_file() {
-    if !clang_tidy_available() {
-        return;
-    }
-    let o = gated(&["rules/goto/allowed.cpp", "--", "-std=c++23", "-ffp-contract=off", "-Xclang", "-dependency-file", "-Xclang", "/dev/null"]);
-    assert_eq!(o.status.code(), Some(2), "stdout: {} stderr: {}", stdout(&o), stderr(&o));
-    assert_eq!(stdout(&o).trim(), "", "nothing on stdout for a refused run");
-    assert!(stderr(&o).lines().any(|l| l == "cannot preprocess rules/goto/allowed.cpp: the dependency list does not name it."), "stderr {}", stderr(&o));
-}
-
 /// The dependency list escapes a space, `#` and `$`, and not a tab. A tab in a header path would split the name, and files named after
 /// the pieces would stand in for the header in the NOLINT scan. A list with any white space but a space and a line break is refused.
 /// The files are written at test time.
@@ -803,7 +791,7 @@ fn gate_refuses_flags_that_change_what_the_compiler_reports() {
     if !clang_tidy_available() {
         return;
     }
-    for flag in ["-E", "-P", "-Wp,-P", "-dM", "-M", "-MM", "-MV", "-Xpreprocessor", "-###", "-fdriver-only"] {
+    for flag in ["-E", "-P", "-Wp,-P", "-dM", "-M", "-MM", "-MV", "-Xpreprocessor", "-Xclang", "-include-pch", "-fmodules", "-fmodule-file=m.pcm", "-###", "-fdriver-only"] {
         let o = gated(&["rules/goto/allowed.cpp", "--", "-std=c++23", "-ffp-contract=off", flag]);
         assert_eq!(o.status.code(), Some(2), "{flag}: stdout {} stderr {}", stdout(&o), stderr(&o));
         assert_eq!(stdout(&o).trim(), "", "{flag}: nothing on stdout for a refused run");

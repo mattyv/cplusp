@@ -2,6 +2,7 @@
 #include <array>
 #include <cstdint>
 #include <memory>
+#include <optional>
 #include <vector>
 #include <sys/uio.h>
 
@@ -110,3 +111,27 @@ struct Holds {
   const std::unique_ptr<int32_t> p;
   int32_t* q = p.get();  // BANNED also: raw_pointer
 };
+
+// A const handle gives reads only, decision 0040. A functional cast, an argument by value, an assignment of a class and the brace list
+// of a wrapper each carry the pointer out, and none is a read.
+iovec made(const std::unique_ptr<int32_t>& p) {
+  return iovec{p.get(), 4};  // BANNED
+}
+
+void take_iov(iovec v) {
+  write_at(static_cast<int32_t*>(v.iov_base));
+}
+
+void reassigned(const std::unique_ptr<int32_t>& p, iovec& v) {
+  v = iovec{p.get(), 4};  // BANNED
+  v = {p.get(), 4};  // BANNED
+}
+
+void passed(const std::unique_ptr<int32_t>& p) {
+  take_iov(iovec{p.get(), 4});  // BANNED
+  take_iov({p.get(), 4});  // BANNED
+}
+
+void wrapped(const std::unique_ptr<int32_t>& p) {
+  std::optional<iovec> o{iovec{p.get(), 4}};  // BANNED
+}
