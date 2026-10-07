@@ -15,7 +15,7 @@ The first real file through the gate. The plan's checklist asks for a run on rea
 
 The gate ran as `cplusp gate main.cpp -- -std=c++23 -ffp-contract=off -include functional`. The last flag pre-includes a header the code relies on through another header, which clang 18 with libstdc++ 13 does not provide that way. Without it the gate refuses the file as not compiling, which is right. The code is C++20 and compiles as C++23 unchanged.
 
-The gate reads no markers yet, so every finding counts as a finding in verified code. The split into verified, trusted and plain cannot be measured until the markers are read. That is the next piece the trial asks for.
+In the first two runs the gate read no markers, so every finding counted as a finding in verified code. The third run reads them, see the section on it below.
 
 ## The numbers
 
@@ -65,8 +65,30 @@ Three kinds of finding were the gate's fault, not the code's. Each is a row or a
 - **The test allocator's counters are the state the rule is for.** Eight findings name two static counters. Functions change and read them with no line saying so. That is decision 0035 doing its job on code nobody wrote for it.
 - **Nothing here decides 0012.** The code has no threads, so the rule on shared variables was not exercised. That trial needs a concurrent target.
 
+## The third run, with markers
+
+On 2026-10-07, under decisions 0039 and 0047 to 0050. A scratch copy marks each function of Test.hpp and main.cpp plain, eleven functions in all. `RunTests` is one function of about 1165 lines. Most of the driver is under `#ifdef __APPLE__`, so the compiler does not see it on this host. The two headers of the tree carry no marker. The flags are those of the first run.
+
+With no marker the gate now gives 868 findings, not 669. The rise is in the row `function_pointers`, from 4 to 203, under decisions 0048 to 0050. Of these, 165 are `std::endl`: a function passed by name to `operator<<`, which calls through it. In the tree, 21 come from `make_unique_alloc`, which gives each node a `std::unique_ptr` with a `std::function` deleter. Each release of a node is a call through that deleter.
+
+| File | No marker | Tests and driver plain |
+| --- | --- | --- |
+| FlashRadixTree.hpp | 251 | 254 |
+| SplayTree.hpp | 143 | 143 |
+| Test.hpp | 440 | 3 |
+| main.cpp | 34 | 3 |
+| All | 868 | 403 |
+
+What the markers show:
+
+- **The tests and the driver go out of view.** 468 findings go, and none of them is in the tree.
+- **A type of the test code stays verified.** Six findings stay in the plain files. Each is a declaration outside a function: the static counters of the test allocator, and the fields of the driver's `Data`. A marker takes only a function, decision 0039. This trial does not decide whether a type can take one.
+- **The tree runs the test allocator.** Three findings are new. `verified code calls ThrowingAllocationAllocator::allocate, which is plain`, and the same for `deallocate` and the constructor. The tests instantiate the tree with the allocator that throws, so the tree runs plain code. That is decision 0047 at work on code that nobody wrote for it. The allocator needs a contract and a trusted mark, or the verified build uses `std::allocator`.
+- **The tree's own findings stay.** The two headers have 397. The largest rows are unlisted 121, metaprogramming 66, strings 42 and raw_pointer 31. Then function_pointers 29, operator_overloading 19, plain_int 11 and exceptions 11. Then iostreams 10, lvalue_references 10, templates 8 and iterators 8. The rest is 31 in thirteen rows. This is the work for a bot, or the share of the tree to mark trusted.
+
 ## What to do next
 
-1. Read the markers, so the trial can report verified, trusted and plain lines instead of findings.
-2. Pick one function of the tree, instantiate it for `std::span<const uint8_t>` keys and `int32_t` values, and take it through the thin slice: gate, model, differential run.
-3. Decide on enum template parameters, with a case in the battery.
+1. Pick one function of the tree, instantiate it for `std::span<const uint8_t>` keys and `int32_t` values, and take it through the thin slice: gate, model, differential run.
+2. Decide on enum template parameters, with a case in the battery.
+3. Give the node a deleter type with no state, so that each release is a direct call. Or mark `make_unique_alloc` trusted, with the deleter inside it.
+4. Decide whether a type of test code can take a plain marker.
