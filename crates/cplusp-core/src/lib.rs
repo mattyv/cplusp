@@ -14,6 +14,8 @@
 //! - `kind_at`: a place takes the kind of the innermost marked function that
 //!   holds it, and is verified when none does.
 
+pub mod model;
+
 use vstd::prelude::*;
 
 verus! {
