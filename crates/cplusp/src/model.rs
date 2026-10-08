@@ -552,15 +552,19 @@ impl Printer<'_> {
     }
 
     /// A `while`: the condition, the invariants, the decreases lines, then the body. A `for` has its step as the last statement of the body.
-    /// The invariant and decreases lines have the invariants of the loop as `own`. The body has them in scope.
+    /// The `while` line and the body have the invariants of the loop in scope. The invariant and decreases lines have them as `own`.
     fn dwhile(&mut self, (c, place): (&DExpr, u32), lists: [&DConds; 2], body: &DStmts, step: Option<(&DStmt, u32)>, depth: usize) {
-        self.put(depth, format!("while {}", dexpr(c, self.names)), place);
         let mut invariants = Vec::new();
         let mut cs = lists[0];
         while let DConds::Cons(_, line, next) = cs {
             invariants.push(*line);
             cs = next;
         }
+        // The `while` line is the condition and the end of the loop. Dafny checks it under all the invariants.
+        let outer = self.scope.len();
+        self.scope.extend(invariants.iter().copied());
+        self.put(depth, format!("while {}", dexpr(c, self.names)), place);
+        self.scope.truncate(outer);
         self.own = invariants.clone();
         for (word, list) in ["invariant", "decreases"].into_iter().zip(lists) {
             let mut cs = list;
