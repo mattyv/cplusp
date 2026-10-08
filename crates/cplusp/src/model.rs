@@ -8,7 +8,7 @@ use std::fmt::Write;
 use anyhow::{Context, Result};
 use cplusp_core::model::{
     parse_contract, translate_unit, Args, BinOp, CastKind, CondKind, Conds, DArgs, DConds, DExpr, DParams, DStmt, DStmts, DTy, Expr, Fns,
-    Function, Method, Model, Models, Params, Refusal, Stmt, Stmts, Tok, Ty,
+    Function, Method, Model, Models, Names as CNames, Params, Refusal, Stmt, Stmts, Tok, Ty,
 };
 use serde::Deserialize;
 
@@ -48,7 +48,7 @@ enum JCast {
 
 #[derive(Deserialize)]
 enum JExpr {
-    Int(i64),
+    Lit(i64, JTy),
     Var(String, JTy),
     Bin(JOp, Box<JExpr>, Box<JExpr>),
     Not(Box<JExpr>),
@@ -73,6 +73,7 @@ struct JCond {
     kind: String,
     line: u32,
     text: String,
+    params: Vec<String>,
 }
 
 /// A line of the plugin: a function, or a `//@` line that no function claimed.
@@ -145,7 +146,7 @@ fn op(o: JOp) -> BinOp {
 
 fn expr(e: JExpr, names: &mut Names) -> Expr {
     match e {
-        JExpr::Int(n) => Expr::Int(n),
+        JExpr::Lit(n, t) => Expr::Lit(n, ty(t, names)),
         JExpr::Var(v, t) => Expr::Var(names.id(&v), ty(t, names)),
         JExpr::Bin(o, a, b) => Expr::Bin(op(o), Box::new(expr(*a, names)), Box::new(expr(*b, names))),
         JExpr::Not(a) => Expr::Not(Box::new(expr(*a, names))),
@@ -233,6 +234,12 @@ fn lex(text: &str, line: u32, names: &mut Names) -> Vec<Tok> {
     toks
 }
 
+/// The names of the parameters of a declaration, in order. A parameter with no name is `'N` by its place, as in `function`.
+fn param_names(v: Vec<String>, names: &mut Names) -> CNames {
+    let ids: Vec<u32> = v.into_iter().enumerate().map(|(i, n)| names.id(&if n.is_empty() { format!("'{i}") } else { n })).collect();
+    ids.into_iter().rev().fold(CNames::Nil, |rest, n| CNames::Cons(n, Box::new(rest)))
+}
+
 /// The contract lines as the core's list. A word other than `requires` and `ensures` has no grammar yet, so its text is not parsed.
 /// The core refuses the line by its word. A line that the parser refuses, or that ends in a backslash, is `Bad`, and the core refuses it
 /// with that refusal.
@@ -254,14 +261,14 @@ fn conds(v: Vec<JCond>, names: &mut Names) -> Conds {
                 word => (CondKind::Other(names.id(word)), Expr::Int(0)),
             }
         };
-        items.push((kind, e, c.line));
+        items.push((kind, e, c.line, param_names(c.params, names)));
     }
-    items.into_iter().rev().fold(Conds::Nil, |rest, (k, e, l)| Conds::Cons(k, e, l, Box::new(rest)))
+    items.into_iter().rev().fold(Conds::Nil, |rest, (k, e, l, p)| Conds::Cons(k, e, l, p, Box::new(rest)))
 }
 
 fn function(f: JFunction, names: &mut Names) -> Function {
     let name = names.id(&f.key);
-    // A parameter with no name is named by its position, as `'N`. C++ cannot write that, so it clashes with no name. The mangling makes it `c_'N`.
+    // A parameter with no name is named by its position, as `'N`. C++ cannot write that, so it clashes with no name. The mangling makes it `v_'N`.
     let ps: Vec<(u32, Ty)> = f
         .params
         .into_iter()
@@ -305,11 +312,12 @@ fn dop(o: BinOp) -> &'static str {
     }
 }
 
-/// The one mangling of a C++ name for Dafny, for code and contract alike. The prefix keeps a name clear of the words Dafny reserves,
-/// such as `old` and `function`, and of `result`. The contract word `result` is no name: it is `Tok::Result`, and prints as `result`.
-// An unnamed parameter is `c_'N` and an overload is `c_{plain}'{k}`. C++ cannot write `'` in a name, so no clash is possible.
+/// The one mangling of a C++ variable for Dafny, for code and contract alike. The prefix `v_` keeps a name clear of the words Dafny
+/// reserves, such as `old` and `function`, and of `result`. The contract word `result` is no name: it is `Tok::Result`, and prints as
+/// `result`. A method has the prefix `c_`, so a variable never hides a method, decision 0060.
+// An unnamed parameter is `v_'N` and an overload is `c_{plain}'{k}`. C++ cannot write `'` in a name, so no clash is possible.
 fn mangle(name: &str) -> String {
-    format!("c_{name}")
+    format!("v_{name}")
 }
 
 /// Every operator has its parentheses, so Dafny's precedence never matters.
@@ -326,7 +334,7 @@ fn dexpr(e: &DExpr, names: &Names) -> String {
     }
 }
 
-/// The Dafny name of each function by the id of its key. `c_{plain}` when the plain name is unique among the file's functions, else
+/// The Dafny name of each function by the id of its key, with the method prefix `c_`. `c_{plain}` when the plain name is unique among the file's functions, else
 /// `c_{plain}'{k}`, with k counting the functions of that plain name in file order from 1.
 type Methods = HashMap<u32, String>;
 

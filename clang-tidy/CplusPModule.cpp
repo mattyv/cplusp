@@ -1321,6 +1321,7 @@ struct Contract {
     unsigned File;  // the hash of the FileID
     unsigned Number;
     std::string Text;
+    std::vector<std::string> Params;  // the parameter names of the declaration that the line stands on, "" for an unnamed one
   };
   std::vector<Line> Lines;
 };
@@ -1366,7 +1367,7 @@ Contract contractAbove(const SourceManager &SM, SourceLocation First) {
     if (!Line.consume_front("//@"))
       break;
     Line = Line.ltrim();
-    C.Lines.push_back({File.getHashValue(), SM.getLineNumber(File, Begin), Line.str()});
+    C.Lines.push_back({File.getHashValue(), SM.getLineNumber(File, Begin), Line.str(), {}});
     if (Spliced)
       continue;
     C.Any = true;
@@ -1407,6 +1408,9 @@ Contract contractOf(const SourceManager &SM, const FunctionDecl *Function) {
     if (Declaration->isImplicit() || SM.isInSystemHeader(Declaration->getLocation()))
       continue;
     Contract One = contractAbove(SM, firstTokenOf(Declaration));
+    for (Contract::Line &L : One.Lines)
+      for (const ParmVarDecl *P : Declaration->parameters())
+        L.Params.push_back(P->getNameAsString());
     C.Modifies.insert(C.Modifies.end(), One.Modifies.begin(), One.Modifies.end());
     C.Reads.insert(C.Reads.end(), One.Reads.begin(), One.Reads.end());
     C.Any |= One.Any;
@@ -3786,7 +3790,8 @@ public:
         const StringRef Text = L.Text;
         const size_t Cut = Text.find_first_of(" \t\f\v\r");
         Conds.push_back(llvm::json::Object{
-            {"kind", Text.substr(0, Cut).str()}, {"line", number(L.Number)}, {"text", Cut == StringRef::npos ? "" : Text.substr(Cut).trim().str()}});
+            {"kind", Text.substr(0, Cut).str()}, {"line", number(L.Number)}, {"text", Cut == StringRef::npos ? "" : Text.substr(Cut).trim().str()},
+            {"params", L.Params}});
       }
     }
     return llvm::json::Object{{"name", FD->getNameAsString()},
@@ -3873,7 +3878,7 @@ private:
 
   llvm::json::Value expr(const Expr *E, unsigned Near) const {
     if (const auto *Literal = dyn_cast<IntegerLiteral>(E); Literal && Literal->getValue().getActiveBits() <= 63)
-      return tag("Int", number(Literal->getValue().getZExtValue()));
+      return tag("Lit", llvm::json::Array{number(Literal->getValue().getZExtValue()), type(Literal->getType())});
     if (const auto *Ref = dyn_cast<DeclRefExpr>(E)) {
       const ValueDecl *D = Ref->getDecl();
       if (isa<ParmVarDecl>(D) || (isa<VarDecl>(D) && cast<VarDecl>(D)->hasLocalStorage()))
