@@ -90,8 +90,9 @@ pub enum CastKind {
 /// negative, since a minus is an operator, so it holds the full range of `uint64_t`, decision 0063. `Bool` is `true` or `false`. In a contract, a name
 /// carries no type, and the translator finds it among the parameters, and `Int` is an exact integer. `Brace` is a braced value of one scalar, such as `int64_t{a}`. `Call` is a call by the
 /// key of its callee, the id of the callee's name for a refusal, its arguments and its line. `HasValue` and `Value` read an
-/// optional, `Nullopt` is `std::nullopt`, and `Wrap` is a value that the compiler turns into an optional, decision 0075. `Unknown`
-/// is a construct with no rule, by the id of its kind and its line.
+/// optional, `Nullopt` is `std::nullopt`, and `Wrap` is a value that the compiler turns into an optional, decision 0075. `Empty`
+/// is `v.empty()` and `Subspan` is `s.subspan(k)`, decision 0078. `Unknown` is a construct with no rule, by the id of its kind and
+/// its line.
 #[derive(PartialEq, Eq, Debug)]
 pub enum Expr {
     Int(u64),
@@ -118,6 +119,8 @@ pub enum Expr {
     Value(Box<Expr>),
     Nullopt,
     Wrap(Box<Expr>),
+    Empty(Box<Expr>),
+    Subspan(Box<Expr>, Box<Expr>),
     Unknown(u32, u32),
 }
 
@@ -231,7 +234,7 @@ pub enum DTy {
 
 /// A Dafny expression. `AsInt` is `(e as int)`, the exact value of a machine integer. `Conv` is `(e as T)`, which Dafny proves
 /// fits `T`. `IsSome` is `e.Some?`, `Get` is `e.value`, which Dafny proves holds a value, and `Nothing` and `Just` are `None` and
-/// `Some(e)`. A Dafny expression has no call.
+/// `Some(e)`. `Drop` is `s[k..]`, which Dafny proves is in range, decision 0078. A Dafny expression has no call.
 #[derive(PartialEq, Eq, Debug)]
 pub enum DExpr {
     Lit(u64),
@@ -254,6 +257,7 @@ pub enum DExpr {
     Get(Box<DExpr>),
     Nothing,
     Just(Box<DExpr>),
+    Drop(Box<DExpr>, Box<DExpr>),
 }
 
 #[derive(PartialEq, Eq, Debug)]
@@ -334,7 +338,7 @@ pub enum Models {
 /// to a parameter. `NoVar` is a name in a loop contract that is no variable. `Misplaced` is a contract line in the wrong place.
 /// `SeqParam` is a sequence that is no parameter. `Extent` is a sequence made from one whose length or element differs.
 /// `NoField` is a field of a contract that its struct does not have. `HoldsSeq` is a local or a result of a struct that holds a
-/// sequence, decision 0076.
+/// sequence, decision 0076. `Element` is an optional of a struct or a sequence of `bool`, which have no rule, decisions 0064 and 0076.
 #[derive(Structural, PartialEq, Eq, Clone, Copy, Debug)]
 pub enum Refusal {
     Construct(u32, u32),
@@ -352,6 +356,7 @@ pub enum Refusal {
     Extent(u32),
     NoField(u32, u32),
     HoldsSeq(u32),
+    Element(u32),
 }
 
 // ------------------------------------------------------------------ the rules
@@ -365,8 +370,10 @@ pub open spec fn spec_ty(t: Ty, line: u32) -> Result<DTy, Refusal> {
         Ty::U32 => Ok(DTy::UInt32),
         Ty::U64 => Ok(DTy::UInt64),
         Ty::Bool => Ok(DTy::Bool),
+        Ty::Seq(Scalar::Bool, _) => Err(Refusal::Element(line)),
         Ty::Seq(s, _) => Ok(DTy::Seq(s)),
         Ty::Struct(k) => Ok(DTy::Struct(k)),
+        Ty::Opt(Scalar::Struct(_)) => Err(Refusal::Element(line)),
         Ty::Opt(s) => Ok(DTy::Opt(s)),
         Ty::Other(k) => Err(Refusal::Construct(k, line)),
     }
@@ -375,14 +382,17 @@ pub open spec fn spec_ty(t: Ty, line: u32) -> Result<DTy, Refusal> {
 /// A type of a local or of a result: a type of the subset that is no sequence, decision 0064, and no struct that holds one,
 /// decision 0076.
 pub open spec fn spec_value_ty(t: Ty, line: u32, sd: Structs) -> Result<DTy, Refusal> {
-    match t {
-        Ty::Seq(_, _) => Err(Refusal::SeqParam(line)),
-        Ty::Struct(k) => if spec_holds(sd, k) {
-            Err(Refusal::HoldsSeq(line))
-        } else {
-            spec_ty(t, line)
+    match spec_ty(t, line) {
+        Err(r) => Err(r),
+        Ok(dt) => match t {
+            Ty::Seq(_, _) => Err(Refusal::SeqParam(line)),
+            Ty::Struct(k) => if spec_holds(sd, k) {
+                Err(Refusal::HoldsSeq(line))
+            } else {
+                Ok(dt)
+            },
+            _ => Ok(dt),
         },
-        _ => spec_ty(t, line),
     }
 }
 
@@ -563,6 +573,17 @@ pub open spec fn spec_code(e: Expr, line: u32) -> Result<DExpr, Refusal>
             Ok(d) => Ok(DExpr::Just(Box::new(d))),
             Err(r) => Err(r),
         },
+        Expr::Empty(o) => match spec_code(*o, line) {
+            Ok(d) => Ok(DExpr::Bin(BinOp::Eq, Box::new(DExpr::Len(Box::new(d))), Box::new(DExpr::Lit(0)))),
+            Err(r) => Err(r),
+        },
+        Expr::Subspan(o, k) => match spec_code(*o, line) {
+            Ok(d) => match spec_code(*k, line) {
+                Ok(dk) => Ok(DExpr::Drop(Box::new(d), Box::new(dk))),
+                Err(r) => Err(r),
+            },
+            Err(r) => Err(r),
+        },
         Expr::Name(n) => Err(Refusal::Name(n, line)),
         Expr::Unknown(k, l) => Err(Refusal::Construct(k, l)),
         _ => Err(Refusal::Syntax(line)),
@@ -655,6 +676,11 @@ pub open spec fn spec_contract(e: Expr, decl: Names, ps: Params, ret: Option<Ty>
         Expr::Paren(a) => spec_contract(*a, decl, ps, ret, bound, line, sd),
         Expr::Size(o) => match spec_path(*o, decl, ps, ret, bound, line, sd) {
             Ok((d, Ty::Seq(_, _))) => Ok(DExpr::Len(Box::new(d))),
+            Ok(_) => Err(Refusal::Syntax(line)),
+            Err(r) => Err(r),
+        },
+        Expr::Empty(o) => match spec_path(*o, decl, ps, ret, bound, line, sd) {
+            Ok((d, Ty::Seq(_, _))) => Ok(DExpr::Bin(BinOp::Eq, Box::new(DExpr::Len(Box::new(d))), Box::new(DExpr::Lit(0)))),
             Ok(_) => Err(Refusal::Syntax(line)),
             Err(r) => Err(r),
         },
@@ -1039,6 +1065,7 @@ pub open spec fn spec_has_result(e: Expr) -> bool
         Expr::Neg(a) => spec_has_result(*a),
         Expr::Paren(a) => spec_has_result(*a),
         Expr::Size(a) => spec_has_result(*a),
+        Expr::Empty(a) => spec_has_result(*a),
         Expr::Index(a, i) => spec_has_result(*a) || spec_has_result(*i),
         Expr::Forall(_, a) => spec_has_result(*a),
         Expr::Field(a, _) => spec_has_result(*a),
@@ -1273,6 +1300,8 @@ pub open spec fn unknown_expr(e: Expr) -> bool
         Expr::HasValue(a) => unknown_expr(*a),
         Expr::Value(a) => unknown_expr(*a),
         Expr::Wrap(a) => unknown_expr(*a),
+        Expr::Empty(a) => unknown_expr(*a),
+        Expr::Subspan(a, k) => unknown_expr(*a) || unknown_expr(*k),
         _ => false,
     }
 }
@@ -1344,6 +1373,14 @@ pub proof fn lemma_unknown_code_is_refused(e: Expr, line: u32)
         Expr::HasValue(a) => lemma_unknown_code_is_refused(*a, line),
         Expr::Value(a) => lemma_unknown_code_is_refused(*a, line),
         Expr::Wrap(a) => lemma_unknown_code_is_refused(*a, line),
+        Expr::Empty(a) => lemma_unknown_code_is_refused(*a, line),
+        Expr::Subspan(a, k) => {
+            if unknown_expr(*a) {
+                lemma_unknown_code_is_refused(*a, line);
+            } else {
+                lemma_unknown_code_is_refused(*k, line);
+            }
+        },
         _ => {},
     }
 }
@@ -1672,8 +1709,10 @@ pub fn translate_ty(t: Ty, line: u32) -> (r: Result<DTy, Refusal>)
         Ty::U32 => Ok(DTy::UInt32),
         Ty::U64 => Ok(DTy::UInt64),
         Ty::Bool => Ok(DTy::Bool),
+        Ty::Seq(Scalar::Bool, _) => Err(Refusal::Element(line)),
         Ty::Seq(s, _) => Ok(DTy::Seq(s)),
         Ty::Struct(k) => Ok(DTy::Struct(k)),
+        Ty::Opt(Scalar::Struct(_)) => Err(Refusal::Element(line)),
         Ty::Opt(s) => Ok(DTy::Opt(s)),
         Ty::Other(k) => Err(Refusal::Construct(k, line)),
     }
@@ -1683,14 +1722,17 @@ pub fn translate_value_ty(t: Ty, line: u32, sd: &Structs) -> (r: Result<DTy, Ref
     ensures
         r == spec_value_ty(t, line, *sd),
 {
-    match t {
-        Ty::Seq(_, _) => Err(Refusal::SeqParam(line)),
-        Ty::Struct(k) => if holds_seq(sd, k) {
-            Err(Refusal::HoldsSeq(line))
-        } else {
-            translate_ty(t, line)
+    match translate_ty(t, line) {
+        Err(r) => Err(r),
+        Ok(dt) => match t {
+            Ty::Seq(_, _) => Err(Refusal::SeqParam(line)),
+            Ty::Struct(k) => if holds_seq(sd, k) {
+                Err(Refusal::HoldsSeq(line))
+            } else {
+                Ok(dt)
+            },
+            _ => Ok(dt),
         },
-        _ => translate_ty(t, line),
     }
 }
 
@@ -1873,6 +1915,17 @@ pub fn translate_code(e: &Expr, line: u32) -> (r: Result<DExpr, Refusal>)
             Ok(d) => Ok(DExpr::Just(Box::new(d))),
             Err(r) => Err(r),
         },
+        Expr::Empty(o) => match translate_code(o, line) {
+            Ok(d) => Ok(DExpr::Bin(BinOp::Eq, Box::new(DExpr::Len(Box::new(d))), Box::new(DExpr::Lit(0)))),
+            Err(r) => Err(r),
+        },
+        Expr::Subspan(o, k) => match translate_code(o, line) {
+            Ok(d) => match translate_code(k, line) {
+                Ok(dk) => Ok(DExpr::Drop(Box::new(d), Box::new(dk))),
+                Err(r) => Err(r),
+            },
+            Err(r) => Err(r),
+        },
         Expr::Name(n) => Err(Refusal::Name(*n, line)),
         Expr::Unknown(k, l) => Err(Refusal::Construct(*k, *l)),
         _ => Err(Refusal::Syntax(line)),
@@ -1965,6 +2018,11 @@ pub fn translate_contract(e: &Expr, decl: &Names, ps: &Params, ret: Option<Ty>, 
         Expr::Paren(a) => translate_contract(a, decl, ps, ret, bound, line, sd),
         Expr::Size(o) => match path(o, decl, ps, ret, bound, line, sd) {
             Ok((d, Ty::Seq(_, _))) => Ok(DExpr::Len(Box::new(d))),
+            Ok(_) => Err(Refusal::Syntax(line)),
+            Err(r) => Err(r),
+        },
+        Expr::Empty(o) => match path(o, decl, ps, ret, bound, line, sd) {
+            Ok((d, Ty::Seq(_, _))) => Ok(DExpr::Bin(BinOp::Eq, Box::new(DExpr::Len(Box::new(d))), Box::new(DExpr::Lit(0)))),
             Ok(_) => Err(Refusal::Syntax(line)),
             Err(r) => Err(r),
         },
@@ -2384,6 +2442,7 @@ pub fn has_result(e: &Expr) -> (r: bool)
         Expr::Neg(a) => has_result(a),
         Expr::Paren(a) => has_result(a),
         Expr::Size(a) => has_result(a),
+        Expr::Empty(a) => has_result(a),
         Expr::Index(a, i) => has_result(a) || has_result(i),
         Expr::Forall(_, a) => has_result(a),
         Expr::Field(a, _) => has_result(a),
@@ -2649,7 +2708,7 @@ pub fn translate_unit(all: &Fns, sd: &Structs) -> (r: Models)
 
 /// A token of a contract line. The shell cuts the text into tokens. `Op` holds `- ` as `Sub`, and the parser reads it as a
 /// negation where no operand is before it. `Size` is the text `.size()`, decision 0064. `Field` is `.name`, decision 0073.
-/// `HasValue` and `Value` are the texts `.has_value()` and `.value()`, decision 0075. `Unknown` is text with no token, by the id of
+/// `HasValue` and `Value` are the texts `.has_value()` and `.value()`, decision 0075. `Empty` is `.empty()`, decision 0078. `Unknown` is text with no token, by the id of
 /// its kind and its line.
 #[derive(Structural, PartialEq, Eq, Clone, Copy, Debug)]
 pub enum Tok {
@@ -2666,6 +2725,7 @@ pub enum Tok {
     Field(u32),
     HasValue,
     Value,
+    Empty,
     Forall,
     ColonColon,
     Unknown(u32, u32),
@@ -2890,7 +2950,7 @@ fn parse_unary(toks: &Vec<Tok>, pos: usize, line: u32) -> (r: Result<(Expr, usiz
 /// A token that follows an atom: `.size()`, `.name` or `[`.
 fn is_postfix(t: Tok) -> bool {
     match t {
-        Tok::Size | Tok::Field(_) | Tok::HasValue | Tok::Value | Tok::LBracket => true,
+        Tok::Size | Tok::Field(_) | Tok::HasValue | Tok::Value | Tok::Empty | Tok::LBracket => true,
         _ => false,
     }
 }
@@ -2923,6 +2983,9 @@ fn parse_postfix(toks: &Vec<Tok>, pos: usize, line: u32) -> (r: Result<(Expr, us
             p = p + 1;
         } else if toks[p] == Tok::Value {
             a = Expr::Value(Box::new(a));
+            p = p + 1;
+        } else if toks[p] == Tok::Empty {
+            a = Expr::Empty(Box::new(a));
             p = p + 1;
         } else {
             match parse_implies(toks, p + 1, line) {
