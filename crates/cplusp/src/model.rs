@@ -22,6 +22,7 @@ enum JScalar {
     U32,
     U64,
     Bool,
+    Struct(String),
 }
 
 #[derive(Deserialize)]
@@ -182,7 +183,7 @@ impl Names {
 
 // ------------------------------------------------------------------ from JSON to the core's types
 
-fn scalar(s: JScalar) -> Scalar {
+fn scalar(s: JScalar, names: &mut Names) -> Scalar {
     match s {
         JScalar::I32 => Scalar::I32,
         JScalar::I64 => Scalar::I64,
@@ -190,6 +191,7 @@ fn scalar(s: JScalar) -> Scalar {
         JScalar::U32 => Scalar::U32,
         JScalar::U64 => Scalar::U64,
         JScalar::Bool => Scalar::Bool,
+        JScalar::Struct(k) => Scalar::Struct(names.id(&k)),
     }
 }
 
@@ -201,8 +203,8 @@ fn ty(t: JTy, names: &mut Names) -> Ty {
         JTy::U32 => Ty::U32,
         JTy::U64 => Ty::U64,
         JTy::Bool => Ty::Bool,
-        JTy::Seq(s, extent) => Ty::Seq(scalar(s), extent.map_or(Extent::Dynamic, Extent::Fixed)),
-        JTy::Opt(s) => Ty::Opt(scalar(s)),
+        JTy::Seq(s, extent) => Ty::Seq(scalar(s, names), extent.map_or(Extent::Dynamic, Extent::Fixed)),
+        JTy::Opt(s) => Ty::Opt(scalar(s, names)),
         JTy::Struct(k) => Ty::Struct(names.id(&k)),
         JTy::Other(s) => Ty::Other(names.id(&s)),
     }
@@ -467,16 +469,18 @@ newtype int64 = x: int | -0x8000_0000_0000_0000 <= x < 0x8000_0000_0000_0000\n\
 newtype uint8 = x: int | 0 <= x < 0x100\n\
 newtype uint32 = x: int | 0 <= x < 0x1_0000_0000\n\
 newtype uint64 = x: int | 0 <= x < 0x1_0000_0000_0000_0000\n\
-datatype Option<T> = None | Some(value: T)\n";
+datatype Option<T> = None | Some(value: T)\n\
+type Vec<T> = s: seq<T> | |s| < 0x1_0000_0000_0000_0000 witness []\n";
 
-fn dscalar(s: Scalar) -> &'static str {
+fn dscalar(s: Scalar, names: &Names) -> String {
     match s {
-        Scalar::I32 => "int32",
-        Scalar::I64 => "int64",
-        Scalar::U8 => "uint8",
-        Scalar::U32 => "uint32",
-        Scalar::U64 => "uint64",
-        Scalar::Bool => "bool",
+        Scalar::I32 => "int32".to_string(),
+        Scalar::I64 => "int64".to_string(),
+        Scalar::U8 => "uint8".to_string(),
+        Scalar::U32 => "uint32".to_string(),
+        Scalar::U64 => "uint64".to_string(),
+        Scalar::Bool => "bool".to_string(),
+        Scalar::Struct(k) => names.datatypes[&k].clone(),
     }
 }
 
@@ -488,9 +492,9 @@ fn dty(t: DTy, names: &Names) -> String {
         DTy::UInt32 => "uint32".to_string(),
         DTy::UInt64 => "uint64".to_string(),
         DTy::Bool => "bool".to_string(),
-        DTy::Seq(s) => format!("seq<{}>", dscalar(s)),
+        DTy::Seq(s) => format!("Vec<{}>", dscalar(s, names)),
         DTy::Struct(k) => names.datatypes[&k].clone(),
-        DTy::Opt(s) => format!("Option<{}>", dscalar(s)),
+        DTy::Opt(s) => format!("Option<{}>", dscalar(s, names)),
     }
 }
 
@@ -740,6 +744,7 @@ fn sentence(r: Refusal, names: &Names) -> (u32, String) {
         Refusal::WriteParam(n, line) => (line, format!("{} is a parameter. The translator writes only a local.", names.text(n))),
         Refusal::NoVar(n, line) => (line, format!("{} in the loop contract is no variable.", names.text(n))),
         Refusal::SeqParam(line) => (line, "a sequence is in the subset only as a parameter.".to_string()),
+        Refusal::HoldsSeq(line) => (line, "a struct that holds a sequence is in the subset only as a parameter.".to_string()),
         Refusal::Extent(line) => (line, "a sequence or an optional made from one of another type or length.".to_string()),
         Refusal::Misplaced(line) => (
             line,

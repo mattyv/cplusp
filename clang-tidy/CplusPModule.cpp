@@ -3824,6 +3824,7 @@ private:
   std::unique_ptr<MangleContext> Mangler;
   std::set<std::pair<unsigned, unsigned>> &Claimed;
   std::map<std::string, llvm::json::Value> &Structs;
+  mutable std::set<const CXXRecordDecl *> Visiting;  // the structs whose fields `plainStruct` is reading
   mutable const FunctionDecl *Enclosing = nullptr;  // the function that `function` is writing, the floor of a loop's walk upward
 
   // The contract lines as data. A line of a loop has no parameters.
@@ -3897,25 +3898,29 @@ private:
     return nullptr;
   }
 
-  // The element scalar of a read-only sequence, decision 0064, or null: a const vector or a reference to one, except
-  // `std::vector<bool>`, and a span of const elements, any extent. A reference is looked through.
-  const char *seqElement(QualType T) const {
+  // The element type of a read-only sequence, decision 0064, or null: a const vector or a reference to one, except `std::vector<bool>`, and
+  // a span of const elements, any extent. A reference is looked through. The element is a scalar or a plain struct, decision 0076. A
+  // `Field` is a field of a struct, decision 0076: a vector with no const, and no span.
+  QualType seqElement(QualType T, bool Field = false) const {
     if (T->isReferenceType())
       T = T->getPointeeType();
     const auto *Spec = dyn_cast_or_null<ClassTemplateSpecializationDecl>(T->getAsCXXRecordDecl());
     if (!Spec || !Spec->isInStdNamespace() || Spec->getTemplateArgs().size() == 0 || Spec->getTemplateArgs()[0].getKind() != TemplateArgument::Type)
-      return nullptr;
+      return QualType();
     QualType Elem = Spec->getTemplateArgs()[0].getAsType();
     if (Spec->getName() == "vector") {
-      const char *S = T.isConstQualified() ? scalar(Elem) : nullptr;
-      return S && StringRef(S) != "Bool" ? S : nullptr;
+      if (!(Field || T.isConstQualified()) || Elem.getCanonicalType().hasQualifiers())
+        return QualType();
+      const char *S = scalar(Elem);
+      return (S ? StringRef(S) != "Bool" : plainStruct(Elem) != nullptr) ? Elem : QualType();
     }
-    if (Spec->getName() == "span" && Elem.isConstQualified()) {
+    if (!Field && Spec->getName() == "span" && Elem.isConstQualified()) {
       Elem.removeLocalConst();
-      return scalar(Elem);
+      return scalar(Elem) || (!Elem.getCanonicalType().hasQualifiers() && plainStruct(Elem)) ? Elem : QualType();
     }
-    return nullptr;
+    return QualType();
   }
+  bool isSeq(QualType T) const { return !seqElement(T).isNull(); }
 
   // The fixed extent of a read-only sequence, decision 0070, or null: a vector, and a span of `std::dynamic_extent`.
   llvm::json::Value seqExtent(QualType T) const {
@@ -3950,8 +3955,8 @@ private:
   }
 
   // The plain struct that a type is, decision 0073, or null. A const and a reference are looked through. Plain means a definition with
-  // a name, no bases, no virtual, no constructor and no member function of the user, and public fields that are each a scalar or a
-  // plain struct, with no const, no reference and no bit field.
+  // a name, no bases, no virtual, no constructor and no member function of the user, and public fields that are each a scalar, a plain
+  // struct, an optional of a scalar (decision 0075) or a sequence (decision 0076), with no const, no reference and no bit field.
   const CXXRecordDecl *plainStruct(QualType T) const {
     if (T->isReferenceType())
       T = T->getPointeeType();
@@ -3965,12 +3970,20 @@ private:
     for (const Decl *D : RD->decls())
       if (isa<FunctionTemplateDecl>(D) || (isa<CXXMethodDecl>(D) && !D->isImplicit()))
         return nullptr;
+    // A struct that holds a sequence of itself is in its own fields: assume it is plain there, decision 0076.
+    if (!Visiting.insert(RD).second)
+      return RD;
+    bool Plain = true;
     for (const FieldDecl *F : RD->fields()) {
       const QualType FT = F->getType();
-      if (F->isBitField() || F->getAccess() != AS_public || FT->isReferenceType() || FT.hasQualifiers() || (!scalar(FT) && !plainStruct(FT) && !optElement(FT)))
-        return nullptr;
+      if (F->isBitField() || F->getAccess() != AS_public || FT->isReferenceType() || FT.hasQualifiers() ||
+          (!scalar(FT) && !plainStruct(FT) && !optElement(FT) && seqElement(FT, true).isNull())) {
+        Plain = false;
+        break;
+      }
     }
-    return RD;
+    Visiting.erase(RD);
+    return Plain ? RD : nullptr;
   }
 
   // The key of a struct, as the key of a function that has no mangled name: the qualified name, `@` and the place of the definition.
@@ -3979,7 +3992,7 @@ private:
     return RD->getQualifiedNameAsString() + "@" + file(Loc) + ":" + std::to_string(line(Loc)) + ":" + std::to_string(SM.getExpansionColumnNumber(Loc));
   }
 
-  llvm::json::Value type(QualType T) const {
+  llvm::json::Value type(QualType T, bool Field = false) const {
     if (const char *S = scalar(T))
       return S;
     // Decision 0074: a struct is by value or by const lvalue reference. Any other reference stays `Other`.
@@ -3987,17 +4000,18 @@ private:
     if (const CXXRecordDecl *RD = Writable ? nullptr : plainStruct(T)) {
       const std::string Key = structKey(RD);
       if (!Structs.count(Key)) {
+        Structs.emplace(Key, nullptr);  // a recursive struct finds itself here, decision 0076
         llvm::json::Array Fields;
         for (const FieldDecl *F : RD->fields())
-          Fields.push_back(llvm::json::Array{F->getNameAsString(), type(F->getType())});
+          Fields.push_back(llvm::json::Array{F->getNameAsString(), type(F->getType(), true)});
         const SourceLocation Loc = SM.getFileLoc(RD->getLocation());
-        Structs.emplace(Key, llvm::json::Object{{"struct", Key}, {"name", RD->getNameAsString()}, {"file", file(Loc)}, {"line", number(line(Loc))},
-                                                 {"fields", std::move(Fields)}});
+        Structs.at(Key) = llvm::json::Object{{"struct", Key}, {"name", RD->getNameAsString()}, {"file", file(Loc)}, {"line", number(line(Loc))},
+                                                 {"fields", std::move(Fields)}};
       }
       return tag("Struct", Key);
     }
-    if (const char *S = seqElement(T))
-      return tag("Seq", llvm::json::Array{S, seqExtent(T)});
+    if (const QualType E = seqElement(T, Field); !E.isNull())
+      return tag("Seq", llvm::json::Array{type(E), seqExtent(T)});
     if (const char *S = optElement(T))
       return tag("Opt", S);
     return tag("Other", T.getAsString(Context.getPrintingPolicy()));
@@ -4096,7 +4110,7 @@ private:
     // A sequence made from one sequence, decision 0070, or a struct made from one struct, decision 0073. The core judges the two types.
     if (const auto *Construct = dyn_cast<CXXConstructExpr>(E);
         Construct && Construct->getNumArgs() == 1 &&
-        ((seqElement(Construct->getType()) && seqElement(Construct->getArg(0)->getType())) ||
+        ((isSeq(Construct->getType()) && isSeq(Construct->getArg(0)->getType())) ||
          (plainStruct(Construct->getType()) && plainStruct(Construct->getArg(0)->getType()))))
       return tag("Copy", llvm::json::Array{expr(Construct->getArg(0), Near), type(Construct->getArg(0)->getType()), type(Construct->getType())});
     // An optional of a scalar, decision 0075: `std::nullopt`, a value that the compiler turns into one, and a copy of one. The core
@@ -4157,10 +4171,10 @@ private:
         return tag("Field", llvm::json::Array{expr(Member->getBase(), Near), Field->getNameAsString()});
     // `v.size()` and `v[i]` of a read-only sequence.
     if (const auto *Member = dyn_cast<CXXMemberCallExpr>(E); Member && Member->getNumArgs() == 0 && Member->getMethodDecl() && Member->getMethodDecl()->getNameAsString() == "size")
-      if (const Expr *Object = Member->getImplicitObjectArgument(); Object && seqElement(Object->getType()))
+      if (const Expr *Object = Member->getImplicitObjectArgument(); Object && isSeq(Object->getType()))
         return tag("Size", expr(Object, Near));
     if (const auto *Operator = dyn_cast<CXXOperatorCallExpr>(E); Operator && Operator->getOperator() == OO_Subscript && Operator->getNumArgs() == 2 &&
-                                                                  seqElement(Operator->getArg(0)->getType()))
+                                                                  isSeq(Operator->getArg(0)->getType()))
       return tag("Index", llvm::json::Array{expr(Operator->getArg(0), Near), expr(Operator->getArg(1), Near)});
     // Only a plain call by name. A member call, an operator call and the rest of the call classes stay unknown.
     if (E->getStmtClass() == Stmt::CallExprClass)
