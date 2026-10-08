@@ -273,6 +273,7 @@ pub struct Method {
     pub ret: DTy,
     pub requires: DConds,
     pub ensures: DConds,
+    pub decreases: DConds,
     pub body: DStmts,
 }
 
@@ -843,7 +844,26 @@ pub open spec fn spec_stmts(ss: Stmts, all: Fns, env: Params, ps: Params) -> Res
     }
 }
 
-/// The lines of one kind of the contract, in their order. A word with no rule, or a line the shell could not read, is refused.
+/// An expression names `result`.
+pub open spec fn spec_has_result(e: Expr) -> bool
+    decreases e,
+{
+    match e {
+        Expr::Result => true,
+        Expr::Bin(_, a, b) => spec_has_result(*a) || spec_has_result(*b),
+        Expr::Not(a) => spec_has_result(*a),
+        Expr::Neg(a) => spec_has_result(*a),
+        Expr::Paren(a) => spec_has_result(*a),
+        Expr::Size(a) => spec_has_result(*a),
+        Expr::Index(a, i) => spec_has_result(*a) || spec_has_result(*i),
+        Expr::Forall(_, a) => spec_has_result(*a),
+        Expr::Chain(_, _, a, b, c) => spec_has_result(*a) || spec_has_result(*b) || spec_has_result(*c),
+        _ => false,
+    }
+}
+
+/// The lines of one kind of the contract of a function, in their order. A word with no rule, or a line the shell could not read,
+/// is refused. A `decreases` line is the measure of a recursion, and it names no `result`, decision 0072.
 pub open spec fn spec_conds(cs: Conds, want: CondKind, ps: Params, ret: Ty) -> Result<DConds, Refusal>
     decreases cs,
 {
@@ -853,9 +873,10 @@ pub open spec fn spec_conds(cs: Conds, want: CondKind, ps: Params, ret: Ty) -> R
             CondKind::Other(w) => Err(Refusal::Construct(w, l)),
             CondKind::Bad(r) => Err(r),
             CondKind::Invariant => Err(Refusal::Misplaced(l)),
-            CondKind::Decreases => Err(Refusal::Misplaced(l)),
             _ => match spec_conds(*rest, want, ps, ret) {
-                Ok(dr) => if k == want {
+                Ok(dr) => if k == want && k == CondKind::Decreases && spec_has_result(e) {
+                    Err(Refusal::Syntax(l))
+                } else if k == want {
                     match spec_contract(e, decl, ps, Some(ret), Names::Nil, l) {
                         Ok(d) => Ok(DConds::Cons(d, l, Box::new(dr))),
                         Err(r) => Err(r),
@@ -945,17 +966,21 @@ pub open spec fn spec_twice(f: Function) -> Option<(u32, u32)> {
     }
 }
 
-/// The contract and the body of a function whose signature is in the subset: the requires lines, the ensures lines and the body.
-pub open spec fn spec_inside(f: Function, all: Fns) -> Result<(DConds, DConds, DStmts), Refusal> {
+/// The contract and the body of a function whose signature is in the subset: the requires lines, the ensures lines, the decreases
+/// lines and the body.
+pub open spec fn spec_inside(f: Function, all: Fns) -> Result<(DConds, DConds, DConds, DStmts), Refusal> {
     match spec_conds(f.conds, CondKind::Requires, f.params, f.ret) {
         Err(r) => Err(r),
         Ok(req) => match spec_conds(f.conds, CondKind::Ensures, f.params, f.ret) {
             Err(r) => Err(r),
-            Ok(ens) => match spec_twice(f) {
-                Some((n, l)) => Err(Refusal::Twice(n, l)),
-                None => match spec_stmts(f.body, all, f.params, f.params) {
-                    Err(r) => Err(r),
-                    Ok(body) => Ok((req, ens, body)),
+            Ok(ens) => match spec_conds(f.conds, CondKind::Decreases, f.params, f.ret) {
+                Err(r) => Err(r),
+                Ok(dec) => match spec_twice(f) {
+                    Some((n, l)) => Err(Refusal::Twice(n, l)),
+                    None => match spec_stmts(f.body, all, f.params, f.params) {
+                        Err(r) => Err(r),
+                        Ok(body) => Ok((req, ens, dec, body)),
+                    },
                 },
             },
         },
@@ -993,8 +1018,8 @@ pub open spec fn spec_function(f: Function, all: Fns) -> Model {
             Err(r) => Model::Refused(r),
             Ok(ret) => match spec_inside(f, all) {
                 Err(r) => Model::Bare(f.name, ps, ret, r),
-                Ok((req, ens, body)) => Model::Full(
-                    Method { name: f.name, params: ps, ret, requires: spec_bounds(f.params, f.line, req), ensures: ens, body },
+                Ok((req, ens, dec, body)) => Model::Full(
+                    Method { name: f.name, params: ps, ret, requires: spec_bounds(f.params, f.line, req), ensures: ens, decreases: dec, body },
                 ),
             },
         },
@@ -1981,6 +2006,25 @@ pub fn translate_stmts(ss: &Stmts, all: &Fns, env: &Params, ps: &Params) -> (r: 
     }
 }
 
+pub fn has_result(e: &Expr) -> (r: bool)
+    ensures
+        r == spec_has_result(*e),
+    decreases e,
+{
+    match e {
+        Expr::Result => true,
+        Expr::Bin(_, a, b) => has_result(a) || has_result(b),
+        Expr::Not(a) => has_result(a),
+        Expr::Neg(a) => has_result(a),
+        Expr::Paren(a) => has_result(a),
+        Expr::Size(a) => has_result(a),
+        Expr::Index(a, i) => has_result(a) || has_result(i),
+        Expr::Forall(_, a) => has_result(a),
+        Expr::Chain(_, _, a, b, c) => has_result(a) || has_result(b) || has_result(c),
+        _ => false,
+    }
+}
+
 pub fn translate_conds(cs: &Conds, want: CondKind, ps: &Params, ret: Ty) -> (r: Result<DConds, Refusal>)
     ensures
         r == spec_conds(*cs, want, *ps, ret),
@@ -1992,9 +2036,10 @@ pub fn translate_conds(cs: &Conds, want: CondKind, ps: &Params, ret: Ty) -> (r: 
             CondKind::Other(w) => Err(Refusal::Construct(*w, *l)),
             CondKind::Bad(r) => Err(*r),
             CondKind::Invariant => Err(Refusal::Misplaced(*l)),
-            CondKind::Decreases => Err(Refusal::Misplaced(*l)),
             _ => match translate_conds(rest, want, ps, ret) {
-                Ok(dr) => if *k == want {
+                Ok(dr) => if *k == want && *k == CondKind::Decreases && has_result(e) {
+                    Err(Refusal::Syntax(*l))
+                } else if *k == want {
                     match translate_contract(e, decl, ps, Some(ret), &Names::Nil, *l) {
                         Ok(d) => Ok(DConds::Cons(d, *l, Box::new(dr))),
                         Err(r) => Err(r),
@@ -2118,7 +2163,7 @@ pub fn twice(f: &Function) -> (r: Option<(u32, u32)>)
     }
 }
 
-pub fn translate_inside(f: &Function, all: &Fns) -> (r: Result<(DConds, DConds, DStmts), Refusal>)
+pub fn translate_inside(f: &Function, all: &Fns) -> (r: Result<(DConds, DConds, DConds, DStmts), Refusal>)
     ensures
         r == spec_inside(*f, *all),
 {
@@ -2126,11 +2171,14 @@ pub fn translate_inside(f: &Function, all: &Fns) -> (r: Result<(DConds, DConds, 
         Err(r) => Err(r),
         Ok(req) => match translate_conds(&f.conds, CondKind::Ensures, &f.params, f.ret) {
             Err(r) => Err(r),
-            Ok(ens) => match twice(f) {
-                Some((n, l)) => Err(Refusal::Twice(n, l)),
-                None => match translate_stmts(&f.body, all, &f.params, &f.params) {
-                    Err(r) => Err(r),
-                    Ok(body) => Ok((req, ens, body)),
+            Ok(ens) => match translate_conds(&f.conds, CondKind::Decreases, &f.params, f.ret) {
+                Err(r) => Err(r),
+                Ok(dec) => match twice(f) {
+                    Some((n, l)) => Err(Refusal::Twice(n, l)),
+                    None => match translate_stmts(&f.body, all, &f.params, &f.params) {
+                        Err(r) => Err(r),
+                        Ok(body) => Ok((req, ens, dec, body)),
+                    },
                 },
             },
         },
@@ -2171,8 +2219,8 @@ pub fn translate_function(f: &Function, all: &Fns) -> (r: Model)
             Err(r) => Model::Refused(r),
             Ok(ret) => match translate_inside(f, all) {
                 Err(r) => Model::Bare(f.name, ps, ret, r),
-                Ok((req, ens, body)) => Model::Full(
-                    Method { name: f.name, params: ps, ret, requires: bounds(&f.params, f.line, req), ensures: ens, body },
+                Ok((req, ens, dec, body)) => Model::Full(
+                    Method { name: f.name, params: ps, ret, requires: bounds(&f.params, f.line, req), ensures: ens, decreases: dec, body },
                 ),
             },
         },
