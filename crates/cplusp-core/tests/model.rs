@@ -1013,3 +1013,57 @@ fn the_core_refuses_an_optional_of_a_struct_and_a_sequence_of_bool_by_itself() {
     let field = Structs::Cons(POINT, 4, Params::Cons(FX, Ty::Opt(Scalar::Struct(POINT)), Box::new(Params::Nil)), Box::new(Structs::Nil));
     assert_eq!(translate_structs(&field), StructModels::Cons(Err(Refusal::Element(4)), Box::new(StructModels::Nil)));
 }
+
+#[test]
+fn code_reads_empty_and_takes_a_subspan() {
+    let key = || b(Expr::Var(A, Ty::Seq(Scalar::U8, Extent::Dynamic)));
+    let len_is_zero = |d: DExpr| DExpr::Bin(BinOp::Eq, Box::new(DExpr::Len(Box::new(d))), Box::new(DExpr::Lit(0)));
+    assert_eq!(translate_code(&Expr::Empty(key()), 3), Ok(len_is_zero(DExpr::Var(A))));
+    // key.subspan(1) is key[1..], and Dafny proves that 1 is at most the length.
+    let want = DExpr::Drop(Box::new(DExpr::Var(A)), Box::new(DExpr::Conv(DTy::UInt64, Box::new(DExpr::Lit(1)))));
+    assert_eq!(translate_code(&Expr::Subspan(key(), b(Expr::Lit(1, Ty::U64))), 3), Ok(want));
+    // An unknown offset is refused, never skipped.
+    assert_eq!(translate_code(&Expr::Subspan(key(), b(Expr::Unknown(OTHER_TYPE, 4))), 3), Err(Refusal::Construct(OTHER_TYPE, 4)));
+}
+
+#[test]
+fn a_contract_reads_empty_on_a_path_of_a_sequence() {
+    // requires !key.empty(), and n.prefix.empty() on a field
+    let req = Expr::Not(b(Expr::Empty(b(Expr::Name(A)))));
+    let ens = Expr::Bin(BinOp::Implies, b(Expr::Result), b(Expr::Empty(b(Expr::Field(b(Expr::Name(B)), PRE)))));
+    let f = Function {
+        name: SAT,
+        line: 14,
+        params: Params::Cons(A, Ty::Seq(Scalar::U8, Extent::Dynamic), Box::new(Params::Cons(B, Ty::Struct(NODE), Box::new(Params::Nil)))),
+        ret: Ty::Bool,
+        conds: Conds::Cons(CondKind::Requires, req, 12, names(&[A, B]), Box::new(Conds::Cons(CondKind::Ensures, ens, 13, names(&[A, B]), Box::new(Conds::Nil)))),
+        body: one(Stmt::Return(Expr::Bool(true), 15)),
+    };
+    let Model::Full(m) = translate_function(&f, &Fns::Nil, &node_table()) else { panic!("a full model") };
+    let len_is_zero = |d: DExpr| DExpr::Bin(BinOp::Eq, Box::new(DExpr::Len(Box::new(d))), Box::new(DExpr::Lit(0)));
+    assert_eq!(strip_conds(m.requires), DConds::Cons(DExpr::Not(Box::new(len_is_zero(DExpr::Var(A)))), 0, Box::new(DConds::Nil)));
+    let want = DExpr::Bin(BinOp::Implies, Box::new(DExpr::Result), Box::new(len_is_zero(DExpr::Field(Box::new(DExpr::Var(B)), PRE))));
+    assert_eq!(strip_conds(m.ensures), DConds::Cons(want, 0, Box::new(DConds::Nil)));
+}
+
+#[test]
+fn empty_of_a_name_that_is_no_sequence_is_refused() {
+    let f = Function {
+        name: SAT,
+        line: 10,
+        params: Params::Cons(A, Ty::I32, Box::new(Params::Nil)),
+        ret: Ty::Bool,
+        conds: Conds::Cons(CondKind::Requires, Expr::Empty(b(Expr::Name(A))), 9, names(&[A]), Box::new(Conds::Nil)),
+        body: one(Stmt::Return(Expr::Bool(true), 11)),
+    };
+    assert_eq!(bare_refusal(translate_function(&f, &Fns::Nil, &Structs::Nil)), Refusal::Syntax(9));
+}
+
+#[test]
+fn the_parser_reads_empty_after_a_path() {
+    // !key.empty() and n.prefix.empty()
+    let toks = vec![Tok::Bang, Tok::Ident(A), Tok::Empty];
+    assert_eq!(parse_contract(&toks, 3), Ok(Expr::Not(b(Expr::Empty(b(Expr::Name(A)))))));
+    let toks = vec![Tok::Ident(B), Tok::Field(PRE), Tok::Empty];
+    assert_eq!(parse_contract(&toks, 4), Ok(Expr::Empty(b(Expr::Field(b(Expr::Name(B)), PRE)))));
+}

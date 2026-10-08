@@ -2519,6 +2519,53 @@ fn a_struct_or_field_name_dafny_cannot_read_is_refused() {
     assert_eq!(refusals.len(), 2, "{text}");
 }
 
+/// `empty()` and `subspan(k)` prove, in code and in contracts, through a recursion over a span, decision 0078.
+#[test]
+fn subspan_and_empty_prove() {
+    let Some(dafny) = dafny() else { return };
+    if !clang_tidy_available() {
+        return;
+    }
+    let o = prove("model-subspan.cpp", &[], &dafny);
+    let text = stdout(&o);
+    assert_eq!(o.status.code(), Some(0), "stdout: {text} stderr: {}", stderr(&o));
+    assert_eq!(text.lines().last(), Some("ok: proved"), "{text}");
+}
+
+/// An offset past the end of a span is named at its line, decision 0078.
+#[test]
+fn prove_names_an_offset_that_may_be_past_the_end() {
+    let Some(dafny) = dafny() else { return };
+    if !clang_tidy_available() {
+        return;
+    }
+    let o = prove("model-subspan-wrong.cpp", &[], &dafny);
+    let text = stdout(&o);
+    assert_eq!(o.status.code(), Some(1), "stdout: {text} stderr: {}", stderr(&o));
+    let failed: Vec<&str> = text.lines().filter(|l| l.starts_with("Not proved: ")).collect();
+    let want = "model-subspan-wrong.cpp:17: the offset may be past the end.";
+    assert!(failed.iter().any(|l| l.ends_with(want)), "{want}: {text}");
+    assert_eq!(failed.len(), 1, "{text}");
+}
+
+/// The forms of a span with no rule yet are refused at their lines, decision 0078.
+#[test]
+fn spans_with_no_rule_are_refused_at_their_lines() {
+    if !clang_tidy_available() {
+        return;
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let (o, _) = model("model-subspan-refuse.cpp", dir.path());
+    let text = stdout(&o);
+    assert_eq!(o.status.code(), Some(1), "stdout: {text} stderr: {}", stderr(&o));
+    let refusals: Vec<&str> = text.lines().filter(|l| l.starts_with("Not provable: ")).collect();
+    for line in [11, 16] {
+        let want = format!("model-subspan-refuse.cpp:{line}: CXXMemberCallExpr: the translator has no rule for it yet.");
+        assert!(refusals.iter().any(|l| l.ends_with(&want)), "{want}: {text}");
+    }
+    assert_eq!(refusals.len(), 2, "{text}");
+}
+
 /// Pull `"key":"value"` or `"key":123` out of one JSON line without a JSON library.
 fn field(line: &str, key: &str) -> String {
     let needle = format!("\"{key}\":");
