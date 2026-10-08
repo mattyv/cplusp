@@ -2,6 +2,7 @@
 //! Every policy decision comes from `cplusp_core`. See docs/policy.md.
 
 mod model;
+mod prove;
 
 use std::collections::{BTreeMap, HashSet};
 use std::fs;
@@ -108,6 +109,19 @@ enum Cli {
         #[arg(last = true)]
         clang_args: Vec<String>,
     },
+    /// Run the gate, translate the functions to Dafny, and run the prover, decision 0068. Exit 1 if something is refused or not proved.
+    Prove {
+        /// The clang-tidy plugin, built from clang-tidy/.
+        #[arg(long)]
+        plugin: Option<PathBuf>,
+        /// Seconds for each method.
+        #[arg(long, default_value_t = 20)]
+        time_limit: u32,
+        file: PathBuf,
+        /// Compiler arguments, after `--`.
+        #[arg(last = true)]
+        clang_args: Vec<String>,
+    },
 }
 
 #[derive(Subcommand)]
@@ -165,6 +179,7 @@ fn run(cli: Cli) -> Result<ExitCode> {
             gate(&common, json, build_dir.as_deref(), plugin.as_deref(), &files, &clang_args)
         }
         Cli::Model { plugin, out, file, clang_args } => model(plugin.as_deref(), &out, &file, &clang_args),
+        Cli::Prove { plugin, time_limit, file, clang_args } => prove(plugin.as_deref(), time_limit, &file, &clang_args),
     }
 }
 
@@ -841,8 +856,8 @@ fn gate(c: &Common, json: bool, build_dir: Option<&Path>, plugin: Option<&Path>,
     Ok(if found.is_empty() { ExitCode::SUCCESS } else { ExitCode::from(1) })
 }
 
-/// `cplusp model`: run the tree check of the plugin alone, translate what it wrote, and write the Dafny file.
-fn model(plugin: Option<&Path>, out: &Path, file: &Path, clang_args: &[String]) -> Result<ExitCode> {
+/// Run the tree check of the plugin alone and translate what it wrote. The working directory comes back with it, for the places.
+fn read_model(plugin: Option<&Path>, file: &Path, clang_args: &[String]) -> Result<(model::Translation, PathBuf)> {
     // ponytail: the flags are judged without the rows of the policy, so a `-Wno-` flag of a warning that a row names passes here.
     // The model reads no warning. Upgrade: load the policy as the gate does.
     let refused = refused_flags(clang_args, &[]);
@@ -892,12 +907,39 @@ fn model(plugin: Option<&Path>, out: &Path, file: &Path, clang_args: &[String]) 
     if !run.status.success() {
         bail!("clang-tidy failed ({}):\n{}{}", run.status, String::from_utf8_lossy(&run.stdout), String::from_utf8_lossy(&run.stderr));
     }
-    let (dafny, refusals) = model::translate(&fs::read_to_string(&tree).context("cannot read the tree")?)?;
-    fs::write(out, dafny).with_context(|| format!("cannot write {}", out.display()))?;
-    for (path, line, sentence) in &refusals {
-        println!("Not provable: {}:{line}: {sentence}", shown(&cwd.join(path)));
+    Ok((model::translate(&fs::read_to_string(&tree).context("cannot read the tree")?)?, cwd))
+}
+
+/// The path of a place, as the gate shows it: from the working directory.
+fn shown_from(cwd: &Path, path: &str) -> String {
+    let p = cwd.join(path);
+    p.strip_prefix(cwd).unwrap_or(&p).display().to_string()
+}
+
+fn print_refusals(t: &model::Translation, cwd: &Path) {
+    for (path, line, sentence) in &t.refusals {
+        println!("Not provable: {}:{line}: {sentence}", shown_from(cwd, path));
     }
-    Ok(if refusals.is_empty() { ExitCode::SUCCESS } else { ExitCode::from(1) })
+}
+
+/// `cplusp model`: translate the functions of a file and write the Dafny file.
+fn model(plugin: Option<&Path>, out: &Path, file: &Path, clang_args: &[String]) -> Result<ExitCode> {
+    let (t, cwd) = read_model(plugin, file, clang_args)?;
+    fs::write(out, &t.dafny).with_context(|| format!("cannot write {}", out.display()))?;
+    print_refusals(&t, &cwd);
+    Ok(if t.refusals.is_empty() { ExitCode::SUCCESS } else { ExitCode::from(1) })
+}
+
+/// `cplusp prove`: the gate first, as `cplusp gate` runs it, then the translator and the prover.
+fn prove(plugin: Option<&Path>, time_limit: u32, file: &Path, clang_args: &[String]) -> Result<ExitCode> {
+    // ponytail: the gate prints "ok: no findings" when it passes, and `prove` leaves it. Upgrade: a quiet flag on the gate.
+    let code = gate(&Common { policy: None }, false, None, plugin, std::slice::from_ref(&file.to_path_buf()), clang_args)?;
+    if code != ExitCode::SUCCESS {
+        return Ok(code);
+    }
+    let (t, cwd) = read_model(plugin, file, clang_args)?;
+    print_refusals(&t, &cwd);
+    prove::run(&t, time_limit, !t.refusals.is_empty(), &|path| shown_from(&cwd, path))
 }
 
 /// The line the gate prints for a compiler error. The model prints the same.

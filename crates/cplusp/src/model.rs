@@ -127,6 +127,8 @@ struct JFunction {
 struct Names {
     words: Vec<String>,
     places: Vec<(String, u32)>,
+    /// The word and text of each contract line by its place, for the report of the prover.
+    contracts: HashMap<u32, (String, String)>,
     file: String,
 }
 
@@ -315,6 +317,7 @@ fn conds(v: Vec<JCond>, names: &mut Names) -> Conds {
     let mut items = Vec::new();
     for c in v {
         let line = names.place(&c.file, c.line);
+        names.contracts.insert(line, (c.kind.clone(), c.text.trim().to_string()));
         // A backslash at the end splices the next line into the comment. The line the author wrote is not the one the plugin read.
         let (kind, e) = if c.text.ends_with('\\') || c.kind.ends_with('\\') {
             (CondKind::Bad(Refusal::Backslash(line)), Expr::Int(0))
@@ -437,100 +440,163 @@ fn dexpr(e: &DExpr, names: &Names) -> String {
 /// `c_{plain}'{k}`, with k counting the functions of that plain name in file order from 1.
 type Methods = HashMap<u32, String>;
 
-fn call(m: u32, args: &DArgs, names: &Names, methods: &Methods) -> String {
-    let mut shown = Vec::new();
-    let mut rest = args;
-    while let DArgs::Cons(a, next) = rest {
-        shown.push(dexpr(a, names));
-        rest = next;
-    }
-    format!("{}({})", methods[&m], shown.join(", "))
+/// What the prover's report needs of one line of the Dafny text, decision 0068: the place of the C++ line it comes from, and the places
+/// of the contract lines in scope there. Those are the requires lines of the function and the invariants of the loops around the line.
+pub struct Line {
+    pub place: u32,
+    pub scope: Vec<u32>,
 }
 
-fn dstmts(ss: &DStmts, names: &Names, methods: &Methods, depth: usize, out: &mut String) {
-    let mut rest = ss;
-    while let DStmts::Cons(s, next) = rest {
-        dstmt(s, names, methods, depth, out);
-        rest = next;
-    }
+/// The map from the lines of the Dafny text to C++, decision 0068. `lines[n - 1]` is line n of the text. A blank line has none.
+pub struct Map {
+    pub lines: Vec<Option<Line>>,
+    /// The file and line of each place.
+    pub places: Vec<(String, u32)>,
+    /// The word and text of the contract line at a place, as the author wrote them.
+    pub contracts: HashMap<u32, (String, String)>,
 }
 
-/// A `while`: the condition, the invariants, the decreases lines, then the body. A `for` has its step as the last statement of the body.
-fn dwhile(c: &DExpr, lists: [&DConds; 2], body: &DStmts, step: Option<&DStmt>, (names, methods): (&Names, &Methods), depth: usize, out: &mut String) {
-    let pad = "  ".repeat(depth);
-    writeln!(out, "{pad}while {}", dexpr(c, names)).unwrap();
-    for (word, list) in ["invariant", "decreases"].into_iter().zip(lists) {
-        let mut cs = list;
-        while let DConds::Cons(e, next) = cs {
-            writeln!(out, "{pad}  {word} {}", dexpr(e, names)).unwrap();
-            cs = next;
-        }
-    }
-    writeln!(out, "{pad}{{").unwrap();
-    dstmts(body, names, methods, depth + 1, out);
-    if let Some(step) = step {
-        dstmt(step, names, methods, depth + 1, out);
-    }
-    writeln!(out, "{pad}}}").unwrap();
+pub struct Translation {
+    pub dafny: String,
+    pub refusals: Vec<Refusing>,
+    pub map: Map,
 }
 
-fn dstmt(s: &DStmt, names: &Names, methods: &Methods, depth: usize, out: &mut String) {
-    let pad = "  ".repeat(depth);
-    match s {
-        DStmt::Return(e) => writeln!(out, "{pad}return {};", dexpr(e, names)).unwrap(),
-        DStmt::Local(x, t, e) => writeln!(out, "{pad}var {}: {} := {};", mangle(names.text(*x)), dty(*t), dexpr(e, names)).unwrap(),
-        DStmt::LocalCall(x, t, m, args) => {
-            writeln!(out, "{pad}var {}: {} := {};", mangle(names.text(*x)), dty(*t), call(*m, args, names, methods)).unwrap()
+/// The printer of the Dafny text. It writes one line at a time, and keeps the map for each line it writes.
+struct Printer<'a> {
+    names: &'a Names,
+    methods: &'a Methods,
+    out: String,
+    lines: Vec<Option<Line>>,
+    /// The contract lines in scope now.
+    scope: Vec<u32>,
+}
+
+impl Printer<'_> {
+    fn put(&mut self, depth: usize, text: String, place: u32) {
+        writeln!(self.out, "{}{text}", "  ".repeat(depth)).unwrap();
+        self.lines.push(Some(Line { place, scope: self.scope.clone() }));
+    }
+
+    fn blank(&mut self) {
+        self.out.push('\n');
+        self.lines.push(None);
+    }
+
+    fn call(&self, m: u32, args: &DArgs) -> String {
+        let mut shown = Vec::new();
+        let mut rest = args;
+        while let DArgs::Cons(a, next) = rest {
+            shown.push(dexpr(a, self.names));
+            rest = next;
         }
-        DStmt::ReturnCall(m, args) => {
-            writeln!(out, "{pad}result := {};", call(*m, args, names, methods)).unwrap();
-            writeln!(out, "{pad}return;").unwrap();
+        format!("{}({})", self.methods[&m], shown.join(", "))
+    }
+
+    fn stmts(&mut self, ss: &DStmts, depth: usize) {
+        let mut rest = ss;
+        while let DStmts::Cons(s, place, next) = rest {
+            self.stmt(s, *place, depth);
+            rest = next;
         }
-        DStmt::Assign(x, e) => writeln!(out, "{pad}{} := {};", mangle(names.text(*x)), dexpr(e, names)).unwrap(),
-        DStmt::AssignCall(x, m, args) => writeln!(out, "{pad}{} := {};", mangle(names.text(*x)), call(*m, args, names, methods)).unwrap(),
-        DStmt::While(c, inv, dec, body) => dwhile(c, [inv, dec], body, None, (names, methods), depth, out),
-        DStmt::For(init, c, inv, dec, body, step) => {
-            dstmt(init, names, methods, depth, out);
-            dwhile(c, [inv, dec], body, Some(step), (names, methods), depth, out);
+    }
+
+    /// A `while`: the condition, the invariants, the decreases lines, then the body. A `for` has its step as the last statement of the body.
+    /// The invariants are in scope in the body, not in the loop's own lines.
+    fn dwhile(&mut self, (c, place): (&DExpr, u32), lists: [&DConds; 2], body: &DStmts, step: Option<&DStmt>, depth: usize) {
+        self.put(depth, format!("while {}", dexpr(c, self.names)), place);
+        let mut invariants = Vec::new();
+        for (word, list) in ["invariant", "decreases"].into_iter().zip(lists) {
+            let mut cs = list;
+            while let DConds::Cons(e, line, next) = cs {
+                self.put(depth + 1, format!("{word} {}", dexpr(e, self.names)), *line);
+                if word == "invariant" {
+                    invariants.push(*line);
+                }
+                cs = next;
+            }
         }
-        DStmt::If(c, t, f) => {
-            writeln!(out, "{pad}if {} {{", dexpr(c, names)).unwrap();
-            dstmts(t, names, methods, depth + 1, out);
-            if matches!(**f, DStmts::Nil) {
-                writeln!(out, "{pad}}}").unwrap();
-            } else {
-                writeln!(out, "{pad}}} else {{").unwrap();
-                dstmts(f, names, methods, depth + 1, out);
-                writeln!(out, "{pad}}}").unwrap();
+        self.put(depth, "{".to_string(), place);
+        let kept = self.scope.len();
+        self.scope.extend(invariants);
+        self.stmts(body, depth + 1);
+        if let Some(step) = step {
+            self.stmt(step, place, depth + 1);
+        }
+        self.scope.truncate(kept);
+        self.put(depth, "}".to_string(), place);
+    }
+
+    fn stmt(&mut self, s: &DStmt, place: u32, depth: usize) {
+        let names = self.names;
+        match s {
+            DStmt::Return(e) => self.put(depth, format!("return {};", dexpr(e, names)), place),
+            DStmt::Local(x, t, e) => self.put(depth, format!("var {}: {} := {};", mangle(names.text(*x)), dty(*t), dexpr(e, names)), place),
+            DStmt::LocalCall(x, t, m, args) => {
+                let call = self.call(*m, args);
+                self.put(depth, format!("var {}: {} := {call};", mangle(names.text(*x)), dty(*t)), place);
+            }
+            DStmt::ReturnCall(m, args) => {
+                let call = self.call(*m, args);
+                self.put(depth, format!("result := {call};"), place);
+                self.put(depth, "return;".to_string(), place);
+            }
+            DStmt::Assign(x, e) => self.put(depth, format!("{} := {};", mangle(names.text(*x)), dexpr(e, names)), place),
+            DStmt::AssignCall(x, m, args) => {
+                let call = self.call(*m, args);
+                self.put(depth, format!("{} := {call};", mangle(names.text(*x))), place);
+            }
+            DStmt::While(c, inv, dec, body) => self.dwhile((c, place), [inv, dec], body, None, depth),
+            // The init and the step of a `for` take the place of the `for` itself.
+            DStmt::For(init, c, inv, dec, body, step) => {
+                self.stmt(init, place, depth);
+                self.dwhile((c, place), [inv, dec], body, Some(step), depth);
+            }
+            DStmt::If(c, t, f) => {
+                self.put(depth, format!("if {} {{", dexpr(c, names)), place);
+                self.stmts(t, depth + 1);
+                if matches!(**f, DStmts::Nil) {
+                    self.put(depth, "}".to_string(), place);
+                } else {
+                    self.put(depth, "} else {".to_string(), place);
+                    self.stmts(f, depth + 1);
+                    self.put(depth, "}".to_string(), place);
+                }
             }
         }
     }
-}
 
-/// The method header line, with no contract and no body.
-fn dheader(name: u32, params: &DParams, ret: DTy, names: &Names, methods: &Methods) -> String {
-    let mut shown = Vec::new();
-    let mut ps = params;
-    while let DParams::Cons(n, t, next) = ps {
-        shown.push(format!("{}: {}", mangle(names.text(*n)), dty(*t)));
-        ps = next;
-    }
-    format!("\nmethod {}({}) returns (result: {})\n", methods[&name], shown.join(", "), dty(ret))
-}
-
-fn dmethod(m: &Method, names: &Names, methods: &Methods) -> String {
-    let mut out = dheader(m.name, &m.params, m.ret, names, methods);
-    for (word, list) in [("requires", &m.requires), ("ensures", &m.ensures)] {
-        let mut cs = list;
-        while let DConds::Cons(e, next) = cs {
-            writeln!(out, "  {word} {}", dexpr(e, names)).unwrap();
-            cs = next;
+    /// The method header line, with no contract and no body.
+    fn header(&mut self, name: u32, params: &DParams, ret: DTy, place: u32) {
+        let mut shown = Vec::new();
+        let mut ps = params;
+        while let DParams::Cons(n, t, next) = ps {
+            shown.push(format!("{}: {}", mangle(self.names.text(*n)), dty(*t)));
+            ps = next;
         }
+        self.blank();
+        self.put(0, format!("method {}({}) returns (result: {})", self.methods[&name], shown.join(", "), dty(ret)), place);
     }
-    out.push_str("{\n");
-    dstmts(&m.body, names, methods, 1, &mut out);
-    out.push_str("}\n");
-    out
+
+    fn method(&mut self, m: &Method, place: u32) {
+        self.header(m.name, &m.params, m.ret, place);
+        let mut requires = Vec::new();
+        for (word, list) in [("requires", &m.requires), ("ensures", &m.ensures)] {
+            let mut cs = list;
+            while let DConds::Cons(e, line, next) = cs {
+                self.put(1, format!("{word} {}", dexpr(e, self.names)), *line);
+                if word == "requires" {
+                    requires.push(*line);
+                }
+                cs = next;
+            }
+        }
+        self.scope = requires;
+        self.put(0, "{".to_string(), place);
+        self.stmts(&m.body, 1);
+        self.put(0, "}".to_string(), place);
+        self.scope.clear();
+    }
 }
 
 /// A refusal as the place it points at and the sentence the bot reads.
@@ -560,10 +626,10 @@ fn sentence(r: Refusal, names: &Names) -> (u32, String) {
 /// A refusal: the file, the line and the sentence.
 pub type Refusing = (String, u32, String);
 
-/// The Dafny file for the plugin's lines, and the refusals in order, each once. A function whose signature is refused is not in the file.
-/// A function whose contract or body is refused is a method with no contract and no body. A `//@` line that no function claimed is a
-/// refusal too.
-pub fn translate(lines: &str) -> Result<(String, Vec<Refusing>)> {
+/// The Dafny file for the plugin's lines, the refusals in order each once, and the map from the lines of the file to C++. A function whose
+/// signature is refused is not in the file. A function whose contract or body is refused is a method with no contract and no body. A `//@`
+/// line that no function claimed is a refusal too.
+pub fn translate(lines: &str) -> Result<Translation> {
     let mut names = Names::default();
     let mut refusals = Vec::new();
     let mut funcs = Vec::new();
@@ -576,37 +642,44 @@ pub fn translate(lines: &str) -> Result<(String, Vec<Refusing>)> {
     // The Dafny names, by key.
     // ponytail: a count of each plain name for each function. A file has dozens of functions. Upgrade: one pass with a map.
     let mut methods = Methods::new();
+    // The place of each function, by the id of its key, for its method header.
+    let mut at = HashMap::new();
     for (i, f) in funcs.iter().enumerate() {
         let same = funcs.iter().filter(|g| g.name == f.name).count();
         let k = funcs[..=i].iter().filter(|g| g.name == f.name).count();
         let dafny = if same == 1 { format!("c_{}", f.name) } else { format!("c_{}'{k}", f.name) };
-        methods.insert(names.id(&f.key), dafny);
+        let key = names.id(&f.key);
+        methods.insert(key, dafny);
+        at.insert(key, names.place(&f.file, f.line));
     }
     let count = funcs.len();
     let fns = funcs.into_iter().rev().map(|f| function(f, &mut names)).fold(Fns::Nil, |rest, f| Fns::Cons(Box::new(f), Box::new(rest)));
-    let mut dafny = PRELUDE.to_string();
     let mut models = translate_unit(&fns);
+    let mut p = Printer { names: &names, methods: &methods, out: PRELUDE.to_string(), lines: Vec::new(), scope: Vec::new() };
+    p.lines.extend(PRELUDE.lines().map(|_| None));
+    let mut refused_at = Vec::new();
     for _ in 0..count {
         let Models::Cons(model, rest) = models else { unreachable!("one model for each function") };
         let refused = match model {
             Model::Full(m) => {
-                dafny += &dmethod(&m, &names, &methods);
+                p.method(&m, at[&m.name]);
                 None
             }
             Model::Bare(key, params, ret, r) => {
-                dafny += &dheader(key, &params, ret, &names, &methods);
+                p.header(key, &params, ret, at[&key]);
                 Some(r)
             }
             Model::Refused(r) => Some(r),
         };
-        if let Some(r) = refused {
-            let (place, sentence) = sentence(r, &names);
-            let (file, line) = names.places[place as usize].clone();
-            refusals.push((file, line, sentence));
-        }
+        refused_at.extend(refused.map(|r| sentence(r, &names)));
         models = *rest;
+    }
+    let (dafny, lines) = (p.out, p.lines);
+    for (place, sentence) in refused_at {
+        let (file, line) = names.places[place as usize].clone();
+        refusals.push((file, line, sentence));
     }
     refusals.sort();
     refusals.dedup();
-    Ok((dafny, refusals))
+    Ok(Translation { dafny, refusals, map: Map { lines, places: names.places, contracts: names.contracts } })
 }

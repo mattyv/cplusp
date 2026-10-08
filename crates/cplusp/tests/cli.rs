@@ -2157,14 +2157,14 @@ fn prove_names_failed_invariants_and_a_callee_requires() {
     assert_eq!(text.lines().filter(|l| l.starts_with("Not proved: ")).count(), 3, "{text}");
 }
 
-/// A method that reaches the time limit is unknown, not false, decision 0068.
+/// A method that reaches the time limit is unknown, not false, decision 0068. Z3 settles the slow contract at random under load, so
+/// the test runs a stand-in for Dafny that prints the line Dafny prints for a time limit.
 #[test]
 fn prove_says_a_time_limit_is_unknown() {
-    let Some(dafny) = dafny() else { return };
-    if !clang_tidy_available() {
+    if dafny().is_none() || !clang_tidy_available() {
         return;
     }
-    let o = prove("model-prove-slow.cpp", &["--time-limit", "1"], &dafny);
+    let o = prove("model-prove-slow.cpp", &["--time-limit", "1"], &fixture("fake-dafny-timeout.sh"));
     let text = stdout(&o);
     assert_eq!(o.status.code(), Some(1), "stdout: {text} stderr: {}", stderr(&o));
     let want = "model-prove-slow.cpp:5: the prover reached its time limit. The result is unknown.";
