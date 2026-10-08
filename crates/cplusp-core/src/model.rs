@@ -45,6 +45,15 @@ pub enum BinOp {
     Implies,
 }
 
+/// A cast that the compiler made or the author wrote. `Read` is the read of a variable, an lvalue-to-rvalue cast, and `NoOp` changes
+/// nothing. Both keep the value. `Other` is a cast with no rule yet, by the id of its kind.
+#[derive(Structural, PartialEq, Eq, Clone, Copy, Debug)]
+pub enum CastKind {
+    Read,
+    NoOp,
+    Other(u32),
+}
+
 /// An expression. In code, a name carries its type, which the compiler gave. In a contract, a name carries no type, and the
 /// translator finds it among the parameters. `Unknown` is a construct with no rule, by the id of its kind and its line.
 #[derive(PartialEq, Eq, Debug)]
@@ -56,6 +65,8 @@ pub enum Expr {
     Bin(BinOp, Box<Expr>, Box<Expr>),
     Not(Box<Expr>),
     Neg(Box<Expr>),
+    Cast(CastKind, Box<Expr>),
+    Paren(Box<Expr>),
     Unknown(u32, u32),
 }
 
@@ -214,6 +225,11 @@ pub open spec fn spec_code(e: Expr, line: u32) -> Result<DExpr, Refusal>
             Ok(da) => Ok(DExpr::Neg(Box::new(da))),
             Err(r) => Err(r),
         },
+        Expr::Cast(c, a) => match c {
+            CastKind::Other(k) => Err(Refusal::Construct(k, line)),
+            _ => spec_code(*a, line),
+        },
+        Expr::Paren(a) => spec_code(*a, line),
         Expr::Name(n) => Err(Refusal::Name(n, line)),
         Expr::Result => Err(Refusal::Syntax(line)),
         Expr::Unknown(k, l) => Err(Refusal::Construct(k, l)),
@@ -273,7 +289,9 @@ pub open spec fn spec_contract(e: Expr, ps: Params, ret: Ty, line: u32) -> Resul
             Ok(da) => Ok(DExpr::Neg(Box::new(da))),
             Err(r) => Err(r),
         },
+        Expr::Paren(a) => spec_contract(*a, ps, ret, line),
         Expr::Var(v, _) => Err(Refusal::Syntax(line)),
+        Expr::Cast(_, _) => Err(Refusal::Syntax(line)),
         Expr::Unknown(k, l) => Err(Refusal::Construct(k, l)),
     }
 }
@@ -384,6 +402,8 @@ pub open spec fn unknown_expr(e: Expr) -> bool
         Expr::Bin(_, a, b) => unknown_expr(*a) || unknown_expr(*b),
         Expr::Not(a) => unknown_expr(*a),
         Expr::Neg(a) => unknown_expr(*a),
+        Expr::Cast(_, a) => unknown_expr(*a),
+        Expr::Paren(a) => unknown_expr(*a),
         _ => false,
     }
 }
@@ -424,6 +444,8 @@ pub proof fn lemma_unknown_code_is_refused(e: Expr, line: u32)
         },
         Expr::Not(a) => lemma_unknown_code_is_refused(*a, line),
         Expr::Neg(a) => lemma_unknown_code_is_refused(*a, line),
+        Expr::Cast(_, a) => lemma_unknown_code_is_refused(*a, line),
+        Expr::Paren(a) => lemma_unknown_code_is_refused(*a, line),
         _ => {},
     }
 }
@@ -589,6 +611,11 @@ pub fn translate_code(e: &Expr, line: u32) -> (r: Result<DExpr, Refusal>)
             Ok(da) => Ok(DExpr::Neg(Box::new(da))),
             Err(r) => Err(r),
         },
+        Expr::Cast(c, a) => match c {
+            CastKind::Other(k) => Err(Refusal::Construct(*k, line)),
+            _ => translate_code(a, line),
+        },
+        Expr::Paren(a) => translate_code(a, line),
         Expr::Name(n) => Err(Refusal::Name(*n, line)),
         Expr::Result => Err(Refusal::Syntax(line)),
         Expr::Unknown(k, l) => Err(Refusal::Construct(*k, *l)),
@@ -651,7 +678,9 @@ pub fn translate_contract(e: &Expr, ps: &Params, ret: Ty, line: u32) -> (r: Resu
             Ok(da) => Ok(DExpr::Neg(Box::new(da))),
             Err(r) => Err(r),
         },
+        Expr::Paren(a) => translate_contract(a, ps, ret, line),
         Expr::Var(_, _) => Err(Refusal::Syntax(line)),
+        Expr::Cast(_, _) => Err(Refusal::Syntax(line)),
         Expr::Unknown(k, l) => Err(Refusal::Construct(*k, *l)),
     }
 }
