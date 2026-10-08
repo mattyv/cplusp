@@ -50,7 +50,8 @@ enum JCast {
 
 #[derive(Deserialize)]
 enum JExpr {
-    Lit(i64, JTy),
+    Lit(u64, JTy),
+    Bool(bool),
     Var(String, JTy),
     Bin(JOp, Box<JExpr>, Box<JExpr>),
     Not(Box<JExpr>),
@@ -76,6 +77,7 @@ enum JStmt {
 
 #[derive(Deserialize)]
 struct JCond {
+    file: String,
     kind: String,
     line: u32,
     text: String,
@@ -105,20 +107,37 @@ struct JFunction {
 // ------------------------------------------------------------------ the table of names
 
 /// Names, kinds and words get a number in the order they first appear. The core compares numbers, and this table prints them.
-// ponytail: a linear search. A file has dozens of names. Upgrade: a hash map.
+/// A place is a pair of a file and a line, and it gets a number the same way. The core never computes with a line, so it gets places.
+/// `file` is the file of the function that is being converted, and `here` makes a place in it.
+// ponytail: a linear search. A file has dozens of names and places. Upgrade: a hash map.
 #[derive(Default)]
-struct Names(Vec<String>);
+struct Names {
+    words: Vec<String>,
+    places: Vec<(String, u32)>,
+    file: String,
+}
 
 impl Names {
     fn id(&mut self, s: &str) -> u32 {
-        let at = self.0.iter().position(|n| n == s).unwrap_or_else(|| {
-            self.0.push(s.to_string());
-            self.0.len() - 1
+        let at = self.words.iter().position(|n| n == s).unwrap_or_else(|| {
+            self.words.push(s.to_string());
+            self.words.len() - 1
         });
         at as u32
     }
     fn text(&self, id: u32) -> &str {
-        &self.0[id as usize]
+        &self.words[id as usize]
+    }
+    fn place(&mut self, file: &str, line: u32) -> u32 {
+        let at = self.places.iter().position(|(f, l)| f == file && *l == line).unwrap_or_else(|| {
+            self.places.push((file.to_string(), line));
+            self.places.len() - 1
+        });
+        at as u32
+    }
+    fn here(&mut self, line: u32) -> u32 {
+        let file = self.file.clone();
+        self.place(&file, line)
     }
 }
 
@@ -155,6 +174,7 @@ fn op(o: JOp) -> BinOp {
 fn expr(e: JExpr, names: &mut Names) -> Expr {
     match e {
         JExpr::Lit(n, t) => Expr::Lit(n, ty(t, names)),
+        JExpr::Bool(b) => Expr::Bool(b),
         JExpr::Var(v, t) => Expr::Var(names.id(&v), ty(t, names)),
         JExpr::Bin(o, a, b) => Expr::Bin(op(o), Box::new(expr(*a, names)), Box::new(expr(*b, names))),
         JExpr::Not(a) => Expr::Not(Box::new(expr(*a, names))),
@@ -173,26 +193,26 @@ fn expr(e: JExpr, names: &mut Names) -> Expr {
         JExpr::Call(key, name, args, line) => {
             let args: Vec<Expr> = args.into_iter().map(|a| expr(a, names)).collect();
             let args = args.into_iter().rev().fold(Args::Nil, |rest, a| Args::Cons(Box::new(a), Box::new(rest)));
-            Expr::Call(names.id(&key), names.id(&name), Box::new(args), line)
+            Expr::Call(names.id(&key), names.id(&name), Box::new(args), names.here(line))
         }
-        JExpr::Unknown(k, line) => Expr::Unknown(names.id(&k), line),
+        JExpr::Unknown(k, line) => Expr::Unknown(names.id(&k), names.here(line)),
     }
 }
 
 fn stmt(s: JStmt, names: &mut Names) -> Stmt {
     match s {
-        JStmt::Return(e, line) => Stmt::Return(expr(e, names), line),
-        JStmt::If(c, t, f, line) => Stmt::If(expr(c, names), Box::new(stmts(t, names)), Box::new(stmts(f, names)), line),
-        JStmt::Local(n, t, e, line) => Stmt::Local(names.id(&n), ty(t, names), expr(e, names), line),
-        JStmt::Assign(n, e, line) => Stmt::Assign(names.id(&n), expr(e, names), line),
-        JStmt::Step(n, t, up, line) => Stmt::Step(names.id(&n), ty(t, names), up, line),
-        JStmt::While(c, cs, body, line) => Stmt::While(expr(c, names), Box::new(conds(cs, names)), Box::new(stmts(body, names)), line),
+        JStmt::Return(e, line) => Stmt::Return(expr(e, names), names.here(line)),
+        JStmt::If(c, t, f, line) => Stmt::If(expr(c, names), Box::new(stmts(t, names)), Box::new(stmts(f, names)), names.here(line)),
+        JStmt::Local(n, t, e, line) => Stmt::Local(names.id(&n), ty(t, names), expr(e, names), names.here(line)),
+        JStmt::Assign(n, e, line) => Stmt::Assign(names.id(&n), expr(e, names), names.here(line)),
+        JStmt::Step(n, t, up, line) => Stmt::Step(names.id(&n), ty(t, names), up, names.here(line)),
+        JStmt::While(c, cs, body, line) => Stmt::While(expr(c, names), Box::new(conds(cs, names)), Box::new(stmts(body, names)), names.here(line)),
         JStmt::For(init, c, step, cs, body, line) => {
             let init = Box::new(stmt(*init, names));
             let c = expr(c, names);
-            Stmt::For(init, c, Box::new(stmt(*step, names)), Box::new(conds(cs, names)), Box::new(stmts(body, names)), line)
+            Stmt::For(init, c, Box::new(stmt(*step, names)), Box::new(conds(cs, names)), Box::new(stmts(body, names)), names.here(line))
         }
-        JStmt::Unknown(k, line) => Stmt::Unknown(names.id(&k), line),
+        JStmt::Unknown(k, line) => Stmt::Unknown(names.id(&k), names.here(line)),
     }
 }
 
@@ -232,7 +252,7 @@ fn lex(text: &str, line: u32, names: &mut Names) -> Vec<Tok> {
             rest = &rest[end..];
         } else if c.is_ascii_digit() {
             let end = word_end(|ch| ch.is_ascii_digit());
-            toks.push(rest[..end].parse().map_or_else(|_| Tok::Unknown(names.id("a number above 9223372036854775807"), line), Tok::Int));
+            toks.push(rest[..end].parse().map_or_else(|_| Tok::Unknown(names.id("a number above 18446744073709551615"), line), Tok::Int));
             rest = &rest[end..];
         } else if let Some((s, o)) = OPS.iter().find(|(s, _)| rest.starts_with(s)) {
             toks.push(Tok::Op(*o));
@@ -262,9 +282,10 @@ fn param_names(v: Vec<String>, names: &mut Names) -> CNames {
 fn conds(v: Vec<JCond>, names: &mut Names) -> Conds {
     let mut items = Vec::new();
     for c in v {
+        let line = names.place(&c.file, c.line);
         // A backslash at the end splices the next line into the comment. The line the author wrote is not the one the plugin read.
         let (kind, e) = if c.text.ends_with('\\') || c.kind.ends_with('\\') {
-            (CondKind::Bad(Refusal::Backslash(c.line)), Expr::Int(0))
+            (CondKind::Bad(Refusal::Backslash(line)), Expr::Int(0))
         } else {
             match c.kind.as_str() {
                 "requires" | "ensures" | "invariant" | "decreases" => {
@@ -274,7 +295,7 @@ fn conds(v: Vec<JCond>, names: &mut Names) -> Conds {
                         "invariant" => CondKind::Invariant,
                         _ => CondKind::Decreases,
                     };
-                    match parse_contract(&lex(&c.text, c.line, names), c.line) {
+                    match parse_contract(&lex(&c.text, line, names), line) {
                         Ok(e) => (want, e),
                         Err(r) => (CondKind::Bad(r), Expr::Int(0)),
                     }
@@ -282,13 +303,14 @@ fn conds(v: Vec<JCond>, names: &mut Names) -> Conds {
                 word => (CondKind::Other(names.id(word)), Expr::Int(0)),
             }
         };
-        items.push((kind, e, c.line, param_names(c.params, names)));
+        items.push((kind, e, line, param_names(c.params, names)));
     }
     items.into_iter().rev().fold(Conds::Nil, |rest, (k, e, l, p)| Conds::Cons(k, e, l, p, Box::new(rest)))
 }
 
 fn function(f: JFunction, names: &mut Names) -> Function {
     let name = names.id(&f.key);
+    names.file = f.file;
     // A parameter with no name is named by its position, as `'N`. C++ cannot write that, so it clashes with no name. The mangling makes it `v_'N`.
     let ps: Vec<(u32, Ty)> = f
         .params
@@ -298,7 +320,8 @@ fn function(f: JFunction, names: &mut Names) -> Function {
         .collect();
     let params = ps.into_iter().rev().fold(Params::Nil, |rest, (n, t)| Params::Cons(n, t, Box::new(rest)));
     let ret = ty(f.ret, names);
-    Function { name, line: f.line, params, ret, conds: conds(f.conds, names), body: stmts(f.body, names) }
+    let line = names.here(f.line);
+    Function { name, line, params, ret, conds: conds(f.conds, names), body: stmts(f.body, names) }
 }
 
 // ------------------------------------------------------------------ the Dafny text
@@ -349,6 +372,7 @@ fn mangle(name: &str) -> String {
 fn dexpr(e: &DExpr, names: &Names) -> String {
     match e {
         DExpr::Lit(n) => n.to_string(),
+        DExpr::Bool(b) => b.to_string(),
         DExpr::Var(v) => mangle(names.text(*v)),
         DExpr::Result => "result".to_string(),
         DExpr::Bin(o, a, b) => format!("({} {} {})", dexpr(a, names), dop(*o), dexpr(b, names)),
@@ -459,7 +483,7 @@ fn dmethod(m: &Method, names: &Names, methods: &Methods) -> String {
     out
 }
 
-/// A refusal as the line it points at and the sentence the bot reads.
+/// A refusal as the place it points at and the sentence the bot reads.
 fn sentence(r: Refusal, names: &Names) -> (u32, String) {
     match r {
         Refusal::Construct(k, line) => (line, format!("{}: the translator has no rule for it yet.", names.text(k))),
@@ -507,11 +531,11 @@ pub fn translate(lines: &str) -> Result<(String, Vec<Refusing>)> {
         let dafny = if same == 1 { format!("c_{}", f.name) } else { format!("c_{}'{k}", f.name) };
         methods.insert(names.id(&f.key), dafny);
     }
-    let files: Vec<String> = funcs.iter().map(|f| f.file.clone()).collect();
+    let count = funcs.len();
     let fns = funcs.into_iter().rev().map(|f| function(f, &mut names)).fold(Fns::Nil, |rest, f| Fns::Cons(Box::new(f), Box::new(rest)));
     let mut dafny = PRELUDE.to_string();
     let mut models = translate_unit(&fns);
-    for file in files {
+    for _ in 0..count {
         let Models::Cons(model, rest) = models else { unreachable!("one model for each function") };
         let refused = match model {
             Model::Full(m) => {
@@ -525,7 +549,8 @@ pub fn translate(lines: &str) -> Result<(String, Vec<Refusing>)> {
             Model::Refused(r) => Some(r),
         };
         if let Some(r) = refused {
-            let (line, sentence) = sentence(r, &names);
+            let (place, sentence) = sentence(r, &names);
+            let (file, line) = names.places[place as usize].clone();
             refusals.push((file, line, sentence));
         }
         models = *rest;

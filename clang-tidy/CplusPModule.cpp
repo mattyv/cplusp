@@ -1322,6 +1322,7 @@ struct Contract {
     unsigned Number;
     std::string Text;
     std::vector<std::string> Params;  // the parameter names of the declaration that the line stands on, "" for an unnamed one
+    FileID Id;                        // the file of the line, for its name
   };
   std::vector<Line> Lines;
 };
@@ -1381,7 +1382,7 @@ Contract contractAbove(const SourceManager &SM, SourceLocation First, SourceLoca
     if (!Line.consume_front("//@"))
       break;
     Line = Line.ltrim();
-    C.Lines.push_back({File.getHashValue(), SM.getLineNumber(File, Begin), Line.str(), {}});
+    C.Lines.push_back({File.getHashValue(), SM.getLineNumber(File, Begin), Line.str(), {}, File});
     if (Spliced)
       continue;
     C.Any = true;
@@ -3824,14 +3825,14 @@ private:
   mutable const FunctionDecl *Enclosing = nullptr;  // the function that `function` is writing, the floor of a loop's walk upward
 
   // The contract lines as data. A line of a loop has no parameters.
-  static llvm::json::Array conds(const Contract &C) {
+  llvm::json::Array conds(const Contract &C) const {
     llvm::json::Array Out;
     for (const Contract::Line &L : C.Lines) {
       // The word ends at any white space.
       const StringRef Text = L.Text;
       const size_t Cut = Text.find_first_of(" \t\f\v\r");
       Out.push_back(llvm::json::Object{
-          {"kind", Text.substr(0, Cut).str()}, {"line", number(L.Number)}, {"text", Cut == StringRef::npos ? "" : Text.substr(Cut).trim().str()},
+          {"kind", Text.substr(0, Cut).str()}, {"file", file(SM.getLocForStartOfFile(L.Id))}, {"line", number(L.Number)}, {"text", Cut == StringRef::npos ? "" : Text.substr(Cut).trim().str()},
           {"params", L.Params}});
     }
     return Out;
@@ -3846,7 +3847,7 @@ private:
     return conds(C);
   }
 
-  static llvm::json::Value number(uint64_t N) { return llvm::json::Value(static_cast<int64_t>(N)); }
+  static llvm::json::Value number(uint64_t N) { return llvm::json::Value(N); }
   unsigned line(SourceLocation At) const { return SM.getExpansionLineNumber(At); }
   static llvm::json::Value tag(const char *Name, llvm::json::Value Inner) { return llvm::json::Object{{Name, std::move(Inner)}}; }
   // A node with no valid place, a default argument, takes the line of the call or statement around it.
@@ -3938,7 +3939,9 @@ private:
   static bool isVariable(const ValueDecl *D) { return isa<ParmVarDecl>(D) || (isa<VarDecl>(D) && cast<VarDecl>(D)->hasLocalStorage()); }
 
   llvm::json::Value expr(const Expr *E, unsigned Near) const {
-    if (const auto *Literal = dyn_cast<IntegerLiteral>(E); Literal && Literal->getValue().getActiveBits() <= 63)
+    if (const auto *Flag = dyn_cast<CXXBoolLiteralExpr>(E))
+      return tag("Bool", Flag->getValue());
+    if (const auto *Literal = dyn_cast<IntegerLiteral>(E); Literal && Literal->getValue().getActiveBits() <= 64)
       return tag("Lit", llvm::json::Array{number(Literal->getValue().getZExtValue()), type(Literal->getType())});
     if (const auto *Ref = dyn_cast<DeclRefExpr>(E)) {
       const ValueDecl *D = Ref->getDecl();
