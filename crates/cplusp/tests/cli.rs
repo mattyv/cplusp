@@ -2367,6 +2367,24 @@ fn structs_with_no_rule_are_refused_at_their_lines() {
     assert_eq!(refusals.len(), 5, "{text}");
 }
 
+/// A function with no method in the model is refused for what it is, not for its name, decision 0069. The check of names covers only
+/// the names the Dafny text prints.
+#[test]
+fn a_member_function_is_refused_as_a_member_whatever_its_name() {
+    if !clang_tidy_available() {
+        return;
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let (o, _) = model("model-member-names.cpp", dir.path());
+    let text = stdout(&o);
+    let refusals: Vec<&str> = text.lines().filter(|l| l.starts_with("Not provable: ")).collect();
+    for line in [5, 6] {
+        let want = format!("model-member-names.cpp:{line}: CXXMethodDecl: the translator has no rule for it yet.");
+        assert!(refusals.iter().any(|l| l.ends_with(&want)), "{want}: {text}");
+    }
+    assert_eq!(refusals.len(), 2, "{text}");
+}
+
 /// Pull `"key":"value"` or `"key":123` out of one JSON line without a JSON library.
 fn field(line: &str, key: &str) -> String {
     let needle = format!("\"{key}\":");
