@@ -616,8 +616,8 @@ fn each_statement_and_contract_line_keeps_the_place_it_comes_from() {
     let DStmts::Cons(_, p2, _) = *then else { panic!("a return") };
     let DStmts::Cons(_, p3, _) = *rest else { panic!("a return") };
     assert_eq!((p1, p2, p3), (27, 28, 30));
-    // The bound on the length of a sequence comes from the function's own line.
-    let seq = Function { params: Params::Cons(X, Ty::Seq(Scalar::I32, Extent::Dynamic), Box::new(Params::Nil)), ret: Ty::Bool, conds: Conds::Nil, ..with_n(one(Stmt::Return(Expr::Bool(true), 5))) };
+    // The length of a span of fixed extent comes from the function's own line.
+    let seq = Function { params: Params::Cons(X, Ty::Seq(Scalar::I32, Extent::Fixed(3)), Box::new(Params::Nil)), ret: Ty::Bool, conds: Conds::Nil, ..with_n(one(Stmt::Return(Expr::Bool(true), 5))) };
     let Model::Full(m) = translate_function(&seq, &Fns::Nil, &Structs::Nil) else { panic!("a full model") };
     let DConds::Cons(_, at, _) = m.requires else { panic!("the bound") };
     assert_eq!(at, 3);
@@ -725,11 +725,12 @@ fn a_copy_of_a_struct_keeps_its_value_only_as_the_same_struct() {
 }
 
 #[test]
-fn a_struct_has_a_model_when_each_field_is_a_value_type_of_the_subset() {
+fn a_struct_has_a_model_when_each_field_is_a_type_of_the_subset() {
     let ok = translate_structs(&point_table());
     assert_eq!(ok, StructModels::Cons(Ok((POINT, DParams::Cons(FX, DTy::Int32, Box::new(DParams::Cons(FY, DTy::Int32, Box::new(DParams::Nil)))))), Box::new(StructModels::Nil)));
-    let seq_field = Structs::Cons(POINT, 4, Params::Cons(FX, Ty::Seq(Scalar::I32, Extent::Dynamic), Box::new(Params::Nil)), Box::new(Structs::Nil));
-    assert_eq!(translate_structs(&seq_field), StructModels::Cons(Err(Refusal::SeqParam(4)), Box::new(StructModels::Nil)));
+    // A field of a type with no rule refuses the struct. A sequence field is in the subset since decision 0076.
+    let other_field = Structs::Cons(POINT, 4, Params::Cons(FX, Ty::Other(OTHER_TYPE), Box::new(Params::Nil)), Box::new(Structs::Nil));
+    assert_eq!(translate_structs(&other_field), StructModels::Cons(Err(Refusal::Construct(OTHER_TYPE, 4)), Box::new(StructModels::Nil)));
 }
 
 #[test]
@@ -758,7 +759,7 @@ fn code_reads_an_optional_and_makes_one_from_a_value_or_nullopt() {
     assert_eq!(translate_code(&Expr::Nullopt, 3), Ok(DExpr::Nothing));
     assert_eq!(translate_code(&Expr::Wrap(b(var(B))), 3), Ok(DExpr::Just(Box::new(DExpr::Var(B)))));
     assert_eq!(translate_ty(Ty::Opt(Scalar::U8), 3), Ok(DTy::Opt(Scalar::U8)));
-    assert_eq!(translate_value_ty(Ty::Opt(Scalar::U8), 3), Ok(DTy::Opt(Scalar::U8)));
+    assert_eq!(translate_value_ty(Ty::Opt(Scalar::U8), 3, &Structs::Nil), Ok(DTy::Opt(Scalar::U8)));
 }
 
 #[test]
