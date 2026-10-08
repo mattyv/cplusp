@@ -1561,6 +1561,70 @@ fn the_translator_refuses_what_it_has_no_rule_for() {
     assert!(!model.contains("method call_one(") && !model.contains("method named("), "{model}");
 }
 
+/// Each function in view is modelled or refused, and each contract line belongs to a function or is refused, decision 0057. A
+/// template is refused, not skipped. A function in a project header is in view. A contract line apart from its function, behind a
+/// comment, or that ends in a backslash is refused. A deleted function runs nothing, so it has no model and no refusal.
+#[test]
+fn every_function_and_contract_line_in_view_is_modelled_or_refused() {
+    if !clang_tidy_available() {
+        return;
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let (o, out) = model("model-coverage.cpp", dir.path());
+    let text = stdout(&o);
+    assert_eq!(o.status.code(), Some(1), "stdout: {text} stderr: {}", stderr(&o));
+    let refusals: Vec<&str> = text.lines().filter(|l| l.starts_with("Not provable: ")).collect();
+    for expected in [
+        "model-coverage.cpp:7: FunctionTemplateDecl: the translator has no rule for it yet.",
+        "model-coverage.cpp:12: FunctionTemplateDecl: the translator has no rule for it yet.",
+        "model-coverage.cpp:16: a contract line that belongs to no function.",
+        "model-coverage.cpp:22: a contract line that belongs to no function.",
+        "model-coverage.cpp:28: a contract line that ends in a backslash.",
+        "model-coverage.cpp:34: '=' in a contract: the translator has no rule for it yet.",
+    ] {
+        assert!(refusals.iter().any(|l| l.ends_with(expected)), "{expected}: {text}");
+    }
+    assert_eq!(refusals.len(), 6, "{text}");
+    let model = std::fs::read_to_string(&out).unwrap();
+    for name in ["in_header", "apart", "noted"] {
+        assert!(model.contains(&format!("method {name}(")) || model.lines().any(|l| l.starts_with("method ") && l.contains(name)), "{name}: {model}");
+    }
+    for name in ["tmpl", "abbreviated", "continued", "arrow", "gone"] {
+        assert!(!model.lines().any(|l| l.starts_with("method ") && l.contains(name)), "{name}: {model}");
+    }
+}
+
+/// A name that Dafny reserves, a parameter with no name, and a tab after the word of a contract line still give a model that Dafny
+/// proves, decision 0057.
+#[test]
+fn reserved_names_and_unnamed_parameters_still_give_a_model_dafny_proves() {
+    let Some(dafny) = dafny() else { return };
+    if !clang_tidy_available() {
+        return;
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let (o, out) = model("model-names.cpp", dir.path());
+    assert_eq!(o.status.code(), Some(0), "stdout: {} stderr: {}", stdout(&o), stderr(&o));
+    let text = std::fs::read_to_string(&out).unwrap();
+    assert_eq!(text.lines().filter(|l| l.starts_with("method ")).count(), 2, "{text}");
+    let v = Command::new(dafny).args(["verify"]).arg(&out).output().unwrap();
+    let said = format!("{}{}", String::from_utf8_lossy(&v.stdout), String::from_utf8_lossy(&v.stderr));
+    assert!(v.status.success() && said.contains(" 0 errors"), "{said}\n{text}");
+}
+
+/// A file that does not compile cannot be modelled. It is exit 2, with the gate's message.
+#[test]
+fn a_file_that_does_not_compile_has_no_model() {
+    if !clang_tidy_available() {
+        return;
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let (o, _) = model("model-broken.cpp", dir.path());
+    let err = stderr(&o);
+    assert_eq!(o.status.code(), Some(2), "stdout: {} stderr: {err}", stdout(&o));
+    assert!(err.lines().any(|l| l.starts_with("does not compile: ") && l.contains("model-broken.cpp:4:")), "{err}");
+}
+
 /// Pull `"key":"value"` or `"key":123` out of one JSON line without a JSON library.
 fn field(line: &str, key: &str) -> String {
     let needle = format!("\"{key}\":");
