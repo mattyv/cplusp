@@ -2359,11 +2359,12 @@ fn structs_with_no_rule_are_refused_at_their_lines() {
         (18, "BinaryOperator =: the translator has no rule for it yet."),
         (22, "z in the contract is no field of the struct."),
         (28, "ImplicitValueInitExpr: the translator has no rule for it yet."),
+        (33, "Point &: the translator has no rule for it yet."),
     ] {
         let want = format!("model-struct-refuse.cpp:{line}: {expected}");
         assert!(refusals.iter().any(|l| l.ends_with(&want)), "{want}: {text}");
     }
-    assert_eq!(refusals.len(), 4, "{text}");
+    assert_eq!(refusals.len(), 5, "{text}");
 }
 
 /// Pull `"key":"value"` or `"key":123` out of one JSON line without a JSON library.

@@ -28,3 +28,8 @@ int32_t partial(int32_t a) {
   Point q = {a};
   return q.x;
 }
+
+// A non-const reference to a struct can write, so it has no rule yet, decision 0074.
+int32_t by_ref(Point& p) {
+  return p.x;
+}
