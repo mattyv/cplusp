@@ -536,9 +536,8 @@ fn a_contract_reads_a_sequence_by_size_index_forall_and_chain() {
         )),
     );
     assert_eq!(strip_conds(m.ensures), DConds::Cons(want, 0, Box::new(DConds::Nil)));
-    // The method requires that the length of the sequence fits size_t.
-    let bound = DExpr::Bin(BinOp::Le, len(), Box::new(DExpr::Lit(u64::MAX)));
-    assert_eq!(strip_conds(m.requires), DConds::Cons(bound, 0, Box::new(DConds::Nil)));
+    // The type Vec holds the bound on the length, so the method requires nothing, decision 0076.
+    assert_eq!(m.requires, DConds::Nil);
 }
 
 #[test]
@@ -851,4 +850,153 @@ fn a_decreases_line_that_reads_result_through_a_field_or_an_optional_is_refused(
         let f = Function { conds: Conds::Cons(CondKind::Decreases, e, 2, names(&[X]), Box::new(Conds::Nil)), ret, ..with_n(one(Stmt::Return(value, 4))) };
         assert_eq!(bare_refusal(translate_function(&f, &Fns::Nil, &point_table())), Refusal::Syntax(2));
     }
+}
+
+const NODE: u32 = 100;
+const PRE: u32 = 101;
+const VAL: u32 = 102;
+const CH: u32 = 103;
+const WRAP: u32 = 104;
+const WN: u32 = 105;
+
+/// `struct Node { std::vector<uint8_t> prefix; std::optional<int32_t> value; std::vector<Node> children; }` and
+/// `struct Wrapper { Node n; }` as the table of the file.
+fn node_table() -> Structs {
+    let node = Params::Cons(
+        PRE,
+        Ty::Seq(Scalar::U8, Extent::Dynamic),
+        Box::new(Params::Cons(VAL, Ty::Opt(Scalar::I32), Box::new(Params::Cons(CH, Ty::Seq(Scalar::Struct(NODE), Extent::Dynamic), Box::new(Params::Nil))))),
+    );
+    let wrap = Params::Cons(WN, Ty::Struct(NODE), Box::new(Params::Nil));
+    Structs::Cons(NODE, 7, node, Box::new(Structs::Cons(WRAP, 13, wrap, Box::new(Structs::Nil))))
+}
+
+#[test]
+fn a_struct_may_hold_sequences_and_a_sequence_of_itself() {
+    let node = DParams::Cons(
+        PRE,
+        DTy::Seq(Scalar::U8),
+        Box::new(DParams::Cons(VAL, DTy::Opt(Scalar::I32), Box::new(DParams::Cons(CH, DTy::Seq(Scalar::Struct(NODE)), Box::new(DParams::Nil))))),
+    );
+    let wrap = DParams::Cons(WN, DTy::Struct(NODE), Box::new(DParams::Nil));
+    let want = StructModels::Cons(Ok((NODE, node)), Box::new(StructModels::Cons(Ok((WRAP, wrap)), Box::new(StructModels::Nil))));
+    assert_eq!(translate_structs(&node_table()), want);
+}
+
+#[test]
+fn a_struct_that_holds_a_sequence_is_refused_as_a_local_or_a_result() {
+    let param = |t: Ty| Params::Cons(A, t, Box::new(Params::Nil));
+    // A local of Node, and a local of Wrapper, which holds a Node by value.
+    for k in [NODE, WRAP] {
+        let f = Function {
+            name: SAT,
+            line: 14,
+            params: param(Ty::Struct(k)),
+            ret: Ty::I32,
+            conds: Conds::Nil,
+            body: Stmts::Cons(
+                Box::new(Stmt::Local(B, Ty::Struct(k), read(A, Ty::Struct(k)), 15)),
+                Box::new(Stmts::Cons(Box::new(Stmt::Return(Expr::Lit(0, Ty::I32), 16)), Box::new(Stmts::Nil))),
+            ),
+        };
+        assert_eq!(bare_refusal(translate_function(&f, &Fns::Nil, &node_table())), Refusal::HoldsSeq(15));
+    }
+    // A result of Node: the function has no method, so a call to it is refused at the call.
+    let result = Function { name: SUCC, line: 19, params: param(Ty::Struct(NODE)), ret: Ty::Struct(NODE), conds: Conds::Nil, body: one(Stmt::Return(read(A, Ty::Struct(NODE)), 20)) };
+    let caller = Function {
+        name: SAT,
+        line: 23,
+        params: param(Ty::Struct(NODE)),
+        ret: Ty::I32,
+        conds: Conds::Nil,
+        body: Stmts::Cons(
+            Box::new(Stmt::Local(B, Ty::I32, Expr::Call(SUCC, SAT_NAME, Box::new(Args::Cons(b(read(A, Ty::Struct(NODE))), Box::new(Args::Nil))), 24), 24)),
+            Box::new(Stmts::Cons(Box::new(Stmt::Return(Expr::Lit(0, Ty::I32), 25)), Box::new(Stmts::Nil))),
+        ),
+    };
+    let all = fns(vec![result, caller]);
+    let Models::Cons(first, rest) = translate_unit(&all, &node_table()) else { panic!("two models") };
+    assert_eq!(first, Model::Refused(Refusal::HoldsSeq(19)));
+    let Models::Cons(second, _) = *rest else { panic!("two models") };
+    assert_eq!(bare_refusal(second), Refusal::Callee(SAT_NAME, 24));
+}
+
+#[test]
+fn a_struct_that_holds_a_sequence_is_a_parameter_by_value_or_by_reference() {
+    let f = Function { name: SAT, line: 14, params: Params::Cons(A, Ty::Struct(NODE), Box::new(Params::Nil)), ret: Ty::I32, conds: Conds::Nil, body: one(Stmt::Return(Expr::Lit(0, Ty::I32), 15)) };
+    let Model::Full(m) = translate_function(&f, &Fns::Nil, &node_table()) else { panic!("a full model") };
+    assert_eq!(m.params, DParams::Cons(A, DTy::Struct(NODE), Box::new(DParams::Nil)));
+    assert_eq!(m.requires, DConds::Nil);
+}
+
+#[test]
+fn code_reads_a_sequence_on_a_field_and_on_an_element() {
+    // n.children[i].prefix[0]
+    let node = Ty::Struct(NODE);
+    let e = Expr::Index(
+        b(Expr::Field(b(Expr::Index(b(Expr::Field(b(Expr::Var(A, node)), CH)), b(read(X, Ty::U64)))), PRE)),
+        b(Expr::Lit(0, Ty::U64)),
+    );
+    let want = DExpr::Index(
+        Box::new(DExpr::Field(Box::new(DExpr::Index(Box::new(DExpr::Field(Box::new(DExpr::Var(A)), CH)), Box::new(DExpr::Var(X)))), PRE)),
+        Box::new(DExpr::Conv(DTy::UInt64, Box::new(DExpr::Lit(0)))),
+    );
+    assert_eq!(translate_code(&e, 3), Ok(want));
+}
+
+#[test]
+fn a_contract_reads_a_sequence_on_a_path() {
+    // forall j :: 0 <= j < n.children.size() ==> n.children[j].prefix.size() > 0, over a parameter n of Node.
+    let j = 70;
+    let children = || b(Expr::Field(b(Expr::Name(A)), CH));
+    let body = Expr::Bin(
+        BinOp::Implies,
+        b(Expr::Chain(BinOp::Le, BinOp::Lt, b(Expr::Int(0)), b(Expr::Name(j)), b(Expr::Size(children())))),
+        b(Expr::Bin(BinOp::Gt, b(Expr::Size(b(Expr::Field(b(Expr::Index(children(), b(Expr::Name(j)))), PRE)))), b(Expr::Int(0)))),
+    );
+    // and n.prefix[0] == 1, an element of a scalar sequence on a field, read as an exact integer.
+    let first = Expr::Bin(BinOp::Eq, b(Expr::Index(b(Expr::Field(b(Expr::Name(A)), PRE)), b(Expr::Int(0)))), b(Expr::Int(1)));
+    let f = Function {
+        name: SAT,
+        line: 14,
+        params: Params::Cons(A, Ty::Struct(NODE), Box::new(Params::Nil)),
+        ret: Ty::Bool,
+        conds: Conds::Cons(CondKind::Requires, first, 12, names(&[A]), Box::new(Conds::Cons(CondKind::Ensures, Expr::Forall(j, b(body)), 13, names(&[A]), Box::new(Conds::Nil)))),
+        body: one(Stmt::Return(Expr::Bool(true), 15)),
+    };
+    let Model::Full(m) = translate_function(&f, &Fns::Nil, &node_table()) else { panic!("a full model") };
+    let dchildren = || Box::new(DExpr::Field(Box::new(DExpr::Var(A)), CH));
+    let want = DExpr::Forall(
+        j,
+        Box::new(DExpr::Bin(
+            BinOp::Implies,
+            Box::new(DExpr::Chain(BinOp::Le, BinOp::Lt, Box::new(DExpr::Lit(0)), Box::new(DExpr::Bound(j)), Box::new(DExpr::Len(dchildren())))),
+            Box::new(DExpr::Bin(
+                BinOp::Gt,
+                Box::new(DExpr::Len(Box::new(DExpr::Field(Box::new(DExpr::Index(dchildren(), Box::new(DExpr::Bound(j)))), PRE)))),
+                Box::new(DExpr::Lit(0)),
+            )),
+        )),
+    );
+    assert_eq!(strip_conds(m.ensures), DConds::Cons(want, 0, Box::new(DConds::Nil)));
+    let want = DExpr::Bin(
+        BinOp::Eq,
+        Box::new(DExpr::AsInt(Box::new(DExpr::Index(Box::new(DExpr::Field(Box::new(DExpr::Var(A)), PRE)), Box::new(DExpr::Lit(0)))))),
+        Box::new(DExpr::Lit(1)),
+    );
+    assert_eq!(strip_conds(m.requires), DConds::Cons(want, 0, Box::new(DConds::Nil)));
+}
+
+#[test]
+fn a_decreases_line_on_a_struct_parameter_is_the_struct_itself() {
+    let f = Function {
+        name: SAT,
+        line: 14,
+        params: Params::Cons(A, Ty::Struct(NODE), Box::new(Params::Nil)),
+        ret: Ty::I32,
+        conds: Conds::Cons(CondKind::Decreases, Expr::Name(A), 13, names(&[A]), Box::new(Conds::Nil)),
+        body: one(Stmt::Return(Expr::Lit(0, Ty::I32), 15)),
+    };
+    let Model::Full(m) = translate_function(&f, &Fns::Nil, &node_table()) else { panic!("a full model") };
+    assert_eq!(strip_conds(m.decreases), DConds::Cons(DExpr::Var(A), 0, Box::new(DConds::Nil)));
 }

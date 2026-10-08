@@ -2450,6 +2450,56 @@ fn optionals_with_no_rule_are_refused_at_their_lines() {
     assert_eq!(refusals.len(), 7, "{text}");
 }
 
+/// A struct that holds a sequence, a recursive struct and a sequence of structs prove, decision 0076. Reads on a field or an
+/// element, contracts on a path, a loop over the children and a recursion into a child.
+#[test]
+fn structs_that_hold_sequences_prove() {
+    let Some(dafny) = dafny() else { return };
+    if !clang_tidy_available() {
+        return;
+    }
+    let o = prove("model-nodes.cpp", &[], &dafny);
+    let text = stdout(&o);
+    assert_eq!(o.status.code(), Some(0), "stdout: {text} stderr: {}", stderr(&o));
+    assert_eq!(text.lines().last(), Some("ok: proved"), "{text}");
+}
+
+/// Each index into a nested sequence and a recursion that does not go down are named at their lines, decision 0076.
+#[test]
+fn prove_names_each_failed_read_and_measure_on_a_recursive_struct() {
+    let Some(dafny) = dafny() else { return };
+    if !clang_tidy_available() {
+        return;
+    }
+    let o = prove("model-nodes-wrong.cpp", &[], &dafny);
+    let text = stdout(&o);
+    assert_eq!(o.status.code(), Some(1), "stdout: {text} stderr: {}", stderr(&o));
+    let failed: Vec<&str> = text.lines().filter(|l| l.starts_with("Not proved: ")).collect();
+    let index = "model-nodes-wrong.cpp:11: the index may be out of range.";
+    assert_eq!(failed.iter().filter(|l| l.ends_with(index)).count(), 2, "{text}");
+    let measure = "model-nodes-wrong.cpp:16: the decreases line may not decrease at this call.";
+    assert!(failed.iter().any(|l| l.ends_with(measure)), "{text}");
+    assert_eq!(failed.len(), 3, "{text}");
+}
+
+/// A struct that holds a sequence, directly or through a field, is refused as a local or a result, decision 0076.
+#[test]
+fn a_struct_that_holds_a_sequence_is_a_parameter_only() {
+    if !clang_tidy_available() {
+        return;
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let (o, _) = model("model-nodes-refuse.cpp", dir.path());
+    let text = stdout(&o);
+    assert_eq!(o.status.code(), Some(1), "stdout: {text} stderr: {}", stderr(&o));
+    let refusals: Vec<&str> = text.lines().filter(|l| l.starts_with("Not provable: ")).collect();
+    for line in [15, 19, 24] {
+        let want = format!("model-nodes-refuse.cpp:{line}: a struct that holds a sequence is in the subset only as a parameter.");
+        assert!(refusals.iter().any(|l| l.ends_with(&want)), "{want}: {text}");
+    }
+    assert_eq!(refusals.len(), 3, "{text}");
+}
+
 /// Pull `"key":"value"` or `"key":123` out of one JSON line without a JSON library.
 fn field(line: &str, key: &str) -> String {
     let needle = format!("\"{key}\":");

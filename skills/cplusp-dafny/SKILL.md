@@ -521,5 +521,5 @@ Then Dafny checks each step, and code that overflows does not prove.
 ## seq_length
 
 A Dafny `seq` has no bound on its length, and a C++ sequence has at most `SIZE_MAX` elements.
-To read `|v|` as a `uint64`, require `|v| <= 0xFFFF_FFFF_FFFF_FFFF` on each sequence parameter.
-Every C++ sequence meets that, so each caller can meet it.
+To read `|v|` as a `uint64`, give each sequence the type `Vec<T>`, a `seq<T>` with `|s| < 0x1_0000_0000_0000_0000`.
+Every C++ sequence meets that, and the bound also holds for a sequence inside a struct.
