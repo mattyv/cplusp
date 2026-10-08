@@ -5,6 +5,7 @@ use std::fs;
 use std::process::{Command, ExitCode, Stdio};
 
 use anyhow::{Context, Result};
+use cplusp_core::verdict::{verdict, Verdict};
 
 use crate::model::{Line, Map, Translation};
 
@@ -122,15 +123,10 @@ pub fn run(t: &Translation, limit: u32, refused: bool, shown: &dyn Fn(&str) -> S
         .output()
         .with_context(|| format!("cannot run {dafny}"))?;
     let output = format!("{}{}", String::from_utf8_lossy(&run.stdout), String::from_utf8_lossy(&run.stderr));
-    // Only a run with a summary that can be read is a result. A model that does not parse, empty output and a crash have none.
-    let Some((errors_counted, timeouts)) = output.lines().find_map(counts) else {
-        eprint!("dafny failed\n{output}");
-        return Ok(ExitCode::from(2));
-    };
     let found = errors(&output);
-    // The exit status, the counts and the error lines must agree. A failure with no error line, or a success with errors, is a fault of the tool.
-    let clean = errors_counted == 0 && timeouts == 0;
-    if run.status.success() != clean || (clean && !found.is_empty()) || (!clean && found.is_empty()) {
+    // The core decides: it reads the exit status, the summary, the error lines and the refusals together, decision 0077.
+    let verdict = verdict(run.status.success(), output.lines().find_map(counts), found.len(), refused);
+    if verdict == Verdict::ToolFailed {
         eprint!("dafny failed\n{output}");
         return Ok(ExitCode::from(2));
     }
@@ -164,7 +160,7 @@ pub fn run(t: &Translation, limit: u32, refused: bool, shown: &dyn Fn(&str) -> S
             }
         }
     }
-    if found.is_empty() && !refused {
+    if verdict == Verdict::Proved {
         println!("ok: proved");
         return Ok(ExitCode::SUCCESS);
     }
