@@ -2258,6 +2258,48 @@ fn prove_gives_each_obligation_its_own_line_and_assumptions() {
     assert!(lines.iter().any(|l| l.starts_with("  It assumes: ") && l.ends_with("model-prove-places.cpp:51: invariant i <= 10")), "{text}");
 }
 
+/// `prove` says ok only when Dafny exits 0 and its summary says 0 errors, decision 0070. A summary with an error that has no line, or
+/// one that disagrees with the exit status, is a fault of the tool.
+#[test]
+fn prove_never_says_ok_when_the_summary_or_the_exit_status_says_otherwise() {
+    if dafny().is_none() || !clang_tidy_available() {
+        return;
+    }
+    for stand_in in ["fake-dafny-summary-errors.sh", "fake-dafny-exit-zero-errors.sh"] {
+        let o = prove("model-clamp.cpp", &[], &fixture(stand_in));
+        let (text, err) = (stdout(&o), stderr(&o));
+        assert_eq!(o.status.code(), Some(2), "{stand_in}: stdout: {text} stderr: {err}");
+        assert!(err.starts_with("dafny failed"), "{stand_in}: {err}");
+        assert!(!text.contains("ok: proved"), "{stand_in}: {text}");
+    }
+}
+
+/// A span with a fixed extent keeps its length, decision 0070, so a contract on its size and a read at index 0 prove.
+#[test]
+fn a_span_with_a_fixed_extent_keeps_its_length() {
+    let Some(dafny) = dafny() else { return };
+    if !clang_tidy_available() {
+        return;
+    }
+    let o = prove("model-span-fixed.cpp", &[], &dafny);
+    let text = stdout(&o);
+    assert_eq!(o.status.code(), Some(0), "stdout: {text} stderr: {}", stderr(&o));
+    assert_eq!(text.lines().last(), Some("ok: proved"), "{text}");
+}
+
+/// A span, a const vector and a span of fixed extent each pass to a span parameter with their value, decision 0070.
+#[test]
+fn a_sequence_passes_to_a_sequence_parameter() {
+    let Some(dafny) = dafny() else { return };
+    if !clang_tidy_available() {
+        return;
+    }
+    let o = prove("model-span-copy.cpp", &[], &dafny);
+    let text = stdout(&o);
+    assert_eq!(o.status.code(), Some(0), "stdout: {text} stderr: {}", stderr(&o));
+    assert_eq!(text.lines().last(), Some("ok: proved"), "{text}");
+}
+
 /// Pull `"key":"value"` or `"key":123` out of one JSON line without a JSON library.
 fn field(line: &str, key: &str) -> String {
     let needle = format!("\"{key}\":");

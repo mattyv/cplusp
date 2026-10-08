@@ -516,7 +516,7 @@ fn a_contract_reads_a_sequence_by_size_index_forall_and_chain() {
     let f = Function {
         name: SAT,
         line: 4,
-        params: Params::Cons(v, Ty::Seq(Scalar::I32), Box::new(Params::Nil)),
+        params: Params::Cons(v, Ty::Seq(Scalar::I32, Extent::Dynamic), Box::new(Params::Nil)),
         ret: Ty::Bool,
         conds,
         body: one(Stmt::Return(Expr::Bool(true), 5)),
@@ -545,7 +545,7 @@ fn a_contract_reads_a_sequence_by_size_index_forall_and_chain() {
 fn code_reads_a_sequence_by_size_and_index() {
     // return v[0] < v.size(); with v of seq<uint8>: the size is (|v| as uint64).
     let v = X;
-    let seq = Ty::Seq(Scalar::U8);
+    let seq = Ty::Seq(Scalar::U8, Extent::Dynamic);
     let idx = Expr::Index(b(Expr::Var(v, seq)), b(Expr::Lit(0, Ty::U64)));
     let size = Expr::Size(b(Expr::Var(v, seq)));
     let e = Expr::Bin(BinOp::Lt, b(Expr::Cast(CastKind::Integral(Ty::U8, Ty::U64), b(Expr::Cast(CastKind::Read, b(idx))))), b(size));
@@ -559,7 +559,7 @@ fn code_reads_a_sequence_by_size_and_index() {
 
 #[test]
 fn a_sequence_is_in_the_subset_only_as_a_parameter() {
-    let seq = Ty::Seq(Scalar::I32);
+    let seq = Ty::Seq(Scalar::I32, Extent::Dynamic);
     let f = Function { ret: seq, ..with_n(Stmts::Nil) };
     assert_eq!(translate_function(&f, &Fns::Nil), Model::Refused(Refusal::SeqParam(3)));
     let local = Stmt::Local(SUM, seq, Expr::Var(X, Ty::I32), 4);
@@ -618,8 +618,39 @@ fn each_statement_and_contract_line_keeps_the_place_it_comes_from() {
     let DStmts::Cons(_, p3, _) = *rest else { panic!("a return") };
     assert_eq!((p1, p2, p3), (27, 28, 30));
     // The bound on the length of a sequence comes from the function's own line.
-    let seq = Function { params: Params::Cons(X, Ty::Seq(Scalar::I32), Box::new(Params::Nil)), ret: Ty::Bool, conds: Conds::Nil, ..with_n(one(Stmt::Return(Expr::Bool(true), 5))) };
+    let seq = Function { params: Params::Cons(X, Ty::Seq(Scalar::I32, Extent::Dynamic), Box::new(Params::Nil)), ret: Ty::Bool, conds: Conds::Nil, ..with_n(one(Stmt::Return(Expr::Bool(true), 5))) };
     let Model::Full(m) = translate_function(&seq, &Fns::Nil) else { panic!("a full model") };
     let DConds::Cons(_, at, _) = m.requires else { panic!("the bound") };
     assert_eq!(at, 3);
+}
+
+#[test]
+fn a_span_of_fixed_extent_requires_its_length() {
+    let f = Function { params: Params::Cons(X, Ty::Seq(Scalar::I32, Extent::Fixed(3)), Box::new(Params::Nil)), ret: Ty::Bool, conds: Conds::Nil, ..with_n(one(Stmt::Return(Expr::Bool(true), 5))) };
+    let Model::Full(m) = translate_function(&f, &Fns::Nil) else { panic!("a full model") };
+    let want = DExpr::Bin(BinOp::Eq, Box::new(DExpr::Len(Box::new(DExpr::Var(X)))), Box::new(DExpr::Lit(3)));
+    assert_eq!(strip_conds(m.requires), DConds::Cons(want, 0, Box::new(DConds::Nil)));
+}
+
+#[test]
+fn a_sequence_made_from_a_sequence_keeps_its_value_when_its_length_cannot_change() {
+    let dynamic = Ty::Seq(Scalar::I32, Extent::Dynamic);
+    let three = Ty::Seq(Scalar::I32, Extent::Fixed(3));
+    let copy = |from: Ty, to: Ty| Expr::Cast(CastKind::Construct, b(Expr::SeqCopy(b(Expr::Var(A, from)), from, to)));
+    let f = |e: Expr| Function { name: SAT, line: 4, params: Params::Cons(A, dynamic, Box::new(Params::Nil)), ret: Ty::I32, conds: Conds::Nil, body: one(Stmt::Local(B, Ty::I32, Expr::Call(SAT, SAT_NAME, Box::new(Args::Cons(b(e), Box::new(Args::Nil))), 5), 5)) };
+    // The callee of each call is the function itself, so each call resolves.
+    let all = |e: Expr| fns(vec![f(e)]);
+    // A copy, and a span with no fixed extent made from one with a fixed extent, keep the value.
+    for (from, to) in [(dynamic, dynamic), (three, dynamic), (three, three)] {
+        let m = translate_function(&f(copy(from, to)), &all(copy(from, to)));
+        let Model::Full(m) = m else { panic!("a full model for {from:?} to {to:?}: {m:?}") };
+        let DStmts::Cons(s, _, _) = m.body else { panic!("a body") };
+        let DStmt::LocalCall(_, _, _, DArgs::Cons(arg, _)) = *s else { panic!("a call") };
+        assert_eq!(arg, DExpr::Var(A));
+    }
+    // A fixed extent made from another length, or another element type, is refused.
+    for (from, to) in [(dynamic, three), (Ty::Seq(Scalar::I32, Extent::Fixed(4)), three), (Ty::Seq(Scalar::U8, Extent::Dynamic), dynamic)] {
+        let m = translate_function(&f(copy(from, to)), &all(copy(from, to)));
+        assert_eq!(bare_refusal(m), Refusal::Extent(5), "{from:?} to {to:?}");
+    }
 }
