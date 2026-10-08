@@ -43,9 +43,16 @@ fn strip_stmt(s: DStmt) -> DStmt {
     match s {
         DStmt::If(c, t, f) => DStmt::If(c, Box::new(strip(*t)), Box::new(strip(*f))),
         DStmt::While(c, i, d, b) => DStmt::While(c, strip_conds(i), strip_conds(d), Box::new(strip(*b))),
-        DStmt::For(init, c, i, d, b, step) => {
-            DStmt::For(Box::new(strip_stmt(*init)), c, strip_conds(i), strip_conds(d), Box::new(strip(*b)), Box::new(strip_stmt(*step)))
-        },
+        DStmt::For(init, _, c, i, d, b, step, _) => DStmt::For(
+            Box::new(strip_stmt(*init)),
+            0,
+            c,
+            strip_conds(i),
+            strip_conds(d),
+            Box::new(strip(*b)),
+            Box::new(strip_stmt(*step)),
+            0,
+        ),
         other => other,
     }
 }
@@ -391,13 +398,18 @@ fn a_for_loop_is_its_start_then_a_while_that_ends_with_its_step() {
     let DStmts::Cons(_, _, rest) = m.body else { panic!("a body") };
     let DStmts::Cons(lp, _, _) = *rest else { panic!("a loop") };
     let as_int = |n: u32| Box::new(DExpr::AsInt(Box::new(DExpr::Var(n))));
+    // The start and the step keep their own places, 5 and 7, decision 0069.
+    let DStmt::For(_, start_at, _, _, _, _, _, step_at) = &*lp else { panic!("a for loop") };
+    assert_eq!((*start_at, *step_at), (5, 7));
     let want = DStmt::For(
         Box::new(DStmt::Local(i, DTy::Int32, lit32(0))),
+        0,
         DExpr::Bin(BinOp::Lt, Box::new(DExpr::Var(i)), Box::new(DExpr::Var(X))),
         DConds::Cons(DExpr::Bin(BinOp::Le, as_int(i), as_int(X)), 0, Box::new(DConds::Nil)),
         DConds::Cons(DExpr::Bin(BinOp::Sub, as_int(X), as_int(i)), 0, Box::new(DConds::Nil)),
         Box::new(DStmts::Cons(Box::new(DStmt::Assign(acc, DExpr::Bin(BinOp::Add, Box::new(DExpr::Var(acc)), Box::new(lit32(1))))), 0, Box::new(DStmts::Nil))),
         Box::new(DStmt::Assign(i, DExpr::Bin(BinOp::Add, Box::new(DExpr::Var(i)), Box::new(lit32(1))))),
+        0,
     );
     assert_eq!(strip_stmt(*lp), want);
 }

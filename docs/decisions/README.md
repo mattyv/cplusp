@@ -74,3 +74,4 @@ Status is `decided`, `proposed` (the default until someone objects or the thin s
 | [0066](0066-agents-work-from-reviewed-specifications.md) | The coder works from reviewed requirements, contracts and tests. The reviewer decides their changes and tries to break each contract | decided |
 | [0067](0067-a-sequence-stays-constant-because-the-gate-passed.md) | A sequence stays constant across a call because the gate passed the file. A bound name is an integer | decided |
 | [0068](0068-cplusp-prove-and-its-diagnostics.md) | cplusp prove runs the gate, the translator and Dafny, and names each failed obligation at its C++ line with its contract line and assumptions | decided |
+| [0069](0069-prove-trusts-only-a-finished-run-and-the-teams-gate.md) | prove trusts only a finished run of Dafny, runs the team's gate, and gives each obligation its own line and assumptions | decided |

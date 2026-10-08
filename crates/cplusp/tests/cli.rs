@@ -2112,7 +2112,7 @@ fn prove_names_a_failed_ensures_at_its_return_with_its_contract_and_assumptions(
     let o = prove("model-clamp-wrong.cpp", &[], &dafny);
     let text = stdout(&o);
     assert_eq!(o.status.code(), Some(1), "stdout: {text} stderr: {}", stderr(&o));
-    let lines = under(&text, "model-clamp-wrong.cpp:8: the ensures line does not hold on this return.");
+    let lines = under(&text, "model-clamp-wrong.cpp:8: the ensures line may not hold on this return.");
     assert!(lines.iter().any(|l| l.starts_with("  The contract line: ") && l.ends_with("model-clamp-wrong.cpp:5: ensures x < lo ==> result == hi")), "{text}");
     assert!(lines.iter().any(|l| l.starts_with("  It assumes: ") && l.ends_with("model-clamp-wrong.cpp:4: requires lo <= hi")), "{text}");
     assert_eq!(text.lines().filter(|l| l.starts_with("Not proved: ")).count(), 1, "{text}");
@@ -2169,7 +2169,7 @@ fn prove_says_a_time_limit_is_unknown() {
     assert_eq!(o.status.code(), Some(1), "stdout: {text} stderr: {}", stderr(&o));
     let want = "model-prove-slow.cpp:5: the prover reached its time limit. The result is unknown.";
     assert!(text.lines().any(|l| l.starts_with("Not proved: ") && l.ends_with(want)), "{text}");
-    assert!(!text.contains("does not hold"), "{text}");
+    assert!(!text.contains("may not hold"), "{text}");
 }
 
 /// `prove` runs the gate first, decisions 0067 and 0068. A file the gate refuses gets the gate's findings and no proof.
@@ -2184,6 +2184,75 @@ fn prove_runs_the_gate_first() {
     assert_eq!(o.status.code(), Some(1), "stdout: {text} stderr: {}", stderr(&o));
     assert!(text.lines().any(|l| l.contains("model-seq-global.cpp:8: ") && l.contains("gv changes")), "{text}");
     assert!(!text.contains("Not proved: ") && !text.contains("BinaryOperator ="), "{text}");
+}
+
+/// A model that Dafny cannot read, or a run of Dafny with no summary, is no proof, decision 0069. `prove` exits 2 and says the prover
+/// failed. It never says ok, and it never names a C++ line for an error of the model.
+#[test]
+fn prove_stops_when_the_prover_cannot_read_the_model() {
+    if dafny().is_none() || !clang_tidy_available() {
+        return;
+    }
+    for stand_in in ["fake-dafny-parse-error.sh", "fake-dafny-silent.sh"] {
+        let o = prove("model-clamp.cpp", &[], &fixture(stand_in));
+        let (text, err) = (stdout(&o), stderr(&o));
+        assert_eq!(o.status.code(), Some(2), "{stand_in}: stdout: {text} stderr: {err}");
+        assert!(err.starts_with("dafny failed"), "{stand_in}: {err}");
+        assert!(!text.contains("Not proved: ") && !text.contains("ok: proved"), "{stand_in}: {text}");
+    }
+}
+
+/// A name with a character that Dafny cannot read is refused, decision 0069, so the model always parses.
+#[test]
+fn a_name_dafny_cannot_read_is_refused() {
+    if !clang_tidy_available() {
+        return;
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let (o, _) = model("model-names-bad.cpp", dir.path());
+    let text = stdout(&o);
+    assert_eq!(o.status.code(), Some(1), "stdout: {text} stderr: {}", stderr(&o));
+    assert!(text.lines().any(|l| l.ends_with("model-names-bad.cpp:4: a$b: a name with a character Dafny cannot read.")), "{text}");
+}
+
+/// `prove` runs the gate under the team's policy, decision 0069. A row the team tightened refuses the file before any proof.
+#[test]
+fn prove_runs_the_gate_under_the_teams_policy() {
+    let Some(dafny) = dafny() else { return };
+    if !clang_tidy_available() {
+        return;
+    }
+    let team = fixture("team-tighten.yaml");
+    let o = prove("model-prove-policy.cpp", &["--policy", team.to_str().unwrap()], &dafny);
+    let text = stdout(&o);
+    assert_eq!(o.status.code(), Some(1), "stdout: {text} stderr: {}", stderr(&o));
+    assert!(text.lines().any(|l| l.contains("model-prove-policy.cpp:7: `operator[]` with a variable index")), "{text}");
+    assert!(!text.contains("Not proved: ") && !text.contains("ok: proved"), "{text}");
+}
+
+/// Each obligation keeps its own line and its own assumptions, decision 0069. The start and the step of a for loop have their own
+/// lines. An ensures line assumes the requires lines. A loop keeps an invariant under all the invariants of the loop, and at the
+/// start it has only what holds before the loop.
+#[test]
+fn prove_gives_each_obligation_its_own_line_and_assumptions() {
+    let Some(dafny) = dafny() else { return };
+    if !clang_tidy_available() {
+        return;
+    }
+    let o = prove("model-prove-places.cpp", &[], &dafny);
+    let text = stdout(&o);
+    assert_eq!(o.status.code(), Some(1), "stdout: {text} stderr: {}", stderr(&o));
+    for want in ["model-prove-places.cpp:8: the value may not fit uint32_t.", "model-prove-places.cpp:10: the value may not fit uint32_t."] {
+        assert!(text.lines().any(|l| l.starts_with("Not proved: ") && l.ends_with(want)), "{want}: {text}");
+    }
+    let lines = under(&text, "model-prove-places.cpp:18: the index may be out of range.");
+    assert!(lines.iter().any(|l| l.starts_with("  It assumes: ") && l.ends_with("model-prove-places.cpp:17: requires v[10] == 0")), "{text}");
+    let lines = under(&text, "model-prove-places.cpp:27: the loop may not keep the invariant.");
+    assert!(lines.iter().any(|l| l.ends_with("model-prove-places.cpp:24: requires 0 <= n && n <= 10")), "{text}");
+    assert!(lines.iter().any(|l| l.ends_with("model-prove-places.cpp:28: invariant 0 <= j")), "{text}");
+    let lines = under(&text, "model-prove-places.cpp:39: the invariant may not hold when the loop starts.");
+    assert!(lines.iter().any(|l| l.ends_with("model-prove-places.cpp:36: requires 0 <= n")), "{text}");
+    assert!(!lines.iter().any(|l| l.contains("model-prove-places.cpp:40:")), "{text}");
 }
 
 /// Pull `"key":"value"` or `"key":123` out of one JSON line without a JSON library.
