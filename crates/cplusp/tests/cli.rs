@@ -1500,7 +1500,11 @@ fn dafny() -> Option<PathBuf> {
 
 /// Translate one fixture into a Dafny file, and give the gate's output and the path of the model.
 fn model(name: &str, dir: &Path) -> (Output, PathBuf) {
-    let f = fixture(name);
+    model_of(&fixture(name), dir)
+}
+
+/// Translate one file into a Dafny file.
+fn model_of(f: &Path, dir: &Path) -> (Output, PathBuf) {
     let out = dir.join("model.dfy");
     let plugin = plugin();
     let o = cplusp(&["model", "--plugin", plugin.to_str().unwrap(), "--out", out.to_str().unwrap(), f.to_str().unwrap(), "--", "-std=c++23", "-ffp-contract=off"]);
@@ -1554,11 +1558,12 @@ fn the_translator_refuses_what_it_has_no_rule_for() {
     assert_eq!(o.status.code(), Some(1), "stdout: {text} stderr: {}", stderr(&o));
     let refusals: Vec<&str> = text.lines().filter(|l| l.starts_with("Not provable: ")).collect();
     assert_eq!(refusals.len(), 2, "{text}");
-    assert!(refusals.iter().any(|l| l.ends_with("model-refuse.cpp:9: CallExpr: the translator has no rule for it yet.")), "{text}");
+    assert!(refusals.iter().any(|l| l.ends_with("model-refuse.cpp:9: BinaryOperator %: the translator has no rule for it yet.")), "{text}");
     assert!(refusals.iter().any(|l| l.ends_with("model-refuse.cpp:12: y in the contract is no parameter.")), "{text}");
     let model = std::fs::read_to_string(&out).unwrap();
-    assert!(model.contains("method c_one("), "{model}");
-    assert!(!model.contains("method c_call_one(") && !model.contains("method c_named("), "{model}");
+    assert!(full(&model, "one"), "{model}");
+    // Decision 0058: a refused function keeps its signature, with no contract and no body.
+    assert!(bare(&model, "call_one") && bare(&model, "named"), "{model}");
 }
 
 /// Each function in view is modelled or refused, and each contract line belongs to a function or is refused, decision 0057. A
@@ -1589,8 +1594,12 @@ fn every_function_and_contract_line_in_view_is_modelled_or_refused() {
     for name in ["in_header", "apart", "noted"] {
         assert!(model.contains(&format!("method {name}(")) || model.lines().any(|l| l.starts_with("method ") && l.contains(name)), "{name}: {model}");
     }
-    for name in ["tmpl", "abbreviated", "continued", "arrow", "gone"] {
+    for name in ["tmpl", "abbreviated", "gone"] {
         assert!(!model.lines().any(|l| l.starts_with("method ") && l.contains(name)), "{name}: {model}");
+    }
+    // Decision 0058: a refused contract keeps the signature, with no contract and no body.
+    for name in ["continued", "arrow"] {
+        assert!(bare(&model, name), "{name}: {model}");
     }
 }
 
@@ -1623,6 +1632,129 @@ fn a_file_that_does_not_compile_has_no_model() {
     let err = stderr(&o);
     assert_eq!(o.status.code(), Some(2), "stdout: {} stderr: {err}", stdout(&o));
     assert!(err.lines().any(|l| l.starts_with("does not compile: ") && l.contains("model-broken.cpp:4:")), "{err}");
+}
+
+/// The lines of the method named `c_{name}` in a model: its header and what follows up to the next method.
+fn method_lines<'a>(model: &'a str, name: &str) -> Option<Vec<&'a str>> {
+    let header = format!("method c_{name}(");
+    let mut lines = model.lines().skip_while(|l| !l.starts_with(&header));
+    let first = lines.next()?;
+    Some(std::iter::once(first).chain(lines.take_while(|l| !l.starts_with("method "))).collect())
+}
+
+/// A method with a body.
+fn full(model: &str, name: &str) -> bool {
+    method_lines(model, name).is_some_and(|ls| ls.contains(&"{"))
+}
+
+/// A method with no contract and no body: it assumes nothing, decision 0058.
+fn bare(model: &str, name: &str) -> bool {
+    method_lines(model, name).is_some_and(|ls| ls[1..].iter().all(|l| l.trim().is_empty()))
+}
+
+/// Dafny's verdict on a model: did it pass, and what it said.
+fn verify(dafny: &Path, model: &Path) -> (bool, String) {
+    let v = Command::new(dafny).args(["verify"]).arg(model).output().unwrap();
+    (v.status.success(), format!("{}{}", String::from_utf8_lossy(&v.stdout), String::from_utf8_lossy(&v.stderr)))
+}
+
+/// The second slice, decision 0058: the example of saturating_add has a local, casts and a call, and each of its three functions
+/// has a model that Dafny proves.
+#[test]
+fn the_model_of_saturating_add_and_successor_verifies_in_dafny() {
+    let Some(dafny) = dafny() else { return };
+    if !clang_tidy_available() {
+        return;
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let example = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../examples/saturating_add/example.cpp");
+    let (o, out) = model_of(&example, dir.path());
+    assert_eq!(o.status.code(), Some(0), "stdout: {} stderr: {}", stdout(&o), stderr(&o));
+    let text = std::fs::read_to_string(&out).unwrap();
+    for name in ["saturating_add", "clamp", "successor"] {
+        assert!(full(&text, name), "{name}: {text}");
+    }
+    let (ok, said) = verify(&dafny, &out);
+    assert!(ok && said.contains(" 0 errors"), "{said}\n{text}");
+}
+
+/// Each call, local and cast that the second slice has no rule for is refused at its line, decision 0058. A refused function keeps a
+/// method with no contract and no body, so its callers still have a model, and the model still resolves in Dafny.
+#[test]
+fn calls_locals_and_casts_with_no_rule_are_refused_at_their_lines() {
+    let Some(dafny) = dafny() else { return };
+    if !clang_tidy_available() {
+        return;
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let (o, out) = model("model-calls.cpp", dir.path());
+    let text = stdout(&o);
+    assert_eq!(o.status.code(), Some(1), "stdout: {text} stderr: {}", stderr(&o));
+    let refusals: Vec<&str> = text.lines().filter(|l| l.starts_with("Not provable: ")).collect();
+    let inside = "a call inside an expression. The translator takes a call only as the full value of a return or of a local.";
+    for (line, expected) in [
+        (12, inside),
+        (16, inside),
+        (20, "a call to declared, which has no model in view."),
+        (25, "CXXMethodDecl: the translator has no rule for it yet."),
+        (28, "a call to T::one, which has no model in view."),
+        (34, "y is declared twice in the function."),
+        (42, "x is declared twice in the function."),
+        (49, "a conversion between bool and a number."),
+        (54, "DeclStmt: the translator has no rule for it yet."),
+        (59, "DeclStmt: the translator has no rule for it yet."),
+        (64, "'=' in a contract: the translator has no rule for it yet."),
+        (77, "BinaryOperator %: the translator has no rule for it yet."),
+    ] {
+        let want = format!("model-calls.cpp:{line}: {expected}");
+        assert!(refusals.iter().any(|l| l.ends_with(&want)), "{want}: {text}");
+    }
+    assert_eq!(refusals.len(), 12, "{text}");
+    let model = std::fs::read_to_string(&out).unwrap();
+    for name in ["id", "calls_bad", "calls_refused"] {
+        assert!(full(&model, name), "{name}: {model}");
+    }
+    for name in ["inside", "nested", "to_declared", "to_member", "twice", "shadow", "from_bool", "no_start", "two_names", "bad_contract", "refused_body"] {
+        assert!(bare(&model, name), "{name}: {model}");
+    }
+    assert!(method_lines(&model, "declared").is_none() && method_lines(&model, "one").is_none(), "{model}");
+    let (ok, said) = verify(&dafny, &out);
+    assert!(ok && said.contains(" 0 errors"), "{said}\n{model}");
+}
+
+/// Overloads and one name in two namespaces are different functions, each with its own method and Dafny name, decision 0058. This
+/// closes the finding of the review of slice 1 that two methods had one name and Dafny refused the file.
+#[test]
+fn overloads_and_namespaces_each_have_their_own_method() {
+    let Some(dafny) = dafny() else { return };
+    if !clang_tidy_available() {
+        return;
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let (o, out) = model("model-overloads.cpp", dir.path());
+    assert_eq!(o.status.code(), Some(0), "stdout: {} stderr: {}", stdout(&o), stderr(&o));
+    let text = std::fs::read_to_string(&out).unwrap();
+    let headers: Vec<&str> = text.lines().filter(|l| l.starts_with("method ")).map(|l| &l[..l.find('(').unwrap()]).collect();
+    let distinct: std::collections::BTreeSet<&str> = headers.iter().copied().collect();
+    assert_eq!((headers.len(), distinct.len()), (7, 7), "{text}");
+    let (ok, said) = verify(&dafny, &out);
+    assert!(ok && said.contains(" 0 errors"), "{said}\n{text}");
+}
+
+/// The model does not wrap a narrowing cast, decision 0058. Dafny must prove that the value fits, and with no contract it cannot.
+#[test]
+fn a_narrowing_cast_that_may_not_fit_fails_in_dafny() {
+    let Some(dafny) = dafny() else { return };
+    if !clang_tidy_available() {
+        return;
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let (o, out) = model("model-narrow.cpp", dir.path());
+    assert_eq!(o.status.code(), Some(0), "stdout: {} stderr: {}", stdout(&o), stderr(&o));
+    let text = std::fs::read_to_string(&out).unwrap();
+    assert!(full(&text, "cut"), "{text}");
+    let (ok, said) = verify(&dafny, &out);
+    assert!(!ok && said.contains("int32"), "{said}\n{text}");
 }
 
 /// Pull `"key":"value"` or `"key":123` out of one JSON line without a JSON library.

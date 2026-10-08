@@ -63,3 +63,4 @@ Status is `decided`, `proposed` (the default until someone objects or the thin s
 | [0055](0055-writes-templates-and-proxies-by-what-the-compiler-resolves.md) | Writes, templates and proxies count by what the compiler resolves: a non-const rvalue reference writes, type checks read instantiations, a library proxy is a reference | decided |
 | [0056](0056-the-translator-is-the-gate-and-its-decisions-are-proved.md) | The translator is the gate, and its decisions live in the Verus core. The plugin only writes the tree as data | decided |
 | [0057](0057-the-tree-crosses-as-json-in-the-cores-shape.md) | No external translator. The plugin writes the tree as JSON in the core's shape, and the first slice is clamp | decided |
+| [0058](0058-locals-integral-casts-and-calls.md) | The second slice: locals, integral casts, braced values and calls. A call stands alone, and each name is declared once | decided |
