@@ -157,6 +157,10 @@ struct Names {
     /// The Dafny name of each struct by the id of its key.
     datatypes: HashMap<u32, String>,
     file: String,
+    /// The functions that the companion file declares. Empty when there is no file or the scan refused it, decision 0079.
+    declared: Vec<String>,
+    /// The first call to an undeclared name in a contract line, by the place of the line.
+    bad_calls: HashMap<u32, String>,
 }
 
 impl Names {
@@ -324,7 +328,13 @@ fn lex(text: &str, line: u32, names: &mut Names) -> Vec<Tok> {
             toks.push(match &rest[..end] {
                 "result" => Tok::Result,
                 "forall" => Tok::Forall,
-                w => Tok::Ident(names.id(w)),
+                w => {
+                    // A name followed by `(` is a call, and the companion file must declare it.
+                    if rest[end..].trim_start().starts_with('(') && !names.declared.iter().any(|d| d == w) {
+                        names.bad_calls.entry(line).or_insert_with(|| w.to_string());
+                    }
+                    Tok::Ident(names.id(w))
+                }
             });
             rest = &rest[end..];
         } else if c.is_ascii_digit() {
@@ -348,6 +358,7 @@ fn lex(text: &str, line: u32, names: &mut Names) -> Vec<Tok> {
                 ')' => Tok::RParen,
                 '[' => Tok::LBracket,
                 ']' => Tok::RBracket,
+                ',' => Tok::Comma,
                 _ => Tok::Unknown(names.id(&format!("'{c}' in a contract")), line),
             });
             rest = &rest[c.len_utf8()..];
@@ -382,9 +393,15 @@ fn conds(v: Vec<JCond>, names: &mut Names) -> Conds {
                         "invariant" => CondKind::Invariant,
                         _ => CondKind::Decreases,
                     };
-                    match parse_contract(&lex(&c.text, line, names), line) {
-                        Ok(e) => (want, e),
-                        Err(r) => (CondKind::Bad(r), Expr::Int(0)),
+                    let toks = lex(&c.text, line, names);
+                    // A call to an undeclared name is refused by `sentence` at this line, so the core refuses the line as a form it cannot read.
+                    if names.bad_calls.contains_key(&line) {
+                        (CondKind::Bad(Refusal::Syntax(line)), Expr::Int(0))
+                    } else {
+                        match parse_contract(&toks, line) {
+                            Ok(e) => (want, e),
+                            Err(r) => (CondKind::Bad(r), Expr::Int(0)),
+                        }
                     }
                 }
                 word => (CondKind::Other(names.id(word)), Expr::Int(0)),
@@ -393,6 +410,132 @@ fn conds(v: Vec<JCond>, names: &mut Names) -> Conds {
         items.push((kind, e, line, param_names(c.params, names)));
     }
     items.into_iter().rev().fold(Conds::Nil, |rest, (k, e, l, p)| Conds::Cons(k, e, l, p, Box::new(rest)))
+}
+
+// ------------------------------------------------------------------ the companion file
+
+/// The keywords of Dafny 4.11 that a companion file may not hold, decision 0080. The words that it may hold are `function`, `predicate`,
+/// `ghost`, `requires`, `ensures`, `decreases`, `reads`, `if`, `then`, `else`, `var`, `match`, `case`, `forall`, `exists`, `true`, `false`,
+/// `as`, `is`, `in`, `int`, `nat`, `bool`, `seq`, `set`, `map` and `multiset`.
+const BANNED: &[&str] = &[
+    "abstract", "allocated", "assert", "assume", "break", "by", "calc", "char", "class", "codatatype", "colemma", "comethod", "const", "constructor",
+    "continue", "copredicate", "datatype", "default", "expect", "export", "extends", "fresh", "greatest", "imap", "import", "include", "inductive",
+    "invariant", "iset", "iterator", "label", "lemma", "least", "method", "modifies", "modify", "module", "nameonly", "new", "newtype", "null", "object",
+    "old", "opaque", "opened", "ORDINAL", "print", "provides", "real", "refines", "return", "returns", "reveal", "reveals", "static", "string", "this",
+    "to", "trait", "twostate", "type", "unchanged", "while", "witness", "yield", "yields",
+];
+
+/// The names of the prelude. A companion file may not declare them, nor a name with a prefix of the model, decision 0083.
+const MODEL_NAMES: &[&str] = &["Option", "Some", "None", "Vec", "value", "int32", "int64", "uint8", "uint32", "uint64"];
+
+/// The sentence for a word of a companion file that is not allowed.
+fn only_functions(word: &str) -> String {
+    format!("{word}: a companion file can hold only functions and predicates.")
+}
+
+/// The refusals of a companion file as (line, sentence), and the names it declares, decision 0080. The scan reads comments as Dafny does:
+/// `//` to the end of the line, and `/* */` that nest. It refuses a comment that does not end, each `"`, `@` and `{:`, and each keyword of
+/// Dafny that is not on the short list. Each word is refused once for each line. The file holds nothing else than `function` and
+/// `predicate` declarations then, and a file with a refusal declares no name.
+// ponytail: a string is skipped to the next quote on its line, because the file is refused at the quote anyway. A file with no quote
+// has no string. Upgrade: the lexer in the core, decision 0077.
+fn scan_companion(text: &str) -> (Vec<(u32, String)>, Vec<String>) {
+    // The bytes first, decision 0083. Dafny ends a line at a carriage return alone, so the lines below are those of a file with no lone one.
+    let mut bad = Vec::new();
+    let mut line = 1u32;
+    let mut chars = text.chars().peekable();
+    while let Some(c) = chars.next() {
+        match c {
+            '\n' => line += 1,
+            '\r' if chars.peek() == Some(&'\n') => {}
+            ' '..='~' | '\t' => {}
+            _ => bad.push((line, "a character that a companion file cannot hold.".to_string())),
+        }
+    }
+    bad.dedup();
+    if !bad.is_empty() {
+        return (bad, Vec::new());
+    }
+    let (mut refused, mut declared) = (Vec::new(), Vec::new());
+    let mut depth = 0usize;
+    let mut opened = 0u32;
+    let mut after_decl = false;
+    for (n, line) in text.lines().enumerate() {
+        let n = n as u32 + 1;
+        let mut rest = line;
+        while let Some(c) = rest.chars().next() {
+            let mut used = c.len_utf8();
+            // A comment does not part a name from `function`.
+            let in_comment = depth > 0 || rest.starts_with("/*");
+            if depth > 0 {
+                if rest.starts_with("/*") {
+                    depth += 1;
+                    used = 2;
+                } else if rest.starts_with("*/") {
+                    depth -= 1;
+                    used = 2;
+                }
+            } else if rest.starts_with("//") {
+                break;
+            } else if rest.starts_with("/*") {
+                if depth == 0 {
+                    opened = n;
+                }
+                depth += 1;
+                used = 2;
+            } else if c.is_ascii_alphabetic() || c == '_' || c == '?' {
+                used = rest.find(|ch: char| !(ch.is_ascii_alphanumeric() || matches!(ch, '_' | '\'' | '?'))).unwrap_or(rest.len());
+                let w = &rest[..used];
+                if after_decl {
+                    if MODEL_NAMES.contains(&w) || ["v_", "c_", "S_", "f_", "b_"].iter().any(|p| w.starts_with(p)) {
+                        refused.push((n, format!("{w}: a name that the model uses.")));
+                    }
+                    declared.push(w.to_string());
+                }
+                after_decl = matches!(w, "function" | "predicate");
+                if BANNED.contains(&w) {
+                    refused.push((n, only_functions(w)));
+                }
+                rest = &rest[used..];
+                continue;
+            } else if c.is_ascii_digit() {
+                // A run of digits ends where a letter starts, so `1newtype` is the number 1 and the word newtype.
+                used = rest.find(|ch: char| !ch.is_ascii_digit()).unwrap_or(rest.len());
+            } else if c == '"' {
+                refused.push((n, only_functions("\"")));
+                let mut skip = 1;
+                let mut chars = rest[1..].chars();
+                while let Some(d) = chars.next() {
+                    skip += d.len_utf8();
+                    if d == '\\' {
+                        skip += chars.next().map_or(0, char::len_utf8);
+                    } else if d == '"' {
+                        break;
+                    }
+                }
+                used = skip.min(rest.len());
+            } else if c == '@' {
+                refused.push((n, only_functions("@")));
+            } else if rest.starts_with("{:") {
+                refused.push((n, only_functions("{:")));
+                used = 2;
+            }
+            if !c.is_whitespace() && !in_comment {
+                after_decl = false;
+            }
+            rest = &rest[used..];
+        }
+    }
+    if depth > 0 {
+        refused.push((opened, "a comment that does not end.".to_string()));
+    }
+    refused.sort();
+    refused.dedup();
+    if refused.is_empty() {
+        (refused, declared)
+    } else {
+        (refused, Vec::new())
+    }
 }
 
 // ------------------------------------------------------------------ names that Dafny can read
@@ -536,6 +679,16 @@ fn mangle(name: &str) -> String {
     format!("v_{name}")
 }
 
+fn dargs(args: &DArgs, names: &Names) -> Vec<String> {
+    let mut shown = Vec::new();
+    let mut rest = args;
+    while let DArgs::Cons(a, next) = rest {
+        shown.push(dexpr(a, names));
+        rest = next;
+    }
+    shown
+}
+
 /// Every operator has its parentheses, so Dafny's precedence never matters.
 fn dexpr(e: &DExpr, names: &Names) -> String {
     match e {
@@ -553,21 +706,14 @@ fn dexpr(e: &DExpr, names: &Names) -> String {
         DExpr::Get(a) => format!("{}.value", dexpr(a, names)),
         DExpr::Nothing => "None".to_string(),
         DExpr::Just(a) => format!("Some({})", dexpr(a, names)),
-        DExpr::Ctor(k, args) => {
-            let mut shown = Vec::new();
-            let mut rest = &**args;
-            while let DArgs::Cons(a, next) = rest {
-                shown.push(dexpr(a, names));
-                rest = next;
-            }
-            format!("{}({})", names.datatypes[k], shown.join(", "))
-        }
+        DExpr::Ctor(k, args) => format!("{}({})", names.datatypes[k], dargs(args, names).join(", ")),
         DExpr::Len(a) => format!("|{}|", dexpr(a, names)),
         DExpr::Index(a, i) => format!("{}[{}]", dexpr(a, names), dexpr(i, names)),
         DExpr::Drop(a, k) => format!("{}[{}..]", dexpr(a, names), dexpr(k, names)),
         // The prefix `b_` keeps a bound name apart from `v_` and `c_` names.
         DExpr::Forall(j, b) => format!("(forall b_{}: int :: {})", names.text(*j), dexpr(b, names)),
         DExpr::Bound(j) => format!("b_{}", names.text(*j)),
+        DExpr::Apply(f, args) => format!("{}({})", names.text(*f), dargs(args, names).join(", ")),
         DExpr::Chain(o1, o2, a, b, c) => format!("({} {} {} {} {})", dexpr(a, names), dop(*o1), dexpr(b, names), dop(*o2), dexpr(c, names)),
     }
 }
@@ -588,6 +734,8 @@ pub struct Line {
 /// The map from the lines of the Dafny text to C++, decision 0068. `lines[n - 1]` is line n of the text. A blank line has none.
 pub struct Map {
     pub lines: Vec<Option<Line>>,
+    /// The indexes in `lines` of the companion file's text, decision 0079.
+    pub companion: std::ops::Range<usize>,
     /// The file and line of each place.
     pub places: Vec<(String, u32)>,
     /// The word and text of the contract line at a place, as the author wrote them.
@@ -596,6 +744,8 @@ pub struct Map {
 
 pub struct Translation {
     pub dafny: String,
+    /// The number of methods in the Dafny text, with a body or without, decision 0080.
+    pub methods: usize,
     pub refusals: Vec<Refusing>,
     pub map: Map,
 }
@@ -619,13 +769,7 @@ impl Printer<'_> {
     }
 
     fn call(&self, m: u32, args: &DArgs) -> String {
-        let mut shown = Vec::new();
-        let mut rest = args;
-        while let DArgs::Cons(a, next) = rest {
-            shown.push(dexpr(a, self.names));
-            rest = next;
-        }
-        format!("{}({})", self.methods[&m], shown.join(", "))
+        format!("{}({})", self.methods[&m], dargs(args, self.names).join(", "))
     }
 
     fn stmts(&mut self, ss: &DStmts, depth: usize) {
@@ -747,6 +891,7 @@ fn sentence(r: Refusal, names: &Names) -> (u32, String) {
         Refusal::Construct(k, line) => (line, format!("{}: the translator has no rule for it yet.", names.text(k))),
         Refusal::Name(n, line) => (line, format!("{} in the contract is no parameter.", names.text(n))),
         Refusal::NoField(f, line) => (line, format!("{} in the contract is no field of the struct.", names.text(f))),
+        Refusal::Syntax(line) if names.bad_calls.contains_key(&line) => (line, format!("{} is no function of the companion file.", names.bad_calls[&line])),
         Refusal::Syntax(line) => (line, "the contract line has a form the translator cannot read.".to_string()),
         Refusal::Backslash(line) => (line, "a contract line that ends in a backslash.".to_string()),
         Refusal::Callee(n, line) => (line, format!("a call to {}, which has no model in view.", names.text(n))),
@@ -775,15 +920,32 @@ pub type Refusing = (String, u32, String);
 /// The Dafny file for the plugin's lines, the refusals in order each once, and the map from the lines of the file to C++. A function whose
 /// signature is refused is not in the file. A function whose contract or body is refused is a method with no contract and no body. A `//@`
 /// line that no function claimed is a refusal too.
-pub fn translate(lines: &str) -> Result<Translation> {
+pub fn translate(lines: &str, companion: Option<(&str, &str)>) -> Result<Translation> {
     let mut names = Names::default();
     let mut refusals = Vec::new();
     let mut funcs = Vec::new();
     let mut structs = Vec::new();
+    let mut companion_ok = false;
+    if let Some((path, text)) = companion {
+        let (refused, declared) = scan_companion(text);
+        refusals.extend(refused.into_iter().map(|(line, sentence)| (path.to_string(), line, sentence)));
+        names.declared = declared;
+        companion_ok = refusals.is_empty();
+    }
+    // A function that names a struct refused for its name has no method: the Dafny text would print the name. The refusal of the struct stands.
+    // ponytail: a struct that holds a struct refused for its name is not caught. Upgrade: close the set under the fields.
+    // A dropped function shows its other defects only after the struct is renamed.
+    let mut items = Vec::new();
     for l in lines.lines().filter(|l| !l.trim().is_empty()) {
-        match serde_json::from_str(l).with_context(|| format!("cannot read a line of the tree: {l}"))? {
+        items.push((serde_json::from_str(l).with_context(|| format!("cannot read a line of the tree: {l}"))?, l));
+    }
+    let unreadable_keys: Vec<String> =
+        items.iter().filter_map(|(i, _)| if let Item::Struct(st) = i { unreadable_struct_name(st).map(|_| serde_json::to_string(&st.key).unwrap_or_default()) } else { None }).collect();
+    for (item, l) in items {
+        match item {
             Item::Orphan { orphan, file } => refusals.push((file, orphan, "a contract line that belongs to no function.".to_string())),
             Item::Struct(st) => structs.push(st),
+            Item::Function(_) if unreadable_keys.iter().any(|k| l.contains(k.as_str())) => {}
             Item::Function(f) => match unreadable_name(&f) {
                 Some(n) => refusals.push((f.file.clone(), f.line, format!("{n}: a name with a character Dafny cannot read."))),
                 None => funcs.push(f),
@@ -823,6 +985,12 @@ pub fn translate(lines: &str) -> Result<Translation> {
     let fns = funcs.into_iter().rev().map(|f| function(f, &mut names)).fold(Fns::Nil, |rest, f| Fns::Cons(Box::new(f), Box::new(rest)));
     let mut models = translate_unit(&fns, &table);
     let mut smodels = translate_structs(&table);
+    // The companion file, when the scan passed it, goes after the methods. Each of its lines is a place in its own file.
+    let (mut companion_text, mut companion_places) = (String::new(), Vec::new());
+    if let Some((path, text)) = companion.filter(|(_, text)| companion_ok && !text.is_empty()) {
+        companion_places = (1..=text.lines().count()).map(|n| Some(Line { place: names.place(path, n as u32), scope: Vec::new(), own: Vec::new() })).collect();
+        companion_text = if text.ends_with('\n') { text.to_string() } else { format!("{text}\n") };
+    }
     let mut p = Printer { names: &names, methods: &methods, out: PRELUDE.to_string(), lines: Vec::new(), scope: Vec::new(), own: Vec::new() };
     p.lines.extend(PRELUDE.lines().map(|_| None));
     let mut refused_at = Vec::new();
@@ -844,15 +1012,18 @@ pub fn translate(lines: &str) -> Result<Translation> {
         }
         smodels = *rest;
     }
+    let mut printed = 0;
     for _ in 0..count {
         let Models::Cons(model, rest) = models else { unreachable!("one model for each function") };
         let refused = match model {
             Model::Full(m) => {
                 p.method(&m, at[&m.name]);
+                printed += 1;
                 None
             }
             Model::Bare(key, params, ret, r) => {
                 p.header(key, &params, ret, at[&key]);
+                printed += 1;
                 Some(r)
             }
             Model::Refused(r) => Some(r),
@@ -860,6 +1031,11 @@ pub fn translate(lines: &str) -> Result<Translation> {
         refused_at.extend(refused.map(|r| sentence(r, &names)));
         models = *rest;
     }
+    // The companion file follows the methods, so none of its comments reaches a method, decision 0083.
+    let start = p.lines.len();
+    p.lines.extend(companion_places);
+    p.out.push_str(&companion_text);
+    let companion_lines = start..p.lines.len();
     let (dafny, lines) = (p.out, p.lines);
     for (place, sentence) in refused_at {
         let (file, line) = names.places[place as usize].clone();
@@ -867,5 +1043,5 @@ pub fn translate(lines: &str) -> Result<Translation> {
     }
     refusals.sort();
     refusals.dedup();
-    Ok(Translation { dafny, refusals, map: Map { lines, places: names.places, contracts: names.contracts } })
+    Ok(Translation { dafny, methods: printed, refusals, map: Map { lines, companion: companion_lines, places: names.places, contracts: names.contracts } })
 }

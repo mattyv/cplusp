@@ -2735,7 +2735,8 @@ fn prove_names_a_parse_error_in_the_companion_file() {
     let text = stdout(&o);
     assert_eq!(o.status.code(), Some(1), "stdout: {text} stderr: {}", stderr(&o));
     assert!(!stderr(&o).contains("dafny failed"), "stdout: {text} stderr: {}", stderr(&o));
-    assert!(text.lines().any(|l| l.starts_with("Not provable: ") && l.contains("model-spec-brace.spec.dfy:") && l.contains(": Dafny says: ")), "{text}");
+    let want = "model-spec-brace.spec.dfy:2: Dafny says: rbrace expected.";
+    assert!(text.lines().any(|l| l.starts_with("Not provable: ") && l.ends_with(want)), "{want}: {text}");
 }
 
 /// When Dafny verifies fewer items than the model has methods, and nothing else is wrong, prove says so in one line, decision 0083.

@@ -909,7 +909,15 @@ fn read_model(plugin: Option<&Path>, file: &Path, clang_args: &[String]) -> Resu
     if !run.status.success() {
         bail!("clang-tidy failed ({}):\n{}{}", run.status, String::from_utf8_lossy(&run.stdout), String::from_utf8_lossy(&run.stderr));
     }
-    Ok((model::translate(&fs::read_to_string(&tree).context("cannot read the tree")?)?, cwd))
+    // The companion file of FILE.cpp is FILE.spec.dfy next to it, decision 0079.
+    let spec = file.with_extension("spec.dfy");
+    let companion = match fs::read_to_string(&spec) {
+        Ok(text) => Some((spec.display().to_string(), text)),
+        Err(e) if e.kind() == ErrorKind::NotFound => None,
+        Err(e) => return Err(e).with_context(|| format!("cannot read {}", spec.display())),
+    };
+    let tree = fs::read_to_string(&tree).context("cannot read the tree")?;
+    Ok((model::translate(&tree, companion.as_ref().map(|(p, t)| (p.as_str(), t.as_str())))?, cwd))
 }
 
 /// The path of a place, as the gate shows it: from the working directory.
@@ -941,7 +949,7 @@ fn prove(common: &Common, plugin: Option<&Path>, time_limit: u32, file: &Path, c
     }
     let (t, cwd) = read_model(plugin, file, clang_args)?;
     print_refusals(&t, &cwd);
-    prove::run(&t, time_limit, !t.refusals.is_empty(), &|path| shown_from(&cwd, path))
+    prove::run(&t, time_limit, !t.refusals.is_empty(), &shown_from(&cwd, &file.display().to_string()), &|path| shown_from(&cwd, path))
 }
 
 /// The line the gate prints for a compiler error. The model prints the same.
