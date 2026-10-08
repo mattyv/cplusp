@@ -44,3 +44,14 @@ int32_t start(int32_t n) {
   }
   return j;
 }
+
+// The condition of a loop, and its end, assume all the invariants of the loop.
+size_t cond(const std::vector<int32_t>& v) {
+  size_t i = 0;
+  //@ invariant i <= 10
+  //@ decreases 10 - i
+  while (i < 10 && v[i] == 0) {
+    ++i;
+  }
+  return i;
+}

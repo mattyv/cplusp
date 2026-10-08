@@ -2253,6 +2253,9 @@ fn prove_gives_each_obligation_its_own_line_and_assumptions() {
     let lines = under(&text, "model-prove-places.cpp:39: the invariant may not hold when the loop starts.");
     assert!(lines.iter().any(|l| l.ends_with("model-prove-places.cpp:36: requires 0 <= n")), "{text}");
     assert!(!lines.iter().any(|l| l.contains("model-prove-places.cpp:40:")), "{text}");
+    // The condition of a loop holds under all the invariants of the loop.
+    let lines = under(&text, "model-prove-places.cpp:53: the index may be out of range.");
+    assert!(lines.iter().any(|l| l.starts_with("  It assumes: ") && l.ends_with("model-prove-places.cpp:51: invariant i <= 10")), "{text}");
 }
 
 /// Pull `"key":"value"` or `"key":123` out of one JSON line without a JSON library.
