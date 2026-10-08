@@ -2647,6 +2647,20 @@ fn prove_stops_at_the_refusal_of_a_struct_name() {
     assert!(!stderr(&o).contains("dafny failed"), "stdout: {text} stderr: {}", stderr(&o));
 }
 
+/// The thin slice, decision 0056: radix_find proves end to end. Gate, translator and Dafny, from C++ with a contract and a companion
+/// file of specification functions. The height bound is the rule of the battery case stack_depth.
+#[test]
+fn radix_find_proves_end_to_end() {
+    let Some(dafny) = dafny() else { return };
+    if !clang_tidy_available() {
+        return;
+    }
+    let o = prove("model-radix.cpp", &["--time-limit", "60"], &dafny);
+    let text = stdout(&o);
+    assert_eq!(o.status.code(), Some(0), "stdout: {text} stderr: {}", stderr(&o));
+    assert_eq!(text.lines().last(), Some("ok: proved"), "{text}");
+}
+
 /// Pull `"key":"value"` or `"key":123` out of one JSON line without a JSON library.
 fn field(line: &str, key: &str) -> String {
     let needle = format!("\"{key}\":");
