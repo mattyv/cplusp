@@ -642,8 +642,8 @@ impl Printer<'_> {
 
     fn method(&mut self, m: &Method, place: u32) {
         self.header(m.name, &m.params, m.ret, place);
-        // A requires line has the requires lines before it in scope, and an ensures line and the body have all of them.
-        for (word, list) in [("requires", &m.requires), ("ensures", &m.ensures)] {
+        // A requires line has the requires lines before it in scope, and an ensures or decreases line and the body have all of them.
+        for (word, list) in [("requires", &m.requires), ("ensures", &m.ensures), ("decreases", &m.decreases)] {
             let mut cs = list;
             while let DConds::Cons(e, line, next) = cs {
                 self.put(1, format!("{word} {}", dexpr(e, self.names)), *line);
@@ -679,7 +679,7 @@ fn sentence(r: Refusal, names: &Names) -> (u32, String) {
         Refusal::Extent(line) => (line, "a sequence made from one of another length or element.".to_string()),
         Refusal::Misplaced(line) => (
             line,
-            "a contract line in the wrong place. A requires or an ensures line goes above a function. An invariant or a decreases line goes above a loop."
+            "a contract line in the wrong place. A requires, an ensures or a decreases line goes above a function. An invariant or a decreases line goes above a loop."
                 .to_string(),
         ),
     }

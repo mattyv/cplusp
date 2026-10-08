@@ -87,6 +87,7 @@ fn sentence(message: &str) -> String {
         "index out of range" => "the index may be out of range.".to_string(),
         "this loop invariant could not be proved on entry" => "the invariant may not hold when the loop starts.".to_string(),
         "this invariant could not be proved to be maintained by the loop" => "the loop may not keep the invariant.".to_string(),
+        "decreases clause might not decrease" => "the decreases line may not decrease at this call.".to_string(),
         "decreases expression might not decrease" => "the decreases line may not decrease on each turn of the loop.".to_string(),
         "decreases expression must be bounded below by 0" => "the decreases line may go below zero.".to_string(),
         "a precondition for this call could not be proved" => "a requires line of the callee may not hold.".to_string(),
