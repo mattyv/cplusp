@@ -17,3 +17,7 @@ std::optional<int32_t> nonneg(int32_t x) {
 int32_t member(std::optional<int32_t> o) {
   return o.value();
 }
+
+std::optional<int32_t> next(int32_t x) {
+  return x + 1;
+}

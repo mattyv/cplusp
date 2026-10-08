@@ -26,3 +26,19 @@ struct Point {
 int32_t of_struct(std::optional<Point> p) {
   return 0;
 }
+
+// A construction from std::nullopt is None only when it names std::nullopt itself. Any other expression of its type is refused.
+//@ ensures true
+std::nullopt_t gives_nullopt();
+
+std::optional<int32_t> dropped_call() {
+  return gives_nullopt();
+}
+
+std::optional<int32_t> dropped_read(std::optional<int32_t> o) {
+  return (*o, std::nullopt);
+}
+
+std::optional<int64_t> widen(std::optional<int32_t> o) {
+  return o;
+}

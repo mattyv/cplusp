@@ -48,3 +48,9 @@ std::optional<int32_t> none() {
 std::optional<int32_t> seven() {
   return nonneg(7);
 }
+
+//@ requires x < 1000
+//@ ensures result.has_value() && result.value() == x + 1
+std::optional<int32_t> next(int32_t x) {
+  return x + 1;
+}

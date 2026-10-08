@@ -2417,10 +2417,14 @@ fn prove_names_each_read_of_an_optional_that_may_be_empty() {
     // The ensures line reads the value of the empty optional that line 12 gives, so it cannot hold on that return either.
     let want = "model-optional-wrong.cpp:12: the ensures line may not hold on this return.";
     assert!(failed.iter().any(|l| l.ends_with(want)), "{want}: {text}");
-    assert_eq!(failed.len(), 4, "{text}");
+    // A value that the compiler turns into an optional is checked like any other value.
+    let want = "model-optional-wrong.cpp:22: the value may not fit int32_t.";
+    assert!(failed.iter().any(|l| l.ends_with(want)), "{want}: {text}");
+    assert_eq!(failed.len(), 5, "{text}");
 }
 
-/// Each use of an optional with no rule is refused at its line, decision 0075.
+/// Each use of an optional with no rule is refused at its line, decision 0075. A construction from an expression of type
+/// `std::nullopt_t` that is not `std::nullopt` itself is refused, so its argument cannot vanish from the model.
 #[test]
 fn optionals_with_no_rule_are_refused_at_their_lines() {
     if !clang_tidy_available() {
@@ -2436,11 +2440,14 @@ fn optionals_with_no_rule_are_refused_at_their_lines() {
         (14, "CXXOperatorCallExpr: the translator has no rule for it yet."),
         (19, "CXXOperatorCallExpr: the translator has no rule for it yet."),
         (26, "std::optional<Point>: the translator has no rule for it yet."),
+        (35, "CXXConstructExpr: the translator has no rule for it yet."),
+        (39, "CXXConstructExpr: the translator has no rule for it yet."),
+        (43, "a sequence or an optional made from one of another type or length."),
     ] {
         let want = format!("model-optional-refuse.cpp:{line}: {expected}");
         assert!(refusals.iter().any(|l| l.ends_with(&want)), "{want}: {text}");
     }
-    assert_eq!(refusals.len(), 4, "{text}");
+    assert_eq!(refusals.len(), 7, "{text}");
 }
 
 /// Pull `"key":"value"` or `"key":123` out of one JSON line without a JSON library.
