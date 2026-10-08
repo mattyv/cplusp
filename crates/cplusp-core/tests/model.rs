@@ -732,3 +732,13 @@ fn a_struct_has_a_model_when_each_field_is_a_value_type_of_the_subset() {
     let seq_field = Structs::Cons(POINT, 4, Params::Cons(FX, Ty::Seq(Scalar::I32, Extent::Dynamic), Box::new(Params::Nil)), Box::new(Structs::Nil));
     assert_eq!(translate_structs(&seq_field), StructModels::Cons(Err(Refusal::SeqParam(4)), Box::new(StructModels::Nil)));
 }
+
+#[test]
+fn the_parser_reads_a_field_after_a_name_or_result() {
+    // result.x == p.y, and b.hi.x
+    let toks = vec![Tok::Result, Tok::Field(FX), Tok::Op(BinOp::Eq), Tok::Ident(A), Tok::Field(FY)];
+    let want = Expr::Bin(BinOp::Eq, b(Expr::Field(b(Expr::Result), FX)), b(Expr::Field(b(Expr::Name(A)), FY)));
+    assert_eq!(parse_contract(&toks, 3), Ok(want));
+    let toks = vec![Tok::Ident(B), Tok::Field(FY), Tok::Field(FX)];
+    assert_eq!(parse_contract(&toks, 4), Ok(Expr::Field(b(Expr::Field(b(Expr::Name(B)), FY)), FX)));
+}

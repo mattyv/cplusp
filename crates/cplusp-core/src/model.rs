@@ -2500,7 +2500,7 @@ pub fn translate_unit(all: &Fns, sd: &Structs) -> (r: Models)
 // ------------------------------------------------------------------ the contract parser
 
 /// A token of a contract line. The shell cuts the text into tokens. `Op` holds `- ` as `Sub`, and the parser reads it as a
-/// negation where no operand is before it. `Size` is the text `.size()`, decision 0064. `Unknown` is text with no token, by the id
+/// negation where no operand is before it. `Size` is the text `.size()`, decision 0064. `Field` is `.name`, decision 0073. `Unknown` is text with no token, by the id
 /// of its kind and its line.
 #[derive(Structural, PartialEq, Eq, Clone, Copy, Debug)]
 pub enum Tok {
@@ -2514,6 +2514,7 @@ pub enum Tok {
     LBracket,
     RBracket,
     Size,
+    Field(u32),
     Forall,
     ColonColon,
     Unknown(u32, u32),
@@ -2735,6 +2736,14 @@ fn parse_unary(toks: &Vec<Tok>, pos: usize, line: u32) -> (r: Result<(Expr, usiz
     }
 }
 
+/// A token that follows an atom: `.size()`, `.name` or `[`.
+fn is_postfix(t: Tok) -> bool {
+    match t {
+        Tok::Size | Tok::Field(_) | Tok::LBracket => true,
+        _ => false,
+    }
+}
+
 fn parse_postfix(toks: &Vec<Tok>, pos: usize, line: u32) -> (r: Result<(Expr, usize), Refusal>)
     requires
         pos <= toks.len(),
@@ -2746,7 +2755,7 @@ fn parse_postfix(toks: &Vec<Tok>, pos: usize, line: u32) -> (r: Result<(Expr, us
         Ok(x) => x,
         Err(e) => return Err(e),
     };
-    while p < toks.len() && (toks[p] == Tok::Size || toks[p] == Tok::LBracket)
+    while p < toks.len() && is_postfix(toks[p])
         invariant
             pos < p <= toks.len(),
             !unknown_expr(a),
@@ -2754,6 +2763,9 @@ fn parse_postfix(toks: &Vec<Tok>, pos: usize, line: u32) -> (r: Result<(Expr, us
     {
         if toks[p] == Tok::Size {
             a = Expr::Size(Box::new(a));
+            p = p + 1;
+        } else if let Tok::Field(f) = toks[p] {
+            a = Expr::Field(Box::new(a), f);
             p = p + 1;
         } else {
             match parse_implies(toks, p + 1, line) {
