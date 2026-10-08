@@ -12,7 +12,7 @@ ghost predicate Wellformed(n: S_Node) {
   forall i :: 0 <= i < |n.f_children| ==> |n.f_children[i].f_prefix| > 0
 }
 
-// A quantifier over all integers, which only a ghost predicate may hold, decision 0080.
+// A quantifier over all integers, which only a ghost predicate may hold, decision 0080. Each integer above a is at least a + 1.
 ghost predicate Above(a: int) {
-  exists b: int :: b < a
+  forall b: int :: b > a ==> b - 1 >= a
 }
