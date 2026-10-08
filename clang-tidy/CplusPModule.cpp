@@ -64,8 +64,8 @@ namespace {
 
 // The patterns of the policy run on the full tree. clang-tidy 18 gives a check no traversal kind
 // unless it overrides getCheckTraversalKind, so a pattern sees implicit nodes. The `sign_compare`
-// pattern relies on that: it matches the cast the compiler adds. The hand-written checks below
-// override it and read the tree as spelled in the source.
+// pattern relies on that: it matches the cast the compiler adds. Of the hand-written checks below, only three read the
+// tree as spelled in the source: mutable, inexact-literal and lambda-limits, through SpelledCheck. The others see the full tree.
 class MatcherCheck : public ClangTidyCheck {
 public:
   // The base class keeps the context private, so the check keeps its own pointer.
@@ -173,18 +173,19 @@ bool isPureInterface(const CXXRecordDecl *Record) {
     if (Method && !Method->isImplicit() && !Method->isPureVirtual() && !(isa<CXXDestructorDecl>(Method) && Method->isVirtual()))
       return false;
   }
-  // ponytail: a dependent base has no record yet, so it counts as no base. A template's instantiations are not
-  // visited, so `template <class T> struct X : Concrete, Holder<T>` passes. The upgrade is to visit instantiations.
+  // A dependent base has no record yet, so it counts as no base. The check visits every instantiation, decision 0055,
+  // where `template <class T> struct X : Concrete, Holder<T>` has its bases.
   return llvm::all_of(Record->bases(), [](const CXXBaseSpecifier &Base) {
     const CXXRecordDecl *Parent = Base.getType()->getAsCXXRecordDecl();
     return !Parent || isPureInterface(Parent);
   });
 }
 
-// cplusp-multiple-inheritance: more than one direct base that is not a pure interface.
-class MultipleInheritanceCheck : public SpelledCheck {
+// cplusp-multiple-inheritance: more than one direct base that is not a pure interface. It reads the bases the compiler resolves,
+// so it visits template instantiations, decision 0055. An instantiation reports at the place in the pattern.
+class MultipleInheritanceCheck : public ClangTidyCheck {
 public:
-  using SpelledCheck::SpelledCheck;
+  using ClangTidyCheck::ClangTidyCheck;
   void registerMatchers(MatchFinder *Finder) override {
     Finder->addMatcher(cxxRecordDecl(isDefinition(), unless(isImplicit())).bind("class"), this);
   }
@@ -208,13 +209,14 @@ const ClassTemplateSpecializationDecl *asSpan(QualType Type) {
   return Span && Span->getName() == "span" && inStdNamespace(Span) ? Span : nullptr;
 }
 
-// A parameter type the function can write through: a non-const lvalue reference, a pointer to non-const, or a std::span of
-// non-const elements, which writes through like a pointer.
+// A type the holder can write through, decision 0055: a non-const lvalue or rvalue reference, a pointer to non-const, or a
+// std::span of non-const elements, which writes through like a pointer. An rvalue reference writes too: `f(std::move(a),
+// std::move(a))` moves one object twice. A forwarding reference has its instantiated type here, so it counts when it is non-const.
 bool isMutableType(QualType Type) {
   Type = Type.getCanonicalType();
   if (const auto *Span = asSpan(Type))
     return !Span->getTemplateArgs()[0].getAsType().isConstQualified();
-  return (Type->isLValueReferenceType() || Type->isPointerType()) && !Type->getPointeeType().isConstQualified();
+  return (Type->isReferenceType() || Type->isPointerType()) && !Type->getPointeeType().isConstQualified();
 }
 
 bool hasMutableParameter(const FunctionDecl *Function) {
@@ -244,23 +246,30 @@ bool isImpureOperator(const FunctionDecl *Function) {
 }
 
 // cplusp-impure-operator. An operator that the author defaulted or deleted is exempt, and so is every implicit one.
-class ImpureOperatorCheck : public SpelledCheck {
+// It reads parameter types, so it judges each instantiation, decision 0055. An instantiation reports at the place in the pattern.
+// The dependent pattern is judged by its spelling only: the kind of operator and the object, not the parameter types, which are
+// not known there. So an operator in a template that nothing instantiates still stands, and one that both make is one finding. The call operator of a closure is no operator the author wrote: the check of lambdas judges it.
+class ImpureOperatorCheck : public ClangTidyCheck {
 public:
-  using SpelledCheck::SpelledCheck;
+  using ClangTidyCheck::ClangTidyCheck;
   void registerMatchers(MatchFinder *Finder) override {
-    Finder->addMatcher(functionDecl(isOperatorFunction(), unless(isImplicit()), unless(isDefaulted()), unless(isDeleted())).bind("operator"), this);
+    Finder->addMatcher(
+        functionDecl(isOperatorFunction(), unless(isImplicit()), unless(isDefaulted()), unless(isDeleted()),
+                     unless(cxxMethodDecl(ofClass(cxxRecordDecl(isLambda()))))).bind("operator"),
+        this);
   }
   void check(const MatchFinder::MatchResult &Result) override {
     const auto *Function = Result.Nodes.getNodeAs<FunctionDecl>("operator");
-    if (isImpureOperator(Function))
+    const auto *Method = dyn_cast<CXXMethodDecl>(Function);
+    const bool Impure = Function->isTemplated() ? isAssignmentOrIncrement(Function->getOverloadedOperator()) || (Method && !Method->isStatic() && !Method->isConst())
+                                                : isImpureOperator(Function);
+    if (Impure)
       diag(Function->getLocation(), "operator is not pure");
   }
 };
 
 // ponytail: a name test. The `__wrap_iter` of libc++ passes, and so does a pointer iterator, as in std::array,
-// unless a begin call stores it. Code that depends on a template parameter passes too: `auto it = c.begin()` in a
-// template body has no type yet, and instantiations are not visited. The upgrade is a list of the library's
-// iterator types, or a test of iterator_category, and a visit of the instantiations.
+// unless a begin call stores it. The upgrade is a list of the library's iterator types, or a test of iterator_category.
 AST_MATCHER(ValueDecl, hasIteratorType) {
   const CXXRecordDecl *Record = Node.getType().getNonReferenceType()->getAsCXXRecordDecl();
   return Record && Record->getName().contains("iterator");
@@ -268,16 +277,23 @@ AST_MATCHER(ValueDecl, hasIteratorType) {
 
 // cplusp-iterator-arithmetic: (a) begin or end that is not a direct argument of a std call,
 // (b) std::next, prev, advance and distance, (c) a variable, parameter or field of an iterator type.
-class IteratorArithmeticCheck : public SpelledCheck {
+// It reads types the compiler resolves, so it visits template instantiations, decision 0055: `auto it = c.begin()` in a template
+// body has an iterator type only in an instantiation, and the finding stands at the place in the pattern. The traversal sees the
+// implicit nodes too, so the matchers leave out the begin and end of a range-for and the fields of a closure, and match a call
+// by its spelled parents.
+class IteratorArithmeticCheck : public ClangTidyCheck {
 public:
-  using SpelledCheck::SpelledCheck;
+  using ClangTidyCheck::ClangTidyCheck;
   void registerMatchers(MatchFinder *Finder) override {
     const auto Bounds = anyOf(callee(cxxMethodDecl(hasAnyName("begin", "end", "cbegin", "cend", "rbegin", "rend", "crbegin", "crend"))),
                               callee(functionDecl(hasAnyName("::std::begin", "::std::end", "::std::cbegin", "::std::cend", "::std::rbegin",
                                                              "::std::rend", "::std::crbegin", "::std::crend"))));
-    Finder->addMatcher(callExpr(Bounds, unless(hasParent(stdCall()))).bind("call"), this);
+    Finder->addMatcher(callExpr(unless(hasParent(varDecl(isImplicit()))),
+                                traverse(TK_IgnoreUnlessSpelledInSource, callExpr(Bounds, unless(hasParent(stdCall())))))
+                           .bind("call"),
+                       this);
     Finder->addMatcher(callExpr(callee(functionDecl(hasAnyName("::std::next", "::std::prev", "::std::advance", "::std::distance")))).bind("call"), this);
-    Finder->addMatcher(valueDecl(anyOf(varDecl(), fieldDecl()), hasIteratorType()).bind("decl"), this);
+    Finder->addMatcher(valueDecl(anyOf(varDecl(), fieldDecl()), hasIteratorType(), unless(isImplicit())).bind("decl"), this);
   }
   void check(const MatchFinder::MatchResult &Result) override {
     if (const auto *Call = Result.Nodes.getNodeAs<CallExpr>("call"))
@@ -395,12 +411,6 @@ bool isOwnerAccess(const CallExpr *Call) {
   const OverloadedOperatorKind Operator = Function->getOverloadedOperator();
   return Operator == OO_Star || Operator == OO_Arrow || Operator == OO_Subscript ||
          (Function->getDeclName().isIdentifier() && Function->getName() == "get");
-}
-
-// What a parameter writes through, for the rule of one writer. A parameter of rvalue reference type writes too: `f(std::move(a),
-// std::move(a))` moves one object twice. A forwarding reference has its instantiated type here, so it counts when it is non-const.
-bool writesThrough(QualType Type) {
-  return isMutableType(Type) || (Type->isRValueReferenceType() && !Type->getPointeeType().isConstQualified());
 }
 
 bool bindsToName(QualType Type) { return Type->isReferenceType() || Type->isPointerType() || asSpan(Type); }
@@ -594,7 +604,7 @@ void collectArgs(const Expr *Node, llvm::SmallVectorImpl<Arg> &Out) {
   for (unsigned I = 0; I < Args.size() && I < Function->getNumParams(); ++I) {
     const QualType Type = Function->getParamDecl(I)->getType();
     if (bindsToName(Type))
-      Out.push_back({rootsOf(Args[I]), writesThrough(Type) && !ReadOnly, false,
+      Out.push_back({rootsOf(Args[I]), isMutableType(Type) && !ReadOnly, false,
                      Type->isReferenceType() && Type->getPointeeType().isConstQualified() && inStdNamespace(Function)});
   }
 }

@@ -315,7 +315,7 @@ rules:
     area: memory
     canonical: Allowed
     decision: restrict
-    limit: A parameter only. No reference member and no reference local, and none in disguise, as a `std::reference_wrapper` or a tuple or pair of references. In a call, two reference arguments never name one object, row `aliasing`.
+    limit: A parameter only. No reference member and no reference local, and none in disguise. A disguise is a `std::reference_wrapper`, a tuple or pair of references, or the reference of a `std::vector<bool>` or a `std::bitset`. To copy the value, write its type. In a call, two reference arguments never name one object, row `aliasing`.
     why: The model has no heap, decision 0029. A reference member or local is a second name for an object, and a value model cannot see it.
     use_instead: "a parameter, or the object itself."
     stage: gate
@@ -324,7 +324,9 @@ rules:
       - matcher: varDecl(hasType(referenceType()), unless(parmVarDecl()), unless(isImplicit()), unless(hasParent(declStmt(hasParent(cxxForRangeStmt())))))
       - matcher: callExpr(callee(functionDecl(hasAnyName("::std::ref", "::std::cref", "::std::tie", "::std::forward_as_tuple"))))
       - matcher: templateSpecializationTypeLoc(hasAnyTemplateArgumentLoc(hasTypeLoc(loc(qualType(references(qualType()))))))
-      - matcher: bindingDecl(hasType(hasCanonicalType(referenceType())))
+      - matcher: bindingDecl(hasType(hasCanonicalType(referenceType())), unless(hasParent(decompositionDecl(hasParent(declStmt(hasParent(cxxForRangeStmt())))))))
+      - matcher: varDecl(hasType(hasCanonicalType(hasDeclaration(cxxRecordDecl(anyOf(hasAnyName("::std::_Bit_reference", "::std::__bit_reference", "::std::reference_wrapper"), allOf(hasName("reference"), hasDeclContext(classTemplateSpecializationDecl(hasName("::std::bitset")))), classTemplateSpecializationDecl(hasAnyName("::std::tuple", "::std::pair"), hasAnyTemplateArgument(refersToType(referenceType())))))))), unless(parmVarDecl()), unless(isImplicit()), unless(hasParent(declStmt(hasParent(cxxForRangeStmt())))))
+      - matcher: fieldDecl(hasType(hasCanonicalType(hasDeclaration(cxxRecordDecl(anyOf(hasAnyName("::std::_Bit_reference", "::std::__bit_reference", "::std::reference_wrapper"), allOf(hasName("reference"), hasDeclContext(classTemplateSpecializationDecl(hasName("::std::bitset")))), classTemplateSpecializationDecl(hasAnyName("::std::tuple", "::std::pair"), hasAnyTemplateArgument(refersToType(referenceType())))))))))
 
   - id: aliasing
     construct: Two names for one object in one call
