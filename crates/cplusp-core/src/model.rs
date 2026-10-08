@@ -1640,10 +1640,27 @@ fn parse_primary(toks: &Vec<Tok>, pos: usize, line: u32) -> (r: Result<(Expr, us
 }
 
 /// One contract line. It reads every token, or it refuses the line, and what it gives holds no unknown node.
+/// Parse one contract line. A token with no rule refuses the line by its kind, wherever it is, before the grammar runs: the first
+/// such token names the problem.
 pub fn parse_contract(toks: &Vec<Tok>, line: u32) -> (r: Result<Expr, Refusal>)
     ensures
-        r matches Ok(e) ==> !unknown_expr(e),
+        r matches Ok(e) ==> !unknown_expr(e) && forall|i: int| 0 <= i < toks@.len() ==> !(toks@[i] is Unknown),
+        forall|i: int|
+            0 <= i < toks@.len() && #[trigger] toks@[i] is Unknown && (forall|j: int| 0 <= j < i ==> !(toks@[j] is Unknown)) ==> r
+                == Err::<Expr, Refusal>(Refusal::Construct(toks@[i]->Unknown_0, toks@[i]->Unknown_1)),
 {
+    let mut i: usize = 0;
+    while i < toks.len()
+        invariant
+            i <= toks.len(),
+            forall|j: int| 0 <= j < i ==> !(toks@[j] is Unknown),
+        decreases toks.len() - i,
+    {
+        if let Tok::Unknown(k, l) = toks[i] {
+            return Err(Refusal::Construct(k, l));
+        }
+        i += 1;
+    }
     match parse_implies(toks, 0, line) {
         Ok((e, p)) => if p == toks.len() {
             Ok(e)
