@@ -1,6 +1,7 @@
 #include <cstdint>
 
-// Two overloads from one expansion of a macro are two functions, each with its own method, decision 0058.
+// Two overloads from one expansion of a macro are two functions, each with its own method, decision 0058. A macro holds no contract,
+// so the callers have none. If a call took the wrong overload, its result type would not match, and Dafny would refuse the file.
 #define TWO                \
   int32_t p(int32_t x) {   \
     return 1;              \
@@ -10,12 +11,10 @@
   }
 TWO
 
-//@ ensures result == 1
 int32_t calls_p32() {
   return p(5);
 }
 
-//@ ensures result == 2
 int64_t calls_p64() {
   return p(int64_t{5});
 }

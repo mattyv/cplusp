@@ -234,8 +234,8 @@ fn lex(text: &str, line: u32, names: &mut Names) -> Vec<Tok> {
 }
 
 /// The contract lines as the core's list. A word other than `requires` and `ensures` has no grammar yet, so its text is not parsed.
-/// The core refuses the line by its word. A line that does not cut or parse, or ends in a backslash, is `Bad`, and the core refuses it
-/// with its refusal.
+/// The core refuses the line by its word. A line that the parser refuses, or that ends in a backslash, is `Bad`, and the core refuses it
+/// with that refusal.
 fn conds(v: Vec<JCond>, names: &mut Names) -> Conds {
     let mut items = Vec::new();
     for c in v {
@@ -246,10 +246,7 @@ fn conds(v: Vec<JCond>, names: &mut Names) -> Conds {
             match c.kind.as_str() {
                 "requires" | "ensures" => {
                     let want = if c.kind == "requires" { CondKind::Requires } else { CondKind::Ensures };
-                    // A character with no token does not cut. The line is refused at the first one, wherever it stands.
-                    let toks = lex(&c.text, c.line, names);
-                    let bad = toks.iter().find_map(|t| if let Tok::Unknown(k, l) = t { Some(Refusal::Construct(*k, *l)) } else { None });
-                    match bad.map_or_else(|| parse_contract(&toks, c.line), Err) {
+                    match parse_contract(&lex(&c.text, c.line, names), c.line) {
                         Ok(e) => (want, e),
                         Err(r) => (CondKind::Bad(r), Expr::Int(0)),
                     }
@@ -264,12 +261,12 @@ fn conds(v: Vec<JCond>, names: &mut Names) -> Conds {
 
 fn function(f: JFunction, names: &mut Names) -> Function {
     let name = names.id(&f.key);
-    // A parameter with no name is named by its position. The mangling makes it `c__N`.
+    // A parameter with no name is named by its position, as `'N`. C++ cannot write that, so it clashes with no name. The mangling makes it `c_'N`.
     let ps: Vec<(u32, Ty)> = f
         .params
         .into_iter()
         .enumerate()
-        .map(|(i, (n, t))| (names.id(&if n.is_empty() { format!("_{i}") } else { n }), ty(t, names)))
+        .map(|(i, (n, t))| (names.id(&if n.is_empty() { format!("'{i}") } else { n }), ty(t, names)))
         .collect();
     let params = ps.into_iter().rev().fold(Params::Nil, |rest, (n, t)| Params::Cons(n, t, Box::new(rest)));
     let ret = ty(f.ret, names);
@@ -310,8 +307,7 @@ fn dop(o: BinOp) -> &'static str {
 
 /// The one mangling of a C++ name for Dafny, for code and contract alike. The prefix keeps a name clear of the words Dafny reserves,
 /// such as `old` and `function`, and of `result`. The contract word `result` is no name: it is `Tok::Result`, and prints as `result`.
-// ponytail: an unnamed parameter is `c__N`, so a parameter that the author calls `_N` has the same name, and Dafny refuses the method.
-// Upgrade: a prefix that C++ cannot write.
+// An unnamed parameter is `c_'N` and an overload is `c_{plain}'{k}`. C++ cannot write `'` in a name, so no clash is possible.
 fn mangle(name: &str) -> String {
     format!("c_{name}")
 }
@@ -331,7 +327,7 @@ fn dexpr(e: &DExpr, names: &Names) -> String {
 }
 
 /// The Dafny name of each function by the id of its key. `c_{plain}` when the plain name is unique among the file's functions, else
-/// `c_{plain}__{k}`, with k counting the functions of that plain name in file order from 1.
+/// `c_{plain}'{k}`, with k counting the functions of that plain name in file order from 1.
 type Methods = HashMap<u32, String>;
 
 fn call(m: u32, args: &DArgs, names: &Names, methods: &Methods) -> String {
@@ -438,7 +434,7 @@ pub fn translate(lines: &str) -> Result<(String, Vec<Refusing>)> {
     for (i, f) in funcs.iter().enumerate() {
         let same = funcs.iter().filter(|g| g.name == f.name).count();
         let k = funcs[..=i].iter().filter(|g| g.name == f.name).count();
-        let dafny = if same == 1 { format!("c_{}", f.name) } else { format!("c_{}__{k}", f.name) };
+        let dafny = if same == 1 { format!("c_{}", f.name) } else { format!("c_{}'{k}", f.name) };
         methods.insert(names.id(&f.key), dafny);
     }
     let files: Vec<String> = funcs.iter().map(|f| f.file.clone()).collect();

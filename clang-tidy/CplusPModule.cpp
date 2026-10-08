@@ -16,6 +16,7 @@
 #include "clang/ASTMatchers/Dynamic/Parser.h"
 #include "clang/AST/ASTLambda.h"
 #include "clang/AST/GlobalDecl.h"
+#include "clang/AST/Mangle.h"
 #include "clang/AST/RecursiveASTVisitor.h"
 #include "clang/Basic/CodeGenOptions.h"
 #include "clang/Basic/Diagnostic.h"
@@ -3742,11 +3743,20 @@ private:
 // Upgrade: drop the qualifiers that keep the value, once the core has a rule for them.
 class TreeWriter {
 public:
-  explicit TreeWriter(ASTContext &Context) : Context(Context), SM(Context.getSourceManager()) {}
+  explicit TreeWriter(ASTContext &Context) : Context(Context), SM(Context.getSourceManager()), Mangler(Context.createMangleContext()) {}
 
-  // The key of a function, decision 0058: its qualified name as printed for diagnostics, template arguments included, then `@` and the
-  // place of its definition, or of its canonical declaration when it has none. It tells overloads and namespaces apart.
+  // The key of a function, decision 0058: its Itanium mangled name. The name tells overloads and namespaces apart, and it is the same
+  // for a call and for the definition. A function with no mangled name, or one that is templated, a constructor or a destructor, has
+  // its qualified name as printed for diagnostics, then `@` and the place of its definition, or of its canonical declaration when it
+  // has none. A mangled name has no `@`, so the two kinds never clash.
   std::string key(const FunctionDecl *FD) const {
+    if (!FD->isTemplated() && !FD->isDependentContext() && !isa<CXXConstructorDecl>(FD) && !isa<CXXDestructorDecl>(FD) &&
+        Mangler->shouldMangleDeclName(FD)) {
+      std::string Out;
+      llvm::raw_string_ostream OS(Out);
+      Mangler->mangleName(GlobalDecl(FD), OS);
+      return Out;
+    }
     const FunctionDecl *At = FD->getDefinition() ? FD->getDefinition() : FD->getCanonicalDecl();
     const SourceLocation Loc = SM.getFileLoc(At->getLocation());
     return name(FD) + "@" + file(Loc) + ":" + std::to_string(line(Loc)) + ":" + std::to_string(SM.getExpansionColumnNumber(Loc));
@@ -3794,12 +3804,22 @@ public:
 private:
   ASTContext &Context;
   const SourceManager &SM;
+  std::unique_ptr<MangleContext> Mangler;
 
   static llvm::json::Value number(uint64_t N) { return llvm::json::Value(static_cast<int64_t>(N)); }
   unsigned line(SourceLocation At) const { return SM.getExpansionLineNumber(At); }
   static llvm::json::Value tag(const char *Name, llvm::json::Value Inner) { return llvm::json::Object{{Name, std::move(Inner)}}; }
-  llvm::json::Value unknown(const Stmt *S, const std::string &What) const {
-    return tag("Unknown", llvm::json::Array{What, number(line(S->getBeginLoc()))});
+  // A node with no valid place, a default argument, takes the line of the call or statement around it.
+  llvm::json::Value unknown(const Stmt *S, const std::string &What, unsigned Near) const {
+    return tag("Unknown", llvm::json::Array{What, number(S->getBeginLoc().isValid() ? line(S->getBeginLoc()) : Near)});
+  }
+  // What the bot reads for a node with no rule. An expression statement and the same expression inside another give the same words.
+  static std::string describe(const Stmt *S) {
+    if (const auto *Binary = dyn_cast<BinaryOperator>(S))
+      return std::string("BinaryOperator ") + Binary->getOpcodeStr().str();
+    if (const auto *Unary = dyn_cast<UnaryOperator>(S))
+      return std::string("UnaryOperator ") + UnaryOperator::getOpcodeStr(Unary->getOpcode()).str();
+    return S->getStmtClassName();
   }
 
   llvm::json::Value type(QualType T) const {
@@ -3841,17 +3861,17 @@ private:
 
   llvm::json::Value stmt(const Stmt *S) const {
     if (const auto *If = dyn_cast<IfStmt>(S); If && !If->getInit() && !If->getConditionVariable() && !If->isConsteval())
-      return tag("If", llvm::json::Array{expr(If->getCond()), stmts(If->getThen()), If->getElse() ? stmts(If->getElse()) : llvm::json::Array{},
+      return tag("If", llvm::json::Array{expr(If->getCond(), line(S->getBeginLoc())), stmts(If->getThen()), If->getElse() ? stmts(If->getElse()) : llvm::json::Array{},
                                          number(line(S->getBeginLoc()))});
     if (const auto *Return = dyn_cast<ReturnStmt>(S); Return && Return->getRetValue())
-      return tag("Return", llvm::json::Array{expr(Return->getRetValue()), number(line(S->getBeginLoc()))});
+      return tag("Return", llvm::json::Array{expr(Return->getRetValue(), line(S->getBeginLoc())), number(line(S->getBeginLoc()))});
     if (const auto *Decl = dyn_cast<DeclStmt>(S); Decl && Decl->isSingleDecl())
       if (const auto *Var = dyn_cast<VarDecl>(Decl->getSingleDecl()); Var && Var->hasLocalStorage() && Var->getInit())
-        return tag("Local", llvm::json::Array{Var->getNameAsString(), type(Var->getType()), expr(Var->getInit()), number(line(S->getBeginLoc()))});
-    return unknown(S, S->getStmtClassName());
+        return tag("Local", llvm::json::Array{Var->getNameAsString(), type(Var->getType()), expr(Var->getInit(), line(S->getBeginLoc())), number(line(S->getBeginLoc()))});
+    return unknown(S, describe(S), line(S->getBeginLoc()));
   }
 
-  llvm::json::Value expr(const Expr *E) const {
+  llvm::json::Value expr(const Expr *E, unsigned Near) const {
     if (const auto *Literal = dyn_cast<IntegerLiteral>(E); Literal && Literal->getValue().getActiveBits() <= 63)
       return tag("Int", number(Literal->getValue().getZExtValue()));
     if (const auto *Ref = dyn_cast<DeclRefExpr>(E)) {
@@ -3876,36 +3896,36 @@ private:
       default: break;
       }
       if (!Op)
-        return unknown(E, std::string("BinaryOperator ") + Binary->getOpcodeStr().str());
-      return tag("Bin", llvm::json::Array{Op, expr(Binary->getLHS()), expr(Binary->getRHS())});
+        return unknown(E, describe(E), Near);
+      return tag("Bin", llvm::json::Array{Op, expr(Binary->getLHS(), Near), expr(Binary->getRHS(), Near)});
     }
     if (const auto *Unary = dyn_cast<UnaryOperator>(E)) {
       if (Unary->getOpcode() == UO_LNot)
-        return tag("Not", expr(Unary->getSubExpr()));
+        return tag("Not", expr(Unary->getSubExpr(), Near));
       if (Unary->getOpcode() == UO_Minus)
-        return tag("Neg", expr(Unary->getSubExpr()));
-      return unknown(E, std::string("UnaryOperator ") + UnaryOperator::getOpcodeStr(Unary->getOpcode()).str());
+        return tag("Neg", expr(Unary->getSubExpr(), Near));
+      return unknown(E, describe(E), Near);
     }
     if (const auto *Cast = dyn_cast<CastExpr>(E)) {
       llvm::json::Value Kind = Cast->getCastKind() == CK_LValueToRValue ? llvm::json::Value("Read")
                                : Cast->getCastKind() == CK_NoOp         ? llvm::json::Value("NoOp")
                                : Cast->getCastKind() == CK_IntegralCast ? tag("Integral", llvm::json::Array{type(Cast->getSubExpr()->getType()), type(Cast->getType())})
                                                                         : tag("Other", std::string(Cast->getStmtClassName()) + " " + Cast->getCastKindName());
-      return tag("Cast", llvm::json::Array{std::move(Kind), expr(Cast->getSubExpr())});
+      return tag("Cast", llvm::json::Array{std::move(Kind), expr(Cast->getSubExpr(), Near)});
     }
     if (const auto *Paren = dyn_cast<ParenExpr>(E))
-      return tag("Paren", expr(Paren->getSubExpr()));
+      return tag("Paren", expr(Paren->getSubExpr(), Near));
     if (const auto *List = dyn_cast<InitListExpr>(E); List && List->getNumInits() == 1 && List->getType()->isScalarType())
-      return tag("Brace", expr(List->getInit(0)));
+      return tag("Brace", expr(List->getInit(0), Near));
     // Only a plain call by name. A member call, an operator call and the rest of the call classes stay unknown.
     if (E->getStmtClass() == Stmt::CallExprClass)
       if (const FunctionDecl *Callee = cast<CallExpr>(E)->getDirectCallee()) {
         llvm::json::Array Args;
         for (const Expr *Arg : cast<CallExpr>(E)->arguments())
-          Args.push_back(expr(Arg));
+          Args.push_back(expr(Arg, line(E->getBeginLoc())));
         return tag("Call", llvm::json::Array{key(Callee), name(Callee), std::move(Args), number(line(E->getBeginLoc()))});
       }
-    return unknown(E, E->getStmtClassName());
+    return unknown(E, E->getStmtClassName(), Near);
   }
 };
 
