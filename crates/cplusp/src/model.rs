@@ -420,6 +420,10 @@ fn stmt_names<'a>(s: &'a JStmt, out: &mut Vec<&'a str>) {
 /// The first name of the function with a character that Dafny cannot read. A parameter with no name is `'N` and Dafny reads it.
 // ponytail: the function is refused, and its callers are refused at the call. Upgrade: a mangling that escapes such characters.
 fn unreadable_name(f: &JFunction) -> Option<&str> {
+    // A signature the core refuses has no method, so the Dafny text prints none of its names. The core's refusal stands.
+    if matches!(f.ret, JTy::Other(_)) || f.params.iter().any(|(_, t)| matches!(t, JTy::Other(_))) {
+        return None;
+    }
     let mut names = vec![f.name.as_str()];
     names.extend(f.params.iter().map(|(n, _)| n.as_str()));
     f.body.iter().for_each(|s| stmt_names(s, &mut names));
