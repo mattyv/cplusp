@@ -2500,6 +2500,25 @@ fn a_struct_that_holds_a_sequence_is_a_parameter_only() {
     assert_eq!(refusals.len(), 3, "{text}");
 }
 
+/// A struct or a field whose name Dafny cannot read is refused at the struct's line, as a function is, decision 0069. Found by the
+/// review of decision 0076.
+#[test]
+fn a_struct_or_field_name_dafny_cannot_read_is_refused() {
+    if !clang_tidy_available() {
+        return;
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let (o, _) = model("model-struct-names.cpp", dir.path());
+    let text = stdout(&o);
+    assert_eq!(o.status.code(), Some(1), "stdout: {text} stderr: {}", stderr(&o));
+    let refusals: Vec<&str> = text.lines().filter(|l| l.starts_with("Not provable: ")).collect();
+    for (line, name) in [(5, "a$b"), (10, "N$")] {
+        let want = format!("model-struct-names.cpp:{line}: {name}: a name with a character Dafny cannot read.");
+        assert!(refusals.iter().any(|l| l.ends_with(&want)), "{want}: {text}");
+    }
+    assert_eq!(refusals.len(), 2, "{text}");
+}
+
 /// Pull `"key":"value"` or `"key":123` out of one JSON line without a JSON library.
 fn field(line: &str, key: &str) -> String {
     let needle = format!("\"{key}\":");

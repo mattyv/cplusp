@@ -1001,3 +1001,15 @@ fn a_decreases_line_on_a_struct_parameter_is_the_struct_itself() {
     let Model::Full(m) = translate_function(&f, &Fns::Nil, &node_table()) else { panic!("a full model") };
     assert_eq!(strip_conds(m.decreases), DConds::Cons(DExpr::Var(A), 0, Box::new(DConds::Nil)));
 }
+
+#[test]
+fn the_core_refuses_an_optional_of_a_struct_and_a_sequence_of_bool_by_itself() {
+    // Decisions 0064 and 0076 give neither a rule. The core refuses them, so the plugin is not the only guard. Found by the review
+    // of decision 0076.
+    for t in [Ty::Opt(Scalar::Struct(NODE)), Ty::Seq(Scalar::Bool, Extent::Dynamic), Ty::Seq(Scalar::Bool, Extent::Fixed(2))] {
+        assert_eq!(translate_ty(t, 7), Err(Refusal::Element(7)));
+        assert_eq!(translate_value_ty(t, 7, &node_table()), Err(Refusal::Element(7)));
+    }
+    let field = Structs::Cons(POINT, 4, Params::Cons(FX, Ty::Opt(Scalar::Struct(POINT)), Box::new(Params::Nil)), Box::new(Structs::Nil));
+    assert_eq!(translate_structs(&field), StructModels::Cons(Err(Refusal::Element(4)), Box::new(StructModels::Nil)));
+}
