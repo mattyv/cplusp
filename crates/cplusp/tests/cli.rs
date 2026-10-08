@@ -1484,6 +1484,83 @@ fn the_impure_operator_check_judges_each_instantiation() {
     assert_eq!(found, BTreeSet::from([8, 35, 39]), "{out}");
 }
 
+// ------------------------------------------------------------------ the translator, decisions 0056 and 0057
+
+/// Dafny, from `$DAFNY`, the battery's install, or the path. None skips the test.
+fn dafny() -> Option<PathBuf> {
+    if let Ok(d) = std::env::var("DAFNY") {
+        return Some(PathBuf::from(d));
+    }
+    let installed = PathBuf::from("/opt/dafny/dafny/dafny");
+    if installed.exists() {
+        return Some(installed);
+    }
+    Command::new("dafny").arg("--version").output().ok().filter(|o| o.status.success()).map(|_| PathBuf::from("dafny"))
+}
+
+/// Translate one fixture into a Dafny file, and give the gate's output and the path of the model.
+fn model(name: &str, dir: &Path) -> (Output, PathBuf) {
+    let f = fixture(name);
+    let out = dir.join("model.dfy");
+    let plugin = plugin();
+    let o = cplusp(&["model", "--plugin", plugin.to_str().unwrap(), "--out", out.to_str().unwrap(), f.to_str().unwrap(), "--", "-std=c++23", "-ffp-contract=off"]);
+    (o, out)
+}
+
+/// The first slice, decision 0057: the translator turns clamp into a Dafny method, and Dafny proves it as it proves the hand-written
+/// model of examples/saturating_add.
+#[test]
+fn the_model_of_clamp_verifies_in_dafny() {
+    let Some(dafny) = dafny() else { return };
+    if !clang_tidy_available() {
+        return;
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let (o, out) = model("model-clamp.cpp", dir.path());
+    assert_eq!(o.status.code(), Some(0), "stdout: {} stderr: {}", stdout(&o), stderr(&o));
+    let text = std::fs::read_to_string(&out).unwrap();
+    assert!(text.contains("method clamp("), "{text}");
+    let v = Command::new(dafny).args(["verify"]).arg(&out).output().unwrap();
+    let said = format!("{}{}", String::from_utf8_lossy(&v.stdout), String::from_utf8_lossy(&v.stderr));
+    assert!(v.status.success() && said.contains(" 0 errors"), "{said}\n{text}");
+}
+
+/// The contract reaches the model: a wrong ensures line makes Dafny fail.
+#[test]
+fn a_wrong_contract_fails_in_dafny() {
+    let Some(dafny) = dafny() else { return };
+    if !clang_tidy_available() {
+        return;
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let (o, out) = model("model-clamp-wrong.cpp", dir.path());
+    assert_eq!(o.status.code(), Some(0), "stdout: {} stderr: {}", stdout(&o), stderr(&o));
+    let text = std::fs::read_to_string(&out).unwrap();
+    let v = Command::new(dafny).args(["verify"]).arg(&out).output().unwrap();
+    let said = format!("{}{}", String::from_utf8_lossy(&v.stdout), String::from_utf8_lossy(&v.stderr));
+    assert!(!v.status.success() && said.contains("postcondition"), "{said}\n{text}");
+}
+
+/// A construct with no rule and a contract name that is no parameter are refused, each at its line, with the gate's prefix. The
+/// functions that the translator can model are still in the model.
+#[test]
+fn the_translator_refuses_what_it_has_no_rule_for() {
+    if !clang_tidy_available() {
+        return;
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let (o, out) = model("model-refuse.cpp", dir.path());
+    let text = stdout(&o);
+    assert_eq!(o.status.code(), Some(1), "stdout: {text} stderr: {}", stderr(&o));
+    let refusals: Vec<&str> = text.lines().filter(|l| l.starts_with("Not provable: ")).collect();
+    assert_eq!(refusals.len(), 2, "{text}");
+    assert!(refusals.iter().any(|l| l.ends_with("model-refuse.cpp:9: CallExpr: the translator has no rule for it yet.")), "{text}");
+    assert!(refusals.iter().any(|l| l.ends_with("model-refuse.cpp:12: y in the contract is no parameter.")), "{text}");
+    let model = std::fs::read_to_string(&out).unwrap();
+    assert!(model.contains("method one("), "{model}");
+    assert!(!model.contains("method call_one(") && !model.contains("method named("), "{model}");
+}
+
 /// Pull `"key":"value"` or `"key":123` out of one JSON line without a JSON library.
 fn field(line: &str, key: &str) -> String {
     let needle = format!("\"{key}\":");
