@@ -427,7 +427,7 @@ fn dexpr(e: &DExpr, names: &Names) -> String {
         DExpr::Len(a) => format!("|{}|", dexpr(a, names)),
         DExpr::Index(a, i) => format!("{}[{}]", dexpr(a, names), dexpr(i, names)),
         // The prefix `b_` keeps a bound name apart from `v_` and `c_` names.
-        DExpr::Forall(j, b) => format!("(forall b_{} :: {})", names.text(*j), dexpr(b, names)),
+        DExpr::Forall(j, b) => format!("(forall b_{}: int :: {})", names.text(*j), dexpr(b, names)),
         DExpr::Bound(j) => format!("b_{}", names.text(*j)),
         DExpr::Chain(o1, o2, a, b, c) => format!("({} {} {} {} {})", dexpr(a, names), dop(*o1), dexpr(b, names), dop(*o2), dexpr(c, names)),
     }
