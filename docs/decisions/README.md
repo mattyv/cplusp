@@ -77,3 +77,4 @@ Status is `decided`, `proposed` (the default until someone objects or the thin s
 | [0069](0069-prove-trusts-only-a-finished-run-and-the-teams-gate.md) | prove trusts only a finished run of Dafny, runs the team's gate, and gives each obligation its own line and assumptions | decided |
 | [0070](0070-a-finished-run-must-succeed-spans-keep-their-length.md) | A run of Dafny must finish and succeed. A span keeps a fixed length. A sequence passes to a sequence parameter | decided |
 | [0071](0071-requirements-and-incremental-proofs.md) | Requirements and contracts come first. Check composition early, then implement and prove increments. Keep conditional obligations visible | decided |
+| [0072](0072-recursion-and-the-order-of-slice-five.md) | Recursion with a decreases line on the function. The order of the fifth slice | decided |

@@ -1836,7 +1836,7 @@ fn loops_and_writes_with_no_rule_are_refused_at_their_lines() {
     assert_eq!(o.status.code(), Some(1), "stdout: {text} stderr: {}", stderr(&o));
     let refusals: Vec<&str> = text.lines().filter(|l| l.starts_with("Not provable: ")).collect();
     let misplaced =
-        "a contract line in the wrong place. A requires or an ensures line goes above a function. An invariant or a decreases line goes above a loop.";
+        "a contract line in the wrong place. A requires, an ensures or a decreases line goes above a function. An invariant or a decreases line goes above a loop.";
     for (line, expected) in [
         (5, "x is a parameter. The translator writes only a local."),
         (11, "BinaryOperator +=: the translator has no rule for it yet."),
@@ -2298,6 +2298,36 @@ fn a_sequence_passes_to_a_sequence_parameter() {
     let text = stdout(&o);
     assert_eq!(o.status.code(), Some(0), "stdout: {text} stderr: {}", stderr(&o));
     assert_eq!(text.lines().last(), Some("ok: proved"), "{text}");
+}
+
+/// A recursion with a decreases line above its function proves, decision 0072.
+#[test]
+fn a_recursion_with_its_measure_proves() {
+    let Some(dafny) = dafny() else { return };
+    if !clang_tidy_available() {
+        return;
+    }
+    let o = prove("model-recursion.cpp", &[], &dafny);
+    let text = stdout(&o);
+    assert_eq!(o.status.code(), Some(0), "stdout: {text} stderr: {}", stderr(&o));
+    assert_eq!(text.lines().last(), Some("ok: proved"), "{text}");
+}
+
+/// A recursive call whose measure may not get smaller is named at the call, and a decreases line above a function that names
+/// `result` is refused, decision 0072.
+#[test]
+fn prove_names_a_recursion_whose_measure_may_not_decrease() {
+    let Some(dafny) = dafny() else { return };
+    if !clang_tidy_available() {
+        return;
+    }
+    let o = prove("model-recursion-wrong.cpp", &[], &dafny);
+    let text = stdout(&o);
+    assert_eq!(o.status.code(), Some(1), "stdout: {text} stderr: {}", stderr(&o));
+    let want = "model-recursion-wrong.cpp:9: the decreases line may not decrease at this call.";
+    assert!(text.lines().any(|l| l.starts_with("Not proved: ") && l.ends_with(want)), "{text}");
+    let want = "model-recursion-wrong.cpp:14: the contract line has a form the translator cannot read.";
+    assert!(text.lines().any(|l| l.starts_with("Not provable: ") && l.ends_with(want)), "{text}");
 }
 
 /// Pull `"key":"value"` or `"key":123` out of one JSON line without a JSON library.

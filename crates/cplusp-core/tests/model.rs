@@ -654,3 +654,17 @@ fn a_sequence_made_from_a_sequence_keeps_its_value_when_its_length_cannot_change
         assert_eq!(bare_refusal(m), Refusal::Extent(5), "{from:?} to {to:?}");
     }
 }
+
+#[test]
+fn a_decreases_line_above_a_function_is_the_measure_of_its_recursion() {
+    // decreases n, over the parameter of with_n, at place 2.
+    let fc = conds(vec![(CondKind::Decreases, Expr::Name(X), 2)]);
+    let f = Function { conds: fc, ..with_n(one(Stmt::Return(Expr::Lit(0, Ty::I32), 4))) };
+    let f = Function { conds: Conds::Cons(CondKind::Decreases, Expr::Name(X), 2, names(&[X]), Box::new(Conds::Nil)), ..f };
+    let Model::Full(m) = translate_function(&f, &Fns::Nil) else { panic!("a full model") };
+    let want = DExpr::AsInt(Box::new(DExpr::Var(X)));
+    assert_eq!(m.decreases, DConds::Cons(want, 2, Box::new(DConds::Nil)));
+    // It names no result.
+    let f = Function { conds: Conds::Cons(CondKind::Decreases, Expr::Result, 2, names(&[X]), Box::new(Conds::Nil)), ..with_n(one(Stmt::Return(Expr::Lit(0, Ty::I32), 4))) };
+    assert_eq!(bare_refusal(translate_function(&f, &Fns::Nil)), Refusal::Syntax(2));
+}
