@@ -90,7 +90,7 @@ int32_t defaulted() {
   return add(1);
 }
 
-// An assignment has no rule. The refusal names the operator.
+// An assignment to a local, which decision 0061 models.
 int32_t assigns(int32_t x) {
   int32_t y = x;
   y = 2;

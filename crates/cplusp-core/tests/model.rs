@@ -31,6 +31,11 @@ fn names(v: &[u32]) -> Names {
     v.iter().rev().fold(Names::Nil, |rest, n| Names::Cons(*n, Box::new(rest)))
 }
 
+/// A literal of code prints with its type, decision 0061.
+fn lit32(n: i64) -> DExpr {
+    DExpr::Conv(DTy::Int32, Box::new(DExpr::Lit(n)))
+}
+
 fn params() -> Params {
     Params::Cons(X, Ty::I32, Box::new(Params::Cons(LO, Ty::I32, Box::new(Params::Cons(HI, Ty::I32, Box::new(Params::Nil))))))
 }
@@ -187,14 +192,14 @@ fn a_call_that_stands_alone_names_the_method_of_its_callee() {
     let all = fns(vec![sat(one(Stmt::Return(Expr::Lit(0, Ty::I32), 15))), succ(call(SAT, vec![read(X, Ty::I32), Expr::Lit(1, Ty::I32)], 38))]);
     let Models::Cons(_, rest) = translate_unit(&all) else { panic!("two models") };
     let Models::Cons(Model::Full(m), _) = *rest else { panic!("successor has a full model") };
-    let args = DArgs::Cons(DExpr::Var(X), Box::new(DArgs::Cons(DExpr::Lit(1), Box::new(DArgs::Nil))));
+    let args = DArgs::Cons(DExpr::Var(X), Box::new(DArgs::Cons(lit32(1), Box::new(DArgs::Nil))));
     assert_eq!(m.body, DStmts::Cons(Box::new(DStmt::ReturnCall(SAT, args)), Box::new(DStmts::Nil)));
 
     let local = Stmt::Local(A, Ty::I32, call(SAT, vec![Expr::Lit(1, Ty::I32), Expr::Lit(2, Ty::I32)], 39), 39);
     let f = Function { body: Stmts::Cons(Box::new(local), Box::new(one(Stmt::Return(read(A, Ty::I32), 40)))), ..succ(Expr::Lit(0, Ty::I32)) };
     let Model::Full(m) = translate_function(&f, &all) else { panic!("a local from a call has a full model") };
     let DStmts::Cons(first, _) = m.body else { panic!("a body") };
-    let args = DArgs::Cons(DExpr::Lit(1), Box::new(DArgs::Cons(DExpr::Lit(2), Box::new(DArgs::Nil))));
+    let args = DArgs::Cons(lit32(1), Box::new(DArgs::Cons(lit32(2), Box::new(DArgs::Nil))));
     assert_eq!(*first, DStmt::LocalCall(A, DTy::Int32, SAT, args));
 }
 
@@ -316,4 +321,116 @@ fn a_contract_reads_the_parameters_of_its_declaration_by_place() {
     let conds = Conds::Cons(CondKind::Ensures, Expr::Bin(BinOp::Eq, b(Expr::Result), b(Expr::Name(A))), 9, names(&[P, Q]), Box::new(Conds::Nil));
     let f = Function { conds, ..sat(one(Stmt::Return(Expr::Lit(0, Ty::I32), 15))) };
     assert_eq!(bare_refusal(translate_function(&f, &Fns::Nil)), Refusal::Name(A, 9));
+}
+
+/// `int32_t n` alone, with a body.
+fn with_n(body: Stmts) -> Function {
+    Function { name: SAT, line: 3, params: Params::Cons(X, Ty::I32, Box::new(Params::Nil)), ret: Ty::I32, conds: Conds::Nil, body }
+}
+
+fn conds(v: Vec<(CondKind, Expr, u32)>) -> Conds {
+    v.into_iter().rev().fold(Conds::Nil, |rest, (k, e, l)| Conds::Cons(k, e, l, Names::Nil, Box::new(rest)))
+}
+
+#[test]
+fn a_literal_of_code_carries_its_type_into_dafny() {
+    let m = translate_function(&with_n(one(Stmt::Return(Expr::Lit(7, Ty::I32), 4))), &Fns::Nil);
+    let Model::Full(m) = m else { panic!("a full model") };
+    assert_eq!(m.body, DStmts::Cons(Box::new(DStmt::Return(lit32(7))), Box::new(DStmts::Nil)));
+    // The unsigned types of decision 0061.
+    let m = translate_function(&with_n(one(Stmt::Return(Expr::Lit(7, Ty::U64), 4))), &Fns::Nil);
+    let Model::Full(m) = m else { panic!("a full model") };
+    assert_eq!(m.body, DStmts::Cons(Box::new(DStmt::Return(DExpr::Conv(DTy::UInt64, Box::new(DExpr::Lit(7))))), Box::new(DStmts::Nil)));
+}
+
+#[test]
+fn a_for_loop_is_its_start_then_a_while_that_ends_with_its_step() {
+    // int32_t i = 0; invariant i <= n; decreases n - i; for (...; i < n; ++i) { acc = acc + 1; }
+    let i = SUM;
+    let acc = A;
+    let start = Stmt::Local(i, Ty::I32, Expr::Lit(0, Ty::I32), 5);
+    let cond = Expr::Bin(BinOp::Lt, b(read(i, Ty::I32)), b(read(X, Ty::I32)));
+    let step = Stmt::Step(i, Ty::I32, true, 7);
+    let loop_conds = conds(vec![
+        (CondKind::Invariant, Expr::Bin(BinOp::Le, b(Expr::Name(i)), b(Expr::Name(X))), 5),
+        (CondKind::Decreases, Expr::Bin(BinOp::Sub, b(Expr::Name(X)), b(Expr::Name(i))), 6),
+    ]);
+    let write = Stmt::Assign(acc, Expr::Bin(BinOp::Add, b(read(acc, Ty::I32)), b(Expr::Lit(1, Ty::I32))), 8);
+    let lp = Stmt::For(Box::new(start), cond, Box::new(step), Box::new(loop_conds), Box::new(one(write)), 7);
+    let body = Stmts::Cons(
+        Box::new(Stmt::Local(acc, Ty::I32, Expr::Lit(0, Ty::I32), 4)),
+        Box::new(Stmts::Cons(Box::new(lp), Box::new(one(Stmt::Return(read(acc, Ty::I32), 10))))),
+    );
+    let Model::Full(m) = translate_function(&with_n(body), &Fns::Nil) else { panic!("a full model") };
+    let DStmts::Cons(_, rest) = m.body else { panic!("a body") };
+    let DStmts::Cons(lp, _) = *rest else { panic!("a loop") };
+    let as_int = |n: u32| Box::new(DExpr::AsInt(Box::new(DExpr::Var(n))));
+    let want = DStmt::For(
+        Box::new(DStmt::Local(i, DTy::Int32, lit32(0))),
+        DExpr::Bin(BinOp::Lt, Box::new(DExpr::Var(i)), Box::new(DExpr::Var(X))),
+        DConds::Cons(DExpr::Bin(BinOp::Le, as_int(i), as_int(X)), Box::new(DConds::Nil)),
+        DConds::Cons(DExpr::Bin(BinOp::Sub, as_int(X), as_int(i)), Box::new(DConds::Nil)),
+        Box::new(DStmts::Cons(Box::new(DStmt::Assign(acc, DExpr::Bin(BinOp::Add, Box::new(DExpr::Var(acc)), Box::new(lit32(1))))), Box::new(DStmts::Nil))),
+        Box::new(DStmt::Assign(i, DExpr::Bin(BinOp::Add, Box::new(DExpr::Var(i)), Box::new(lit32(1))))),
+    );
+    assert_eq!(*lp, want);
+}
+
+#[test]
+fn a_while_loop_reads_its_contract_over_parameters_and_locals() {
+    // int32_t k = n; invariant 0 <= k; decreases k; while (k > 0) { --k; }
+    let k = SUM;
+    let lc = conds(vec![
+        (CondKind::Invariant, Expr::Bin(BinOp::Le, b(Expr::Int(0)), b(Expr::Name(k))), 5),
+        (CondKind::Decreases, Expr::Name(k), 6),
+    ]);
+    let lp = Stmt::While(Expr::Bin(BinOp::Gt, b(read(k, Ty::I32)), b(Expr::Lit(0, Ty::I32))), Box::new(lc), Box::new(one(Stmt::Step(k, Ty::I32, false, 8))), 7);
+    let body = Stmts::Cons(Box::new(Stmt::Local(k, Ty::I32, read(X, Ty::I32), 4)), Box::new(Stmts::Cons(Box::new(lp), Box::new(one(Stmt::Return(read(k, Ty::I32), 10))))));
+    let Model::Full(m) = translate_function(&with_n(body), &Fns::Nil) else { panic!("a full model") };
+    let DStmts::Cons(_, rest) = m.body else { panic!("a body") };
+    let DStmts::Cons(lp, _) = *rest else { panic!("a loop") };
+    let kk = || Box::new(DExpr::AsInt(Box::new(DExpr::Var(k))));
+    let want = DStmt::While(
+        DExpr::Bin(BinOp::Gt, Box::new(DExpr::Var(k)), Box::new(lit32(0))),
+        DConds::Cons(DExpr::Bin(BinOp::Le, Box::new(DExpr::Lit(0)), kk()), Box::new(DConds::Nil)),
+        DConds::Cons(*kk(), Box::new(DConds::Nil)),
+        Box::new(DStmts::Cons(Box::new(DStmt::Assign(k, DExpr::Bin(BinOp::Sub, Box::new(DExpr::Var(k)), Box::new(lit32(1))))), Box::new(DStmts::Nil))),
+    );
+    assert_eq!(*lp, want);
+}
+
+#[test]
+fn a_write_to_a_parameter_is_refused() {
+    let body = Stmts::Cons(Box::new(Stmt::Assign(X, Expr::Lit(1, Ty::I32), 5)), Box::new(one(Stmt::Return(read(X, Ty::I32), 6))));
+    assert_eq!(bare_refusal(translate_function(&with_n(body), &Fns::Nil)), Refusal::WriteParam(X, 5));
+    let body = Stmts::Cons(Box::new(Stmt::Step(X, Ty::I32, true, 5)), Box::new(one(Stmt::Return(read(X, Ty::I32), 6))));
+    assert_eq!(bare_refusal(translate_function(&with_n(body), &Fns::Nil)), Refusal::WriteParam(X, 5));
+}
+
+#[test]
+fn a_loop_contract_names_only_variables_and_never_result() {
+    let lp = |lc: Conds| Stmt::While(Expr::Lit(1, Ty::Bool), Box::new(lc), Box::new(Stmts::Nil), 7);
+    let f = |lc: Conds| with_n(Stmts::Cons(Box::new(lp(lc)), Box::new(one(Stmt::Return(Expr::Lit(0, Ty::I32), 9)))));
+    let unbound = conds(vec![(CondKind::Invariant, Expr::Bin(BinOp::Le, b(Expr::Name(X)), b(Expr::Name(99))), 6)]);
+    assert_eq!(bare_refusal(translate_function(&f(unbound), &Fns::Nil)), Refusal::NoVar(99, 6));
+    let result = conds(vec![(CondKind::Invariant, Expr::Bin(BinOp::Eq, b(Expr::Result), b(Expr::Int(0))), 6)]);
+    assert_eq!(bare_refusal(translate_function(&f(result), &Fns::Nil)), Refusal::Syntax(6));
+    let ensures = conds(vec![(CondKind::Ensures, Expr::Name(X), 6)]);
+    assert_eq!(bare_refusal(translate_function(&f(ensures), &Fns::Nil)), Refusal::Misplaced(6));
+}
+
+#[test]
+fn a_loop_contract_line_above_a_function_is_refused() {
+    let fc = conds(vec![(CondKind::Invariant, Expr::Bin(BinOp::Lt, b(Expr::Int(0)), b(Expr::Name(X))), 2)]);
+    let f = Function { conds: fc, ..with_n(one(Stmt::Return(Expr::Lit(0, Ty::I32), 4))) };
+    assert_eq!(bare_refusal(translate_function(&f, &Fns::Nil)), Refusal::Misplaced(2));
+}
+
+#[test]
+fn a_name_declared_in_a_loop_counts_for_declared_once() {
+    // int32_t i = 0; for (int32_t i = 0; ...) — the start of the for declares i a second time.
+    let start = Stmt::Local(SUM, Ty::I32, Expr::Lit(0, Ty::I32), 6);
+    let lp = Stmt::For(Box::new(start), Expr::Lit(0, Ty::Bool), Box::new(Stmt::Step(SUM, Ty::I32, true, 6)), Box::new(Conds::Nil), Box::new(Stmts::Nil), 6);
+    let body = Stmts::Cons(Box::new(Stmt::Local(SUM, Ty::I32, Expr::Lit(0, Ty::I32), 5)), Box::new(Stmts::Cons(Box::new(lp), Box::new(one(Stmt::Return(Expr::Lit(0, Ty::I32), 7))))));
+    assert_eq!(bare_refusal(translate_function(&with_n(body), &Fns::Nil)), Refusal::Twice(SUM, 6));
 }

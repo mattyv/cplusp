@@ -1707,17 +1707,17 @@ fn calls_locals_and_casts_with_no_rule_are_refused_at_their_lines() {
         (64, "'=' in a contract: the translator has no rule for it yet."),
         (77, "BinaryOperator %: the translator has no rule for it yet."),
         (90, "CXXDefaultArgExpr: the translator has no rule for it yet."),
-        (96, "BinaryOperator =: the translator has no rule for it yet."),
     ] {
         let want = format!("model-calls.cpp:{line}: {expected}");
         assert!(refusals.iter().any(|l| l.ends_with(&want)), "{want}: {text}");
     }
-    assert_eq!(refusals.len(), 14, "{text}");
+    assert_eq!(refusals.len(), 13, "{text}");
     let model = std::fs::read_to_string(&out).unwrap();
-    for name in ["id", "calls_bad", "calls_refused", "add"] {
+    // Decision 0061 gives `y = 2;` in `assigns` a rule.
+    for name in ["id", "calls_bad", "calls_refused", "add", "assigns"] {
         assert!(full(&model, name), "{name}: {model}");
     }
-    for name in ["inside", "nested", "to_declared", "to_member", "twice", "shadow", "from_bool", "no_start", "two_names", "bad_contract", "refused_body", "defaulted", "assigns"] {
+    for name in ["inside", "nested", "to_declared", "to_member", "twice", "shadow", "from_bool", "no_start", "two_names", "bad_contract", "refused_body", "defaulted"] {
         assert!(bare(&model, name), "{name}: {model}");
     }
     assert!(method_lines(&model, "declared").is_none() && method_lines(&model, "one").is_none(), "{model}");
@@ -1805,6 +1805,72 @@ fn a_contract_on_a_declaration_reads_its_parameters_by_place() {
     let text = std::fs::read_to_string(&out).unwrap();
     let (ok, said) = verify(&dafny, &out);
     assert!(!ok && said.contains("postcondition"), "{said}\n{text}");
+}
+
+/// The third slice, decision 0061: a for loop, a while loop, writes to locals and an unsigned count, each with its invariant and
+/// decreases lines, give methods that Dafny proves.
+#[test]
+fn loops_with_invariants_verify_in_dafny() {
+    let Some(dafny) = dafny() else { return };
+    if !clang_tidy_available() {
+        return;
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let (o, out) = model("model-loops.cpp", dir.path());
+    assert_eq!(o.status.code(), Some(0), "stdout: {} stderr: {}", stdout(&o), stderr(&o));
+    let text = std::fs::read_to_string(&out).unwrap();
+    for name in ["triangle", "down", "count"] {
+        assert!(full(&text, name), "{name}: {text}");
+    }
+    assert!(text.lines().filter(|l| l.trim_start().starts_with("invariant ")).count() == 4, "{text}");
+    assert!(text.lines().filter(|l| l.trim_start().starts_with("decreases ")).count() == 3, "{text}");
+    let (ok, said) = verify(&dafny, &out);
+    assert!(ok && said.contains(" 0 errors"), "{said}\n{text}");
+}
+
+/// Each loop, write and loop contract that the third slice has no rule for is refused at its line, decision 0061.
+#[test]
+fn loops_and_writes_with_no_rule_are_refused_at_their_lines() {
+    if !clang_tidy_available() {
+        return;
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let (o, _) = model("model-loops-refuse.cpp", dir.path());
+    let text = stdout(&o);
+    assert_eq!(o.status.code(), Some(1), "stdout: {text} stderr: {}", stderr(&o));
+    let refusals: Vec<&str> = text.lines().filter(|l| l.starts_with("Not provable: ")).collect();
+    let misplaced =
+        "a contract line in the wrong place. A requires or an ensures line goes above a function. An invariant or a decreases line goes above a loop.";
+    for (line, expected) in [
+        (5, "x is a parameter. The translator writes only a local."),
+        (11, "BinaryOperator +=: the translator has no rule for it yet."),
+        (18, "BreakStmt: the translator has no rule for it yet."),
+        (25, "z in the loop contract is no variable."),
+        (32, misplaced),
+        (39, misplaced),
+        (48, "the contract line has a form the translator cannot read."),
+        (56, "ForStmt: the translator has no rule for it yet."),
+    ] {
+        let want = format!("model-loops-refuse.cpp:{line}: {expected}");
+        assert!(refusals.iter().any(|l| l.ends_with(&want)), "{want}: {text}");
+    }
+    assert_eq!(refusals.len(), 8, "{text}");
+}
+
+/// The model never wraps, decision 0061. An unsigned value below zero and a sum of literals that overflows each fail in Dafny.
+#[test]
+fn unsigned_wrap_and_literal_overflow_fail_in_dafny() {
+    let Some(dafny) = dafny() else { return };
+    if !clang_tidy_available() {
+        return;
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let (o, out) = model("model-wrap.cpp", dir.path());
+    assert_eq!(o.status.code(), Some(0), "stdout: {} stderr: {}", stdout(&o), stderr(&o));
+    let text = std::fs::read_to_string(&out).unwrap();
+    assert!(full(&text, "below") && full(&text, "over"), "{text}");
+    let (ok, said) = verify(&dafny, &out);
+    assert!(!ok && said.contains(" 2 errors"), "{said}\n{text}");
 }
 
 /// The model does not wrap a narrowing cast, decision 0058. Dafny must prove that the value fits, and with no contract it cannot.
