@@ -8,11 +8,21 @@ use std::fmt::Write;
 use anyhow::{Context, Result};
 use cplusp_core::model::{
     parse_contract, translate_unit, Args, BinOp, CastKind, CondKind, Conds, DArgs, DConds, DExpr, DParams, DStmt, DStmts, DTy, Expr, Fns,
-    Function, Method, Model, Models, Names as CNames, Params, Refusal, Stmt, Stmts, Tok, Ty,
+    Function, Method, Model, Models, Names as CNames, Params, Refusal, Scalar, Stmt, Stmts, Tok, Ty,
 };
 use serde::Deserialize;
 
 // ------------------------------------------------------------------ the plugin's lines, in the core's shape with names as text
+
+#[derive(Deserialize)]
+enum JScalar {
+    I32,
+    I64,
+    U8,
+    U32,
+    U64,
+    Bool,
+}
 
 #[derive(Deserialize)]
 enum JTy {
@@ -22,6 +32,7 @@ enum JTy {
     U32,
     U64,
     Bool,
+    Seq(JScalar),
     Other(String),
 }
 
@@ -59,6 +70,8 @@ enum JExpr {
     Cast(JCast, Box<JExpr>),
     Paren(Box<JExpr>),
     Brace(Box<JExpr>),
+    Size(Box<JExpr>),
+    Index(Box<JExpr>, Box<JExpr>),
     Call(String, String, Vec<JExpr>, u32),
     Unknown(String, u32),
 }
@@ -151,6 +164,14 @@ fn ty(t: JTy, names: &mut Names) -> Ty {
         JTy::U32 => Ty::U32,
         JTy::U64 => Ty::U64,
         JTy::Bool => Ty::Bool,
+        JTy::Seq(s) => Ty::Seq(match s {
+            JScalar::I32 => Scalar::I32,
+            JScalar::I64 => Scalar::I64,
+            JScalar::U8 => Scalar::U8,
+            JScalar::U32 => Scalar::U32,
+            JScalar::U64 => Scalar::U64,
+            JScalar::Bool => Scalar::Bool,
+        }),
         JTy::Other(s) => Ty::Other(names.id(&s)),
     }
 }
@@ -190,6 +211,8 @@ fn expr(e: JExpr, names: &mut Names) -> Expr {
         }
         JExpr::Paren(a) => Expr::Paren(Box::new(expr(*a, names))),
         JExpr::Brace(a) => Expr::Brace(Box::new(expr(*a, names))),
+        JExpr::Size(a) => Expr::Size(Box::new(expr(*a, names))),
+        JExpr::Index(a, i) => Expr::Index(Box::new(expr(*a, names)), Box::new(expr(*i, names))),
         JExpr::Call(key, name, args, line) => {
             let args: Vec<Expr> = args.into_iter().map(|a| expr(a, names)).collect();
             let args = args.into_iter().rev().fold(Args::Nil, |rest, a| Args::Cons(Box::new(a), Box::new(rest)));
@@ -248,12 +271,19 @@ fn lex(text: &str, line: u32, names: &mut Names) -> Vec<Tok> {
             rest = rest.trim_start();
         } else if c.is_ascii_alphabetic() || c == '_' {
             let end = word_end(|ch| ch.is_ascii_alphanumeric() || ch == '_');
-            toks.push(if &rest[..end] == "result" { Tok::Result } else { Tok::Ident(names.id(&rest[..end])) });
+            toks.push(match &rest[..end] {
+                "result" => Tok::Result,
+                "forall" => Tok::Forall,
+                w => Tok::Ident(names.id(w)),
+            });
             rest = &rest[end..];
         } else if c.is_ascii_digit() {
             let end = word_end(|ch| ch.is_ascii_digit());
             toks.push(rest[..end].parse().map_or_else(|_| Tok::Unknown(names.id("a number above 18446744073709551615"), line), Tok::Int));
             rest = &rest[end..];
+        } else if let Some(t) = [(".size()", Tok::Size), ("::", Tok::ColonColon)].into_iter().find(|(s, _)| rest.starts_with(s)) {
+            rest = &rest[t.0.len()..];
+            toks.push(t.1);
         } else if let Some((s, o)) = OPS.iter().find(|(s, _)| rest.starts_with(s)) {
             toks.push(Tok::Op(*o));
             rest = &rest[s.len()..];
@@ -262,6 +292,8 @@ fn lex(text: &str, line: u32, names: &mut Names) -> Vec<Tok> {
                 '!' => Tok::Bang,
                 '(' => Tok::LParen,
                 ')' => Tok::RParen,
+                '[' => Tok::LBracket,
+                ']' => Tok::RBracket,
                 _ => Tok::Unknown(names.id(&format!("'{c}' in a contract")), line),
             });
             rest = &rest[c.len_utf8()..];
@@ -332,14 +364,26 @@ newtype uint8 = x: int | 0 <= x < 0x100\n\
 newtype uint32 = x: int | 0 <= x < 0x1_0000_0000\n\
 newtype uint64 = x: int | 0 <= x < 0x1_0000_0000_0000_0000\n";
 
-fn dty(t: DTy) -> &'static str {
+fn dscalar(s: Scalar) -> &'static str {
+    match s {
+        Scalar::I32 => "int32",
+        Scalar::I64 => "int64",
+        Scalar::U8 => "uint8",
+        Scalar::U32 => "uint32",
+        Scalar::U64 => "uint64",
+        Scalar::Bool => "bool",
+    }
+}
+
+fn dty(t: DTy) -> String {
     match t {
-        DTy::Int32 => "int32",
-        DTy::Int64 => "int64",
-        DTy::UInt8 => "uint8",
-        DTy::UInt32 => "uint32",
-        DTy::UInt64 => "uint64",
-        DTy::Bool => "bool",
+        DTy::Int32 => "int32".to_string(),
+        DTy::Int64 => "int64".to_string(),
+        DTy::UInt8 => "uint8".to_string(),
+        DTy::UInt32 => "uint32".to_string(),
+        DTy::UInt64 => "uint64".to_string(),
+        DTy::Bool => "bool".to_string(),
+        DTy::Seq(s) => format!("seq<{}>", dscalar(s)),
     }
 }
 
@@ -380,6 +424,12 @@ fn dexpr(e: &DExpr, names: &Names) -> String {
         DExpr::Neg(a) => format!("(-{})", dexpr(a, names)),
         DExpr::AsInt(a) => format!("({} as int)", dexpr(a, names)),
         DExpr::Conv(t, a) => format!("({} as {})", dexpr(a, names), dty(*t)),
+        DExpr::Len(a) => format!("|{}|", dexpr(a, names)),
+        DExpr::Index(a, i) => format!("{}[{}]", dexpr(a, names), dexpr(i, names)),
+        // The prefix `b_` keeps a bound name apart from `v_` and `c_` names.
+        DExpr::Forall(j, b) => format!("(forall b_{} :: {})", names.text(*j), dexpr(b, names)),
+        DExpr::Bound(j) => format!("b_{}", names.text(*j)),
+        DExpr::Chain(o1, o2, a, b, c) => format!("({} {} {} {} {})", dexpr(a, names), dop(*o1), dexpr(b, names), dop(*o2), dexpr(c, names)),
     }
 }
 
@@ -498,6 +548,7 @@ fn sentence(r: Refusal, names: &Names) -> (u32, String) {
         Refusal::Convert(line) => (line, "a conversion between bool and a number.".to_string()),
         Refusal::WriteParam(n, line) => (line, format!("{} is a parameter. The translator writes only a local.", names.text(n))),
         Refusal::NoVar(n, line) => (line, format!("{} in the loop contract is no variable.", names.text(n))),
+        Refusal::SeqParam(line) => (line, "a sequence is in the subset only as a parameter.".to_string()),
         Refusal::Misplaced(line) => (
             line,
             "a contract line in the wrong place. A requires or an ensures line goes above a function. An invariant or a decreases line goes above a loop."

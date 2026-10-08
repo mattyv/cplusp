@@ -3863,38 +3863,60 @@ private:
     return S->getStmtClassName();
   }
 
-  llvm::json::Value type(QualType T) const {
+  // The scalar of the subset that a type is, as the core names it, or null. A qualified type is none.
+  const char *scalar(QualType T) const {
     const QualType Canon = T.getCanonicalType();
-    if (!Canon.hasQualifiers())
-      if (const auto *Builtin = dyn_cast<BuiltinType>(Canon.getTypePtr())) {
-        const uint64_t Bits = Context.getTypeSize(Canon);
-        switch (Builtin->getKind()) {
-        case BuiltinType::Int:
-          if (Bits == 32)
-            return "I32";
-          break;
-        case BuiltinType::Long:
-        case BuiltinType::LongLong:
-          if (Bits == 64)
-            return "I64";
-          break;
-        case BuiltinType::UChar:
-          return "U8";
-        case BuiltinType::UInt:
-          if (Bits == 32)
-            return "U32";
-          break;
-        case BuiltinType::ULong:
-        case BuiltinType::ULongLong:
-          if (Bits == 64)
-            return "U64";
-          break;
-        case BuiltinType::Bool:
-          return "Bool";
-        default:
-          break;
-        }
+    if (Canon.hasQualifiers())
+      return nullptr;
+    if (const auto *Builtin = dyn_cast<BuiltinType>(Canon.getTypePtr())) {
+      const uint64_t Bits = Context.getTypeSize(Canon);
+      switch (Builtin->getKind()) {
+      case BuiltinType::Int:
+        return Bits == 32 ? "I32" : nullptr;
+      case BuiltinType::Long:
+      case BuiltinType::LongLong:
+        return Bits == 64 ? "I64" : nullptr;
+      case BuiltinType::UChar:
+        return "U8";
+      case BuiltinType::UInt:
+        return Bits == 32 ? "U32" : nullptr;
+      case BuiltinType::ULong:
+      case BuiltinType::ULongLong:
+        return Bits == 64 ? "U64" : nullptr;
+      case BuiltinType::Bool:
+        return "Bool";
+      default:
+        return nullptr;
       }
+    }
+    return nullptr;
+  }
+
+  // The element scalar of a read-only sequence, decision 0064, or null: a const vector or a reference to one, except
+  // `std::vector<bool>`, and a span of const elements, any extent. A reference is looked through.
+  const char *seqElement(QualType T) const {
+    if (T->isReferenceType())
+      T = T->getPointeeType();
+    const auto *Spec = dyn_cast_or_null<ClassTemplateSpecializationDecl>(T->getAsCXXRecordDecl());
+    if (!Spec || !Spec->isInStdNamespace() || Spec->getTemplateArgs().size() == 0 || Spec->getTemplateArgs()[0].getKind() != TemplateArgument::Type)
+      return nullptr;
+    QualType Elem = Spec->getTemplateArgs()[0].getAsType();
+    if (Spec->getName() == "vector") {
+      const char *S = T.isConstQualified() ? scalar(Elem) : nullptr;
+      return S && StringRef(S) != "Bool" ? S : nullptr;
+    }
+    if (Spec->getName() == "span" && Elem.isConstQualified()) {
+      Elem.removeLocalConst();
+      return scalar(Elem);
+    }
+    return nullptr;
+  }
+
+  llvm::json::Value type(QualType T) const {
+    if (const char *S = scalar(T))
+      return S;
+    if (const char *S = seqElement(T))
+      return tag("Seq", S);
     return tag("Other", T.getAsString(Context.getPrintingPolicy()));
   }
 
@@ -3986,6 +4008,13 @@ private:
       return tag("Paren", expr(Paren->getSubExpr(), Near));
     if (const auto *List = dyn_cast<InitListExpr>(E); List && List->getNumInits() == 1 && List->getType()->isScalarType())
       return tag("Brace", expr(List->getInit(0), Near));
+    // `v.size()` and `v[i]` of a read-only sequence.
+    if (const auto *Member = dyn_cast<CXXMemberCallExpr>(E); Member && Member->getNumArgs() == 0 && Member->getMethodDecl() && Member->getMethodDecl()->getNameAsString() == "size")
+      if (const Expr *Object = Member->getImplicitObjectArgument(); Object && seqElement(Object->getType()))
+        return tag("Size", expr(Object, Near));
+    if (const auto *Operator = dyn_cast<CXXOperatorCallExpr>(E); Operator && Operator->getOperator() == OO_Subscript && Operator->getNumArgs() == 2 &&
+                                                                  seqElement(Operator->getArg(0)->getType()))
+      return tag("Index", llvm::json::Array{expr(Operator->getArg(0), Near), expr(Operator->getArg(1), Near)});
     // Only a plain call by name. A member call, an operator call and the rest of the call classes stay unknown.
     if (E->getStmtClass() == Stmt::CallExprClass)
       if (const FunctionDecl *Callee = cast<CallExpr>(E)->getDirectCallee()) {
