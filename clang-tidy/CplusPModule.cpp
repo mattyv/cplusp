@@ -3958,7 +3958,9 @@ private:
   llvm::json::Value type(QualType T) const {
     if (const char *S = scalar(T))
       return S;
-    if (const CXXRecordDecl *RD = plainStruct(T)) {
+    // Decision 0074: a struct is by value or by const lvalue reference. Any other reference stays `Other`.
+    const bool Writable = T->isReferenceType() && !(T->isLValueReferenceType() && T->getPointeeType().isConstQualified());
+    if (const CXXRecordDecl *RD = Writable ? nullptr : plainStruct(T)) {
       const std::string Key = structKey(RD);
       if (!Structs.count(Key)) {
         llvm::json::Array Fields;
