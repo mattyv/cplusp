@@ -30,7 +30,14 @@ pub enum Scalar {
     Bool,
 }
 
-/// A type of the subset. `Seq` is a read-only sequence of a scalar, a parameter only, decision 0064. `Other` is a type the
+/// The extent of a sequence: no fixed length, or a fixed length, decision 0070.
+#[derive(Structural, PartialEq, Eq, Clone, Copy, Debug)]
+pub enum Extent {
+    Dynamic,
+    Fixed(u64),
+}
+
+/// A type of the subset. `Seq` is a read-only sequence of a scalar with its extent, a parameter only, decisions 0064 and 0070. `Other` is a type the
 /// translator has no rule for, by the id of its name.
 #[derive(Structural, PartialEq, Eq, Clone, Copy, Debug)]
 pub enum Ty {
@@ -40,7 +47,7 @@ pub enum Ty {
     U32,
     U64,
     Bool,
-    Seq(Scalar),
+    Seq(Scalar, Extent),
     Other(u32),
 }
 
@@ -63,13 +70,15 @@ pub enum BinOp {
 }
 
 /// A cast that the compiler made or the author wrote. `Read` is the read of a variable, an lvalue-to-rvalue cast, and `NoOp` changes
-/// nothing. Both keep the value. `Integral` is a cast from one integral type to another, by both types. `Other` is a cast with no
+/// nothing. Both keep the value. `Integral` is a cast from one integral type to another, by both types. `Construct` is the cast the
+/// compiler writes around a construction, which keeps the value of the construction, decision 0070. `Other` is a cast with no
 /// rule yet, by the id of its kind.
 #[derive(Structural, PartialEq, Eq, Clone, Copy, Debug)]
 pub enum CastKind {
     Read,
     NoOp,
     Integral(Ty, Ty),
+    Construct,
     Other(u32),
 }
 
@@ -95,6 +104,7 @@ pub enum Expr {
     Call(u32, u32, Box<Args>, u32),
     Size(Box<Expr>),
     Index(Box<Expr>, Box<Expr>),
+    SeqCopy(Box<Expr>, Ty, Ty),
     Forall(u32, Box<Expr>),
     Chain(BinOp, BinOp, Box<Expr>, Box<Expr>, Box<Expr>),
     Unknown(u32, u32),
@@ -287,7 +297,7 @@ pub enum Models {
 /// `Callee` is a call to a function with no method, by the id of the callee's name. `Place` is a call that does not stand alone.
 /// `Twice` is a name declared a second time in a function. `Convert` is a cast between `bool` and a number. `WriteParam` is a write
 /// to a parameter. `NoVar` is a name in a loop contract that is no variable. `Misplaced` is a contract line in the wrong place.
-/// `SeqParam` is a sequence that is no parameter.
+/// `SeqParam` is a sequence that is no parameter. `Extent` is a sequence made from one whose length or element differs.
 #[derive(Structural, PartialEq, Eq, Clone, Copy, Debug)]
 pub enum Refusal {
     Construct(u32, u32),
@@ -302,6 +312,7 @@ pub enum Refusal {
     NoVar(u32, u32),
     Misplaced(u32),
     SeqParam(u32),
+    Extent(u32),
 }
 
 // ------------------------------------------------------------------ the rules
@@ -315,7 +326,7 @@ pub open spec fn spec_ty(t: Ty, line: u32) -> Result<DTy, Refusal> {
         Ty::U32 => Ok(DTy::UInt32),
         Ty::U64 => Ok(DTy::UInt64),
         Ty::Bool => Ok(DTy::Bool),
-        Ty::Seq(s) => Ok(DTy::Seq(s)),
+        Ty::Seq(s, _) => Ok(DTy::Seq(s)),
         Ty::Other(k) => Err(Refusal::Construct(k, line)),
     }
 }
@@ -323,7 +334,7 @@ pub open spec fn spec_ty(t: Ty, line: u32) -> Result<DTy, Refusal> {
 /// A type of a local or of a result: a type of the subset that is no sequence, decision 0064.
 pub open spec fn spec_value_ty(t: Ty, line: u32) -> Result<DTy, Refusal> {
     match t {
-        Ty::Seq(_) => Err(Refusal::SeqParam(line)),
+        Ty::Seq(_, _) => Err(Refusal::SeqParam(line)),
         _ => spec_ty(t, line),
     }
 }
@@ -337,6 +348,15 @@ pub open spec fn spec_elem(s: Scalar) -> Ty {
         Scalar::U32 => Ty::U32,
         Scalar::U64 => Ty::U64,
         Scalar::Bool => Ty::Bool,
+    }
+}
+
+/// A sequence made from a sequence keeps its value when the elements are the same and the length cannot change: the new one has no
+/// fixed extent, or the same extent as the old one, decision 0070.
+pub open spec fn copies(from: Ty, to: Ty) -> bool {
+    match (from, to) {
+        (Ty::Seq(s1, e1), Ty::Seq(s2, e2)) => s1 == s2 && (e2 == Extent::Dynamic || e1 == e2),
+        _ => false,
     }
 }
 
@@ -419,6 +439,11 @@ pub open spec fn spec_code(e: Expr, line: u32) -> Result<DExpr, Refusal>
                 Err(r) => Err(r),
             },
             Err(r) => Err(r),
+        },
+        Expr::SeqCopy(a, from, to) => if copies(from, to) {
+            spec_code(*a, line)
+        } else {
+            Err(Refusal::Extent(line))
         },
         Expr::Name(n) => Err(Refusal::Name(n, line)),
         Expr::Unknown(k, l) => Err(Refusal::Construct(k, l)),
@@ -568,7 +593,7 @@ pub open spec fn spec_seq_name(o: Expr, decl: Names, ps: Params, ret: Option<Ty>
             Err(Refusal::Syntax(line))
         } else {
             match spec_rebind(decl, ps, n) {
-                Some((p, Ty::Seq(s))) => Ok((p, s)),
+                Some((p, Ty::Seq(s, _))) => Ok((p, s)),
                 Some(_) => Err(Refusal::Syntax(line)),
                 None => match ret {
                     Some(_) => Err(Refusal::Name(n, line)),
@@ -937,15 +962,21 @@ pub open spec fn spec_inside(f: Function, all: Fns) -> Result<(DConds, DConds, D
     }
 }
 
-/// The requires lines `tail`, after one for each sequence parameter: its length fits `size_t`, decision 0064.
+/// The requires lines `tail`, after one for each sequence parameter: its length fits `size_t`, decision 0064, or is its fixed
+/// extent, decision 0070.
 pub open spec fn spec_bounds(ps: Params, line: u32, tail: DConds) -> DConds
     decreases ps,
 {
     match ps {
         Params::Nil => tail,
         Params::Cons(n, t, rest) => match t {
-            Ty::Seq(_) => DConds::Cons(
+            Ty::Seq(_, Extent::Dynamic) => DConds::Cons(
                 DExpr::Bin(BinOp::Le, Box::new(DExpr::Len(Box::new(DExpr::Var(n)))), Box::new(DExpr::Lit(0xffff_ffff_ffff_ffff))),
+                line,
+                Box::new(spec_bounds(*rest, line, tail)),
+            ),
+            Ty::Seq(_, Extent::Fixed(k)) => DConds::Cons(
+                DExpr::Bin(BinOp::Eq, Box::new(DExpr::Len(Box::new(DExpr::Var(n)))), Box::new(DExpr::Lit(k))),
                 line,
                 Box::new(spec_bounds(*rest, line, tail)),
             ),
@@ -996,6 +1027,7 @@ pub open spec fn unknown_expr(e: Expr) -> bool
         Expr::Call(_, _, args, _) => unknown_args(*args),
         Expr::Size(a) => unknown_expr(*a),
         Expr::Index(a, i) => unknown_expr(*a) || unknown_expr(*i),
+        Expr::SeqCopy(a, _, _) => unknown_expr(*a),
         Expr::Forall(_, a) => unknown_expr(*a),
         Expr::Chain(_, _, a, b, c) => unknown_expr(*a) || unknown_expr(*b) || unknown_expr(*c),
         _ => false,
@@ -1063,6 +1095,7 @@ pub proof fn lemma_unknown_code_is_refused(e: Expr, line: u32)
                 lemma_unknown_code_is_refused(*i, line);
             }
         },
+        Expr::SeqCopy(a, _, _) => lemma_unknown_code_is_refused(*a, line),
         _ => {},
     }
 }
@@ -1391,7 +1424,7 @@ pub fn translate_ty(t: Ty, line: u32) -> (r: Result<DTy, Refusal>)
         Ty::U32 => Ok(DTy::UInt32),
         Ty::U64 => Ok(DTy::UInt64),
         Ty::Bool => Ok(DTy::Bool),
-        Ty::Seq(s) => Ok(DTy::Seq(s)),
+        Ty::Seq(s, _) => Ok(DTy::Seq(s)),
         Ty::Other(k) => Err(Refusal::Construct(k, line)),
     }
 }
@@ -1401,7 +1434,7 @@ pub fn translate_value_ty(t: Ty, line: u32) -> (r: Result<DTy, Refusal>)
         r == spec_value_ty(t, line),
 {
     match t {
-        Ty::Seq(_) => Err(Refusal::SeqParam(line)),
+        Ty::Seq(_, _) => Err(Refusal::SeqParam(line)),
         _ => translate_ty(t, line),
     }
 }
@@ -1417,6 +1450,16 @@ pub fn elem(s: Scalar) -> (r: Ty)
         Scalar::U32 => Ty::U32,
         Scalar::U64 => Ty::U64,
         Scalar::Bool => Ty::Bool,
+    }
+}
+
+pub fn copy_ok(from: Ty, to: Ty) -> (r: bool)
+    ensures
+        r == copies(from, to),
+{
+    match (from, to) {
+        (Ty::Seq(s1, e1), Ty::Seq(s2, e2)) => s1 == s2 && (e2 == Extent::Dynamic || e1 == e2),
+        _ => false,
     }
 }
 
@@ -1496,6 +1539,11 @@ pub fn translate_code(e: &Expr, line: u32) -> (r: Result<DExpr, Refusal>)
                 Err(r) => Err(r),
             },
             Err(r) => Err(r),
+        },
+        Expr::SeqCopy(a, from, to) => if copy_ok(*from, *to) {
+            translate_code(a, line)
+        } else {
+            Err(Refusal::Extent(line))
         },
         Expr::Name(n) => Err(Refusal::Name(*n, line)),
         Expr::Unknown(k, l) => Err(Refusal::Construct(*k, *l)),
@@ -1665,7 +1713,7 @@ pub fn seq_name(o: &Expr, decl: &Names, ps: &Params, ret: Option<Ty>, bound: &Na
             Err(Refusal::Syntax(line))
         } else {
             match rebind(decl, ps, *n) {
-                Some((p, Ty::Seq(s))) => Ok((p, s)),
+                Some((p, Ty::Seq(s, _))) => Ok((p, s)),
                 Some(_) => Err(Refusal::Syntax(line)),
                 None => match ret {
                     Some(_) => Err(Refusal::Name(*n, line)),
@@ -2097,8 +2145,13 @@ pub fn bounds(ps: &Params, line: u32, tail: DConds) -> (r: DConds)
     match ps {
         Params::Nil => tail,
         Params::Cons(n, t, rest) => match t {
-            Ty::Seq(_) => DConds::Cons(
+            Ty::Seq(_, Extent::Dynamic) => DConds::Cons(
                 DExpr::Bin(BinOp::Le, Box::new(DExpr::Len(Box::new(DExpr::Var(*n)))), Box::new(DExpr::Lit(0xffff_ffff_ffff_ffff))),
+                line,
+                Box::new(bounds(rest, line, tail)),
+            ),
+            Ty::Seq(_, Extent::Fixed(k)) => DConds::Cons(
+                DExpr::Bin(BinOp::Eq, Box::new(DExpr::Len(Box::new(DExpr::Var(*n)))), Box::new(DExpr::Lit(*k))),
                 line,
                 Box::new(bounds(rest, line, tail)),
             ),
