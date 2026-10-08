@@ -15,6 +15,7 @@
 //!   holds it, and is verified when none does.
 
 pub mod model;
+pub mod verdict;
 
 use vstd::prelude::*;
 
