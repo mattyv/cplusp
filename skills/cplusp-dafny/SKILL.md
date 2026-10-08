@@ -9,14 +9,25 @@ The divergence rules below come from cases in `divergence/dafny/cases/`. The cas
 
 ## Whole-program development
 Read [the research report](../../docs/research/formal-verification-llm-coding-report.md) and [the FAQ](../../docs/formal-proof-faq.md) for proof scope and evidence.
-1. Write the subsystem requirement before choosing helpers.
-2. Derive component contracts with input ranges, required results and permitted state effects.
-3. Review whether the contracts cover the requirement. Sorting needs order and preservation of elements, including duplicates.
-4. Prove each body and each caller's callee preconditions.
-5. Prove that composition establishes the subsystem requirement. Check initialization and every public entry point.
-6. Record trusted dependencies, target assumptions and unproved obligations.
-7. Run executable tests, translation regression cases and all relevant proofs after changes.
-8. Report guarantees, remaining assumptions and bounds used by bounded checks.
+Start top-down with requirements and contracts. Build code and proofs together in small increments.
+1. Select one feature. Define its outputs, state changes, failure behavior and allowed inputs.
+2. Define the state invariants and initialization guarantees the feature needs.
+3. Derive component contracts before implementing their bodies.
+4. Check composition early: establish each callee's preconditions and derive the feature's result from its guarantees.
+5. Check a difficult operation early against the current translator slice.
+6. Implement and prove small increments. Helpers often come first, but use the order that tests the design soonest.
+7. Verify initialization, relevant bodies and public entry points. Recheck composition with the completed implementations.
+8. Run executable tests, translation regression cases and all relevant proofs after changes.
+9. Report guarantees, bounds, trusted dependencies and unproved obligations.
+A caller proof that relies on an unimplemented helper's contract is conditional on that helper satisfying the contract.
+Keep that obligation visible until its implementation verifies. Do not report the feature as fully proved while it remains open.
+Dafny abstract interfaces can support this design check. They do not add support for an unsupported C+P construct.
+Review contract corrections as you learn. Follow the repository's reviewer role before changing a reviewed requirement or contract.
+
+Example: sort, then search. Require sorting to preserve all input elements, including duplicates, and establish the search's ordering precondition.
+Use the search guarantee and element preservation to establish membership in the original input.
+Check this composition before choosing a sorting algorithm. Prove both implementations before claiming the complete feature.
+
 Try to break each contract before you trust it. Write deliberately wrong bodies, such as an empty result, a missed update or wrong handling of duplicates, and check that the contract rejects each one. Show that intended inputs satisfy the preconditions. These checks find weak contracts. They do not prove that a contract is complete.
 Build the implementation and its proof together, in small increments. Prove each increment before you build on it. When a proof gets hard, change the data structures or the helper boundaries, and keep the reviewed contract.
 Treat a plan as implementation guidance and a formal contract as a machine-checkable requirement.
