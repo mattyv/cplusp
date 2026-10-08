@@ -1,0 +1,20 @@
+construct: "A sum of literals with no typed operand"
+standard: "[expr.pre]: if during the evaluation of an expression the result is not mathematically defined or not in the range of representable values for its type, the behavior is undefined."
+row: arithmetic
+gap: 3
+cpp: "`2147483647 + 1` is an `int` sum that overflows, which is undefined behaviour. The sanitizer reports it."
+naive_does: "Dafny reads a literal with no typed operand as an exact integer. `2147483647 + 1 > 0` is true, and the model proves it."
+naive: verifies
+naive_is_wrong: true
+mitigated: verifies
+side: cpp
+mitigation: "Each literal in the model gets its type, so Dafny checks the sum. The C++ adds in `int64_t`, where the sum fits."
+witness:
+  input: "2147483647 + 1 > 0"
+  ubsan: true
+  fixed_prints: "1"
+rule: |
+  A literal with no typed operand is an exact integer in Dafny.
+  `2147483647 + 1 > 0` is true in Dafny, and in C++ the sum overflows.
+  Give each literal its type, such as `(1 as int32)`.
+  Then Dafny checks each step, and code that overflows does not prove.

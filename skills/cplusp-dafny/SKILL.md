@@ -499,3 +499,16 @@ Model its getter as a method that does not constrain its result between calls.
 The contract of the getter says only what every writer keeps, for example a range.
 The getter is trusted code, and it must read an atomic. A plain read of a variable another thread writes is a data race.
 Never prove two reads equal.
+
+## untyped_literal
+
+A literal with no typed operand is an exact integer in Dafny.
+`2147483647 + 1 > 0` is true in Dafny, and in C++ the sum overflows.
+Give each literal its type, such as `(1 as int32)`.
+Then Dafny checks each step, and code that overflows does not prove.
+
+## seq_length
+
+A Dafny `seq` has no bound on its length, and a C++ sequence has at most `SIZE_MAX` elements.
+To read `|v|` as a `uint64`, require `|v| <= 0xFFFF_FFFF_FFFF_FFFF` on each sequence parameter.
+Every C++ sequence meets that, so each caller can meet it.
