@@ -80,3 +80,4 @@ Status is `decided`, `proposed` (the default until someone objects or the thin s
 | [0072](0072-recursion-and-the-order-of-slice-five.md) | Recursion with a decreases line on the function. The order of the fifth slice | decided |
 | [0073](0073-structs-of-scalars-are-datatypes.md) | A struct of scalars is a Dafny datatype. Field reads in code and contracts, braced values, copies | decided |
 | [0074](0074-a-mutable-reference-to-a-struct-has-no-rule-yet.md) | A non-const reference to a struct has no rule yet | decided |
+| [0075](0075-an-optional-scalar-is-a-dafny-option.md) | An optional scalar is a Dafny Option. has_value, value and the dereference read it. Dafny proves each read | decided |

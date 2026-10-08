@@ -2385,6 +2385,61 @@ fn a_member_function_is_refused_as_a_member_whatever_its_name() {
     assert_eq!(refusals.len(), 2, "{text}");
 }
 
+/// An optional scalar is a Dafny Option, decision 0075. Its reads in code and contracts, `std::nullopt`, the construction from a
+/// value, a field, a copy and a call prove.
+#[test]
+fn optional_scalars_prove() {
+    let Some(dafny) = dafny() else { return };
+    if !clang_tidy_available() {
+        return;
+    }
+    let o = prove("model-optional.cpp", &[], &dafny);
+    let text = stdout(&o);
+    assert_eq!(o.status.code(), Some(0), "stdout: {text} stderr: {}", stderr(&o));
+    assert_eq!(text.lines().last(), Some("ok: proved"), "{text}");
+}
+
+/// Each read of an optional that may be empty is named at its line, in code and in a contract, decision 0075.
+#[test]
+fn prove_names_each_read_of_an_optional_that_may_be_empty() {
+    let Some(dafny) = dafny() else { return };
+    if !clang_tidy_available() {
+        return;
+    }
+    let o = prove("model-optional-wrong.cpp", &[], &dafny);
+    let text = stdout(&o);
+    assert_eq!(o.status.code(), Some(1), "stdout: {text} stderr: {}", stderr(&o));
+    let failed: Vec<&str> = text.lines().filter(|l| l.starts_with("Not proved: ")).collect();
+    for line in [6, 9, 18] {
+        let want = format!("model-optional-wrong.cpp:{line}: the optional may be empty here.");
+        assert!(failed.iter().any(|l| l.ends_with(&want)), "{want}: {text}");
+    }
+    assert_eq!(failed.len(), 3, "{text}");
+}
+
+/// Each use of an optional with no rule is refused at its line, decision 0075.
+#[test]
+fn optionals_with_no_rule_are_refused_at_their_lines() {
+    if !clang_tidy_available() {
+        return;
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let (o, _) = model("model-optional-refuse.cpp", dir.path());
+    let text = stdout(&o);
+    assert_eq!(o.status.code(), Some(1), "stdout: {text} stderr: {}", stderr(&o));
+    let refusals: Vec<&str> = text.lines().filter(|l| l.starts_with("Not provable: ")).collect();
+    for (line, expected) in [
+        (6, "ImplicitCastExpr UserDefinedConversion: the translator has no rule for it yet."),
+        (14, "CXXOperatorCallExpr: the translator has no rule for it yet."),
+        (19, "CXXOperatorCallExpr: the translator has no rule for it yet."),
+        (26, "std::optional<Point>: the translator has no rule for it yet."),
+    ] {
+        let want = format!("model-optional-refuse.cpp:{line}: {expected}");
+        assert!(refusals.iter().any(|l| l.ends_with(&want)), "{want}: {text}");
+    }
+    assert_eq!(refusals.len(), 4, "{text}");
+}
+
 /// Pull `"key":"value"` or `"key":123` out of one JSON line without a JSON library.
 fn field(line: &str, key: &str) -> String {
     let needle = format!("\"{key}\":");

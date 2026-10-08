@@ -742,3 +742,113 @@ fn the_parser_reads_a_field_after_a_name_or_result() {
     let toks = vec![Tok::Ident(B), Tok::Field(FY), Tok::Field(FX)];
     assert_eq!(parse_contract(&toks, 4), Ok(Expr::Field(b(Expr::Field(b(Expr::Name(B)), FY)), FX)));
 }
+
+const SLOT: u32 = 90;
+const FV: u32 = 91;
+
+/// `struct Slot { std::optional<int32_t> value; }` as the table of the file.
+fn slot_table() -> Structs {
+    Structs::Cons(SLOT, 4, Params::Cons(FV, Ty::Opt(Scalar::I32), Box::new(Params::Nil)), Box::new(Structs::Nil))
+}
+
+#[test]
+fn code_reads_an_optional_and_makes_one_from_a_value_or_nullopt() {
+    let o = || b(Expr::Var(A, Ty::Opt(Scalar::I32)));
+    assert_eq!(translate_code(&Expr::HasValue(o()), 3), Ok(DExpr::IsSome(Box::new(DExpr::Var(A)))));
+    assert_eq!(translate_code(&Expr::Value(o()), 3), Ok(DExpr::Get(Box::new(DExpr::Var(A)))));
+    assert_eq!(translate_code(&Expr::Nullopt, 3), Ok(DExpr::Nothing));
+    assert_eq!(translate_code(&Expr::Wrap(b(var(B))), 3), Ok(DExpr::Just(Box::new(DExpr::Var(B)))));
+    assert_eq!(translate_ty(Ty::Opt(Scalar::U8), 3), Ok(DTy::Opt(Scalar::U8)));
+    assert_eq!(translate_value_ty(Ty::Opt(Scalar::U8), 3), Ok(DTy::Opt(Scalar::U8)));
+}
+
+#[test]
+fn a_contract_reads_an_optional_by_has_value_and_value() {
+    let opt = Ty::Opt(Scalar::I32);
+    // std::optional<int32_t> nonneg(int32_t x) with ensures result.has_value() ==> result.value() >= 0
+    let ens = Expr::Bin(
+        BinOp::Implies,
+        b(Expr::HasValue(b(Expr::Result))),
+        b(Expr::Bin(BinOp::Ge, b(Expr::Value(b(Expr::Result))), b(Expr::Int(0)))),
+    );
+    // requires s.value.has_value(), on a parameter of the struct Slot
+    let req = Expr::HasValue(b(Expr::Field(b(Expr::Name(B)), FV)));
+    let f = Function {
+        name: SAT,
+        line: 10,
+        params: Params::Cons(A, Ty::I32, Box::new(Params::Cons(B, Ty::Struct(SLOT), Box::new(Params::Nil)))),
+        ret: opt,
+        conds: Conds::Cons(CondKind::Requires, req, 8, names(&[A, B]), Box::new(Conds::Cons(CondKind::Ensures, ens, 9, names(&[A, B]), Box::new(Conds::Nil)))),
+        body: one(Stmt::Return(Expr::Nullopt, 11)),
+    };
+    let Model::Full(m) = translate_function(&f, &Fns::Nil, &slot_table()) else { panic!("a full model") };
+    let want_req = DExpr::IsSome(Box::new(DExpr::Field(Box::new(DExpr::Var(B)), FV)));
+    // The value of an integer reads as an exact integer.
+    let want_ens = DExpr::Bin(
+        BinOp::Implies,
+        Box::new(DExpr::IsSome(Box::new(DExpr::Result))),
+        Box::new(DExpr::Bin(BinOp::Ge, Box::new(DExpr::AsInt(Box::new(DExpr::Get(Box::new(DExpr::Result))))), Box::new(DExpr::Lit(0)))),
+    );
+    assert_eq!(strip_conds(m.requires), DConds::Cons(want_req, 0, Box::new(DConds::Nil)));
+    assert_eq!(strip_conds(m.ensures), DConds::Cons(want_ens, 0, Box::new(DConds::Nil)));
+    assert_eq!(m.ret, DTy::Opt(Scalar::I32));
+    assert_eq!(strip(m.body), DStmts::Cons(Box::new(DStmt::Return(DExpr::Nothing)), 0, Box::new(DStmts::Nil)));
+}
+
+#[test]
+fn has_value_and_value_of_a_name_that_is_no_optional_are_refused() {
+    for e in [Expr::HasValue(b(Expr::Name(A))), Expr::Value(b(Expr::Name(A)))] {
+        let f = Function {
+            name: SAT,
+            line: 10,
+            params: Params::Cons(A, Ty::I32, Box::new(Params::Nil)),
+            ret: Ty::Bool,
+            conds: Conds::Cons(CondKind::Requires, e, 9, names(&[A]), Box::new(Conds::Nil)),
+            body: one(Stmt::Return(Expr::Bool(true), 11)),
+        };
+        assert_eq!(bare_refusal(translate_function(&f, &Fns::Nil, &Structs::Nil)), Refusal::Syntax(9));
+    }
+}
+
+#[test]
+fn a_copy_of_an_optional_keeps_its_value_only_as_the_same_optional() {
+    let o = || b(Expr::Var(A, Ty::Opt(Scalar::I32)));
+    assert_eq!(translate_code(&Expr::Copy(o(), Ty::Opt(Scalar::I32), Ty::Opt(Scalar::I32)), 3), Ok(DExpr::Var(A)));
+    assert_eq!(translate_code(&Expr::Copy(o(), Ty::Opt(Scalar::I32), Ty::Opt(Scalar::I64)), 3), Err(Refusal::Extent(3)));
+}
+
+#[test]
+fn a_struct_may_hold_an_optional_scalar() {
+    let want = StructModels::Cons(Ok((SLOT, DParams::Cons(FV, DTy::Opt(Scalar::I32), Box::new(DParams::Nil)))), Box::new(StructModels::Nil));
+    assert_eq!(translate_structs(&slot_table()), want);
+}
+
+#[test]
+fn the_parser_reads_has_value_and_value_after_a_path() {
+    // result.has_value() ==> result.value() >= 0
+    let toks = vec![Tok::Result, Tok::HasValue, Tok::Op(BinOp::Implies), Tok::Result, Tok::Value, Tok::Op(BinOp::Ge), Tok::Int(0)];
+    let want = Expr::Bin(
+        BinOp::Implies,
+        b(Expr::HasValue(b(Expr::Result))),
+        b(Expr::Bin(BinOp::Ge, b(Expr::Value(b(Expr::Result))), b(Expr::Int(0)))),
+    );
+    assert_eq!(parse_contract(&toks, 3), Ok(want));
+    // s.value.has_value()
+    let toks = vec![Tok::Ident(B), Tok::Field(FV), Tok::HasValue];
+    assert_eq!(parse_contract(&toks, 4), Ok(Expr::HasValue(b(Expr::Field(b(Expr::Name(B)), FV)))));
+}
+
+#[test]
+fn a_decreases_line_that_reads_result_through_a_field_or_an_optional_is_refused() {
+    // decreases result.x, decreases result.value(), decreases result.has_value()
+    // Each result has the type that the read needs, so only the rule on result refuses the line.
+    let reads = [
+        (Expr::Field(b(Expr::Result), FX), Ty::Struct(POINT), Expr::Construct(POINT, Box::new(Args::Cons(b(var(X)), Box::new(Args::Cons(b(var(X)), Box::new(Args::Nil))))))),
+        (Expr::Value(b(Expr::Result)), Ty::Opt(Scalar::I32), Expr::Nullopt),
+        (Expr::HasValue(b(Expr::Result)), Ty::Opt(Scalar::I32), Expr::Nullopt),
+    ];
+    for (e, ret, value) in reads {
+        let f = Function { conds: Conds::Cons(CondKind::Decreases, e, 2, names(&[X]), Box::new(Conds::Nil)), ret, ..with_n(one(Stmt::Return(value, 4))) };
+        assert_eq!(bare_refusal(translate_function(&f, &Fns::Nil, &point_table())), Refusal::Syntax(2));
+    }
+}
