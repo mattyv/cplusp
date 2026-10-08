@@ -1328,8 +1328,12 @@ struct Contract {
 
 // The contract lines of the function that starts at `First`: the contiguous lines above that line that start with `//@`. A
 // `CPLUSP_...(...)` marker line does not end the block. Any other line does. The lines come from the source buffer, because `//@`
-// is no doc comment and the AST has not got it.
-Contract contractAbove(const SourceManager &SM, SourceLocation First) {
+// is no doc comment and the AST has not got it. A line that holds code before its `//@` is no contract line, so the walk stops at it.
+// `Floor` is where the walk ends: it claims no line that starts at or above the line of `Floor`. A loop sets it to the start of the
+// body of its function.
+// ponytail: a floor in another file than the loop, as under a macro, is ignored. Such a loop can then claim its function's lines, and
+// the core refuses them as lines in the wrong place, which is loud. Upgrade: compare the lines in the file of the loop's expansion.
+Contract contractAbove(const SourceManager &SM, SourceLocation First, SourceLocation Floor = SourceLocation()) {
   Contract C;
   First = SM.getExpansionLoc(First);
   if (First.isInvalid())
@@ -1341,13 +1345,23 @@ Contract contractAbove(const SourceManager &SM, SourceLocation First) {
     return C;
   size_t Start = Text.substr(0, Offset).rfind('\n');
   Start = Start == StringRef::npos ? 0 : Start + 1;
-  while (Start > 0) {
+  size_t FloorStart = 0;
+  if (Floor.isValid()) {
+    const auto [FloorFile, FloorOffset] = SM.getDecomposedLoc(SM.getExpansionLoc(Floor));
+    if (FloorFile == File) {
+      const size_t Newline = Text.substr(0, FloorOffset).rfind('\n');
+      FloorStart = Newline == StringRef::npos ? 0 : Newline + 1;
+    }
+  }
+  while (Start > FloorStart) {
     // The line above is the text from the newline before it up to the newline that ends it.
     const size_t End = Start - 1;
     size_t Begin = Text.substr(0, End).rfind('\n');
     Begin = Begin == StringRef::npos ? 0 : Begin + 1;
     StringRef Line = Text.slice(Begin, End).trim();
     Start = Begin;
+    if (Begin <= FloorStart && Floor.isValid())
+      break;
     if (Line.starts_with("CPLUSP_"))
       continue;
     // A comment that ends in a backslash goes on in the next line. So the line above can be the tail of a `//@` line.
@@ -3784,6 +3798,7 @@ public:
                          : !FD->getBody()         ? "FunctionDecl without body"
                                                   : nullptr;
     llvm::json::Array Params, Conds;
+    Enclosing = FD;
     if (!Opaque) {
       for (const ParmVarDecl *P : FD->parameters())
         Params.push_back(llvm::json::Array{P->getNameAsString(), type(P->getType())});
@@ -3806,6 +3821,7 @@ private:
   const SourceManager &SM;
   std::unique_ptr<MangleContext> Mangler;
   std::set<std::pair<unsigned, unsigned>> &Claimed;
+  mutable const FunctionDecl *Enclosing = nullptr;  // the function that `function` is writing, the floor of a loop's walk upward
 
   // The contract lines as data. A line of a loop has no parameters.
   static llvm::json::Array conds(const Contract &C) {
@@ -3820,9 +3836,11 @@ private:
     }
     return Out;
   }
-  // The `//@` lines directly above a loop, claimed for it.
+  // The `//@` lines directly above a loop, claimed for it. They stop at the start of the body of the function, so a loop on the line of
+  // its function leaves the function its lines.
   llvm::json::Array loopConds(const Stmt *Loop) const {
-    const Contract C = contractAbove(SM, Loop->getBeginLoc());
+    const Stmt *Body = Enclosing ? Enclosing->getBody() : nullptr;
+    const Contract C = contractAbove(SM, Loop->getBeginLoc(), Body ? Body->getBeginLoc() : SourceLocation());
     for (const Contract::Line &L : C.Lines)
       Claimed.insert({L.File, L.Number});
     return conds(C);
@@ -3980,8 +3998,9 @@ private:
 // Everything in view is accounted for. Each function that a non-system file defines is written, and each `//@` line of such a file that
 // no function claimed is written as `{"orphan": line, "file": name}`. A deleted function runs nothing, so it is not written, and it
 // claims no line.
-// ponytail: the orphan scan reads the text, not the tokens. A `//@` line inside a block comment or a raw string is an orphan too, which
-// only refuses more. Upgrade: the lexer's comment tokens.
+// ponytail: the orphan scan reads the text, not the tokens. A line that holds `//@` anywhere is an orphan when nothing claimed it, and
+// only a line that starts with `//@` can be claimed. So a `//@` after code, in a block comment or in a raw string is an orphan too,
+// which only refuses more. Upgrade: the lexer's comment tokens.
 class TreeCheck : public ClangTidyCheck {
 public:
   TreeCheck(StringRef Name, ClangTidyContext *Context) : ClangTidyCheck(Name, Context), Output(Options.get("Output", "")) {}
@@ -4019,7 +4038,7 @@ public:
         const auto [Line, Tail] = Rest.split('\n');
         ++Number;
         Rest = Tail;
-        if (Line.trim().starts_with("//@") && !Claimed.count({ID.getHashValue(), Number}))
+        if (Line.contains("//@") && !Claimed.count({ID.getHashValue(), Number}))
           append(llvm::json::Object{{"orphan", static_cast<int64_t>(Number)}, {"file", SM.getFilename(Start).str()}});
       }
     }
