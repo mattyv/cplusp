@@ -60,14 +60,16 @@ pub enum CastKind {
     Other(u32),
 }
 
-/// An expression. In code, a name and a literal carry their type, which the compiler gave, decision 0060. In a contract, a name
+/// An expression. In code, a name and a literal carry their type, which the compiler gave, decision 0060. A literal is never
+/// negative, since a minus is an operator, so it holds the full range of `uint64_t`, decision 0063. `Bool` is `true` or `false`. In a contract, a name
 /// carries no type, and the translator finds it among the parameters, and `Int` is an exact integer. `Brace` is a braced value of one scalar, such as `int64_t{a}`. `Call` is a call by the
 /// key of its callee, the id of the callee's name for a refusal, its arguments and its line. `Unknown` is a construct with no rule,
 /// by the id of its kind and its line.
 #[derive(PartialEq, Eq, Debug)]
 pub enum Expr {
-    Int(i64),
-    Lit(i64, Ty),
+    Int(u64),
+    Lit(u64, Ty),
+    Bool(bool),
     Var(u32, Ty),
     Name(u32),
     Result,
@@ -176,7 +178,8 @@ pub enum DTy {
 /// fits `T`. A Dafny expression has no call.
 #[derive(PartialEq, Eq, Debug)]
 pub enum DExpr {
-    Lit(i64),
+    Lit(u64),
+    Bool(bool),
     Var(u32),
     Result,
     Bin(BinOp, Box<DExpr>, Box<DExpr>),
@@ -321,6 +324,7 @@ pub open spec fn spec_code(e: Expr, line: u32) -> Result<DExpr, Refusal>
             Ok(dt) => Ok(DExpr::Conv(dt, Box::new(DExpr::Lit(n)))),
             Err(r) => Err(r),
         },
+        Expr::Bool(b) => Ok(DExpr::Bool(b)),
         Expr::Var(v, t) => match spec_ty(t, line) {
             Ok(_) => Ok(DExpr::Var(v)),
             Err(r) => Err(r),
@@ -1241,6 +1245,7 @@ pub fn translate_code(e: &Expr, line: u32) -> (r: Result<DExpr, Refusal>)
             Ok(dt) => Ok(DExpr::Conv(dt, Box::new(DExpr::Lit(*n)))),
             Err(r) => Err(r),
         },
+        Expr::Bool(b) => Ok(DExpr::Bool(*b)),
         Expr::Var(v, t) => match translate_ty(*t, line) {
             Ok(_) => Ok(DExpr::Var(*v)),
             Err(r) => Err(r),
@@ -1805,7 +1810,7 @@ pub fn translate_unit(all: &Fns) -> (r: Models)
 #[derive(Structural, PartialEq, Eq, Clone, Copy, Debug)]
 pub enum Tok {
     Ident(u32),
-    Int(i64),
+    Int(u64),
     Result,
     Op(BinOp),
     Bang,
