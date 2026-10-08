@@ -54,6 +54,17 @@ fn a_contract_line_that_does_not_end_cleanly_is_refused() {
 }
 
 #[test]
+fn a_token_with_no_rule_is_refused_by_its_kind_wherever_it_is() {
+    // x > 0 $ : the parser would stop before the `$` and call the line bad syntax. The token names the problem.
+    let dollar = 77;
+    let toks = vec![Tok::Ident(X), Tok::Op(BinOp::Gt), Tok::Int(0), Tok::Unknown(dollar, 6)];
+    assert_eq!(parse_contract(&toks, 6), Err(Refusal::Construct(dollar, 6)));
+    // result = x
+    let toks = vec![Tok::Result, Tok::Unknown(dollar, 7), Tok::Ident(X)];
+    assert_eq!(parse_contract(&toks, 7), Err(Refusal::Construct(dollar, 7)));
+}
+
+#[test]
 fn clamp_translates_to_a_method_whose_contract_reads_exact_integers() {
     // requires lo <= hi; ensures x < lo ==> result == lo; if (x < lo) { return lo; } return x;
     let conds = Conds::Cons(

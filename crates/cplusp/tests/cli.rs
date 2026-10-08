@@ -1604,7 +1604,7 @@ fn every_function_and_contract_line_in_view_is_modelled_or_refused() {
 }
 
 /// A name that Dafny reserves, a parameter with no name, and a tab after the word of a contract line still give a model that Dafny
-/// proves, decision 0057.
+/// proves, decision 0057. A parameter with no name never shares a Dafny name with one the author named, decision 0058.
 #[test]
 fn reserved_names_and_unnamed_parameters_still_give_a_model_dafny_proves() {
     let Some(dafny) = dafny() else { return };
@@ -1615,7 +1615,7 @@ fn reserved_names_and_unnamed_parameters_still_give_a_model_dafny_proves() {
     let (o, out) = model("model-names.cpp", dir.path());
     assert_eq!(o.status.code(), Some(0), "stdout: {} stderr: {}", stdout(&o), stderr(&o));
     let text = std::fs::read_to_string(&out).unwrap();
-    assert_eq!(text.lines().filter(|l| l.starts_with("method ")).count(), 2, "{text}");
+    assert_eq!(text.lines().filter(|l| l.starts_with("method ")).count(), 3, "{text}");
     let v = Command::new(dafny).args(["verify"]).arg(&out).output().unwrap();
     let said = format!("{}{}", String::from_utf8_lossy(&v.stdout), String::from_utf8_lossy(&v.stderr));
     assert!(v.status.success() && said.contains(" 0 errors"), "{said}\n{text}");
@@ -1705,16 +1705,18 @@ fn calls_locals_and_casts_with_no_rule_are_refused_at_their_lines() {
         (59, "DeclStmt: the translator has no rule for it yet."),
         (64, "'=' in a contract: the translator has no rule for it yet."),
         (77, "BinaryOperator %: the translator has no rule for it yet."),
+        (90, "CXXDefaultArgExpr: the translator has no rule for it yet."),
+        (96, "BinaryOperator =: the translator has no rule for it yet."),
     ] {
         let want = format!("model-calls.cpp:{line}: {expected}");
         assert!(refusals.iter().any(|l| l.ends_with(&want)), "{want}: {text}");
     }
-    assert_eq!(refusals.len(), 12, "{text}");
+    assert_eq!(refusals.len(), 14, "{text}");
     let model = std::fs::read_to_string(&out).unwrap();
-    for name in ["id", "calls_bad", "calls_refused"] {
+    for name in ["id", "calls_bad", "calls_refused", "add"] {
         assert!(full(&model, name), "{name}: {model}");
     }
-    for name in ["inside", "nested", "to_declared", "to_member", "twice", "shadow", "from_bool", "no_start", "two_names", "bad_contract", "refused_body"] {
+    for name in ["inside", "nested", "to_declared", "to_member", "twice", "shadow", "from_bool", "no_start", "two_names", "bad_contract", "refused_body", "defaulted", "assigns"] {
         assert!(bare(&model, name), "{name}: {model}");
     }
     assert!(method_lines(&model, "declared").is_none() && method_lines(&model, "one").is_none(), "{model}");
@@ -1737,6 +1739,25 @@ fn overloads_and_namespaces_each_have_their_own_method() {
     let headers: Vec<&str> = text.lines().filter(|l| l.starts_with("method ")).map(|l| &l[..l.find('(').unwrap()]).collect();
     let distinct: std::collections::BTreeSet<&str> = headers.iter().copied().collect();
     assert_eq!((headers.len(), distinct.len()), (7, 7), "{text}");
+    let (ok, said) = verify(&dafny, &out);
+    assert!(ok && said.contains(" 0 errors"), "{said}\n{text}");
+}
+
+/// Two overloads from one expansion of a macro are two functions with two methods, decision 0058. A key from the place of the
+/// expansion alone would give them one.
+#[test]
+fn overloads_from_one_macro_each_have_their_own_method() {
+    let Some(dafny) = dafny() else { return };
+    if !clang_tidy_available() {
+        return;
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let (o, out) = model("model-macro.cpp", dir.path());
+    assert_eq!(o.status.code(), Some(0), "stdout: {} stderr: {}", stdout(&o), stderr(&o));
+    let text = std::fs::read_to_string(&out).unwrap();
+    let headers: Vec<&str> = text.lines().filter(|l| l.starts_with("method ")).map(|l| &l[..l.find('(').unwrap()]).collect();
+    let distinct: std::collections::BTreeSet<&str> = headers.iter().copied().collect();
+    assert_eq!((headers.len(), distinct.len()), (4, 4), "{text}");
     let (ok, said) = verify(&dafny, &out);
     assert!(ok && said.contains(" 0 errors"), "{said}\n{text}");
 }

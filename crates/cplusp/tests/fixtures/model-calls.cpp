@@ -80,3 +80,19 @@ int32_t refused_body(int32_t x) {
 int32_t calls_refused(int32_t x) {
   return refused_body(x);
 }
+
+// A default argument has no rule. The refusal is at the line of the call.
+int32_t add(int32_t x, int32_t y = 5) {
+  return x;
+}
+
+int32_t defaulted() {
+  return add(1);
+}
+
+// An assignment has no rule. The refusal names the operator.
+int32_t assigns(int32_t x) {
+  int32_t y = x;
+  y = 2;
+  return y;
+}
