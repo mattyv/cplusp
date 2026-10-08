@@ -58,13 +58,14 @@ pub enum CastKind {
     Other(u32),
 }
 
-/// An expression. In code, a name carries its type, which the compiler gave. In a contract, a name carries no type, and the
-/// translator finds it among the parameters. `Brace` is a braced value of one scalar, such as `int64_t{a}`. `Call` is a call by the
+/// An expression. In code, a name and a literal carry their type, which the compiler gave, decision 0060. In a contract, a name
+/// carries no type, and the translator finds it among the parameters, and `Int` is an exact integer. `Brace` is a braced value of one scalar, such as `int64_t{a}`. `Call` is a call by the
 /// key of its callee, the id of the callee's name for a refusal, its arguments and its line. `Unknown` is a construct with no rule,
 /// by the id of its kind and its line.
 #[derive(PartialEq, Eq, Debug)]
 pub enum Expr {
     Int(i64),
+    Lit(i64, Ty),
     Var(u32, Ty),
     Name(u32),
     Result,
@@ -115,10 +116,19 @@ pub enum CondKind {
     Bad(Refusal),
 }
 
+/// The names of the parameters of a declaration, in their order.
+#[derive(PartialEq, Eq, Debug)]
+pub enum Names {
+    Nil,
+    Cons(u32, Box<Names>),
+}
+
+/// A contract line: what it says, its expression, its line, and the names of the parameters of the declaration it stands on,
+/// decision 0060.
 #[derive(PartialEq, Eq, Debug)]
 pub enum Conds {
     Nil,
-    Cons(CondKind, Expr, u32, Box<Conds>),
+    Cons(CondKind, Expr, u32, Names, Box<Conds>),
 }
 
 /// One function: its key, its parameters, its return type, its contract and its body. The key names the function apart from every
@@ -283,7 +293,10 @@ pub open spec fn spec_code(e: Expr, line: u32) -> Result<DExpr, Refusal>
     decreases e,
 {
     match e {
-        Expr::Int(n) => Ok(DExpr::Lit(n)),
+        Expr::Lit(n, t) => match spec_ty(t, line) {
+            Ok(_) => Ok(DExpr::Lit(n)),
+            Err(r) => Err(r),
+        },
         Expr::Var(v, t) => match spec_ty(t, line) {
             Ok(_) => Ok(DExpr::Var(v)),
             Err(r) => Err(r),
@@ -316,6 +329,7 @@ pub open spec fn spec_code(e: Expr, line: u32) -> Result<DExpr, Refusal>
         Expr::Call(_, _, _, l) => Err(Refusal::Place(l)),
         Expr::Name(n) => Err(Refusal::Name(n, line)),
         Expr::Result => Err(Refusal::Syntax(line)),
+        Expr::Int(_) => Err(Refusal::Syntax(line)),
         Expr::Unknown(k, l) => Err(Refusal::Construct(k, l)),
     }
 }
@@ -336,16 +350,19 @@ pub open spec fn spec_args(args: Args, line: u32) -> Result<DArgs, Refusal>
     }
 }
 
-/// The type of a parameter, if `name` is one.
-pub open spec fn spec_lookup(ps: Params, name: u32) -> Option<Ty>
+/// The parameter of the definition at the place where the declaration `decl` has the name `name`, decision 0060.
+pub open spec fn spec_rebind(decl: Names, ps: Params, name: u32) -> Option<(u32, Ty)>
     decreases ps,
 {
-    match ps {
-        Params::Nil => None,
-        Params::Cons(n, t, rest) => if n == name {
-            Some(t)
-        } else {
-            spec_lookup(*rest, name)
+    match decl {
+        Names::Nil => None,
+        Names::Cons(d, drest) => match ps {
+            Params::Nil => None,
+            Params::Cons(p, t, prest) => if d == name {
+                Some((p, t))
+            } else {
+                spec_rebind(*drest, *prest, name)
+            },
         },
     }
 }
@@ -363,33 +380,34 @@ pub open spec fn spec_leaf(d: DExpr, t: Ty, line: u32) -> Result<DExpr, Refusal>
 }
 
 /// An expression of a contract. Arithmetic is on the exact integers, the battery case signed_overflow: each integer name and
-/// `result` read as `as int`, so no step can overflow. A name must be a parameter.
-pub open spec fn spec_contract(e: Expr, ps: Params, ret: Ty, line: u32) -> Result<DExpr, Refusal>
+/// `result` read as `as int`, so no step can overflow. A name must be a parameter of the declaration `decl`, and it reads the
+/// parameter of the definition at its place.
+pub open spec fn spec_contract(e: Expr, decl: Names, ps: Params, ret: Ty, line: u32) -> Result<DExpr, Refusal>
     decreases e,
 {
     match e {
         Expr::Int(n) => Ok(DExpr::Lit(n)),
-        Expr::Name(n) => match spec_lookup(ps, n) {
-            Some(t) => spec_leaf(DExpr::Var(n), t, line),
+        Expr::Name(n) => match spec_rebind(decl, ps, n) {
+            Some((p, t)) => spec_leaf(DExpr::Var(p), t, line),
             None => Err(Refusal::Name(n, line)),
         },
         Expr::Result => spec_leaf(DExpr::Result, ret, line),
-        Expr::Bin(op, a, b) => match spec_contract(*a, ps, ret, line) {
-            Ok(da) => match spec_contract(*b, ps, ret, line) {
+        Expr::Bin(op, a, b) => match spec_contract(*a, decl, ps, ret, line) {
+            Ok(da) => match spec_contract(*b, decl, ps, ret, line) {
                 Ok(db) => Ok(DExpr::Bin(op, Box::new(da), Box::new(db))),
                 Err(r) => Err(r),
             },
             Err(r) => Err(r),
         },
-        Expr::Not(a) => match spec_contract(*a, ps, ret, line) {
+        Expr::Not(a) => match spec_contract(*a, decl, ps, ret, line) {
             Ok(da) => Ok(DExpr::Not(Box::new(da))),
             Err(r) => Err(r),
         },
-        Expr::Neg(a) => match spec_contract(*a, ps, ret, line) {
+        Expr::Neg(a) => match spec_contract(*a, decl, ps, ret, line) {
             Ok(da) => Ok(DExpr::Neg(Box::new(da))),
             Err(r) => Err(r),
         },
-        Expr::Paren(a) => spec_contract(*a, ps, ret, line),
+        Expr::Paren(a) => spec_contract(*a, decl, ps, ret, line),
         Expr::Unknown(k, l) => Err(Refusal::Construct(k, l)),
         _ => Err(Refusal::Syntax(line)),
     }
@@ -501,12 +519,12 @@ pub open spec fn spec_conds(cs: Conds, want: CondKind, ps: Params, ret: Ty) -> R
 {
     match cs {
         Conds::Nil => Ok(DConds::Nil),
-        Conds::Cons(k, e, l, rest) => match k {
+        Conds::Cons(k, e, l, decl, rest) => match k {
             CondKind::Other(w) => Err(Refusal::Construct(w, l)),
             CondKind::Bad(r) => Err(r),
             _ => match spec_conds(*rest, want, ps, ret) {
                 Ok(dr) => if k == want {
-                    match spec_contract(e, ps, ret, l) {
+                    match spec_contract(e, decl, ps, ret, l) {
                         Ok(d) => Ok(DConds::Cons(d, Box::new(dr))),
                         Err(r) => Err(r),
                     }
@@ -994,7 +1012,10 @@ pub fn translate_code(e: &Expr, line: u32) -> (r: Result<DExpr, Refusal>)
     decreases e,
 {
     match e {
-        Expr::Int(n) => Ok(DExpr::Lit(*n)),
+        Expr::Lit(n, t) => match translate_ty(*t, line) {
+            Ok(_) => Ok(DExpr::Lit(*n)),
+            Err(r) => Err(r),
+        },
         Expr::Var(v, t) => match translate_ty(*t, line) {
             Ok(_) => Ok(DExpr::Var(*v)),
             Err(r) => Err(r),
@@ -1027,6 +1048,7 @@ pub fn translate_code(e: &Expr, line: u32) -> (r: Result<DExpr, Refusal>)
         Expr::Call(_, _, _, l) => Err(Refusal::Place(*l)),
         Expr::Name(n) => Err(Refusal::Name(*n, line)),
         Expr::Result => Err(Refusal::Syntax(line)),
+        Expr::Int(_) => Err(Refusal::Syntax(line)),
         Expr::Unknown(k, l) => Err(Refusal::Construct(*k, *l)),
     }
 }
@@ -1048,17 +1070,20 @@ pub fn translate_args(args: &Args, line: u32) -> (r: Result<DArgs, Refusal>)
     }
 }
 
-pub fn lookup(ps: &Params, name: u32) -> (r: Option<Ty>)
+pub fn rebind(decl: &Names, ps: &Params, name: u32) -> (r: Option<(u32, Ty)>)
     ensures
-        r == spec_lookup(*ps, name),
+        r == spec_rebind(*decl, *ps, name),
     decreases ps,
 {
-    match ps {
-        Params::Nil => None,
-        Params::Cons(n, t, rest) => if *n == name {
-            Some(*t)
-        } else {
-            lookup(rest, name)
+    match decl {
+        Names::Nil => None,
+        Names::Cons(d, drest) => match ps {
+            Params::Nil => None,
+            Params::Cons(p, t, prest) => if *d == name {
+                Some((*p, *t))
+            } else {
+                rebind(drest, prest, name)
+            },
         },
     }
 }
@@ -1077,34 +1102,34 @@ pub fn translate_leaf(d: DExpr, t: Ty, line: u32) -> (r: Result<DExpr, Refusal>)
     }
 }
 
-pub fn translate_contract(e: &Expr, ps: &Params, ret: Ty, line: u32) -> (r: Result<DExpr, Refusal>)
+pub fn translate_contract(e: &Expr, decl: &Names, ps: &Params, ret: Ty, line: u32) -> (r: Result<DExpr, Refusal>)
     ensures
-        r == spec_contract(*e, *ps, ret, line),
+        r == spec_contract(*e, *decl, *ps, ret, line),
     decreases e,
 {
     match e {
         Expr::Int(n) => Ok(DExpr::Lit(*n)),
-        Expr::Name(n) => match lookup(ps, *n) {
-            Some(t) => translate_leaf(DExpr::Var(*n), t, line),
+        Expr::Name(n) => match rebind(decl, ps, *n) {
+            Some((p, t)) => translate_leaf(DExpr::Var(p), t, line),
             None => Err(Refusal::Name(*n, line)),
         },
         Expr::Result => translate_leaf(DExpr::Result, ret, line),
-        Expr::Bin(op, a, b) => match translate_contract(a, ps, ret, line) {
-            Ok(da) => match translate_contract(b, ps, ret, line) {
+        Expr::Bin(op, a, b) => match translate_contract(a, decl, ps, ret, line) {
+            Ok(da) => match translate_contract(b, decl, ps, ret, line) {
                 Ok(db) => Ok(DExpr::Bin(*op, Box::new(da), Box::new(db))),
                 Err(r) => Err(r),
             },
             Err(r) => Err(r),
         },
-        Expr::Not(a) => match translate_contract(a, ps, ret, line) {
+        Expr::Not(a) => match translate_contract(a, decl, ps, ret, line) {
             Ok(da) => Ok(DExpr::Not(Box::new(da))),
             Err(r) => Err(r),
         },
-        Expr::Neg(a) => match translate_contract(a, ps, ret, line) {
+        Expr::Neg(a) => match translate_contract(a, decl, ps, ret, line) {
             Ok(da) => Ok(DExpr::Neg(Box::new(da))),
             Err(r) => Err(r),
         },
-        Expr::Paren(a) => translate_contract(a, ps, ret, line),
+        Expr::Paren(a) => translate_contract(a, decl, ps, ret, line),
         Expr::Unknown(k, l) => Err(Refusal::Construct(*k, *l)),
         _ => Err(Refusal::Syntax(line)),
     }
@@ -1223,12 +1248,12 @@ pub fn translate_conds(cs: &Conds, want: CondKind, ps: &Params, ret: Ty) -> (r: 
 {
     match cs {
         Conds::Nil => Ok(DConds::Nil),
-        Conds::Cons(k, e, l, rest) => match k {
+        Conds::Cons(k, e, l, decl, rest) => match k {
             CondKind::Other(w) => Err(Refusal::Construct(*w, *l)),
             CondKind::Bad(r) => Err(*r),
             _ => match translate_conds(rest, want, ps, ret) {
                 Ok(dr) => if *k == want {
-                    match translate_contract(e, ps, ret, *l) {
+                    match translate_contract(e, decl, ps, ret, *l) {
                         Ok(d) => Ok(DConds::Cons(d, Box::new(dr))),
                         Err(r) => Err(r),
                     }
