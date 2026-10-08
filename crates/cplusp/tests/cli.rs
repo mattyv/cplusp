@@ -2566,6 +2566,87 @@ fn spans_with_no_rule_are_refused_at_their_lines() {
     assert_eq!(refusals.len(), 2, "{text}");
 }
 
+/// A contract calls the functions and predicates of the companion file, decision 0079: an integer function, a predicate on a
+/// recursive struct, and a predicate in a requires line.
+#[test]
+fn specification_functions_from_the_companion_file_prove() {
+    let Some(dafny) = dafny() else { return };
+    if !clang_tidy_available() {
+        return;
+    }
+    let o = prove("model-spec.cpp", &[], &dafny);
+    let text = stdout(&o);
+    assert_eq!(o.status.code(), Some(0), "stdout: {text} stderr: {}", stderr(&o));
+    assert_eq!(text.lines().last(), Some("ok: proved"), "{text}");
+}
+
+/// A function with no body and an ensures line in the companion file is an axiom. Dafny proves a wrong body from it, and the run
+/// must not say proved, decision 0079.
+#[test]
+fn prove_refuses_an_axiom_in_the_companion_file() {
+    let Some(dafny) = dafny() else { return };
+    if !clang_tidy_available() {
+        return;
+    }
+    let o = prove("model-spec-axiom.cpp", &[], &dafny);
+    let text = stdout(&o);
+    assert_eq!(o.status.code(), Some(1), "stdout: {text} stderr: {}", stderr(&o));
+    let want = "model-spec-axiom.spec.dfy:3: a function with no body is an axiom.";
+    assert!(text.lines().any(|l| l.starts_with("Not provable: ") && l.ends_with(want)), "{want}: {text}");
+    assert!(!text.contains("ok: proved"), "{text}");
+}
+
+/// A call to a name that the companion file does not declare is refused at the contract line, decision 0079.
+#[test]
+fn a_call_to_a_name_the_companion_file_does_not_declare_is_refused() {
+    if !clang_tidy_available() {
+        return;
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let (o, _) = model("model-spec-name.cpp", dir.path());
+    let text = stdout(&o);
+    assert_eq!(o.status.code(), Some(1), "stdout: {text} stderr: {}", stderr(&o));
+    let refusals: Vec<&str> = text.lines().filter(|l| l.starts_with("Not provable: ")).collect();
+    let want = "model-spec-name.cpp:4: Min is no function of the companion file.";
+    assert!(refusals.iter().any(|l| l.ends_with(want)), "{want}: {text}");
+    assert_eq!(refusals.len(), 1, "{text}");
+}
+
+/// A companion file that holds an attribute, a lemma or an assume is refused at each word, and then it declares no function,
+/// decision 0079.
+#[test]
+fn a_companion_file_with_other_words_is_refused() {
+    if !clang_tidy_available() {
+        return;
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let (o, _) = model("model-spec-words.cpp", dir.path());
+    let text = stdout(&o);
+    assert_eq!(o.status.code(), Some(1), "stdout: {text} stderr: {}", stderr(&o));
+    let refusals: Vec<&str> = text.lines().filter(|l| l.starts_with("Not provable: ")).collect();
+    for (file, line, word) in [("model-spec-words.spec.dfy", 1, "{:"), ("model-spec-words.spec.dfy", 3, "lemma"), ("model-spec-words.spec.dfy", 6, "assume")] {
+        let want = format!("{file}:{line}: {word}: a companion file can hold only functions and predicates.");
+        assert!(refusals.iter().any(|l| l.ends_with(&want)), "{want}: {text}");
+    }
+    let want = "model-spec-words.cpp:4: Max is no function of the companion file.";
+    assert!(refusals.iter().any(|l| l.ends_with(want)), "{want}: {text}");
+    assert_eq!(refusals.len(), 4, "{text}");
+}
+
+/// A struct refused for its name leaves no method that names it, so prove ends with the refusals and does not fail on the Dafny
+/// text. Found after decision 0078.
+#[test]
+fn prove_stops_at_the_refusal_of_a_struct_name() {
+    let Some(dafny) = dafny() else { return };
+    if !clang_tidy_available() {
+        return;
+    }
+    let o = prove("model-struct-names.cpp", &[], &dafny);
+    let text = stdout(&o);
+    assert_eq!(o.status.code(), Some(1), "stdout: {text} stderr: {}", stderr(&o));
+    assert!(!stderr(&o).contains("dafny failed"), "stdout: {text} stderr: {}", stderr(&o));
+}
+
 /// Pull `"key":"value"` or `"key":123` out of one JSON line without a JSON library.
 fn field(line: &str, key: &str) -> String {
     let needle = format!("\"{key}\":");

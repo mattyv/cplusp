@@ -1067,3 +1067,54 @@ fn the_parser_reads_empty_after_a_path() {
     let toks = vec![Tok::Ident(B), Tok::Field(PRE), Tok::Empty];
     assert_eq!(parse_contract(&toks, 4), Ok(Expr::Empty(b(Expr::Field(b(Expr::Name(B)), PRE)))));
 }
+
+const MAX: u32 = 110;
+const HEIGHT: u32 = 111;
+
+#[test]
+fn the_parser_reads_a_call_of_a_specification_function() {
+    // Max(a, b) == result, F() and an unclosed call
+    let toks = vec![Tok::Ident(MAX), Tok::LParen, Tok::Ident(A), Tok::Comma, Tok::Ident(B), Tok::RParen, Tok::Op(BinOp::Eq), Tok::Result];
+    let args = Args::Cons(b(Expr::Name(A)), Box::new(Args::Cons(b(Expr::Name(B)), Box::new(Args::Nil))));
+    assert_eq!(parse_contract(&toks, 3), Ok(Expr::Bin(BinOp::Eq, b(Expr::Apply(MAX, Box::new(args))), b(Expr::Result))));
+    assert_eq!(parse_contract(&vec![Tok::Ident(MAX), Tok::LParen, Tok::RParen], 3), Ok(Expr::Apply(MAX, Box::new(Args::Nil))));
+    assert_eq!(parse_contract(&vec![Tok::Ident(MAX), Tok::LParen, Tok::Ident(A)], 3), Err(Refusal::Syntax(3)));
+    assert_eq!(parse_contract(&vec![Tok::Ident(MAX), Tok::LParen, Tok::Ident(A), Tok::Comma, Tok::RParen], 3), Err(Refusal::Syntax(3)));
+}
+
+#[test]
+fn a_contract_calls_a_specification_function_with_exact_integers() {
+    // ensures result == Max(a, b), and requires Height(n) <= 1000 on a struct parameter
+    let ens = Expr::Bin(
+        BinOp::Eq,
+        b(Expr::Result),
+        b(Expr::Apply(MAX, Box::new(Args::Cons(b(Expr::Name(A)), Box::new(Args::Cons(b(Expr::Name(B)), Box::new(Args::Nil))))))),
+    );
+    let req = Expr::Bin(BinOp::Le, b(Expr::Apply(HEIGHT, Box::new(Args::Cons(b(Expr::Name(X)), Box::new(Args::Nil))))), b(Expr::Int(1000)));
+    let f = Function {
+        name: SAT,
+        line: 14,
+        params: Params::Cons(A, Ty::I32, Box::new(Params::Cons(B, Ty::I32, Box::new(Params::Cons(X, Ty::Struct(NODE), Box::new(Params::Nil)))))),
+        ret: Ty::I32,
+        conds: Conds::Cons(CondKind::Requires, req, 12, names(&[A, B, X]), Box::new(Conds::Cons(CondKind::Ensures, ens, 13, names(&[A, B, X]), Box::new(Conds::Nil)))),
+        body: one(Stmt::Return(Expr::Lit(0, Ty::I32), 15)),
+    };
+    let Model::Full(m) = translate_function(&f, &Fns::Nil, &node_table()) else { panic!("a full model") };
+    let int = |d: DExpr| DExpr::AsInt(Box::new(d));
+    let dargs = DArgs::Cons(int(DExpr::Var(A)), Box::new(DArgs::Cons(int(DExpr::Var(B)), Box::new(DArgs::Nil))));
+    let want = DExpr::Bin(BinOp::Eq, Box::new(int(DExpr::Result)), Box::new(DExpr::Apply(MAX, Box::new(dargs))));
+    assert_eq!(strip_conds(m.ensures), DConds::Cons(want, 0, Box::new(DConds::Nil)));
+    // A struct argument is the datatype value itself.
+    let want = DExpr::Bin(BinOp::Le, Box::new(DExpr::Apply(HEIGHT, Box::new(DArgs::Cons(DExpr::Var(X), Box::new(DArgs::Nil))))), Box::new(DExpr::Lit(1000)));
+    assert_eq!(strip_conds(m.requires), DConds::Cons(want, 0, Box::new(DConds::Nil)));
+}
+
+#[test]
+fn a_specification_function_has_no_place_in_code_or_with_result_in_a_decreases_line() {
+    let call = || Expr::Apply(MAX, Box::new(Args::Cons(b(var(A)), Box::new(Args::Nil))));
+    assert_eq!(translate_code(&call(), 3), Err(Refusal::Syntax(3)));
+    // decreases Height(result) names the result.
+    let dec = Expr::Apply(HEIGHT, Box::new(Args::Cons(b(Expr::Result), Box::new(Args::Nil))));
+    let f = Function { conds: Conds::Cons(CondKind::Decreases, dec, 2, names(&[X]), Box::new(Conds::Nil)), ..with_n(one(Stmt::Return(Expr::Lit(0, Ty::I32), 4))) };
+    assert_eq!(bare_refusal(translate_function(&f, &Fns::Nil, &Structs::Nil)), Refusal::Syntax(2));
+}
