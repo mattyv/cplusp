@@ -32,7 +32,7 @@ fn names(v: &[u32]) -> Names {
 }
 
 /// A literal of code prints with its type, decision 0061.
-fn lit32(n: i64) -> DExpr {
+fn lit32(n: u64) -> DExpr {
     DExpr::Conv(DTy::Int32, Box::new(DExpr::Lit(n)))
 }
 
@@ -295,7 +295,7 @@ fn a_signature_outside_the_subset_has_no_method() {
 #[test]
 fn a_literal_of_a_type_outside_the_subset_is_refused() {
     // return -1u < 1u; C++ wraps the negation, so a literal that lost its type would give the wrong result.
-    let unsigned = |n: i64| Expr::Lit(n, Ty::Other(OTHER_TYPE));
+    let unsigned = |n: u64| Expr::Lit(n, Ty::Other(OTHER_TYPE));
     let e = Expr::Bin(BinOp::Lt, b(Expr::Neg(b(unsigned(1)))), b(unsigned(1)));
     assert_eq!(bare_refusal(translate_function(&sat(one(Stmt::Return(e, 6))), &Fns::Nil)), Refusal::Construct(OTHER_TYPE, 6));
 }
@@ -450,4 +450,16 @@ fn a_loop_contract_reads_only_the_variables_in_scope_at_the_loop() {
     let tail = Stmts::Cons(Box::new(Stmt::Local(t, Ty::I32, Expr::Lit(1, Ty::I32), 9)), Box::new(one(Stmt::Return(read(t, Ty::I32), 10))));
     let f = with_n(Stmts::Cons(Box::new(Stmt::Local(i, Ty::I32, Expr::Lit(0, Ty::I32), 4)), Box::new(Stmts::Cons(Box::new(lp), Box::new(tail)))));
     assert_eq!(bare_refusal(translate_function(&f, &Fns::Nil)), Refusal::NoVar(t, 5));
+}
+
+#[test]
+fn bool_literals_and_the_largest_uint64_literal_translate() {
+    let f = |e: Expr, ret: Ty| Function { ret, ..with_n(one(Stmt::Return(e, 4))) };
+    let Model::Full(m) = translate_function(&f(Expr::Bool(true), Ty::Bool), &Fns::Nil) else { panic!("a full model") };
+    assert_eq!(m.body, DStmts::Cons(Box::new(DStmt::Return(DExpr::Bool(true))), Box::new(DStmts::Nil)));
+    let Model::Full(m) = translate_function(&f(Expr::Lit(u64::MAX, Ty::U64), Ty::U64), &Fns::Nil) else { panic!("a full model") };
+    let want = DExpr::Conv(DTy::UInt64, Box::new(DExpr::Lit(u64::MAX)));
+    assert_eq!(m.body, DStmts::Cons(Box::new(DStmt::Return(want)), Box::new(DStmts::Nil)));
+    // The parser reads the largest literal of a contract.
+    assert_eq!(parse_contract(&vec![Tok::Int(u64::MAX)], 3), Ok(Expr::Int(u64::MAX)));
 }

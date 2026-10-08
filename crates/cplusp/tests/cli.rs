@@ -1889,6 +1889,54 @@ fn a_loop_on_the_line_of_its_function_leaves_the_function_its_contract() {
     assert!(ok && said.contains(" 0 errors"), "{said}\n{text}");
 }
 
+/// `true` and `false` in code are bool literals, decision 0063, and the model proves what they say.
+#[test]
+fn bool_literals_verify_in_dafny() {
+    let Some(dafny) = dafny() else { return };
+    if !clang_tidy_available() {
+        return;
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let (o, out) = model("model-bool.cpp", dir.path());
+    assert_eq!(o.status.code(), Some(0), "stdout: {} stderr: {}", stdout(&o), stderr(&o));
+    let text = std::fs::read_to_string(&out).unwrap();
+    assert!(full(&text, "yes") && full(&text, "no"), "{text}");
+    let (ok, said) = verify(&dafny, &out);
+    assert!(ok && said.contains(" 0 errors"), "{said}\n{text}");
+}
+
+/// A literal holds the full range of uint64_t, in code and in a contract, decision 0063.
+#[test]
+fn the_largest_uint64_literal_verifies_in_dafny() {
+    let Some(dafny) = dafny() else { return };
+    if !clang_tidy_available() {
+        return;
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let (o, out) = model("model-u64.cpp", dir.path());
+    assert_eq!(o.status.code(), Some(0), "stdout: {} stderr: {}", stdout(&o), stderr(&o));
+    let text = std::fs::read_to_string(&out).unwrap();
+    assert!(full(&text, "top"), "{text}");
+    let (ok, said) = verify(&dafny, &out);
+    assert!(ok && said.contains(" 0 errors"), "{said}\n{text}");
+}
+
+/// A refusal of a contract line in a header names the header and its line, decision 0063, not the line of that number in the source
+/// file.
+#[test]
+fn a_contract_line_in_a_header_is_refused_at_the_header() {
+    if !clang_tidy_available() {
+        return;
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let (o, _) = model("model-header-contract.cpp", dir.path());
+    let text = stdout(&o);
+    assert_eq!(o.status.code(), Some(1), "stdout: {text} stderr: {}", stderr(&o));
+    let refusals: Vec<&str> = text.lines().filter(|l| l.starts_with("Not provable: ")).collect();
+    assert_eq!(refusals.len(), 1, "{text}");
+    assert!(refusals[0].ends_with("model-header-contract.h:3: '=' in a contract: the translator has no rule for it yet."), "{text}");
+}
+
 /// The model never wraps, decision 0061. An unsigned value below zero and a sum of literals that overflows each fail in Dafny.
 #[test]
 fn unsigned_wrap_and_literal_overflow_fail_in_dafny() {

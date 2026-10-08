@@ -68,3 +68,4 @@ Status is `decided`, `proposed` (the default until someone objects or the thin s
 | [0060](0060-literal-types-contract-places-and-two-kinds-of-name.md) | A literal carries its type. A contract reads the parameters of its declaration by place. Methods are `c_`, variables `v_` | decided |
 | [0061](0061-loops-writes-and-unsigned-types.md) | The third slice: loops with invariant and decreases, writes to locals, uint32 and uint64 with no wrap, typed literals | decided |
 | [0062](0062-a-loop-contract-reads-the-variables-in-scope.md) | A loop contract reads the variables in scope. A contract line after code belongs to nothing. A loop does not take its function's lines | decided |
+| [0063](0063-bool-literals-full-unsigned-literals-and-places.md) | Bool literals, literals over the full unsigned range, and a refusal of a contract line at its own file | decided |
