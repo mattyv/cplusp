@@ -88,3 +88,4 @@ Status is `decided`, `proposed` (the default until someone objects or the thin s
 | [0080](0080-the-companion-file-is-checked-word-by-word-and-prove-counts-its-methods.md) | The companion file is checked against a list of keywords as Dafny reads it. prove counts the methods that Dafny verified, and names a resolution error | decided |
 | [0081](0081-the-review-falls-back-to-opus.md) | The review falls back to Opus when Fable is not available | decided |
 | [0082](0082-hex-literals-exists-and-several-bound-names.md) | Hex literals, exists, and several bound names in a contract. / and % still wait | decided |
+| [0083](0083-the-companion-file-is-plain-text-after-the-methods.md) | The companion file is plain ASCII after the methods, and declares no name of the model. A parse error in it is the author's | decided |

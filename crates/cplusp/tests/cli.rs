@@ -2704,6 +2704,53 @@ fn prove_names_a_resolution_error_at_its_line() {
     assert!(text.lines().any(|l| l.starts_with("Not provable: ") && l.contains(want)), "{want}: {text}");
 }
 
+/// Two companion files from the second review made a wrong body prove: a lone carriage return hid an axiom from the scan, and a
+/// function named Some changed the model's Some. Both are refused, and neither proves, decision 0083.
+#[test]
+fn prove_refuses_a_lone_carriage_return_and_a_name_of_the_model() {
+    let Some(dafny) = dafny() else { return };
+    if !clang_tidy_available() {
+        return;
+    }
+    for (name, want) in [
+        ("cr", "model-spec-cr.spec.dfy:1: a character that a companion file cannot hold."),
+        ("some", "model-spec-some.spec.dfy:1: Some: a name that the model uses."),
+    ] {
+        let o = prove(&format!("model-spec-{name}.cpp"), &[], &dafny);
+        let text = stdout(&o);
+        assert_eq!(o.status.code(), Some(1), "{name}: stdout: {text} stderr: {}", stderr(&o));
+        assert!(!text.contains("ok: proved"), "{name}: {text}");
+        assert!(text.lines().any(|l| l.starts_with("Not provable: ") && l.ends_with(want)), "{want}: {text}");
+    }
+}
+
+/// A parse error in the companion file is the author's, named in its file in the words of Dafny, with exit 1, decision 0083.
+#[test]
+fn prove_names_a_parse_error_in_the_companion_file() {
+    let Some(dafny) = dafny() else { return };
+    if !clang_tidy_available() {
+        return;
+    }
+    let o = prove("model-spec-brace.cpp", &[], &dafny);
+    let text = stdout(&o);
+    assert_eq!(o.status.code(), Some(1), "stdout: {text} stderr: {}", stderr(&o));
+    assert!(!stderr(&o).contains("dafny failed"), "stdout: {text} stderr: {}", stderr(&o));
+    assert!(text.lines().any(|l| l.starts_with("Not provable: ") && l.contains("model-spec-brace.spec.dfy:") && l.contains(": Dafny says: ")), "{text}");
+}
+
+/// When Dafny verifies fewer items than the model has methods, and nothing else is wrong, prove says so in one line, decision 0083.
+#[test]
+fn prove_names_a_run_that_verified_too_few_items() {
+    if dafny().is_none() || !clang_tidy_available() {
+        return;
+    }
+    let o = prove("model-clamp.cpp", &[], &fixture("fake-dafny-few-verified.sh"));
+    let text = stdout(&o);
+    assert_eq!(o.status.code(), Some(1), "stdout: {text} stderr: {}", stderr(&o));
+    let want = "model-clamp.cpp: Dafny verified fewer items than the model has methods: 0 for 1.";
+    assert!(text.lines().any(|l| l.starts_with("Not provable: ") && l.ends_with(want)), "{want}: {text}");
+}
+
 /// Pull `"key":"value"` or `"key":123` out of one JSON line without a JSON library.
 fn field(line: &str, key: &str) -> String {
     let needle = format!("\"{key}\":");
