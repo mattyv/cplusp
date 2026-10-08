@@ -1519,7 +1519,7 @@ fn the_model_of_clamp_verifies_in_dafny() {
     let (o, out) = model("model-clamp.cpp", dir.path());
     assert_eq!(o.status.code(), Some(0), "stdout: {} stderr: {}", stdout(&o), stderr(&o));
     let text = std::fs::read_to_string(&out).unwrap();
-    assert!(text.contains("method clamp("), "{text}");
+    assert!(text.contains("method c_clamp("), "{text}");
     let v = Command::new(dafny).args(["verify"]).arg(&out).output().unwrap();
     let said = format!("{}{}", String::from_utf8_lossy(&v.stdout), String::from_utf8_lossy(&v.stderr));
     assert!(v.status.success() && said.contains(" 0 errors"), "{said}\n{text}");
@@ -1557,8 +1557,8 @@ fn the_translator_refuses_what_it_has_no_rule_for() {
     assert!(refusals.iter().any(|l| l.ends_with("model-refuse.cpp:9: CallExpr: the translator has no rule for it yet.")), "{text}");
     assert!(refusals.iter().any(|l| l.ends_with("model-refuse.cpp:12: y in the contract is no parameter.")), "{text}");
     let model = std::fs::read_to_string(&out).unwrap();
-    assert!(model.contains("method one("), "{model}");
-    assert!(!model.contains("method call_one(") && !model.contains("method named("), "{model}");
+    assert!(model.contains("method c_one("), "{model}");
+    assert!(!model.contains("method c_call_one(") && !model.contains("method c_named("), "{model}");
 }
 
 /// Each function in view is modelled or refused, and each contract line belongs to a function or is refused, decision 0057. A
