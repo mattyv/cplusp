@@ -60,3 +60,4 @@ Status is `decided`, `proposed` (the default until someone objects or the thin s
 | [0052](0052-a-plain-object-goes-only-to-the-files-own-code.md) | A plain object goes only to the file's own code. No value that holds a plain type, and no call of the library with one | decided |
 | [0053](0053-a-pointer-counts-as-the-object-and-a-friend-of-a-plain-type-is-plain.md) | A pointer to a plain object counts as the object. A friend defined in a plain type is plain | decided |
 | [0054](0054-a-cast-of-a-pointer-to-a-plain-object-is-a-use.md) | A cast of a pointer to a plain object into another pointer type is a use | decided |
+| [0055](0055-writes-templates-and-proxies-by-what-the-compiler-resolves.md) | Writes, templates and proxies count by what the compiler resolves: a non-const rvalue reference writes, type checks read instantiations, a library proxy is a reference | decided |

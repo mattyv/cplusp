@@ -55,3 +55,18 @@ void tied_whole(int32_t x, int32_t y) {
   auto t = std::tie(x, y);  // BANNED
   take(std::get<0>(t), y);
 }
+
+#include <bitset>
+
+// A proxy of the library is a reference in disguise, decision 0055. A deduced type spells no reference.
+bool bit_of(std::vector<bool>& v) {
+  auto bit = v[0];  // BANNED
+  v[0] = true;
+  return bit;
+}
+
+bool flag_of(std::bitset<8>& b) {
+  auto flag = b[0];  // BANNED
+  b.reset();
+  return flag;
+}

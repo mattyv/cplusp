@@ -88,3 +88,15 @@ int32_t grow_const_view(std::vector<int32_t>& v) {
   }
   return s;
 }
+
+// A template is judged at each instantiation, decision 0055. The deduced iterator is a vector's.
+template <class C>
+int32_t first_after_clear(C& v) {
+  auto it = v.begin();  // BANNED
+  v.clear();
+  return *it;
+}
+
+int32_t first_of(std::vector<int32_t>& v) {
+  return first_after_clear(v);
+}

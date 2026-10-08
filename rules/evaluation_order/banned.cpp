@@ -283,3 +283,12 @@ bool default_init_beside_a_read() {
 bool capture_beside_a_read() {
   return before(std::make_pair([k = take_next()] { return k; }, int32_t{0}).second, total);  // BANNED
 }
+
+// A non-const rvalue reference can write, as a non-const lvalue reference can, decision 0055.
+int32_t next_of(int32_t&& x) {
+  return x++;
+}
+
+bool moved_beside_a_read(int32_t& x) {
+  return before(next_of(std::move(x)), x);  // BANNED
+}
