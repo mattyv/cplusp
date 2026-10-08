@@ -39,6 +39,8 @@
 #include "llvm/IR/IntrinsicInst.h"
 #include "llvm/IR/Module.h"
 #include "llvm/Passes/PassBuilder.h"
+#include "llvm/Support/FileSystem.h"
+#include "llvm/Support/JSON.h"
 #include "llvm/Support/Path.h"
 #include "llvm/Transforms/Scalar/SROA.h"
 #include "clang/Lex/Lexer.h"
@@ -1312,6 +1314,14 @@ private:
 struct Contract {
   std::vector<std::string> Modifies, Reads;
   bool Any = false;  // a `//@` line of any kind is there
+  // Every `//@` line in source order: its file, its line number and its text after the `//@`. The translator, cplusp-tree, reads these.
+  // A line that a backslash spliced to the next one is here too, with the backslash at the end of its text. It is no `modifies` or `reads`.
+  struct Line {
+    unsigned File;  // the hash of the FileID
+    unsigned Number;
+    std::string Text;
+  };
+  std::vector<Line> Lines;
 };
 
 // The contract lines of the function that starts at `First`: the contiguous lines above that line that start with `//@`. A
@@ -1338,10 +1348,27 @@ Contract contractAbove(const SourceManager &SM, SourceLocation First) {
     Start = Begin;
     if (Line.starts_with("CPLUSP_"))
       continue;
+    // A comment that ends in a backslash goes on in the next line. So the line above can be the tail of a `//@` line.
+    size_t Head = Begin;
+    while (Head > 0) {
+      const size_t PreviousBegin = Text.substr(0, Head - 1).rfind('\n');
+      const size_t From = PreviousBegin == StringRef::npos ? 0 : PreviousBegin + 1;
+      if (!Text.slice(From, Head - 1).rtrim().ends_with("\\"))
+        break;
+      Head = From;
+    }
+    const bool Spliced = Head != Begin;
+    if (Spliced) {
+      Line = Text.slice(Head, Text.find('\n', Head)).trim();
+      Begin = Start = Head;
+    }
     if (!Line.consume_front("//@"))
       break;
-    C.Any = true;
     Line = Line.ltrim();
+    C.Lines.push_back({File.getHashValue(), SM.getLineNumber(File, Begin), Line.str()});
+    if (Spliced)
+      continue;
+    C.Any = true;
     std::vector<std::string> *Names = Line.consume_front("modifies") ? &C.Modifies : Line.consume_front("reads") ? &C.Reads : nullptr;
     if (!Names || (!Line.empty() && !isspace(static_cast<unsigned char>(Line.front()))))
       continue;
@@ -1351,6 +1378,7 @@ Contract contractAbove(const SourceManager &SM, SourceLocation First) {
       if (!Name.trim().empty())
         Names->push_back(Name.trim().str());
   }
+  std::reverse(C.Lines.begin(), C.Lines.end());  // the walk went upward
   return C;
 }
 
@@ -1381,6 +1409,7 @@ Contract contractOf(const SourceManager &SM, const FunctionDecl *Function) {
     C.Modifies.insert(C.Modifies.end(), One.Modifies.begin(), One.Modifies.end());
     C.Reads.insert(C.Reads.end(), One.Reads.begin(), One.Reads.end());
     C.Any |= One.Any;
+    C.Lines.insert(C.Lines.end(), One.Lines.begin(), One.Lines.end());
   }
   return C;
 }
@@ -3705,6 +3734,215 @@ private:
   bool Seen = false;
 };
 
+// cplusp-tree: decisions 0056 and 0057. The plugin writes the tree of each function the file defines as data, and the core decides
+// what it means. One JSON object on one line, appended to the file of the option `Output`, in the shape of the core's types, with names
+// as strings. The shell numbers them. This check decides nothing. It keeps every implicit node, and it looks through no cast and no
+// parenthesis. A node it has no name for is `{"Unknown": [class, line]}`, and the core refuses it.
+// ponytail: a qualified type, a `const int` for one, is `Other`, so the translator refuses it. The slice has no const yet.
+// Upgrade: drop the qualifiers that keep the value, once the core has a rule for them.
+class TreeWriter {
+public:
+  explicit TreeWriter(ASTContext &Context) : Context(Context), SM(Context.getSourceManager()) {}
+
+  // ponytail: a function the translator cannot read, a template, a member or one with no body, is written with no signature and no
+  // contract, only a body of one `Unknown`. The core judges the signature first, so a real one would make the refusal name the first type,
+  // such as `T`, and not the construct. The placeholder return type is never shown. Its contract lines still count as claimed.
+  // Upgrade: a core rule for these, and their real signature.
+  llvm::json::Value function(const FunctionDecl *FD, const Contract &C) const {
+    const char *Opaque = FD->isTemplated()        ? "FunctionTemplateDecl"
+                         : isa<CXXMethodDecl>(FD) ? "CXXMethodDecl"
+                         : !FD->getBody()         ? "FunctionDecl without body"
+                                                  : nullptr;
+    llvm::json::Array Params, Conds;
+    if (!Opaque) {
+      for (const ParmVarDecl *P : FD->parameters())
+        Params.push_back(llvm::json::Array{P->getNameAsString(), type(P->getType())});
+      for (const Contract::Line &L : C.Lines) {
+        // The word ends at any white space.
+        const StringRef Text = L.Text;
+        const size_t Cut = Text.find_first_of(" \t\f\v\r");
+        Conds.push_back(llvm::json::Object{
+            {"kind", Text.substr(0, Cut).str()}, {"line", number(L.Number)}, {"text", Cut == StringRef::npos ? "" : Text.substr(Cut).trim().str()}});
+      }
+    }
+    return llvm::json::Object{{"name", FD->getNameAsString()},
+                              {"file", file(FD->getLocation())},
+                              {"line", number(line(FD->getLocation()))},
+                              {"params", std::move(Params)},
+                              {"ret", Opaque ? llvm::json::Value("Bool") : type(FD->getReturnType())},
+                              {"conds", std::move(Conds)},
+                              {"body", Opaque ? llvm::json::Array{tag("Unknown", llvm::json::Array{Opaque, number(line(FD->getLocation()))})} : stmts(FD->getBody())}};
+  }
+
+  std::string file(SourceLocation At) const { return SM.getFilename(SM.getFileLoc(At)).str(); }
+
+private:
+  ASTContext &Context;
+  const SourceManager &SM;
+
+  static llvm::json::Value number(uint64_t N) { return llvm::json::Value(static_cast<int64_t>(N)); }
+  unsigned line(SourceLocation At) const { return SM.getExpansionLineNumber(At); }
+  static llvm::json::Value tag(const char *Name, llvm::json::Value Inner) { return llvm::json::Object{{Name, std::move(Inner)}}; }
+  llvm::json::Value unknown(const Stmt *S, const std::string &What) const {
+    return tag("Unknown", llvm::json::Array{What, number(line(S->getBeginLoc()))});
+  }
+
+  llvm::json::Value type(QualType T) const {
+    const QualType Canon = T.getCanonicalType();
+    if (!Canon.hasQualifiers())
+      if (const auto *Builtin = dyn_cast<BuiltinType>(Canon.getTypePtr())) {
+        const uint64_t Bits = Context.getTypeSize(Canon);
+        switch (Builtin->getKind()) {
+        case BuiltinType::Int:
+          if (Bits == 32)
+            return "I32";
+          break;
+        case BuiltinType::Long:
+        case BuiltinType::LongLong:
+          if (Bits == 64)
+            return "I64";
+          break;
+        case BuiltinType::UChar:
+          return "U8";
+        case BuiltinType::Bool:
+          return "Bool";
+        default:
+          break;
+        }
+      }
+    return tag("Other", T.getAsString(Context.getPrintingPolicy()));
+  }
+
+  // The statements of a branch or of the body: a compound statement is its list, and any other statement is a list of one.
+  llvm::json::Array stmts(const Stmt *S) const {
+    llvm::json::Array Out;
+    if (const auto *Block = dyn_cast<CompoundStmt>(S))
+      for (const Stmt *Child : Block->body())
+        Out.push_back(stmt(Child));
+    else
+      Out.push_back(stmt(S));
+    return Out;
+  }
+
+  llvm::json::Value stmt(const Stmt *S) const {
+    if (const auto *If = dyn_cast<IfStmt>(S); If && !If->getInit() && !If->getConditionVariable() && !If->isConsteval())
+      return tag("If", llvm::json::Array{expr(If->getCond()), stmts(If->getThen()), If->getElse() ? stmts(If->getElse()) : llvm::json::Array{}});
+    if (const auto *Return = dyn_cast<ReturnStmt>(S); Return && Return->getRetValue())
+      return tag("Return", expr(Return->getRetValue()));
+    return unknown(S, S->getStmtClassName());
+  }
+
+  llvm::json::Value expr(const Expr *E) const {
+    if (const auto *Literal = dyn_cast<IntegerLiteral>(E); Literal && Literal->getValue().getActiveBits() <= 63)
+      return tag("Int", number(Literal->getValue().getZExtValue()));
+    if (const auto *Ref = dyn_cast<DeclRefExpr>(E)) {
+      const ValueDecl *D = Ref->getDecl();
+      if (isa<ParmVarDecl>(D) || (isa<VarDecl>(D) && cast<VarDecl>(D)->hasLocalStorage()))
+        return tag("Var", llvm::json::Array{D->getNameAsString(), type(D->getType())});
+    }
+    if (const auto *Binary = dyn_cast<BinaryOperator>(E)) {
+      const char *Op = nullptr;
+      switch (Binary->getOpcode()) {
+      case BO_Add: Op = "Add"; break;
+      case BO_Sub: Op = "Sub"; break;
+      case BO_Mul: Op = "Mul"; break;
+      case BO_LT: Op = "Lt"; break;
+      case BO_LE: Op = "Le"; break;
+      case BO_GT: Op = "Gt"; break;
+      case BO_GE: Op = "Ge"; break;
+      case BO_EQ: Op = "Eq"; break;
+      case BO_NE: Op = "Ne"; break;
+      case BO_LAnd: Op = "And"; break;
+      case BO_LOr: Op = "Or"; break;
+      default: break;
+      }
+      if (!Op)
+        return unknown(E, std::string("BinaryOperator ") + Binary->getOpcodeStr().str());
+      return tag("Bin", llvm::json::Array{Op, expr(Binary->getLHS()), expr(Binary->getRHS())});
+    }
+    if (const auto *Unary = dyn_cast<UnaryOperator>(E)) {
+      if (Unary->getOpcode() == UO_LNot)
+        return tag("Not", expr(Unary->getSubExpr()));
+      if (Unary->getOpcode() == UO_Minus)
+        return tag("Neg", expr(Unary->getSubExpr()));
+      return unknown(E, std::string("UnaryOperator ") + UnaryOperator::getOpcodeStr(Unary->getOpcode()).str());
+    }
+    if (const auto *Cast = dyn_cast<CastExpr>(E)) {
+      llvm::json::Value Kind = Cast->getCastKind() == CK_LValueToRValue ? llvm::json::Value("Read")
+                               : Cast->getCastKind() == CK_NoOp         ? llvm::json::Value("NoOp")
+                                                                        : tag("Other", std::string(Cast->getStmtClassName()) + " " + Cast->getCastKindName());
+      return tag("Cast", llvm::json::Array{std::move(Kind), expr(Cast->getSubExpr())});
+    }
+    if (const auto *Paren = dyn_cast<ParenExpr>(E))
+      return tag("Paren", expr(Paren->getSubExpr()));
+    return unknown(E, E->getStmtClassName());
+  }
+};
+
+// Everything in view is accounted for. Each function that a non-system file defines is written, and each `//@` line of such a file that
+// no function claimed is written as `{"orphan": line, "file": name}`. A deleted function runs nothing, so it is not written, and it
+// claims no line.
+// ponytail: the orphan scan reads the text, not the tokens. A `//@` line inside a block comment or a raw string is an orphan too, which
+// only refuses more. Upgrade: the lexer's comment tokens.
+class TreeCheck : public ClangTidyCheck {
+public:
+  TreeCheck(StringRef Name, ClangTidyContext *Context) : ClangTidyCheck(Name, Context), Output(Options.get("Output", "")) {}
+  void registerMatchers(MatchFinder *Finder) override {
+    Finder->addMatcher(
+        functionDecl(unless(isImplicit()), unless(isTemplateInstantiation()), unless(isExpansionInSystemHeader())).bind("fn"), this);
+    Finder->addMatcher(translationUnitDecl(), this);
+  }
+  void check(const MatchFinder::MatchResult &Result) override {
+    Context = Result.Context;
+    const auto *FD = Result.Nodes.getNodeAs<FunctionDecl>("fn");
+    if (!FD || FD->isDeleted())
+      return;
+    const Contract C = contractOf(Context->getSourceManager(), FD);
+    for (const Contract::Line &L : C.Lines)
+      Claimed.insert({L.File, L.Number});
+    if (FD->isThisDeclarationADefinition())
+      append(TreeWriter(*Context).function(FD, C));
+  }
+  void onEndOfTranslationUnit() override {
+    if (!Context)
+      return;
+    const SourceManager &SM = Context->getSourceManager();
+    for (unsigned I = 0; I < SM.local_sloc_entry_size(); ++I) {
+      const SrcMgr::SLocEntry &Entry = SM.getLocalSLocEntry(I);
+      if (!Entry.isFile())
+        continue;
+      const SourceLocation Start = SourceLocation::getFromRawEncoding(Entry.getOffset());
+      const FileID ID = SM.getFileID(Start);
+      // The compiler's own buffers, such as the predefined macros, are no file.
+      if (!SM.getFileEntryForID(ID) || SM.isInSystemHeader(Start))
+        continue;
+      unsigned Number = 0;
+      for (StringRef Rest = SM.getBufferData(ID); !Rest.empty();) {
+        const auto [Line, Tail] = Rest.split('\n');
+        ++Number;
+        Rest = Tail;
+        if (Line.trim().starts_with("//@") && !Claimed.count({ID.getHashValue(), Number}))
+          append(llvm::json::Object{{"orphan", static_cast<int64_t>(Number)}, {"file", SM.getFilename(Start).str()}});
+      }
+    }
+  }
+
+private:
+  std::string Output;
+  ASTContext *Context = nullptr;
+  std::set<std::pair<unsigned, unsigned>> Claimed;
+
+  void append(const llvm::json::Value &V) {
+    std::error_code EC;
+    llvm::raw_fd_ostream OS(Output, EC, llvm::sys::fs::OF_Append | llvm::sys::fs::OF_Text);
+    if (EC) {
+      configurationDiag("cplusp-tree cannot write %0: %1") << Output << EC.message();
+      return;
+    }
+    OS << llvm::formatv("{0}", V) << "\n";
+  }
+};
+
 class CplusPModule : public ClangTidyModule {
 public:
   void addCheckFactories(ClangTidyCheckFactories &Factories) override {
@@ -3724,6 +3962,7 @@ public:
     Factories.registerCheck<PragmaCheck>("cplusp-pragma");
     Factories.registerCheck<MarkersCheck>("cplusp-markers");
     Factories.registerCheck<IndirectCallCheck>("cplusp-indirect-call");
+    Factories.registerCheck<TreeCheck>("cplusp-tree");
   }
 };
 

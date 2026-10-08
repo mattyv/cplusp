@@ -1,6 +1,8 @@
 //! The `cplusp` command line. It parses files, runs clang-tidy and prints text.
 //! Every policy decision comes from `cplusp_core`. See docs/policy.md.
 
+mod model;
+
 use std::collections::{BTreeMap, HashSet};
 use std::fs;
 use std::io::ErrorKind;
@@ -24,6 +26,9 @@ const DIAGNOSTIC: &str = "clang-diagnostic-";
 
 /// What clang-tidy names the diagnostic of a check that is given a bad option.
 const CONFIG_ERROR: &str = "clang-tidy-config";
+
+/// The check of the plugin that writes the tree of each function as JSON, decisions 0056 and 0057. Only the `model` command enables it.
+const TREE: &str = "cplusp-tree";
 
 /// The generic check of the plugin. A `matcher` entry of the policy becomes an option of this check.
 const MATCHER: &str = "cplusp-matcher";
@@ -90,6 +95,19 @@ enum Cli {
         #[arg(last = true)]
         clang_args: Vec<String>,
     },
+    /// Translate the functions of a file to Dafny, decisions 0056 and 0057. Exit 1 if a function is refused.
+    Model {
+        /// The clang-tidy plugin, built from clang-tidy/.
+        #[arg(long)]
+        plugin: Option<PathBuf>,
+        /// The Dafny file to write. It is written even when a function is refused.
+        #[arg(long)]
+        out: PathBuf,
+        file: PathBuf,
+        /// Compiler arguments, after `--`.
+        #[arg(last = true)]
+        clang_args: Vec<String>,
+    },
 }
 
 #[derive(Subcommand)]
@@ -146,6 +164,7 @@ fn run(cli: Cli) -> Result<ExitCode> {
         Cli::Gate { common, json, build_dir, plugin, files, clang_args } => {
             gate(&common, json, build_dir.as_deref(), plugin.as_deref(), &files, &clang_args)
         }
+        Cli::Model { plugin, out, file, clang_args } => model(plugin.as_deref(), &out, &file, &clang_args),
     }
 }
 
@@ -822,6 +841,77 @@ fn gate(c: &Common, json: bool, build_dir: Option<&Path>, plugin: Option<&Path>,
     Ok(if found.is_empty() { ExitCode::SUCCESS } else { ExitCode::from(1) })
 }
 
+/// `cplusp model`: run the tree check of the plugin alone, translate what it wrote, and write the Dafny file.
+fn model(plugin: Option<&Path>, out: &Path, file: &Path, clang_args: &[String]) -> Result<ExitCode> {
+    // ponytail: the flags are judged without the rows of the policy, so a `-Wno-` flag of a warning that a row names passes here.
+    // The model reads no warning. Upgrade: load the policy as the gate does.
+    let refused = refused_flags(clang_args, &[]);
+    if !refused.is_empty() {
+        bail!("{}", refused.join("\n"));
+    }
+    let tool = locate(TIDY).context("clang-tidy not found. Install clang-tidy-18.")?;
+    if !list_checks(&tool, plugin)?.iter().any(|l| l == TREE) {
+        bail!("not enforced: no such check {TREE}. Build the plugin and pass --plugin PATH.");
+    }
+    let cwd = std::env::current_dir().context("cannot find the working directory")?;
+    let tmp = tempfile::tempdir().context("cannot create a temporary directory")?;
+    // The plugin appends, so the file starts empty, and a file with no function leaves it empty.
+    let tree = tmp.path().join("tree.jsonl");
+    fs::write(&tree, "")?;
+    let config = tmp.path().join("clang-tidy.yaml");
+    fs::write(&config, format!("Checks: \"-*,{TREE}\"\nCheckOptions:\n  {TREE}.Output: {}\n", quote(&tree.display().to_string())))?;
+    let fixes_file = tmp.path().join("fixes.yaml");
+    let run = Command::new(&tool)
+        .current_dir(&cwd)
+        .args(load_arg(plugin))
+        .arg(format!("--config-file={}", config.display()))
+        .arg(format!("--export-fixes={}", fixes_file.display()))
+        .arg("--quiet")
+        .arg(file)
+        .arg("--")
+        .args(clang_args)
+        .stdin(Stdio::null())
+        .output()
+        .with_context(|| format!("cannot run {tool}"))?;
+    // The check reports no finding, so what clang-tidy reports is the compiler's. The gate's own words, and exit 2.
+    let fixes: Fixes = match fs::read_to_string(&fixes_file) {
+        Ok(yaml) => parse(&yaml, "the clang-tidy fixes")?,
+        Err(e) if e.kind() == ErrorKind::NotFound => Fixes::default(),
+        Err(e) => return Err(e).context("cannot read the clang-tidy fixes"),
+    };
+    let shown = |p: &Path| p.strip_prefix(&cwd).unwrap_or(p).display().to_string();
+    let broken: Vec<String> = fixes
+        .diagnostics
+        .iter()
+        .filter(|d| d.name.starts_with(DIAGNOSTIC))
+        .map(|d| does_not_compile(&Path::new(&d.dir).join(&d.at.file), d, &shown))
+        .collect();
+    if !broken.is_empty() {
+        bail!("{}", broken.join("\n"));
+    }
+    if !run.status.success() {
+        bail!("clang-tidy failed ({}):\n{}{}", run.status, String::from_utf8_lossy(&run.stdout), String::from_utf8_lossy(&run.stderr));
+    }
+    let (dafny, refusals) = model::translate(&fs::read_to_string(&tree).context("cannot read the tree")?)?;
+    fs::write(out, dafny).with_context(|| format!("cannot write {}", out.display()))?;
+    for (path, line, sentence) in &refusals {
+        println!("Not provable: {}:{line}: {sentence}", shown(&cwd.join(path)));
+    }
+    Ok(if refusals.is_empty() { ExitCode::SUCCESS } else { ExitCode::from(1) })
+}
+
+/// The line the gate prints for a compiler error. The model prints the same.
+fn does_not_compile(path: &Path, d: &Diagnostic, shown: &dyn Fn(&Path) -> String) -> String {
+    // An empty file name means clang had no input file at all. A pseudo-file such as
+    // `<command line>` cannot be read back, so the line is left out rather than lost.
+    let place = match (d.at.file.is_empty(), line_of(path, d.at.offset)) {
+        (true, _) => String::new(),
+        (false, Ok(line)) => format!("{}:{line}: ", shown(path)),
+        (false, Err(_)) => format!("{}: ", shown(path)),
+    };
+    format!("does not compile: {place}{}", d.at.message)
+}
+
 /// The findings of one run of clang-tidy. `fixes` is what the run reported. The places of the run decide the kind of each of its findings.
 fn judge(loaded: &Loaded, fixes: Fixes, shown: &dyn Fn(&Path) -> String) -> Result<Vec<Finding>> {
     let mut found = Vec::new();
@@ -845,14 +935,7 @@ fn judge(loaded: &Loaded, fixes: Fixes, shown: &dyn Fn(&Path) -> String) -> Resu
     let mut broken = Vec::new();
     for (path, d) in &diagnostics {
         if d.name.starts_with(DIAGNOSTIC) && rule_for_check(&loaded.policy, &d.name).is_none() {
-            // An empty file name means clang had no input file at all. A pseudo-file such as
-            // `<command line>` cannot be read back, so the line is left out rather than lost.
-            let place = match (d.at.file.is_empty(), line_of(path, d.at.offset)) {
-                (true, _) => String::new(),
-                (false, Ok(line)) => format!("{}:{line}: ", shown(path)),
-                (false, Err(_)) => format!("{}: ", shown(path)),
-            };
-            broken.push(format!("does not compile: {place}{}", d.at.message));
+            broken.push(does_not_compile(path, d, shown));
         }
     }
     if !broken.is_empty() {
