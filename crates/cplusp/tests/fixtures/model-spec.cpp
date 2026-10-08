@@ -9,6 +9,7 @@ struct Node {
 };
 
 //@ ensures result == Max(a, b)
+//@ ensures Above(result)
 int32_t larger(int32_t a, int32_t b) {
   if (a < b) {
     return b;

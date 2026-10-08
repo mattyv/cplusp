@@ -2661,6 +2661,49 @@ fn radix_find_proves_end_to_end() {
     assert_eq!(text.lines().last(), Some("ok: proved"), "{text}");
 }
 
+/// The four companion files from the review of decision 0079 each made a wrong body prove. Each is now refused at the word that
+/// hides an axiom or the model, and no run says proved, decision 0080.
+#[test]
+fn prove_refuses_each_companion_file_that_hid_an_axiom_or_the_model() {
+    let Some(dafny) = dafny() else { return };
+    if !clang_tidy_available() {
+        return;
+    }
+    let word = |w: &str| format!("{w}: a companion file can hold only functions and predicates.");
+    let cases: [(&str, Vec<(u32, String)>); 4] = [
+        ("unclosed", vec![(2, "a comment that does not end.".to_string())]),
+        ("string", vec![(1, word("\"")), (2, word("{:"))]),
+        ("nested", vec![(2, word("type")), (2, word("witness"))]),
+        ("newtype", vec![(1, word("newtype")), (1, word("witness"))]),
+    ];
+    for (name, wants) in cases {
+        let o = prove(&format!("model-spec-{name}.cpp"), &[], &dafny);
+        let text = stdout(&o);
+        assert_eq!(o.status.code(), Some(1), "{name}: stdout: {text} stderr: {}", stderr(&o));
+        assert!(!text.contains("ok: proved"), "{name}: {text}");
+        for (line, sentence) in wants {
+            let want = format!("model-spec-{name}.spec.dfy:{line}: {sentence}");
+            assert!(text.lines().any(|l| l.starts_with("Not provable: ") && l.ends_with(&want)), "{want}: {text}");
+        }
+    }
+}
+
+/// A contract call that Dafny cannot resolve is named at its C++ line in the words of Dafny, and the run is not proved, with
+/// exit 1. It is no failure of the tool, decision 0080.
+#[test]
+fn prove_names_a_resolution_error_at_its_line() {
+    let Some(dafny) = dafny() else { return };
+    if !clang_tidy_available() {
+        return;
+    }
+    let o = prove("model-spec-arity.cpp", &[], &dafny);
+    let text = stdout(&o);
+    assert_eq!(o.status.code(), Some(1), "stdout: {text} stderr: {}", stderr(&o));
+    assert!(!stderr(&o).contains("dafny failed"), "stdout: {text} stderr: {}", stderr(&o));
+    let want = "model-spec-arity.cpp:3: Dafny says: wrong number of arguments";
+    assert!(text.lines().any(|l| l.starts_with("Not provable: ") && l.contains(want)), "{want}: {text}");
+}
+
 /// Pull `"key":"value"` or `"key":123` out of one JSON line without a JSON library.
 fn field(line: &str, key: &str) -> String {
     let needle = format!("\"{key}\":");
