@@ -1,5 +1,5 @@
-//! The verdict of `cplusp prove`, decision 0077. The shell runs Dafny and reads four facts from the run. This module decides from
-//! them, and it proves that `Proved` needs all four to be clean.
+//! The verdict of `cplusp prove`, decisions 0077 and 0079. The shell runs Dafny and reads five facts from the run. This module decides from
+//! them, and it proves that `Proved` needs each of them to be clean.
 
 use vstd::prelude::*;
 
@@ -16,15 +16,16 @@ pub enum Verdict {
 
 /// The rule. `exit_ok` is the exit status of Dafny. `summary` is the errors and the time-outs of its summary line, or `None` when
 /// the output has no summary that can be read. `errors` is the number of error lines. `refused` says that the translator refused
-/// a construct. The exit status, the counts and the error lines must agree, decision 0070.
-pub open spec fn spec_verdict(exit_ok: bool, summary: Option<(u64, u64)>, errors: usize, refused: bool) -> Verdict {
+/// a construct. `axioms` is the number of axioms that Dafny warns of in the companion file, decision 0079. The exit status, the
+/// counts and the error lines must agree, decision 0070.
+pub open spec fn spec_verdict(exit_ok: bool, summary: Option<(u64, u64)>, errors: usize, refused: bool, axioms: usize) -> Verdict {
     match summary {
         None => Verdict::ToolFailed,
         Some((e, t)) => {
             let clean = e == 0 && t == 0;
             if exit_ok != clean || (clean && errors > 0) || (!clean && errors == 0) {
                 Verdict::ToolFailed
-            } else if clean && !refused {
+            } else if clean && !refused && axioms == 0 {
                 Verdict::Proved
             } else {
                 Verdict::NotProved
@@ -34,11 +35,11 @@ pub open spec fn spec_verdict(exit_ok: bool, summary: Option<(u64, u64)>, errors
 }
 
 /// The verdict of one run. It is `Proved` only when Dafny exits with success, the summary has zero errors and zero time-outs, no
-/// error line is present and nothing is refused.
-pub fn verdict(exit_ok: bool, summary: Option<(u64, u64)>, errors: usize, refused: bool) -> (v: Verdict)
+/// error line is present, nothing is refused and the companion file holds no axiom.
+pub fn verdict(exit_ok: bool, summary: Option<(u64, u64)>, errors: usize, refused: bool, axioms: usize) -> (v: Verdict)
     ensures
-        v == spec_verdict(exit_ok, summary, errors, refused),
-        v == Verdict::Proved <==> (exit_ok && summary == Some((0u64, 0u64)) && errors == 0 && !refused),
+        v == spec_verdict(exit_ok, summary, errors, refused, axioms),
+        v == Verdict::Proved <==> (exit_ok && summary == Some((0u64, 0u64)) && errors == 0 && !refused && axioms == 0),
         summary.is_none() ==> v == Verdict::ToolFailed,
 {
     match summary {
@@ -47,7 +48,7 @@ pub fn verdict(exit_ok: bool, summary: Option<(u64, u64)>, errors: usize, refuse
             let clean = e == 0 && t == 0;
             if exit_ok != clean || (clean && errors > 0) || (!clean && errors == 0) {
                 Verdict::ToolFailed
-            } else if clean && !refused {
+            } else if clean && !refused && axioms == 0 {
                 Verdict::Proved
             } else {
                 Verdict::NotProved

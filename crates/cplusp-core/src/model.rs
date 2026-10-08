@@ -91,8 +91,8 @@ pub enum CastKind {
 /// carries no type, and the translator finds it among the parameters, and `Int` is an exact integer. `Brace` is a braced value of one scalar, such as `int64_t{a}`. `Call` is a call by the
 /// key of its callee, the id of the callee's name for a refusal, its arguments and its line. `HasValue` and `Value` read an
 /// optional, `Nullopt` is `std::nullopt`, and `Wrap` is a value that the compiler turns into an optional, decision 0075. `Empty`
-/// is `v.empty()` and `Subspan` is `s.subspan(k)`, decision 0078. `Unknown` is a construct with no rule, by the id of its kind and
-/// its line.
+/// is `v.empty()` and `Subspan` is `s.subspan(k)`, decision 0078. `Apply` is a call in a contract of a function of the companion
+/// file, by the id of its name, decision 0079. `Unknown` is a construct with no rule, by the id of its kind and its line.
 #[derive(PartialEq, Eq, Debug)]
 pub enum Expr {
     Int(u64),
@@ -121,6 +121,7 @@ pub enum Expr {
     Wrap(Box<Expr>),
     Empty(Box<Expr>),
     Subspan(Box<Expr>, Box<Expr>),
+    Apply(u32, Box<Args>),
     Unknown(u32, u32),
 }
 
@@ -234,7 +235,8 @@ pub enum DTy {
 
 /// A Dafny expression. `AsInt` is `(e as int)`, the exact value of a machine integer. `Conv` is `(e as T)`, which Dafny proves
 /// fits `T`. `IsSome` is `e.Some?`, `Get` is `e.value`, which Dafny proves holds a value, and `Nothing` and `Just` are `None` and
-/// `Some(e)`. `Drop` is `s[k..]`, which Dafny proves is in range, decision 0078. A Dafny expression has no call.
+/// `Some(e)`. `Drop` is `s[k..]`, which Dafny proves is in range, decision 0078. `Apply` calls a function of the companion file,
+/// decision 0079. A Dafny expression calls no method.
 #[derive(PartialEq, Eq, Debug)]
 pub enum DExpr {
     Lit(u64),
@@ -258,6 +260,7 @@ pub enum DExpr {
     Nothing,
     Just(Box<DExpr>),
     Drop(Box<DExpr>, Box<DExpr>),
+    Apply(u32, Box<DArgs>),
 }
 
 #[derive(PartialEq, Eq, Debug)]
@@ -706,6 +709,10 @@ pub open spec fn spec_contract(e: Expr, decl: Names, ps: Params, ret: Option<Ty>
             Ok(_) => Err(Refusal::Syntax(line)),
             Err(r) => Err(r),
         },
+        Expr::Apply(f, args) => match spec_contract_args(*args, decl, ps, ret, bound, line, sd) {
+            Ok(da) => Ok(DExpr::Apply(f, Box::new(da))),
+            Err(r) => Err(r),
+        },
         Expr::Chain(o1, o2, a, b, c) => if chains(o1, o2) {
             match spec_contract(*a, decl, ps, ret, bound, line, sd) {
                 Ok(da) => match spec_contract(*b, decl, ps, ret, bound, line, sd) {
@@ -722,6 +729,25 @@ pub open spec fn spec_contract(e: Expr, decl: Names, ps: Params, ret: Option<Ty>
         },
         Expr::Unknown(k, l) => Err(Refusal::Construct(k, l)),
         _ => Err(Refusal::Syntax(line)),
+    }
+}
+
+/// The arguments of a call in a contract, each an expression of the contract, decision 0079.
+pub open spec fn spec_contract_args(args: Args, decl: Names, ps: Params, ret: Option<Ty>, bound: Names, line: u32, sd: Structs) -> Result<
+    DArgs,
+    Refusal,
+>
+    decreases args, 2nat,
+{
+    match args {
+        Args::Nil => Ok(DArgs::Nil),
+        Args::Cons(a, rest) => match spec_contract(*a, decl, ps, ret, bound, line, sd) {
+            Ok(da) => match spec_contract_args(*rest, decl, ps, ret, bound, line, sd) {
+                Ok(dr) => Ok(DArgs::Cons(da, Box::new(dr))),
+                Err(r) => Err(r),
+            },
+            Err(r) => Err(r),
+        },
     }
 }
 
@@ -1066,6 +1092,7 @@ pub open spec fn spec_has_result(e: Expr) -> bool
         Expr::Paren(a) => spec_has_result(*a),
         Expr::Size(a) => spec_has_result(*a),
         Expr::Empty(a) => spec_has_result(*a),
+        Expr::Apply(_, args) => spec_has_result_args(*args),
         Expr::Index(a, i) => spec_has_result(*a) || spec_has_result(*i),
         Expr::Forall(_, a) => spec_has_result(*a),
         Expr::Field(a, _) => spec_has_result(*a),
@@ -1073,6 +1100,15 @@ pub open spec fn spec_has_result(e: Expr) -> bool
         Expr::Value(a) => spec_has_result(*a),
         Expr::Chain(_, _, a, b, c) => spec_has_result(*a) || spec_has_result(*b) || spec_has_result(*c),
         _ => false,
+    }
+}
+
+pub open spec fn spec_has_result_args(args: Args) -> bool
+    decreases args,
+{
+    match args {
+        Args::Nil => false,
+        Args::Cons(a, rest) => spec_has_result(*a) || spec_has_result_args(*rest),
     }
 }
 
@@ -1302,6 +1338,7 @@ pub open spec fn unknown_expr(e: Expr) -> bool
         Expr::Wrap(a) => unknown_expr(*a),
         Expr::Empty(a) => unknown_expr(*a),
         Expr::Subspan(a, k) => unknown_expr(*a) || unknown_expr(*k),
+        Expr::Apply(_, args) => unknown_args(*args),
         _ => false,
     }
 }
@@ -2051,6 +2088,10 @@ pub fn translate_contract(e: &Expr, decl: &Names, ps: &Params, ret: Option<Ty>, 
             Ok(_) => Err(Refusal::Syntax(line)),
             Err(r) => Err(r),
         },
+        Expr::Apply(f, args) => match translate_contract_args(args, decl, ps, ret, bound, line, sd) {
+            Ok(da) => Ok(DExpr::Apply(*f, Box::new(da))),
+            Err(r) => Err(r),
+        },
         Expr::Chain(o1, o2, a, b, c) => if chain_ok(*o1, *o2) {
             match translate_contract(a, decl, ps, ret, bound, line, sd) {
                 Ok(da) => match translate_contract(b, decl, ps, ret, bound, line, sd) {
@@ -2067,6 +2108,26 @@ pub fn translate_contract(e: &Expr, decl: &Names, ps: &Params, ret: Option<Ty>, 
         },
         Expr::Unknown(k, l) => Err(Refusal::Construct(*k, *l)),
         _ => Err(Refusal::Syntax(line)),
+    }
+}
+
+pub fn translate_contract_args(args: &Args, decl: &Names, ps: &Params, ret: Option<Ty>, bound: &Names, line: u32, sd: &Structs) -> (r: Result<
+    DArgs,
+    Refusal,
+>)
+    ensures
+        r == spec_contract_args(*args, *decl, *ps, ret, *bound, line, *sd),
+    decreases args, 2nat,
+{
+    match args {
+        Args::Nil => Ok(DArgs::Nil),
+        Args::Cons(a, rest) => match translate_contract(a, decl, ps, ret, bound, line, sd) {
+            Ok(da) => match translate_contract_args(rest, decl, ps, ret, bound, line, sd) {
+                Ok(dr) => Ok(DArgs::Cons(da, Box::new(dr))),
+                Err(r) => Err(r),
+            },
+            Err(r) => Err(r),
+        },
     }
 }
 
@@ -2443,6 +2504,7 @@ pub fn has_result(e: &Expr) -> (r: bool)
         Expr::Paren(a) => has_result(a),
         Expr::Size(a) => has_result(a),
         Expr::Empty(a) => has_result(a),
+        Expr::Apply(_, args) => has_result_args(args),
         Expr::Index(a, i) => has_result(a) || has_result(i),
         Expr::Forall(_, a) => has_result(a),
         Expr::Field(a, _) => has_result(a),
@@ -2450,6 +2512,17 @@ pub fn has_result(e: &Expr) -> (r: bool)
         Expr::Value(a) => has_result(a),
         Expr::Chain(_, _, a, b, c) => has_result(a) || has_result(b) || has_result(c),
         _ => false,
+    }
+}
+
+pub fn has_result_args(args: &Args) -> (r: bool)
+    ensures
+        r == spec_has_result_args(*args),
+    decreases args,
+{
+    match args {
+        Args::Nil => false,
+        Args::Cons(a, rest) => has_result(a) || has_result_args(rest),
     }
 }
 
@@ -2708,7 +2781,8 @@ pub fn translate_unit(all: &Fns, sd: &Structs) -> (r: Models)
 
 /// A token of a contract line. The shell cuts the text into tokens. `Op` holds `- ` as `Sub`, and the parser reads it as a
 /// negation where no operand is before it. `Size` is the text `.size()`, decision 0064. `Field` is `.name`, decision 0073.
-/// `HasValue` and `Value` are the texts `.has_value()` and `.value()`, decision 0075. `Empty` is `.empty()`, decision 0078. `Unknown` is text with no token, by the id of
+/// `HasValue` and `Value` are the texts `.has_value()` and `.value()`, decision 0075. `Empty` is `.empty()`, decision 0078. `Comma`
+/// parts the arguments of a call, decision 0079. `Unknown` is text with no token, by the id of
 /// its kind and its line.
 #[derive(Structural, PartialEq, Eq, Clone, Copy, Debug)]
 pub enum Tok {
@@ -2726,6 +2800,7 @@ pub enum Tok {
     HasValue,
     Value,
     Empty,
+    Comma,
     Forall,
     ColonColon,
     Unknown(u32, u32),
@@ -3002,6 +3077,38 @@ fn parse_postfix(toks: &Vec<Tok>, pos: usize, line: u32) -> (r: Result<(Expr, us
     Ok((a, p))
 }
 
+/// What a parse of arguments gives: the arguments, and the place after the `)`. No unknown node is in them.
+pub open spec fn parsed_args(r: Result<(Args, usize), Refusal>, toks: Seq<Tok>, pos: usize) -> bool {
+    match r {
+        Ok((a, p)) => pos < p && p <= toks.len() && !unknown_args(a),
+        Err(_) => true,
+    }
+}
+
+/// The arguments of a call, after its `(` and to its `)`, each parted by a comma. At least one argument is here.
+fn parse_args(toks: &Vec<Tok>, pos: usize, line: u32) -> (r: Result<(Args, usize), Refusal>)
+    requires
+        pos <= toks.len(),
+    ensures
+        parsed_args(r, toks@, pos),
+    decreases toks.len() - pos, 9usize,
+{
+    match parse_implies(toks, pos, line) {
+        Ok((a, p)) => if p < toks.len() && toks[p] == Tok::RParen {
+            assert(!unknown_args(Args::Nil));
+            Ok((Args::Cons(Box::new(a), Box::new(Args::Nil)), p + 1))
+        } else if p < toks.len() && toks[p] == Tok::Comma {
+            match parse_args(toks, p + 1, line) {
+                Ok((rest, q)) => Ok((Args::Cons(Box::new(a), Box::new(rest)), q)),
+                Err(e) => Err(e),
+            }
+        } else {
+            Err(Refusal::Syntax(line))
+        },
+        Err(e) => Err(e),
+    }
+}
+
 fn parse_atom(toks: &Vec<Tok>, pos: usize, line: u32) -> (r: Result<(Expr, usize), Refusal>)
     requires
         pos <= toks.len(),
@@ -3014,7 +3121,17 @@ fn parse_atom(toks: &Vec<Tok>, pos: usize, line: u32) -> (r: Result<(Expr, usize
     }
     match toks[pos] {
         Tok::Int(n) => Ok((Expr::Int(n), pos + 1)),
-        Tok::Ident(n) => Ok((Expr::Name(n), pos + 1)),
+        Tok::Ident(n) => if toks.len() - pos > 2 && toks[pos + 1] == Tok::LParen && toks[pos + 2] == Tok::RParen {
+            assert(!unknown_args(Args::Nil));
+            Ok((Expr::Apply(n, Box::new(Args::Nil)), pos + 3))
+        } else if toks.len() - pos > 1 && toks[pos + 1] == Tok::LParen {
+            match parse_args(toks, pos + 2, line) {
+                Ok((args, p)) => Ok((Expr::Apply(n, Box::new(args)), p)),
+                Err(e) => Err(e),
+            }
+        } else {
+            Ok((Expr::Name(n), pos + 1))
+        },
         Tok::Result => Ok((Expr::Result, pos + 1)),
         Tok::LParen => match parse_implies(toks, pos + 1, line) {
             Ok((e, p)) => if p < toks.len() && toks[p] == Tok::RParen {
