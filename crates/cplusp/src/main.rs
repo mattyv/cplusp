@@ -111,6 +111,8 @@ enum Cli {
     },
     /// Run the gate, translate the functions to Dafny, and run the prover, decision 0068. Exit 1 if something is refused or not proved.
     Prove {
+        #[command(flatten)]
+        common: Common,
         /// The clang-tidy plugin, built from clang-tidy/.
         #[arg(long)]
         plugin: Option<PathBuf>,
@@ -179,7 +181,7 @@ fn run(cli: Cli) -> Result<ExitCode> {
             gate(&common, json, build_dir.as_deref(), plugin.as_deref(), &files, &clang_args)
         }
         Cli::Model { plugin, out, file, clang_args } => model(plugin.as_deref(), &out, &file, &clang_args),
-        Cli::Prove { plugin, time_limit, file, clang_args } => prove(plugin.as_deref(), time_limit, &file, &clang_args),
+        Cli::Prove { common, plugin, time_limit, file, clang_args } => prove(&common, plugin.as_deref(), time_limit, &file, &clang_args),
     }
 }
 
@@ -931,9 +933,9 @@ fn model(plugin: Option<&Path>, out: &Path, file: &Path, clang_args: &[String]) 
 }
 
 /// `cplusp prove`: the gate first, as `cplusp gate` runs it, then the translator and the prover.
-fn prove(plugin: Option<&Path>, time_limit: u32, file: &Path, clang_args: &[String]) -> Result<ExitCode> {
+fn prove(common: &Common, plugin: Option<&Path>, time_limit: u32, file: &Path, clang_args: &[String]) -> Result<ExitCode> {
     // ponytail: the gate prints "ok: no findings" when it passes, and `prove` leaves it. Upgrade: a quiet flag on the gate.
-    let code = gate(&Common { policy: None }, false, None, plugin, std::slice::from_ref(&file.to_path_buf()), clang_args)?;
+    let code = gate(common, false, None, plugin, std::slice::from_ref(&file.to_path_buf()), clang_args)?;
     if code != ExitCode::SUCCESS {
         return Ok(code);
     }

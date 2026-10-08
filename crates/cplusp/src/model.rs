@@ -343,6 +343,57 @@ fn conds(v: Vec<JCond>, names: &mut Names) -> Conds {
     items.into_iter().rev().fold(Conds::Nil, |rest, (k, e, l, p)| Conds::Cons(k, e, l, p, Box::new(rest)))
 }
 
+// ------------------------------------------------------------------ names that Dafny can read
+
+/// Every name in an expression that the Dafny text will print.
+fn expr_names<'a>(e: &'a JExpr, out: &mut Vec<&'a str>) {
+    match e {
+        JExpr::Var(v, _) => out.push(v),
+        JExpr::Bin(_, a, b) | JExpr::Index(a, b) => {
+            expr_names(a, out);
+            expr_names(b, out);
+        }
+        JExpr::Not(a) | JExpr::Neg(a) | JExpr::Cast(_, a) | JExpr::Paren(a) | JExpr::Brace(a) | JExpr::Size(a) => expr_names(a, out),
+        JExpr::Call(_, _, args, _) => args.iter().for_each(|a| expr_names(a, out)),
+        JExpr::Lit(..) | JExpr::Bool(_) | JExpr::Unknown(..) => {}
+    }
+}
+
+fn stmt_names<'a>(s: &'a JStmt, out: &mut Vec<&'a str>) {
+    match s {
+        JStmt::Return(e, _) => expr_names(e, out),
+        JStmt::If(c, t, f, _) => {
+            expr_names(c, out);
+            t.iter().chain(f).for_each(|s| stmt_names(s, out));
+        }
+        JStmt::Local(n, _, e, _) | JStmt::Assign(n, e, _) => {
+            out.push(n);
+            expr_names(e, out);
+        }
+        JStmt::Step(n, ..) => out.push(n),
+        JStmt::While(c, _, body, _) => {
+            expr_names(c, out);
+            body.iter().for_each(|s| stmt_names(s, out));
+        }
+        JStmt::For(init, c, step, _, body, _) => {
+            stmt_names(init, out);
+            expr_names(c, out);
+            stmt_names(step, out);
+            body.iter().for_each(|s| stmt_names(s, out));
+        }
+        JStmt::Unknown(..) => {}
+    }
+}
+
+/// The first name of the function with a character that Dafny cannot read. A parameter with no name is `'N` and Dafny reads it.
+// ponytail: the function is refused, and its callers are refused at the call. Upgrade: a mangling that escapes such characters.
+fn unreadable_name(f: &JFunction) -> Option<&str> {
+    let mut names = vec![f.name.as_str()];
+    names.extend(f.params.iter().map(|(n, _)| n.as_str()));
+    f.body.iter().for_each(|s| stmt_names(s, &mut names));
+    names.into_iter().find(|n| !n.chars().all(|c| c.is_ascii_alphanumeric() || c == '_'))
+}
+
 fn function(f: JFunction, names: &mut Names) -> Function {
     let name = names.id(&f.key);
     names.file = f.file;
@@ -441,10 +492,12 @@ fn dexpr(e: &DExpr, names: &Names) -> String {
 type Methods = HashMap<u32, String>;
 
 /// What the prover's report needs of one line of the Dafny text, decision 0068: the place of the C++ line it comes from, and the places
-/// of the contract lines in scope there. Those are the requires lines of the function and the invariants of the loops around the line.
+/// of the contract lines in scope there. Those are the requires lines before it and the invariants of the loops around it. On an
+/// invariant or a decreases line, `own` holds all the invariants of that loop. They are assumed when the loop keeps an invariant, not when it starts.
 pub struct Line {
     pub place: u32,
     pub scope: Vec<u32>,
+    pub own: Vec<u32>,
 }
 
 /// The map from the lines of the Dafny text to C++, decision 0068. `lines[n - 1]` is line n of the text. A blank line has none.
@@ -470,17 +523,14 @@ struct Printer<'a> {
     lines: Vec<Option<Line>>,
     /// The contract lines in scope now.
     scope: Vec<u32>,
+    /// The invariants of the loop whose invariant and decreases lines are being written.
+    own: Vec<u32>,
 }
 
 impl Printer<'_> {
     fn put(&mut self, depth: usize, text: String, place: u32) {
         writeln!(self.out, "{}{text}", "  ".repeat(depth)).unwrap();
-        self.lines.push(Some(Line { place, scope: self.scope.clone() }));
-    }
-
-    fn blank(&mut self) {
-        self.out.push('\n');
-        self.lines.push(None);
+        self.lines.push(Some(Line { place, scope: self.scope.clone(), own: self.own.clone() }));
     }
 
     fn call(&self, m: u32, args: &DArgs) -> String {
@@ -502,26 +552,30 @@ impl Printer<'_> {
     }
 
     /// A `while`: the condition, the invariants, the decreases lines, then the body. A `for` has its step as the last statement of the body.
-    /// The invariants are in scope in the body, not in the loop's own lines.
-    fn dwhile(&mut self, (c, place): (&DExpr, u32), lists: [&DConds; 2], body: &DStmts, step: Option<&DStmt>, depth: usize) {
+    /// The invariant and decreases lines have the invariants of the loop as `own`. The body has them in scope.
+    fn dwhile(&mut self, (c, place): (&DExpr, u32), lists: [&DConds; 2], body: &DStmts, step: Option<(&DStmt, u32)>, depth: usize) {
         self.put(depth, format!("while {}", dexpr(c, self.names)), place);
         let mut invariants = Vec::new();
+        let mut cs = lists[0];
+        while let DConds::Cons(_, line, next) = cs {
+            invariants.push(*line);
+            cs = next;
+        }
+        self.own = invariants.clone();
         for (word, list) in ["invariant", "decreases"].into_iter().zip(lists) {
             let mut cs = list;
             while let DConds::Cons(e, line, next) = cs {
                 self.put(depth + 1, format!("{word} {}", dexpr(e, self.names)), *line);
-                if word == "invariant" {
-                    invariants.push(*line);
-                }
                 cs = next;
             }
         }
+        self.own.clear();
         self.put(depth, "{".to_string(), place);
         let kept = self.scope.len();
         self.scope.extend(invariants);
         self.stmts(body, depth + 1);
-        if let Some(step) = step {
-            self.stmt(step, place, depth + 1);
+        if let Some((step, at)) = step {
+            self.stmt(step, at, depth + 1);
         }
         self.scope.truncate(kept);
         self.put(depth, "}".to_string(), place);
@@ -547,10 +601,9 @@ impl Printer<'_> {
                 self.put(depth, format!("{} := {call};", mangle(names.text(*x))), place);
             }
             DStmt::While(c, inv, dec, body) => self.dwhile((c, place), [inv, dec], body, None, depth),
-            // The init and the step of a `for` take the place of the `for` itself.
-            DStmt::For(init, c, inv, dec, body, step) => {
-                self.stmt(init, place, depth);
-                self.dwhile((c, place), [inv, dec], body, Some(step), depth);
+            DStmt::For(init, init_place, c, inv, dec, body, step, step_place) => {
+                self.stmt(init, *init_place, depth);
+                self.dwhile((c, place), [inv, dec], body, Some((step, *step_place)), depth);
             }
             DStmt::If(c, t, f) => {
                 self.put(depth, format!("if {} {{", dexpr(c, names)), place);
@@ -574,24 +627,24 @@ impl Printer<'_> {
             shown.push(format!("{}: {}", mangle(self.names.text(*n)), dty(*t)));
             ps = next;
         }
-        self.blank();
+        self.out.push('\n');
+        self.lines.push(None);
         self.put(0, format!("method {}({}) returns (result: {})", self.methods[&name], shown.join(", "), dty(ret)), place);
     }
 
     fn method(&mut self, m: &Method, place: u32) {
         self.header(m.name, &m.params, m.ret, place);
-        let mut requires = Vec::new();
+        // A requires line has the requires lines before it in scope, and an ensures line and the body have all of them.
         for (word, list) in [("requires", &m.requires), ("ensures", &m.ensures)] {
             let mut cs = list;
             while let DConds::Cons(e, line, next) = cs {
                 self.put(1, format!("{word} {}", dexpr(e, self.names)), *line);
                 if word == "requires" {
-                    requires.push(*line);
+                    self.scope.push(*line);
                 }
                 cs = next;
             }
         }
-        self.scope = requires;
         self.put(0, "{".to_string(), place);
         self.stmts(&m.body, 1);
         self.put(0, "}".to_string(), place);
@@ -636,7 +689,10 @@ pub fn translate(lines: &str) -> Result<Translation> {
     for l in lines.lines().filter(|l| !l.trim().is_empty()) {
         match serde_json::from_str(l).with_context(|| format!("cannot read a line of the tree: {l}"))? {
             Item::Orphan { orphan, file } => refusals.push((file, orphan, "a contract line that belongs to no function.".to_string())),
-            Item::Function(f) => funcs.push(f),
+            Item::Function(f) => match unreadable_name(&f) {
+                Some(n) => refusals.push((f.file.clone(), f.line, format!("{n}: a name with a character Dafny cannot read."))),
+                None => funcs.push(f),
+            },
         }
     }
     // The Dafny names, by key.
@@ -655,7 +711,7 @@ pub fn translate(lines: &str) -> Result<Translation> {
     let count = funcs.len();
     let fns = funcs.into_iter().rev().map(|f| function(f, &mut names)).fold(Fns::Nil, |rest, f| Fns::Cons(Box::new(f), Box::new(rest)));
     let mut models = translate_unit(&fns);
-    let mut p = Printer { names: &names, methods: &methods, out: PRELUDE.to_string(), lines: Vec::new(), scope: Vec::new() };
+    let mut p = Printer { names: &names, methods: &methods, out: PRELUDE.to_string(), lines: Vec::new(), scope: Vec::new(), own: Vec::new() };
     p.lines.extend(PRELUDE.lines().map(|_| None));
     let mut refused_at = Vec::new();
     for _ in 0..count {

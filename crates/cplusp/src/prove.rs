@@ -47,9 +47,9 @@ fn errors(output: &str) -> Vec<Error> {
     found
 }
 
-/// The C++ type of a Dafny type.
-fn cpp_type(dafny: &str) -> Option<&'static str> {
-    Some(match dafny {
+/// The type between the quotes at the end of a message, as C++ writes it.
+fn quoted_type(message: &str) -> Option<&'static str> {
+    Some(match message.strip_suffix('\'')?.rsplit_once('\'')?.1 {
         "int32" => "int32_t",
         "int64" => "int64_t",
         "uint8" => "uint8_t",
@@ -57,11 +57,6 @@ fn cpp_type(dafny: &str) -> Option<&'static str> {
         "uint64" => "uint64_t",
         _ => return None,
     })
-}
-
-/// The type between the quotes at the end of a message, as C++ writes it.
-fn quoted_type(message: &str) -> Option<&'static str> {
-    cpp_type(message.strip_suffix('\'')?.rsplit_once('\'')?.1)
 }
 
 fn timed_out(message: &str) -> bool {
@@ -73,7 +68,7 @@ fn sentence(message: &str) -> String {
     let message = message.trim();
     let fit = |t: &str| format!("the value may not fit {t}.");
     match message {
-        "a postcondition could not be proved on this return path" => "the ensures line does not hold on this return.".to_string(),
+        "a postcondition could not be proved on this return path" => "the ensures line may not hold on this return.".to_string(),
         "index out of range" => "the index may be out of range.".to_string(),
         "this loop invariant could not be proved on entry" => "the invariant may not hold when the loop starts.".to_string(),
         "this invariant could not be proved to be maintained by the loop" => "the loop may not keep the invariant.".to_string(),
@@ -110,16 +105,17 @@ pub fn run(t: &Translation, limit: u32, refused: bool, shown: &dyn Fn(&str) -> S
         .output()
         .with_context(|| format!("cannot run {dafny}"))?;
     let output = format!("{}{}", String::from_utf8_lossy(&run.stdout), String::from_utf8_lossy(&run.stderr));
-    let found = errors(&output);
-    if !run.status.success() && found.is_empty() {
-        eprint!("dafny failed ({}):\n{output}", run.status);
+        // Only a run with a summary is a result. A model that does not parse, empty output and a crash have none.
+    if !output.lines().any(|l| l.starts_with("Dafny program verifier finished with")) {
+        eprint!("dafny failed\n{output}");
         return Ok(ExitCode::from(2));
     }
+    let found = errors(&output);
     let map = &t.map;
     let here = |line: usize| line.checked_sub(1).and_then(|n| map.lines.get(n)).and_then(Option::as_ref);
     for e in &found {
         let message = e.message.trim();
-        let Some(Line { place, scope }) = here(e.line) else {
+        let Some(Line { place, scope, own }) = here(e.line) else {
             // ponytail: an error on a line with no C++ place, such as a resolution error, is named by its Dafny line. Upgrade: map it to the function.
             println!("Not proved: model.dfy:{}: {}", e.line, sentence(message));
             continue;
@@ -136,7 +132,9 @@ pub fn run(t: &Translation, limit: u32, refused: bool, shown: &dyn Fn(&str) -> S
             }
         }
         if !timed_out(message) {
-            for p in scope {
+            // The invariants of a loop do not hold yet when the loop starts.
+            let own = own.iter().filter(|_| !message.starts_with("this loop invariant could not be proved on entry"));
+            for p in scope.iter().chain(own) {
                 if let Some(text) = contract(map, *p, shown) {
                     println!("  It assumes: {text}");
                 }
