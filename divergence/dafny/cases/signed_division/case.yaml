@@ -3,7 +3,7 @@ standard: "[expr.mul]: the / operator yields the algebraic quotient with any fra
 row: arithmetic
 gap: 3
 cpp: "`/` truncates toward zero. `%` takes the sign of the left operand. `-7 / 2` is -3 and `-7 % 2` is -1."
-naive_does: "Dafny `/` and `%` round toward negative infinity and give -4 and 1. The model proves facts the C++ does not meet."
+naive_does: "Dafny `/` and `%` are Euclidean and give -4 and 1. The model proves facts the C++ does not meet."
 naive: verifies
 naive_is_wrong: true
 mitigated: verifies
@@ -19,7 +19,7 @@ differential:
     - {type: int32}
     - {type: int32, min: -1000, max: 1000}
 rule: |
-  Dafny `/` and `%` round toward negative infinity, and C++ rounds toward zero.
+  Dafny uses Euclidean division with a nonnegative remainder. C++ signed division truncates toward zero.
   Never carry `/` or `%` over on signed values.
   Use `trunc_div(a, b)` and `trunc_rem(a, b)`, which divide the absolute values and then set the sign.
   The contract must require `b != 0`.
