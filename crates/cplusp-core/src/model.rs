@@ -235,10 +235,11 @@ pub enum DStmt {
     For(Box<DStmt>, DExpr, DConds, DConds, Box<DStmts>, Box<DStmt>),
 }
 
+/// The statements of a Dafny body. Each keeps the place of the C++ statement it comes from, decision 0068.
 #[derive(PartialEq, Eq, Debug)]
 pub enum DStmts {
     Nil,
-    Cons(Box<DStmt>, Box<DStmts>),
+    Cons(Box<DStmt>, u32, Box<DStmts>),
 }
 
 #[derive(PartialEq, Eq, Debug)]
@@ -247,10 +248,11 @@ pub enum DParams {
     Cons(u32, DTy, Box<DParams>),
 }
 
+/// Contract lines of a Dafny method or loop. Each keeps the place of the C++ contract line it comes from, decision 0068.
 #[derive(PartialEq, Eq, Debug)]
 pub enum DConds {
     Nil,
-    Cons(DExpr, Box<DConds>),
+    Cons(DExpr, u32, Box<DConds>),
 }
 
 /// A Dafny method.
@@ -619,6 +621,20 @@ pub open spec fn spec_call(key: u32, name: u32, args: Args, at: u32, all: Fns, l
     }
 }
 
+/// The place of a statement, decision 0068.
+pub open spec fn spec_place(s: Stmt) -> u32 {
+    match s {
+        Stmt::Return(_, l) => l,
+        Stmt::If(_, _, _, l) => l,
+        Stmt::Local(_, _, _, l) => l,
+        Stmt::Assign(_, _, l) => l,
+        Stmt::Step(_, _, _, l) => l,
+        Stmt::While(_, _, _, l) => l,
+        Stmt::For(_, _, _, _, _, l) => l,
+        Stmt::Unknown(_, l) => l,
+    }
+}
+
 /// The variables in scope after a statement, decision 0062: a local adds its name and type in front of the variables before it.
 /// A local inside a branch or a loop body stays inside, so the scope after any other statement is the scope before it.
 pub open spec fn spec_scope(s: Stmt, env: Params) -> Params {
@@ -664,7 +680,7 @@ pub open spec fn spec_loop_conds(cs: Conds, want: CondKind, env: Params) -> Resu
             _ => match spec_loop_conds(*rest, want, env) {
                 Ok(dr) => if k == want {
                     match spec_contract(e, spec_names_of(env), env, None, Names::Nil, l) {
-                        Ok(d) => Ok(DConds::Cons(d, Box::new(dr))),
+                        Ok(d) => Ok(DConds::Cons(d, l, Box::new(dr))),
                         Err(r) => Err(r),
                     }
                 } else {
@@ -794,7 +810,7 @@ pub open spec fn spec_stmts(ss: Stmts, all: Fns, env: Params, ps: Params) -> Res
         Stmts::Nil => Ok(DStmts::Nil),
         Stmts::Cons(s, rest) => match spec_stmt(*s, all, env, ps) {
             Ok(d) => match spec_stmts(*rest, all, spec_scope(*s, env), ps) {
-                Ok(dr) => Ok(DStmts::Cons(Box::new(d), Box::new(dr))),
+                Ok(dr) => Ok(DStmts::Cons(Box::new(d), spec_place(*s), Box::new(dr))),
                 Err(r) => Err(r),
             },
             Err(r) => Err(r),
@@ -816,7 +832,7 @@ pub open spec fn spec_conds(cs: Conds, want: CondKind, ps: Params, ret: Ty) -> R
             _ => match spec_conds(*rest, want, ps, ret) {
                 Ok(dr) => if k == want {
                     match spec_contract(e, decl, ps, Some(ret), Names::Nil, l) {
-                        Ok(d) => Ok(DConds::Cons(d, Box::new(dr))),
+                        Ok(d) => Ok(DConds::Cons(d, l, Box::new(dr))),
                         Err(r) => Err(r),
                     }
                 } else {
@@ -922,7 +938,7 @@ pub open spec fn spec_inside(f: Function, all: Fns) -> Result<(DConds, DConds, D
 }
 
 /// The requires lines `tail`, after one for each sequence parameter: its length fits `size_t`, decision 0064.
-pub open spec fn spec_bounds(ps: Params, tail: DConds) -> DConds
+pub open spec fn spec_bounds(ps: Params, line: u32, tail: DConds) -> DConds
     decreases ps,
 {
     match ps {
@@ -930,9 +946,10 @@ pub open spec fn spec_bounds(ps: Params, tail: DConds) -> DConds
         Params::Cons(n, t, rest) => match t {
             Ty::Seq(_) => DConds::Cons(
                 DExpr::Bin(BinOp::Le, Box::new(DExpr::Len(Box::new(DExpr::Var(n)))), Box::new(DExpr::Lit(0xffff_ffff_ffff_ffff))),
-                Box::new(spec_bounds(*rest, tail)),
+                line,
+                Box::new(spec_bounds(*rest, line, tail)),
             ),
-            _ => spec_bounds(*rest, tail),
+            _ => spec_bounds(*rest, line, tail),
         },
     }
 }
@@ -946,7 +963,7 @@ pub open spec fn spec_function(f: Function, all: Fns) -> Model {
             Ok(ret) => match spec_inside(f, all) {
                 Err(r) => Model::Bare(f.name, ps, ret, r),
                 Ok((req, ens, body)) => Model::Full(
-                    Method { name: f.name, params: ps, ret, requires: spec_bounds(f.params, req), ensures: ens, body },
+                    Method { name: f.name, params: ps, ret, requires: spec_bounds(f.params, f.line, req), ensures: ens, body },
                 ),
             },
         },
@@ -1195,7 +1212,7 @@ pub open spec fn count_dstmts(ss: DStmts) -> nat
 {
     match ss {
         DStmts::Nil => 0,
-        DStmts::Cons(s, rest) => count_dstmt(*s) + count_dstmts(*rest),
+        DStmts::Cons(s, _, rest) => count_dstmt(*s) + count_dstmts(*rest),
     }
 }
 
@@ -1271,7 +1288,7 @@ pub open spec fn calls_resolve(ss: DStmts, all: Fns) -> bool
 {
     match ss {
         DStmts::Nil => true,
-        DStmts::Cons(s, rest) => calls_resolve_stmt(*s, all) && calls_resolve(*rest, all),
+        DStmts::Cons(s, _, rest) => calls_resolve_stmt(*s, all) && calls_resolve(*rest, all),
     }
 }
 
@@ -1717,6 +1734,22 @@ pub fn copy_params(ps: &Params) -> (r: Params)
     }
 }
 
+pub fn place(s: &Stmt) -> (r: u32)
+    ensures
+        r == spec_place(*s),
+{
+    match s {
+        Stmt::Return(_, l) => *l,
+        Stmt::If(_, _, _, l) => *l,
+        Stmt::Local(_, _, _, l) => *l,
+        Stmt::Assign(_, _, l) => *l,
+        Stmt::Step(_, _, _, l) => *l,
+        Stmt::While(_, _, _, l) => *l,
+        Stmt::For(_, _, _, _, _, l) => *l,
+        Stmt::Unknown(_, l) => *l,
+    }
+}
+
 pub fn scope(s: &Stmt, env: &Params) -> (r: Params)
     ensures
         r == spec_scope(*s, *env),
@@ -1764,7 +1797,7 @@ pub fn translate_loop_conds(cs: &Conds, want: CondKind, env: &Params) -> (r: Res
             _ => match translate_loop_conds(rest, want, env) {
                 Ok(dr) => if *k == want {
                     match translate_contract(e, &names_of(env), env, None, &Names::Nil, *l) {
-                        Ok(d) => Ok(DConds::Cons(d, Box::new(dr))),
+                        Ok(d) => Ok(DConds::Cons(d, *l, Box::new(dr))),
                         Err(r) => Err(r),
                     }
                 } else {
@@ -1892,7 +1925,7 @@ pub fn translate_stmts(ss: &Stmts, all: &Fns, env: &Params, ps: &Params) -> (r: 
         Stmts::Nil => Ok(DStmts::Nil),
         Stmts::Cons(s, rest) => match translate_stmt(s, all, env, ps) {
             Ok(d) => match translate_stmts(rest, all, &scope(s, env), ps) {
-                Ok(dr) => Ok(DStmts::Cons(Box::new(d), Box::new(dr))),
+                Ok(dr) => Ok(DStmts::Cons(Box::new(d), place(s), Box::new(dr))),
                 Err(r) => Err(r),
             },
             Err(r) => Err(r),
@@ -1915,7 +1948,7 @@ pub fn translate_conds(cs: &Conds, want: CondKind, ps: &Params, ret: Ty) -> (r: 
             _ => match translate_conds(rest, want, ps, ret) {
                 Ok(dr) => if *k == want {
                     match translate_contract(e, decl, ps, Some(ret), &Names::Nil, *l) {
-                        Ok(d) => Ok(DConds::Cons(d, Box::new(dr))),
+                        Ok(d) => Ok(DConds::Cons(d, *l, Box::new(dr))),
                         Err(r) => Err(r),
                     }
                 } else {
@@ -2056,9 +2089,9 @@ pub fn translate_inside(f: &Function, all: &Fns) -> (r: Result<(DConds, DConds, 
     }
 }
 
-pub fn bounds(ps: &Params, tail: DConds) -> (r: DConds)
+pub fn bounds(ps: &Params, line: u32, tail: DConds) -> (r: DConds)
     ensures
-        r == spec_bounds(*ps, tail),
+        r == spec_bounds(*ps, line, tail),
     decreases ps,
 {
     match ps {
@@ -2066,9 +2099,10 @@ pub fn bounds(ps: &Params, tail: DConds) -> (r: DConds)
         Params::Cons(n, t, rest) => match t {
             Ty::Seq(_) => DConds::Cons(
                 DExpr::Bin(BinOp::Le, Box::new(DExpr::Len(Box::new(DExpr::Var(*n)))), Box::new(DExpr::Lit(0xffff_ffff_ffff_ffff))),
-                Box::new(bounds(rest, tail)),
+                line,
+                Box::new(bounds(rest, line, tail)),
             ),
-            _ => bounds(rest, tail),
+            _ => bounds(rest, line, tail),
         },
     }
 }
@@ -2085,7 +2119,7 @@ pub fn translate_function(f: &Function, all: &Fns) -> (r: Model)
             Ok(ret) => match translate_inside(f, all) {
                 Err(r) => Model::Bare(f.name, ps, ret, r),
                 Ok((req, ens, body)) => Model::Full(
-                    Method { name: f.name, params: ps, ret, requires: bounds(&f.params, req), ensures: ens, body },
+                    Method { name: f.name, params: ps, ret, requires: bounds(&f.params, f.line, req), ensures: ens, body },
                 ),
             },
         },

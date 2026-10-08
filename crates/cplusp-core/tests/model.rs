@@ -148,7 +148,7 @@ fn clamp_translates_to_a_method_whose_contract_reads_exact_integers() {
         DStmts::Cons(
             Box::new(DStmt::If(
                 DExpr::Bin(BinOp::Lt, Box::new(DExpr::Var(X)), Box::new(DExpr::Var(LO))),
-                Box::new(DStmts::Cons(Box::new(DStmt::Return(DExpr::Var(LO))), Box::new(DStmts::Nil))),
+                Box::new(DStmts::Cons(Box::new(DStmt::Return(DExpr::Var(LO))), 0, Box::new(DStmts::Nil))),
                 Box::new(DStmts::Nil)
             )), 0,
             Box::new(DStmts::Cons(Box::new(DStmt::Return(DExpr::Var(X))), 0, Box::new(DStmts::Nil)))
