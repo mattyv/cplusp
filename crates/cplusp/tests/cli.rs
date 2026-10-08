@@ -2414,7 +2414,10 @@ fn prove_names_each_read_of_an_optional_that_may_be_empty() {
         let want = format!("model-optional-wrong.cpp:{line}: the optional may be empty here.");
         assert!(failed.iter().any(|l| l.ends_with(&want)), "{want}: {text}");
     }
-    assert_eq!(failed.len(), 3, "{text}");
+    // The ensures line reads the value of the empty optional that line 12 gives, so it cannot hold on that return either.
+    let want = "model-optional-wrong.cpp:12: the ensures line may not hold on this return.";
+    assert!(failed.iter().any(|l| l.ends_with(want)), "{want}: {text}");
+    assert_eq!(failed.len(), 4, "{text}");
 }
 
 /// Each use of an optional with no rule is refused at its line, decision 0075.
