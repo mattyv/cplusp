@@ -221,7 +221,7 @@ pub enum DArgs {
 /// A Dafny statement. `Local` is `var x: T := e;`. `LocalCall` is `var x: T := m(args);`. `ReturnCall` is `result := m(args);
 /// return;`, since Dafny takes no call in a `return`. `Assign` is `x := e;` and `AssignCall` is `x := m(args);`. `While` is the
 /// condition, the invariants, the decreases lines and the body. `For` prints as its start, then a `while` whose body ends with the
-/// step.
+/// step. The start and the step keep their own places, decision 0069.
 #[derive(PartialEq, Eq, Debug)]
 pub enum DStmt {
     Return(DExpr),
@@ -232,7 +232,7 @@ pub enum DStmt {
     Assign(u32, DExpr),
     AssignCall(u32, u32, DArgs),
     While(DExpr, DConds, DConds, Box<DStmts>),
-    For(Box<DStmt>, DExpr, DConds, DConds, Box<DStmts>, Box<DStmt>),
+    For(Box<DStmt>, u32, DExpr, DConds, DConds, Box<DStmts>, Box<DStmt>, u32),
 }
 
 /// The statements of a Dafny body. Each keeps the place of the C++ statement it comes from, decision 0068.
@@ -792,7 +792,7 @@ pub open spec fn spec_stmt(s: Stmt, all: Fns, env: Params, ps: Params) -> Result
                             Err(r) => Err(r),
                             Ok(ds) => match spec_stmts(*body, all, spec_scope(*init, env), ps) {
                                 Err(r) => Err(r),
-                                Ok(db) => Ok(DStmt::For(Box::new(di), dc, inv, dec, Box::new(db), Box::new(ds))),
+                                Ok(db) => Ok(DStmt::For(Box::new(di), spec_place(*init), dc, inv, dec, Box::new(db), Box::new(ds), spec_place(*step))),
                             },
                         },
                     },
@@ -1222,7 +1222,7 @@ pub open spec fn count_dstmt(s: DStmt) -> nat
     match s {
         DStmt::If(_, t, f) => 1 + count_dstmts(*t) + count_dstmts(*f),
         DStmt::While(_, _, _, body) => 1 + count_dstmts(*body),
-        DStmt::For(init, _, _, _, body, step) => 1 + count_dstmt(*init) + count_dstmt(*step) + count_dstmts(*body),
+        DStmt::For(init, _, _, _, _, body, step, _) => 1 + count_dstmt(*init) + count_dstmt(*step) + count_dstmts(*body),
         _ => 1,
     }
 }
@@ -1301,7 +1301,7 @@ pub open spec fn calls_resolve_stmt(s: DStmt, all: Fns) -> bool
         DStmt::ReturnCall(k, _) => spec_callable(all, k),
         DStmt::AssignCall(_, k, _) => spec_callable(all, k),
         DStmt::While(_, _, _, body) => calls_resolve(*body, all),
-        DStmt::For(init, _, _, _, body, step) => calls_resolve_stmt(*init, all) && calls_resolve(*body, all) && calls_resolve_stmt(*step, all),
+        DStmt::For(init, _, _, _, _, body, step, _) => calls_resolve_stmt(*init, all) && calls_resolve(*body, all) && calls_resolve_stmt(*step, all),
         _ => true,
     }
 }
@@ -1904,7 +1904,7 @@ pub fn translate_stmt(s: &Stmt, all: &Fns, env: &Params, ps: &Params) -> (r: Res
                                 Err(r) => Err(r),
                                 Ok(ds) => match translate_stmts(body, all, &inner, ps) {
                                     Err(r) => Err(r),
-                                    Ok(db) => Ok(DStmt::For(Box::new(di), dc, inv, dec, Box::new(db), Box::new(ds))),
+                                    Ok(db) => Ok(DStmt::For(Box::new(di), place(init), dc, inv, dec, Box::new(db), Box::new(ds), place(step))),
                                 },
                             },
                         },
