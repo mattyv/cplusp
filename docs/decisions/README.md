@@ -61,3 +61,4 @@ Status is `decided`, `proposed` (the default until someone objects or the thin s
 | [0053](0053-a-pointer-counts-as-the-object-and-a-friend-of-a-plain-type-is-plain.md) | A pointer to a plain object counts as the object. A friend defined in a plain type is plain | decided |
 | [0054](0054-a-cast-of-a-pointer-to-a-plain-object-is-a-use.md) | A cast of a pointer to a plain object into another pointer type is a use | decided |
 | [0055](0055-writes-templates-and-proxies-by-what-the-compiler-resolves.md) | Writes, templates and proxies count by what the compiler resolves: a non-const rvalue reference writes, type checks read instantiations, a library proxy is a reference | decided |
+| [0056](0056-the-translator-is-the-gate-and-its-decisions-are-proved.md) | The translator is the gate, and its decisions live in the Verus core. The plugin only writes the tree as data | decided |
