@@ -3744,9 +3744,23 @@ class TreeWriter {
 public:
   explicit TreeWriter(ASTContext &Context) : Context(Context), SM(Context.getSourceManager()) {}
 
+  // The key of a function, decision 0058: its qualified name as printed for diagnostics, template arguments included, then `@` and the
+  // place of its definition, or of its canonical declaration when it has none. It tells overloads and namespaces apart.
+  std::string key(const FunctionDecl *FD) const {
+    const FunctionDecl *At = FD->getDefinition() ? FD->getDefinition() : FD->getCanonicalDecl();
+    const SourceLocation Loc = SM.getFileLoc(At->getLocation());
+    return name(FD) + "@" + file(Loc) + ":" + std::to_string(line(Loc)) + ":" + std::to_string(SM.getExpansionColumnNumber(Loc));
+  }
+  std::string name(const FunctionDecl *FD) const {
+    std::string Out;
+    llvm::raw_string_ostream OS(Out);
+    FD->getNameForDiagnostic(OS, Context.getPrintingPolicy(), true);
+    return Out;
+  }
+
   // ponytail: a function the translator cannot read, a template, a member or one with no body, is written with no signature and no
-  // contract, only a body of one `Unknown`. The core judges the signature first, so a real one would make the refusal name the first type,
-  // such as `T`, and not the construct. The placeholder return type is never shown. Its contract lines still count as claimed.
+  // contract, only a body of one `Unknown`. Its return type is `Other` with the opaque kind, so the core refuses its signature by that
+  // kind, and a caller sees a callee with no method. Its contract lines still count as claimed.
   // Upgrade: a core rule for these, and their real signature.
   llvm::json::Value function(const FunctionDecl *FD, const Contract &C) const {
     const char *Opaque = FD->isTemplated()        ? "FunctionTemplateDecl"
@@ -3766,10 +3780,11 @@ public:
       }
     }
     return llvm::json::Object{{"name", FD->getNameAsString()},
+                              {"key", key(FD)},
                               {"file", file(FD->getLocation())},
                               {"line", number(line(FD->getLocation()))},
                               {"params", std::move(Params)},
-                              {"ret", Opaque ? llvm::json::Value("Bool") : type(FD->getReturnType())},
+                              {"ret", Opaque ? tag("Other", Opaque) : type(FD->getReturnType())},
                               {"conds", std::move(Conds)},
                               {"body", Opaque ? llvm::json::Array{tag("Unknown", llvm::json::Array{Opaque, number(line(FD->getLocation()))})} : stmts(FD->getBody())}};
   }
@@ -3826,9 +3841,13 @@ private:
 
   llvm::json::Value stmt(const Stmt *S) const {
     if (const auto *If = dyn_cast<IfStmt>(S); If && !If->getInit() && !If->getConditionVariable() && !If->isConsteval())
-      return tag("If", llvm::json::Array{expr(If->getCond()), stmts(If->getThen()), If->getElse() ? stmts(If->getElse()) : llvm::json::Array{}});
+      return tag("If", llvm::json::Array{expr(If->getCond()), stmts(If->getThen()), If->getElse() ? stmts(If->getElse()) : llvm::json::Array{},
+                                         number(line(S->getBeginLoc()))});
     if (const auto *Return = dyn_cast<ReturnStmt>(S); Return && Return->getRetValue())
-      return tag("Return", expr(Return->getRetValue()));
+      return tag("Return", llvm::json::Array{expr(Return->getRetValue()), number(line(S->getBeginLoc()))});
+    if (const auto *Decl = dyn_cast<DeclStmt>(S); Decl && Decl->isSingleDecl())
+      if (const auto *Var = dyn_cast<VarDecl>(Decl->getSingleDecl()); Var && Var->hasLocalStorage() && Var->getInit())
+        return tag("Local", llvm::json::Array{Var->getNameAsString(), type(Var->getType()), expr(Var->getInit()), number(line(S->getBeginLoc()))});
     return unknown(S, S->getStmtClassName());
   }
 
@@ -3870,11 +3889,22 @@ private:
     if (const auto *Cast = dyn_cast<CastExpr>(E)) {
       llvm::json::Value Kind = Cast->getCastKind() == CK_LValueToRValue ? llvm::json::Value("Read")
                                : Cast->getCastKind() == CK_NoOp         ? llvm::json::Value("NoOp")
+                               : Cast->getCastKind() == CK_IntegralCast ? tag("Integral", llvm::json::Array{type(Cast->getSubExpr()->getType()), type(Cast->getType())})
                                                                         : tag("Other", std::string(Cast->getStmtClassName()) + " " + Cast->getCastKindName());
       return tag("Cast", llvm::json::Array{std::move(Kind), expr(Cast->getSubExpr())});
     }
     if (const auto *Paren = dyn_cast<ParenExpr>(E))
       return tag("Paren", expr(Paren->getSubExpr()));
+    if (const auto *List = dyn_cast<InitListExpr>(E); List && List->getNumInits() == 1 && List->getType()->isScalarType())
+      return tag("Brace", expr(List->getInit(0)));
+    // Only a plain call by name. A member call, an operator call and the rest of the call classes stay unknown.
+    if (E->getStmtClass() == Stmt::CallExprClass)
+      if (const FunctionDecl *Callee = cast<CallExpr>(E)->getDirectCallee()) {
+        llvm::json::Array Args;
+        for (const Expr *Arg : cast<CallExpr>(E)->arguments())
+          Args.push_back(expr(Arg));
+        return tag("Call", llvm::json::Array{key(Callee), name(Callee), std::move(Args), number(line(E->getBeginLoc()))});
+      }
     return unknown(E, E->getStmtClassName());
   }
 };

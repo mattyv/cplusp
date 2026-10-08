@@ -2,12 +2,13 @@
 //! lines into tokens, hands the core its types, and prints the Dafny text of what the core gives back. Every rule of the translation is
 //! in `cplusp_core::model`. Nothing here decides what is allowed.
 
+use std::collections::HashMap;
 use std::fmt::Write;
 
 use anyhow::{Context, Result};
 use cplusp_core::model::{
-    parse_contract, translate_function, BinOp, CastKind, CondKind, Conds, DConds, DExpr, DParams, DStmt, DStmts, DTy, Expr, Function, Method,
-    Params, Refusal, Stmt, Stmts, Tok, Ty,
+    parse_contract, translate_unit, Args, BinOp, CastKind, CondKind, Conds, DArgs, DConds, DExpr, DParams, DStmt, DStmts, DTy, Expr, Fns,
+    Function, Method, Model, Models, Params, Refusal, Stmt, Stmts, Tok, Ty,
 };
 use serde::Deserialize;
 
@@ -41,6 +42,7 @@ enum JOp {
 enum JCast {
     Read,
     NoOp,
+    Integral(JTy, JTy),
     Other(String),
 }
 
@@ -53,13 +55,16 @@ enum JExpr {
     Neg(Box<JExpr>),
     Cast(JCast, Box<JExpr>),
     Paren(Box<JExpr>),
+    Brace(Box<JExpr>),
+    Call(String, String, Vec<JExpr>, u32),
     Unknown(String, u32),
 }
 
 #[derive(Deserialize)]
 enum JStmt {
-    Return(JExpr),
-    If(JExpr, Vec<JStmt>, Vec<JStmt>),
+    Return(JExpr, u32),
+    If(JExpr, Vec<JStmt>, Vec<JStmt>, u32),
+    Local(String, JTy, JExpr, u32),
     Unknown(String, u32),
 }
 
@@ -80,6 +85,7 @@ enum Item {
 
 #[derive(Deserialize)]
 struct JFunction {
+    key: String,
     name: String,
     file: String,
     line: u32,
@@ -148,19 +154,27 @@ fn expr(e: JExpr, names: &mut Names) -> Expr {
             let kind = match k {
                 JCast::Read => CastKind::Read,
                 JCast::NoOp => CastKind::NoOp,
+                JCast::Integral(from, to) => CastKind::Integral(ty(from, names), ty(to, names)),
                 JCast::Other(s) => CastKind::Other(names.id(&s)),
             };
             Expr::Cast(kind, Box::new(expr(*a, names)))
         }
         JExpr::Paren(a) => Expr::Paren(Box::new(expr(*a, names))),
+        JExpr::Brace(a) => Expr::Brace(Box::new(expr(*a, names))),
+        JExpr::Call(key, name, args, line) => {
+            let args: Vec<Expr> = args.into_iter().map(|a| expr(a, names)).collect();
+            let args = args.into_iter().rev().fold(Args::Nil, |rest, a| Args::Cons(Box::new(a), Box::new(rest)));
+            Expr::Call(names.id(&key), names.id(&name), Box::new(args), line)
+        }
         JExpr::Unknown(k, line) => Expr::Unknown(names.id(&k), line),
     }
 }
 
 fn stmt(s: JStmt, names: &mut Names) -> Stmt {
     match s {
-        JStmt::Return(e) => Stmt::Return(expr(e, names)),
-        JStmt::If(c, t, f) => Stmt::If(expr(c, names), Box::new(stmts(t, names)), Box::new(stmts(f, names))),
+        JStmt::Return(e, line) => Stmt::Return(expr(e, names), line),
+        JStmt::If(c, t, f, line) => Stmt::If(expr(c, names), Box::new(stmts(t, names)), Box::new(stmts(f, names)), line),
+        JStmt::Local(n, t, e, line) => Stmt::Local(names.id(&n), ty(t, names), expr(e, names), line),
         JStmt::Unknown(k, line) => Stmt::Unknown(names.id(&k), line),
     }
 }
@@ -220,38 +234,36 @@ fn lex(text: &str, line: u32, names: &mut Names) -> Vec<Tok> {
 }
 
 /// The contract lines as the core's list. A word other than `requires` and `ensures` has no grammar yet, so its text is not parsed.
-/// The core refuses the line by its word.
-fn conds(v: Vec<JCond>, names: &mut Names) -> Result<Conds, Refused> {
+/// The core refuses the line by its word. A line that does not cut or parse, or ends in a backslash, is `Bad`, and the core refuses it
+/// with its refusal.
+fn conds(v: Vec<JCond>, names: &mut Names) -> Conds {
     let mut items = Vec::new();
     for c in v {
         // A backslash at the end splices the next line into the comment. The line the author wrote is not the one the plugin read.
-        if c.text.ends_with('\\') || c.kind.ends_with('\\') {
-            return Err(Refused::Backslash(c.line));
-        }
-        let (kind, e) = match c.kind.as_str() {
-            "requires" => (CondKind::Requires, parse_contract(&lex(&c.text, c.line, names), c.line)?),
-            "ensures" => (CondKind::Ensures, parse_contract(&lex(&c.text, c.line, names), c.line)?),
-            word => (CondKind::Other(names.id(word)), Expr::Int(0)),
+        let (kind, e) = if c.text.ends_with('\\') || c.kind.ends_with('\\') {
+            (CondKind::Bad(Refusal::Backslash(c.line)), Expr::Int(0))
+        } else {
+            match c.kind.as_str() {
+                "requires" | "ensures" => {
+                    let want = if c.kind == "requires" { CondKind::Requires } else { CondKind::Ensures };
+                    // A character with no token does not cut. The line is refused at the first one, wherever it stands.
+                    let toks = lex(&c.text, c.line, names);
+                    let bad = toks.iter().find_map(|t| if let Tok::Unknown(k, l) = t { Some(Refusal::Construct(*k, *l)) } else { None });
+                    match bad.map_or_else(|| parse_contract(&toks, c.line), Err) {
+                        Ok(e) => (want, e),
+                        Err(r) => (CondKind::Bad(r), Expr::Int(0)),
+                    }
+                }
+                word => (CondKind::Other(names.id(word)), Expr::Int(0)),
+            }
         };
         items.push((kind, e, c.line));
     }
-    Ok(items.into_iter().rev().fold(Conds::Nil, |rest, (k, e, l)| Conds::Cons(k, e, l, Box::new(rest))))
+    items.into_iter().rev().fold(Conds::Nil, |rest, (k, e, l)| Conds::Cons(k, e, l, Box::new(rest)))
 }
 
-/// Why a function is refused before or by the core. `Backslash` is the shell's own: a contract line that ends in a backslash.
-enum Refused {
-    Core(Refusal),
-    Backslash(u32),
-}
-
-impl From<Refusal> for Refused {
-    fn from(r: Refusal) -> Self {
-        Refused::Core(r)
-    }
-}
-
-fn function(f: JFunction, names: &mut Names) -> Result<Function, Refused> {
-    let name = names.id(&f.name);
+fn function(f: JFunction, names: &mut Names) -> Function {
+    let name = names.id(&f.key);
     // A parameter with no name is named by its position. The mangling makes it `c__N`.
     let ps: Vec<(u32, Ty)> = f
         .params
@@ -261,11 +273,7 @@ fn function(f: JFunction, names: &mut Names) -> Result<Function, Refused> {
         .collect();
     let params = ps.into_iter().rev().fold(Params::Nil, |rest, (n, t)| Params::Cons(n, t, Box::new(rest)));
     let ret = ty(f.ret, names);
-    // ponytail: a contract line that does not parse refuses the function before the core sees it. The core has no way to carry a
-    // refusal of the parser inside `Conds`, so a bad line wins over a bad body. The bot sees one refusal per function per run, so it
-    // fixes the line first, and the body on the next run. Upgrade: a `Bad` kind of line in `Conds`.
-    let conds = conds(f.conds, names)?;
-    Ok(Function { name, line: f.line, params, ret, conds, body: stmts(f.body, names) })
+    Function { name, line: f.line, params, ret, conds: conds(f.conds, names), body: stmts(f.body, names) }
 }
 
 // ------------------------------------------------------------------ the Dafny text
@@ -318,23 +326,46 @@ fn dexpr(e: &DExpr, names: &Names) -> String {
         DExpr::Not(a) => format!("(!{})", dexpr(a, names)),
         DExpr::Neg(a) => format!("(-{})", dexpr(a, names)),
         DExpr::AsInt(a) => format!("({} as int)", dexpr(a, names)),
+        DExpr::Conv(t, a) => format!("({} as {})", dexpr(a, names), dty(*t)),
     }
 }
 
-fn dstmts(ss: &DStmts, names: &Names, depth: usize, out: &mut String) {
+/// The Dafny name of each function by the id of its key. `c_{plain}` when the plain name is unique among the file's functions, else
+/// `c_{plain}__{k}`, with k counting the functions of that plain name in file order from 1.
+type Methods = HashMap<u32, String>;
+
+fn call(m: u32, args: &DArgs, names: &Names, methods: &Methods) -> String {
+    let mut shown = Vec::new();
+    let mut rest = args;
+    while let DArgs::Cons(a, next) = rest {
+        shown.push(dexpr(a, names));
+        rest = next;
+    }
+    format!("{}({})", methods[&m], shown.join(", "))
+}
+
+fn dstmts(ss: &DStmts, names: &Names, methods: &Methods, depth: usize, out: &mut String) {
     let pad = "  ".repeat(depth);
     let mut rest = ss;
     while let DStmts::Cons(s, next) = rest {
         match &**s {
             DStmt::Return(e) => writeln!(out, "{pad}return {};", dexpr(e, names)).unwrap(),
+            DStmt::Local(x, t, e) => writeln!(out, "{pad}var {}: {} := {};", mangle(names.text(*x)), dty(*t), dexpr(e, names)).unwrap(),
+            DStmt::LocalCall(x, t, m, args) => {
+                writeln!(out, "{pad}var {}: {} := {};", mangle(names.text(*x)), dty(*t), call(*m, args, names, methods)).unwrap()
+            }
+            DStmt::ReturnCall(m, args) => {
+                writeln!(out, "{pad}result := {};", call(*m, args, names, methods)).unwrap();
+                writeln!(out, "{pad}return;").unwrap();
+            }
             DStmt::If(c, t, f) => {
                 writeln!(out, "{pad}if {} {{", dexpr(c, names)).unwrap();
-                dstmts(t, names, depth + 1, out);
+                dstmts(t, names, methods, depth + 1, out);
                 if matches!(**f, DStmts::Nil) {
                     writeln!(out, "{pad}}}").unwrap();
                 } else {
                     writeln!(out, "{pad}}} else {{").unwrap();
-                    dstmts(f, names, depth + 1, out);
+                    dstmts(f, names, methods, depth + 1, out);
                     writeln!(out, "{pad}}}").unwrap();
                 }
             }
@@ -343,14 +374,19 @@ fn dstmts(ss: &DStmts, names: &Names, depth: usize, out: &mut String) {
     }
 }
 
-fn dmethod(m: &Method, names: &Names) -> String {
-    let mut params = Vec::new();
-    let mut ps = &m.params;
+/// The method header line, with no contract and no body.
+fn dheader(name: u32, params: &DParams, ret: DTy, names: &Names, methods: &Methods) -> String {
+    let mut shown = Vec::new();
+    let mut ps = params;
     while let DParams::Cons(n, t, next) = ps {
-        params.push(format!("{}: {}", mangle(names.text(*n)), dty(*t)));
+        shown.push(format!("{}: {}", mangle(names.text(*n)), dty(*t)));
         ps = next;
     }
-    let mut out = format!("\nmethod {}({}) returns (result: {})\n", mangle(names.text(m.name)), params.join(", "), dty(m.ret));
+    format!("\nmethod {}({}) returns (result: {})\n", methods[&name], shown.join(", "), dty(ret))
+}
+
+fn dmethod(m: &Method, names: &Names, methods: &Methods) -> String {
+    let mut out = dheader(m.name, &m.params, m.ret, names, methods);
     for (word, list) in [("requires", &m.requires), ("ensures", &m.ensures)] {
         let mut cs = list;
         while let DConds::Cons(e, next) = cs {
@@ -359,44 +395,74 @@ fn dmethod(m: &Method, names: &Names) -> String {
         }
     }
     out.push_str("{\n");
-    dstmts(&m.body, names, 1, &mut out);
+    dstmts(&m.body, names, methods, 1, &mut out);
     out.push_str("}\n");
     out
 }
 
 /// A refusal as the line it points at and the sentence the bot reads.
-fn sentence(r: Refused, names: &Names) -> (u32, String) {
+fn sentence(r: Refusal, names: &Names) -> (u32, String) {
     match r {
-        Refused::Core(Refusal::Construct(k, line)) => (line, format!("{}: the translator has no rule for it yet.", names.text(k))),
-        Refused::Core(Refusal::Name(n, line)) => (line, format!("{} in the contract is no parameter.", names.text(n))),
-        Refused::Core(Refusal::Syntax(line)) => (line, "the contract line has a form the translator cannot read.".to_string()),
-        Refused::Backslash(line) => (line, "a contract line that ends in a backslash.".to_string()),
+        Refusal::Construct(k, line) => (line, format!("{}: the translator has no rule for it yet.", names.text(k))),
+        Refusal::Name(n, line) => (line, format!("{} in the contract is no parameter.", names.text(n))),
+        Refusal::Syntax(line) => (line, "the contract line has a form the translator cannot read.".to_string()),
+        Refusal::Backslash(line) => (line, "a contract line that ends in a backslash.".to_string()),
+        Refusal::Callee(n, line) => (line, format!("a call to {}, which has no model in view.", names.text(n))),
+        Refusal::Place(line) => {
+            (line, "a call inside an expression. The translator takes a call only as the full value of a return or of a local.".to_string())
+        }
+        Refusal::Twice(n, line) => (line, format!("{} is declared twice in the function.", names.text(n))),
+        Refusal::Convert(line) => (line, "a conversion between bool and a number.".to_string()),
     }
 }
 
 /// A refusal: the file, the line and the sentence.
 pub type Refusing = (String, u32, String);
 
-/// The Dafny file for the plugin's lines, and the refusals in order, each once. A refused function is not in the file. A `//@` line
-/// that no function claimed is a refusal too.
+/// The Dafny file for the plugin's lines, and the refusals in order, each once. A function whose signature is refused is not in the file.
+/// A function whose contract or body is refused is a method with no contract and no body. A `//@` line that no function claimed is a
+/// refusal too.
 pub fn translate(lines: &str) -> Result<(String, Vec<Refusing>)> {
     let mut names = Names::default();
-    let mut dafny = PRELUDE.to_string();
     let mut refusals = Vec::new();
+    let mut funcs = Vec::new();
     for l in lines.lines().filter(|l| !l.trim().is_empty()) {
         match serde_json::from_str(l).with_context(|| format!("cannot read a line of the tree: {l}"))? {
             Item::Orphan { orphan, file } => refusals.push((file, orphan, "a contract line that belongs to no function.".to_string())),
-            Item::Function(f) => {
-                let file = f.file.clone();
-                match function(f, &mut names).and_then(|f| translate_function(&f).map_err(Refused::Core)) {
-                    Ok(m) => dafny += &dmethod(&m, &names),
-                    Err(r) => {
-                        let (line, sentence) = sentence(r, &names);
-                        refusals.push((file, line, sentence));
-                    }
-                }
-            }
+            Item::Function(f) => funcs.push(f),
         }
+    }
+    // The Dafny names, by key.
+    // ponytail: a count of each plain name for each function. A file has dozens of functions. Upgrade: one pass with a map.
+    let mut methods = Methods::new();
+    for (i, f) in funcs.iter().enumerate() {
+        let same = funcs.iter().filter(|g| g.name == f.name).count();
+        let k = funcs[..=i].iter().filter(|g| g.name == f.name).count();
+        let dafny = if same == 1 { format!("c_{}", f.name) } else { format!("c_{}__{k}", f.name) };
+        methods.insert(names.id(&f.key), dafny);
+    }
+    let files: Vec<String> = funcs.iter().map(|f| f.file.clone()).collect();
+    let fns = funcs.into_iter().rev().map(|f| function(f, &mut names)).fold(Fns::Nil, |rest, f| Fns::Cons(Box::new(f), Box::new(rest)));
+    let mut dafny = PRELUDE.to_string();
+    let mut models = translate_unit(&fns);
+    for file in files {
+        let Models::Cons(model, rest) = models else { unreachable!("one model for each function") };
+        let refused = match model {
+            Model::Full(m) => {
+                dafny += &dmethod(&m, &names, &methods);
+                None
+            }
+            Model::Bare(key, params, ret, r) => {
+                dafny += &dheader(key, &params, ret, &names, &methods);
+                Some(r)
+            }
+            Model::Refused(r) => Some(r),
+        };
+        if let Some(r) = refused {
+            let (line, sentence) = sentence(r, &names);
+            refusals.push((file, line, sentence));
+        }
+        models = *rest;
     }
     refusals.sort();
     refusals.dedup();

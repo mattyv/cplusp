@@ -1696,7 +1696,7 @@ fn calls_locals_and_casts_with_no_rule_are_refused_at_their_lines() {
         (12, inside),
         (16, inside),
         (20, "a call to declared, which has no model in view."),
-        (25, "CXXMethodDecl: the translator has no rule for it yet."),
+        (24, "CXXMethodDecl: the translator has no rule for it yet."),
         (28, "a call to T::one, which has no model in view."),
         (34, "y is declared twice in the function."),
         (42, "x is declared twice in the function."),
