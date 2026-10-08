@@ -3912,11 +3912,22 @@ private:
     return nullptr;
   }
 
+  // The fixed extent of a read-only sequence, decision 0070, or null: a vector, and a span of `std::dynamic_extent`.
+  llvm::json::Value seqExtent(QualType T) const {
+    if (T->isReferenceType())
+      T = T->getPointeeType();
+    const auto *Spec = dyn_cast_or_null<ClassTemplateSpecializationDecl>(T->getAsCXXRecordDecl());
+    if (!Spec || Spec->getName() != "span" || Spec->getTemplateArgs().size() < 2 || Spec->getTemplateArgs()[1].getKind() != TemplateArgument::Integral)
+      return nullptr;
+    llvm::APSInt N = Spec->getTemplateArgs()[1].getAsIntegral();
+    return N.isNegative() || N.getActiveBits() > 63 || N.isAllOnes() ? llvm::json::Value(nullptr) : llvm::json::Value(static_cast<int64_t>(N.getZExtValue()));
+  }
+
   llvm::json::Value type(QualType T) const {
     if (const char *S = scalar(T))
       return S;
     if (const char *S = seqElement(T))
-      return tag("Seq", S);
+      return tag("Seq", llvm::json::Array{S, seqExtent(T)});
     return tag("Other", T.getAsString(Context.getPrintingPolicy()));
   }
 
@@ -4000,12 +4011,17 @@ private:
     if (const auto *Cast = dyn_cast<CastExpr>(E)) {
       llvm::json::Value Kind = Cast->getCastKind() == CK_LValueToRValue ? llvm::json::Value("Read")
                                : Cast->getCastKind() == CK_NoOp         ? llvm::json::Value("NoOp")
+                               : Cast->getCastKind() == CK_ConstructorConversion ? llvm::json::Value("Construct")
                                : Cast->getCastKind() == CK_IntegralCast ? tag("Integral", llvm::json::Array{type(Cast->getSubExpr()->getType()), type(Cast->getType())})
                                                                         : tag("Other", std::string(Cast->getStmtClassName()) + " " + Cast->getCastKindName());
       return tag("Cast", llvm::json::Array{std::move(Kind), expr(Cast->getSubExpr(), Near)});
     }
     if (const auto *Paren = dyn_cast<ParenExpr>(E))
       return tag("Paren", expr(Paren->getSubExpr(), Near));
+    // A sequence made from one sequence, decision 0070. The core judges the two types.
+    if (const auto *Construct = dyn_cast<CXXConstructExpr>(E); Construct && Construct->getNumArgs() == 1 && seqElement(Construct->getType()) &&
+                                                                seqElement(Construct->getArg(0)->getType()))
+      return tag("SeqCopy", llvm::json::Array{expr(Construct->getArg(0), Near), type(Construct->getArg(0)->getType()), type(Construct->getType())});
     if (const auto *List = dyn_cast<InitListExpr>(E); List && List->getNumInits() == 1 && List->getType()->isScalarType())
       return tag("Brace", expr(List->getInit(0), Near));
     // `v.size()` and `v[i]` of a read-only sequence.

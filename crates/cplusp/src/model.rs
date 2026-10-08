@@ -7,7 +7,7 @@ use std::fmt::Write;
 
 use anyhow::{Context, Result};
 use cplusp_core::model::{
-    parse_contract, translate_unit, Args, BinOp, CastKind, CondKind, Conds, DArgs, DConds, DExpr, DParams, DStmt, DStmts, DTy, Expr, Fns,
+    parse_contract, translate_unit, Args, BinOp, CastKind, CondKind, Conds, DArgs, DConds, DExpr, DParams, DStmt, DStmts, DTy, Expr, Extent, Fns,
     Function, Method, Model, Models, Names as CNames, Params, Refusal, Scalar, Stmt, Stmts, Tok, Ty,
 };
 use serde::Deserialize;
@@ -32,7 +32,7 @@ enum JTy {
     U32,
     U64,
     Bool,
-    Seq(JScalar),
+    Seq(JScalar, Option<u64>),
     Other(String),
 }
 
@@ -55,6 +55,7 @@ enum JOp {
 enum JCast {
     Read,
     NoOp,
+    Construct,
     Integral(JTy, JTy),
     Other(String),
 }
@@ -71,6 +72,7 @@ enum JExpr {
     Paren(Box<JExpr>),
     Brace(Box<JExpr>),
     Size(Box<JExpr>),
+    SeqCopy(Box<JExpr>, JTy, JTy),
     Index(Box<JExpr>, Box<JExpr>),
     Call(String, String, Vec<JExpr>, u32),
     Unknown(String, u32),
@@ -166,14 +168,14 @@ fn ty(t: JTy, names: &mut Names) -> Ty {
         JTy::U32 => Ty::U32,
         JTy::U64 => Ty::U64,
         JTy::Bool => Ty::Bool,
-        JTy::Seq(s) => Ty::Seq(match s {
+        JTy::Seq(s, extent) => Ty::Seq(match s {
             JScalar::I32 => Scalar::I32,
             JScalar::I64 => Scalar::I64,
             JScalar::U8 => Scalar::U8,
             JScalar::U32 => Scalar::U32,
             JScalar::U64 => Scalar::U64,
             JScalar::Bool => Scalar::Bool,
-        }),
+        }, extent.map_or(Extent::Dynamic, Extent::Fixed)),
         JTy::Other(s) => Ty::Other(names.id(&s)),
     }
 }
@@ -206,6 +208,7 @@ fn expr(e: JExpr, names: &mut Names) -> Expr {
             let kind = match k {
                 JCast::Read => CastKind::Read,
                 JCast::NoOp => CastKind::NoOp,
+                JCast::Construct => CastKind::Construct,
                 JCast::Integral(from, to) => CastKind::Integral(ty(from, names), ty(to, names)),
                 JCast::Other(s) => CastKind::Other(names.id(&s)),
             };
@@ -214,6 +217,7 @@ fn expr(e: JExpr, names: &mut Names) -> Expr {
         JExpr::Paren(a) => Expr::Paren(Box::new(expr(*a, names))),
         JExpr::Brace(a) => Expr::Brace(Box::new(expr(*a, names))),
         JExpr::Size(a) => Expr::Size(Box::new(expr(*a, names))),
+        JExpr::SeqCopy(a, from, to) => Expr::SeqCopy(Box::new(expr(*a, names)), ty(from, names), ty(to, names)),
         JExpr::Index(a, i) => Expr::Index(Box::new(expr(*a, names)), Box::new(expr(*i, names))),
         JExpr::Call(key, name, args, line) => {
             let args: Vec<Expr> = args.into_iter().map(|a| expr(a, names)).collect();
@@ -353,7 +357,7 @@ fn expr_names<'a>(e: &'a JExpr, out: &mut Vec<&'a str>) {
             expr_names(a, out);
             expr_names(b, out);
         }
-        JExpr::Not(a) | JExpr::Neg(a) | JExpr::Cast(_, a) | JExpr::Paren(a) | JExpr::Brace(a) | JExpr::Size(a) => expr_names(a, out),
+        JExpr::Not(a) | JExpr::Neg(a) | JExpr::Cast(_, a) | JExpr::Paren(a) | JExpr::Brace(a) | JExpr::Size(a) | JExpr::SeqCopy(a, ..) => expr_names(a, out),
         JExpr::Call(_, _, args, _) => args.iter().for_each(|a| expr_names(a, out)),
         JExpr::Lit(..) | JExpr::Bool(_) | JExpr::Unknown(..) => {}
     }
@@ -672,6 +676,7 @@ fn sentence(r: Refusal, names: &Names) -> (u32, String) {
         Refusal::WriteParam(n, line) => (line, format!("{} is a parameter. The translator writes only a local.", names.text(n))),
         Refusal::NoVar(n, line) => (line, format!("{} in the loop contract is no variable.", names.text(n))),
         Refusal::SeqParam(line) => (line, "a sequence is in the subset only as a parameter.".to_string()),
+        Refusal::Extent(line) => (line, "a sequence made from one of another length or element.".to_string()),
         Refusal::Misplaced(line) => (
             line,
             "a contract line in the wrong place. A requires or an ensures line goes above a function. An invariant or a decreases line goes above a loop."

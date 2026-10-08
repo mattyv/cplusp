@@ -47,6 +47,21 @@ fn errors(output: &str) -> Vec<Error> {
     found
 }
 
+/// The counts of a summary line, `Dafny program verifier finished with N verified, M errors[, K time outs]`, as errors and time-outs.
+/// `None` when the line is not a summary or its shape cannot be read.
+fn counts(line: &str) -> Option<(u64, u64)> {
+    let rest = line.strip_prefix("Dafny program verifier finished with ")?;
+    let number = |part: &str, words: &[&str]| -> Option<u64> {
+        let (n, w) = part.split_once(' ')?;
+        words.contains(&w).then(|| n.parse().ok())?
+    };
+    match rest.trim_end().split(", ").collect::<Vec<_>>()[..] {
+        [v, e] => number(v, &["verified"]).and(Some((number(e, &["error", "errors"])?, 0))),
+        [v, e, t] => number(v, &["verified"]).and(Some((number(e, &["error", "errors"])?, number(t, &["time out", "time outs"])?))),
+        _ => None,
+    }
+}
+
 /// The type between the quotes at the end of a message, as C++ writes it.
 fn quoted_type(message: &str) -> Option<&'static str> {
     Some(match message.strip_suffix('\'')?.rsplit_once('\'')?.1 {
@@ -105,12 +120,18 @@ pub fn run(t: &Translation, limit: u32, refused: bool, shown: &dyn Fn(&str) -> S
         .output()
         .with_context(|| format!("cannot run {dafny}"))?;
     let output = format!("{}{}", String::from_utf8_lossy(&run.stdout), String::from_utf8_lossy(&run.stderr));
-        // Only a run with a summary is a result. A model that does not parse, empty output and a crash have none.
-    if !output.lines().any(|l| l.starts_with("Dafny program verifier finished with")) {
+    // Only a run with a summary that can be read is a result. A model that does not parse, empty output and a crash have none.
+    let Some((errors_counted, timeouts)) = output.lines().find_map(counts) else {
+        eprint!("dafny failed\n{output}");
+        return Ok(ExitCode::from(2));
+    };
+    let found = errors(&output);
+    // The exit status, the counts and the error lines must agree. A failure with no error line, or a success with errors, is a fault of the tool.
+    let clean = errors_counted == 0 && timeouts == 0;
+    if run.status.success() != clean || (clean && !found.is_empty()) || (!clean && found.is_empty()) {
         eprint!("dafny failed\n{output}");
         return Ok(ExitCode::from(2));
     }
-    let found = errors(&output);
     let map = &t.map;
     let here = |line: usize| line.checked_sub(1).and_then(|n| map.lines.get(n)).and_then(Option::as_ref);
     for e in &found {
