@@ -71,3 +71,4 @@ Status is `decided`, `proposed` (the default until someone objects or the thin s
 | [0063](0063-bool-literals-full-unsigned-literals-and-places.md) | Bool literals, literals over the full unsigned range, and a refusal of a contract line at its own file | decided |
 | [0064](0064-read-only-sequences-and-forall.md) | The fourth slice: read-only span and vector parameters as Dafny sequences, size and index, forall and chained comparisons in contracts | decided |
 | [0065](0065-requirements-contracts-and-composition.md) | Derive contracts from requirements. Prove components and composition. Validate translation and report assumptions | decided |
+| [0066](0066-agents-work-from-reviewed-specifications.md) | The coder works from reviewed requirements, contracts and tests. The reviewer decides their changes and tries to break each contract | decided |

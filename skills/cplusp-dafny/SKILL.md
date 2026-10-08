@@ -17,6 +17,8 @@ Read [the research report](../../docs/research/formal-verification-llm-coding-re
 6. Record trusted dependencies, target assumptions and unproved obligations.
 7. Run executable tests, translation regression cases and all relevant proofs after changes.
 8. Report guarantees, remaining assumptions and bounds used by bounded checks.
+Try to break each contract before you trust it. Write deliberately wrong bodies, such as an empty result, a missed update or wrong handling of duplicates, and check that the contract rejects each one. Show that intended inputs satisfy the preconditions. These checks find weak contracts. They do not prove that a contract is complete.
+Build the implementation and its proof together, in small increments. Prove each increment before you build on it. When a proof gets hard, change the data structures or the helper boundaries, and keep the reviewed contract.
 Treat a plan as implementation guidance and a formal contract as a machine-checkable requirement.
 Do not weaken contracts, restrict valid inputs or add assumptions merely to make proofs pass.
 Report requirement changes and any code excluded from verification.

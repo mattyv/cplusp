@@ -15,10 +15,12 @@ Every module lands with its proof or with a named reason why it has none.
 Three roles, in order, for every change. The agent files are in `.claude/agents/`.
 
 1. **Fable writes the failing tests**, and the fixtures and sample pairs they need. Red step. Committed as such.
-2. **The `coder` agent (Sonnet) makes them green.** It never touches a test. If a test cannot be met it reports back instead of changing it.
-3. **The `reviewer` agent (Fable) reviews the diff.** Findings go back to the coder, with new failing tests for any behaviour change. Then Fable runs the suite and the proofs, commits the green step, and pushes.
+2. **The `coder` agent (Sonnet) makes them green** against the reviewed requirements, contracts and tests. It never changes one. If they conflict, or a test cannot be met, it reports the conflict instead.
+3. **The `reviewer` agent (Fable) reviews the diff.** It tries to break each contract with deliberately wrong implementations, and it checks that intended inputs meet the preconditions. Findings go back to the coder, with new failing tests for any behaviour change. Then Fable runs the suite and the proofs, commits the green step, and pushes.
 
-Fable also writes the Verus core and its proofs, and the docs. Sonnet does not touch the core.
+The reviewer decides each change to a requirement, a contract or a test, and Fable writes it, decision 0066. Fable also writes the Verus core and its proofs, and the docs. Sonnet does not touch the core.
+
+Build in small increments, and prove each one before you build on it. When a proof gets hard, change the data structures or the helper boundaries. Never weaken a reviewed contract to make a proof pass.
 
 ## Test-driven, always
 
