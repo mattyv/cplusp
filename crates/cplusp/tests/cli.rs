@@ -1846,11 +1846,47 @@ fn loops_and_writes_with_no_rule_are_refused_at_their_lines() {
         (39, misplaced),
         (48, "the contract line has a form the translator cannot read."),
         (56, "ForStmt: the translator has no rule for it yet."),
+        (64, "t in the loop contract is no variable."),
+        (74, "z in the loop contract is no variable."),
     ] {
         let want = format!("model-loops-refuse.cpp:{line}: {expected}");
         assert!(refusals.iter().any(|l| l.ends_with(&want)), "{want}: {text}");
     }
-    assert_eq!(refusals.len(), 8, "{text}");
+    assert_eq!(refusals.len(), 10, "{text}");
+}
+
+/// A `//@` line after code on the same line belongs to no function and no loop, decision 0062. Each is refused, never dropped.
+#[test]
+fn a_contract_line_after_code_is_refused() {
+    if !clang_tidy_available() {
+        return;
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let (o, _) = model("model-trailing.cpp", dir.path());
+    let text = stdout(&o);
+    assert_eq!(o.status.code(), Some(1), "stdout: {text} stderr: {}", stderr(&o));
+    let refusals: Vec<&str> = text.lines().filter(|l| l.starts_with("Not provable: ")).collect();
+    for line in [4, 9, 13] {
+        let want = format!("model-trailing.cpp:{line}: a contract line that belongs to no function.");
+        assert!(refusals.iter().any(|l| l.ends_with(&want)), "{want}: {text}");
+    }
+    assert_eq!(refusals.len(), 3, "{text}");
+}
+
+/// A loop on the line of its function's name leaves the function its contract lines, decision 0062.
+#[test]
+fn a_loop_on_the_line_of_its_function_leaves_the_function_its_contract() {
+    let Some(dafny) = dafny() else { return };
+    if !clang_tidy_available() {
+        return;
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let (o, out) = model("model-oneline.cpp", dir.path());
+    assert_eq!(o.status.code(), Some(0), "stdout: {} stderr: {}", stdout(&o), stderr(&o));
+    let text = std::fs::read_to_string(&out).unwrap();
+    assert!(full(&text, "w4") && text.contains("  requires ") && text.contains("  ensures "), "{text}");
+    let (ok, said) = verify(&dafny, &out);
+    assert!(ok && said.contains(" 0 errors"), "{said}\n{text}");
 }
 
 /// The model never wraps, decision 0061. An unsigned value below zero and a sum of literals that overflows each fail in Dafny.

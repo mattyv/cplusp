@@ -434,3 +434,20 @@ fn a_name_declared_in_a_loop_counts_for_declared_once() {
     let body = Stmts::Cons(Box::new(Stmt::Local(SUM, Ty::I32, Expr::Lit(0, Ty::I32), 5)), Box::new(Stmts::Cons(Box::new(lp), Box::new(one(Stmt::Return(Expr::Lit(0, Ty::I32), 7))))));
     assert_eq!(bare_refusal(translate_function(&with_n(body), &Fns::Nil)), Refusal::Twice(SUM, 6));
 }
+
+#[test]
+fn a_loop_contract_reads_only_the_variables_in_scope_at_the_loop() {
+    // int32_t i = 0; invariant t == 1; while (...) { int32_t t = 1; ++i; }
+    let (i, t) = (SUM, A);
+    let lc = conds(vec![(CondKind::Invariant, Expr::Bin(BinOp::Eq, b(Expr::Name(t)), b(Expr::Int(1))), 5)]);
+    let body = Stmts::Cons(Box::new(Stmt::Local(t, Ty::I32, Expr::Lit(1, Ty::I32), 7)), Box::new(one(Stmt::Step(i, Ty::I32, true, 8))));
+    let lp = Stmt::While(Expr::Bin(BinOp::Lt, b(read(i, Ty::I32)), b(read(X, Ty::I32))), Box::new(lc), Box::new(body), 6);
+    let f = with_n(Stmts::Cons(Box::new(Stmt::Local(i, Ty::I32, Expr::Lit(0, Ty::I32), 4)), Box::new(Stmts::Cons(Box::new(lp), Box::new(one(Stmt::Return(read(i, Ty::I32), 10)))))));
+    assert_eq!(bare_refusal(translate_function(&f, &Fns::Nil)), Refusal::NoVar(t, 5));
+    // A local declared after the loop.
+    let lc = conds(vec![(CondKind::Invariant, Expr::Bin(BinOp::Eq, b(Expr::Name(t)), b(Expr::Int(1))), 5)]);
+    let lp = Stmt::While(Expr::Bin(BinOp::Lt, b(read(i, Ty::I32)), b(read(X, Ty::I32))), Box::new(lc), Box::new(one(Stmt::Step(i, Ty::I32, true, 7))), 6);
+    let tail = Stmts::Cons(Box::new(Stmt::Local(t, Ty::I32, Expr::Lit(1, Ty::I32), 9)), Box::new(one(Stmt::Return(read(t, Ty::I32), 10))));
+    let f = with_n(Stmts::Cons(Box::new(Stmt::Local(i, Ty::I32, Expr::Lit(0, Ty::I32), 4)), Box::new(Stmts::Cons(Box::new(lp), Box::new(tail)))));
+    assert_eq!(bare_refusal(translate_function(&f, &Fns::Nil)), Refusal::NoVar(t, 5));
+}

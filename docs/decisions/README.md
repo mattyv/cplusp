@@ -67,3 +67,4 @@ Status is `decided`, `proposed` (the default until someone objects or the thin s
 | [0059](0059-a-function-is-keyed-by-its-mangled-name.md) | A function is keyed by its mangled name. A Dafny name that the shell makes up has a `'`, which C++ cannot write | decided |
 | [0060](0060-literal-types-contract-places-and-two-kinds-of-name.md) | A literal carries its type. A contract reads the parameters of its declaration by place. Methods are `c_`, variables `v_` | decided |
 | [0061](0061-loops-writes-and-unsigned-types.md) | The third slice: loops with invariant and decreases, writes to locals, uint32 and uint64 with no wrap, typed literals | decided |
+| [0062](0062-a-loop-contract-reads-the-variables-in-scope.md) | A loop contract reads the variables in scope. A contract line after code belongs to nothing. A loop does not take its function's lines | decided |

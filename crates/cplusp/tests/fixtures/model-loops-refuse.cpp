@@ -57,3 +57,24 @@ int32_t forever() {
     return 1;
   }
 }
+
+// A loop contract reads only the variables in scope at the loop, decision 0062.
+int32_t inside_body(int32_t n) {
+  int32_t i = 0;
+  //@ invariant t == 1
+  while (i < n) {
+    int32_t t = 1;
+    ++i;
+  }
+  return i;
+}
+
+int32_t declared_after(int32_t n) {
+  int32_t i = 0;
+  //@ invariant z == 1
+  while (i < n) {
+    ++i;
+  }
+  int32_t z = 1;
+  return z;
+}
