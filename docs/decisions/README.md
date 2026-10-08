@@ -83,3 +83,5 @@ Status is `decided`, `proposed` (the default until someone objects or the thin s
 | [0075](0075-an-optional-scalar-is-a-dafny-option.md) | An optional scalar is a Dafny Option. has_value, value and the dereference read it. Dafny proves each read | decided |
 | [0076](0076-structs-that-hold-sequences-and-recursive-structs.md) | Structs that hold sequences, and recursive structs. Each sequence is a Vec, a seq with its bound on the length | decided |
 | [0077](0077-move-the-shells-decisions-into-the-core.md) | Move the decisions of the shell into the core: the verdict of prove first, then the printer and the lexer | decided |
+| [0078](0078-subspan-and-empty.md) | subspan with one argument and empty. Dafny proves the offset is in range | decided |
+| [0079](0079-specification-functions-come-from-a-companion-file.md) | Specification functions come from a companion Dafny file of functions and predicates only. prove refuses an axiom in it | decided |
