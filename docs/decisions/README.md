@@ -65,3 +65,4 @@ Status is `decided`, `proposed` (the default until someone objects or the thin s
 | [0057](0057-the-tree-crosses-as-json-in-the-cores-shape.md) | No external translator. The plugin writes the tree as JSON in the core's shape, and the first slice is clamp | decided |
 | [0058](0058-locals-integral-casts-and-calls.md) | The second slice: locals, integral casts, braced values and calls. A call stands alone, and each name is declared once | decided |
 | [0059](0059-a-function-is-keyed-by-its-mangled-name.md) | A function is keyed by its mangled name. A Dafny name that the shell makes up has a `'`, which C++ cannot write | decided |
+| [0060](0060-literal-types-contract-places-and-two-kinds-of-name.md) | A literal carries its type. A contract reads the parameters of its declaration by place. Methods are `c_`, variables `v_` | decided |

@@ -1604,7 +1604,8 @@ fn every_function_and_contract_line_in_view_is_modelled_or_refused() {
 }
 
 /// A name that Dafny reserves, a parameter with no name, and a tab after the word of a contract line still give a model that Dafny
-/// proves, decision 0057. A parameter with no name never shares a Dafny name with one the author named, decision 0058.
+/// proves, decision 0057. A parameter with no name never shares a Dafny name with one the author named, decision 0059. A parameter
+/// with the name of a function never shares a Dafny name with the method, decision 0060.
 #[test]
 fn reserved_names_and_unnamed_parameters_still_give_a_model_dafny_proves() {
     let Some(dafny) = dafny() else { return };
@@ -1615,7 +1616,7 @@ fn reserved_names_and_unnamed_parameters_still_give_a_model_dafny_proves() {
     let (o, out) = model("model-names.cpp", dir.path());
     assert_eq!(o.status.code(), Some(0), "stdout: {} stderr: {}", stdout(&o), stderr(&o));
     let text = std::fs::read_to_string(&out).unwrap();
-    assert_eq!(text.lines().filter(|l| l.starts_with("method ")).count(), 3, "{text}");
+    assert_eq!(text.lines().filter(|l| l.starts_with("method ")).count(), 5, "{text}");
     let v = Command::new(dafny).args(["verify"]).arg(&out).output().unwrap();
     let said = format!("{}{}", String::from_utf8_lossy(&v.stdout), String::from_utf8_lossy(&v.stderr));
     assert!(v.status.success() && said.contains(" 0 errors"), "{said}\n{text}");
@@ -1760,6 +1761,50 @@ fn overloads_from_one_macro_each_have_their_own_method() {
     assert_eq!((headers.len(), distinct.len()), (4, 4), "{text}");
     let (ok, said) = verify(&dafny, &out);
     assert!(ok && said.contains(" 0 errors"), "{said}\n{text}");
+}
+
+/// A literal of a type outside the subset is refused at its line, decision 0060. C++ wraps `-1u`, and a model that dropped the type
+/// proved `-1u < 1u` true.
+#[test]
+fn an_unsigned_literal_is_refused() {
+    if !clang_tidy_available() {
+        return;
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let (o, out) = model("model-unsigned.cpp", dir.path());
+    let text = stdout(&o);
+    assert_eq!(o.status.code(), Some(1), "stdout: {text} stderr: {}", stderr(&o));
+    let refusals: Vec<&str> = text.lines().filter(|l| l.starts_with("Not provable: ")).collect();
+    for line in [6, 10] {
+        let want = format!("model-unsigned.cpp:{line}: unsigned int: the translator has no rule for it yet.");
+        assert!(refusals.iter().any(|l| l.ends_with(&want)), "{want}: {text}");
+    }
+    assert_eq!(refusals.len(), 2, "{text}");
+    let model = std::fs::read_to_string(&out).unwrap();
+    assert!(bare(&model, "wrong") && bare(&model, "wrong_sub"), "{model}");
+}
+
+/// A contract on a declaration reads that declaration's parameters by place, decision 0060. The definition may name them otherwise.
+/// With the same order the model proves. With the names swapped, the C++ breaks its contract and Dafny refuses it.
+#[test]
+fn a_contract_on_a_declaration_reads_its_parameters_by_place() {
+    let Some(dafny) = dafny() else { return };
+    if !clang_tidy_available() {
+        return;
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let (o, out) = model("model-redecl.cpp", dir.path());
+    assert_eq!(o.status.code(), Some(0), "stdout: {} stderr: {}", stdout(&o), stderr(&o));
+    let text = std::fs::read_to_string(&out).unwrap();
+    assert!(full(&text, "minus"), "{text}");
+    let (ok, said) = verify(&dafny, &out);
+    assert!(ok && said.contains(" 0 errors"), "{said}\n{text}");
+
+    let (o, out) = model("model-redecl-wrong.cpp", dir.path());
+    assert_eq!(o.status.code(), Some(0), "stdout: {} stderr: {}", stdout(&o), stderr(&o));
+    let text = std::fs::read_to_string(&out).unwrap();
+    let (ok, said) = verify(&dafny, &out);
+    assert!(!ok && said.contains("postcondition"), "{said}\n{text}");
 }
 
 /// The model does not wrap a narrowing cast, decision 0058. Dafny must prove that the value fits, and with no contract it cannot.

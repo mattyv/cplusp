@@ -16,3 +16,14 @@ int32_t function(int32_t x) {
 int32_t unnamed(int32_t, int32_t _0) {
   return _0;
 }
+
+// A parameter with the name of a function is a variable apart from the method, decision 0060.
+//@ ensures result == x
+int32_t helper(int32_t x) {
+  return x;
+}
+
+//@ ensures result == helper
+int32_t caller(int32_t helper) {
+  return ::helper(helper);
+}
