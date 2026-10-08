@@ -82,3 +82,4 @@ Status is `decided`, `proposed` (the default until someone objects or the thin s
 | [0074](0074-a-mutable-reference-to-a-struct-has-no-rule-yet.md) | A non-const reference to a struct has no rule yet | decided |
 | [0075](0075-an-optional-scalar-is-a-dafny-option.md) | An optional scalar is a Dafny Option. has_value, value and the dereference read it. Dafny proves each read | decided |
 | [0076](0076-structs-that-hold-sequences-and-recursive-structs.md) | Structs that hold sequences, and recursive structs. Each sequence is a Vec, a seq with its bound on the length | decided |
+| [0077](0077-move-the-shells-decisions-into-the-core.md) | Move the decisions of the shell into the core: the verdict of prove first, then the printer and the lexer | decided |
