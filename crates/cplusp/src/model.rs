@@ -19,6 +19,8 @@ enum JTy {
     I32,
     I64,
     U8,
+    U32,
+    U64,
     Bool,
     Other(String),
 }
@@ -65,6 +67,10 @@ enum JStmt {
     Return(JExpr, u32),
     If(JExpr, Vec<JStmt>, Vec<JStmt>, u32),
     Local(String, JTy, JExpr, u32),
+    Assign(String, JExpr, u32),
+    Step(String, JTy, bool, u32),
+    While(JExpr, Vec<JCond>, Vec<JStmt>, u32),
+    For(Box<JStmt>, JExpr, Box<JStmt>, Vec<JCond>, Vec<JStmt>, u32),
     Unknown(String, u32),
 }
 
@@ -123,6 +129,8 @@ fn ty(t: JTy, names: &mut Names) -> Ty {
         JTy::I32 => Ty::I32,
         JTy::I64 => Ty::I64,
         JTy::U8 => Ty::U8,
+        JTy::U32 => Ty::U32,
+        JTy::U64 => Ty::U64,
         JTy::Bool => Ty::Bool,
         JTy::Other(s) => Ty::Other(names.id(&s)),
     }
@@ -176,6 +184,14 @@ fn stmt(s: JStmt, names: &mut Names) -> Stmt {
         JStmt::Return(e, line) => Stmt::Return(expr(e, names), line),
         JStmt::If(c, t, f, line) => Stmt::If(expr(c, names), Box::new(stmts(t, names)), Box::new(stmts(f, names)), line),
         JStmt::Local(n, t, e, line) => Stmt::Local(names.id(&n), ty(t, names), expr(e, names), line),
+        JStmt::Assign(n, e, line) => Stmt::Assign(names.id(&n), expr(e, names), line),
+        JStmt::Step(n, t, up, line) => Stmt::Step(names.id(&n), ty(t, names), up, line),
+        JStmt::While(c, cs, body, line) => Stmt::While(expr(c, names), Box::new(conds(cs, names)), Box::new(stmts(body, names)), line),
+        JStmt::For(init, c, step, cs, body, line) => {
+            let init = Box::new(stmt(*init, names));
+            let c = expr(c, names);
+            Stmt::For(init, c, Box::new(stmt(*step, names)), Box::new(conds(cs, names)), Box::new(stmts(body, names)), line)
+        }
         JStmt::Unknown(k, line) => Stmt::Unknown(names.id(&k), line),
     }
 }
@@ -240,8 +256,8 @@ fn param_names(v: Vec<String>, names: &mut Names) -> CNames {
     ids.into_iter().rev().fold(CNames::Nil, |rest, n| CNames::Cons(n, Box::new(rest)))
 }
 
-/// The contract lines as the core's list. A word other than `requires` and `ensures` has no grammar yet, so its text is not parsed.
-/// The core refuses the line by its word. A line that the parser refuses, or that ends in a backslash, is `Bad`, and the core refuses it
+/// The contract lines as the core's list. A word other than the four of the grammar has no rule, so its text is not parsed.
+/// The core refuses the line by its word, and refuses a word in the wrong place. A line that the parser refuses, or that ends in a backslash, is `Bad`, and the core refuses it
 /// with that refusal.
 fn conds(v: Vec<JCond>, names: &mut Names) -> Conds {
     let mut items = Vec::new();
@@ -251,8 +267,13 @@ fn conds(v: Vec<JCond>, names: &mut Names) -> Conds {
             (CondKind::Bad(Refusal::Backslash(c.line)), Expr::Int(0))
         } else {
             match c.kind.as_str() {
-                "requires" | "ensures" => {
-                    let want = if c.kind == "requires" { CondKind::Requires } else { CondKind::Ensures };
+                "requires" | "ensures" | "invariant" | "decreases" => {
+                    let want = match c.kind.as_str() {
+                        "requires" => CondKind::Requires,
+                        "ensures" => CondKind::Ensures,
+                        "invariant" => CondKind::Invariant,
+                        _ => CondKind::Decreases,
+                    };
                     match parse_contract(&lex(&c.text, c.line, names), c.line) {
                         Ok(e) => (want, e),
                         Err(r) => (CondKind::Bad(r), Expr::Int(0)),
@@ -284,13 +305,17 @@ fn function(f: JFunction, names: &mut Names) -> Function {
 
 const PRELUDE: &str = "newtype int32 = x: int | -0x8000_0000 <= x < 0x8000_0000\n\
 newtype int64 = x: int | -0x8000_0000_0000_0000 <= x < 0x8000_0000_0000_0000\n\
-newtype uint8 = x: int | 0 <= x < 0x100\n";
+newtype uint8 = x: int | 0 <= x < 0x100\n\
+newtype uint32 = x: int | 0 <= x < 0x1_0000_0000\n\
+newtype uint64 = x: int | 0 <= x < 0x1_0000_0000_0000_0000\n";
 
 fn dty(t: DTy) -> &'static str {
     match t {
         DTy::Int32 => "int32",
         DTy::Int64 => "int64",
         DTy::UInt8 => "uint8",
+        DTy::UInt32 => "uint32",
+        DTy::UInt64 => "uint64",
         DTy::Bool => "bool",
     }
 }
@@ -349,32 +374,62 @@ fn call(m: u32, args: &DArgs, names: &Names, methods: &Methods) -> String {
 }
 
 fn dstmts(ss: &DStmts, names: &Names, methods: &Methods, depth: usize, out: &mut String) {
-    let pad = "  ".repeat(depth);
     let mut rest = ss;
     while let DStmts::Cons(s, next) = rest {
-        match &**s {
-            DStmt::Return(e) => writeln!(out, "{pad}return {};", dexpr(e, names)).unwrap(),
-            DStmt::Local(x, t, e) => writeln!(out, "{pad}var {}: {} := {};", mangle(names.text(*x)), dty(*t), dexpr(e, names)).unwrap(),
-            DStmt::LocalCall(x, t, m, args) => {
-                writeln!(out, "{pad}var {}: {} := {};", mangle(names.text(*x)), dty(*t), call(*m, args, names, methods)).unwrap()
-            }
-            DStmt::ReturnCall(m, args) => {
-                writeln!(out, "{pad}result := {};", call(*m, args, names, methods)).unwrap();
-                writeln!(out, "{pad}return;").unwrap();
-            }
-            DStmt::If(c, t, f) => {
-                writeln!(out, "{pad}if {} {{", dexpr(c, names)).unwrap();
-                dstmts(t, names, methods, depth + 1, out);
-                if matches!(**f, DStmts::Nil) {
-                    writeln!(out, "{pad}}}").unwrap();
-                } else {
-                    writeln!(out, "{pad}}} else {{").unwrap();
-                    dstmts(f, names, methods, depth + 1, out);
-                    writeln!(out, "{pad}}}").unwrap();
-                }
+        dstmt(s, names, methods, depth, out);
+        rest = next;
+    }
+}
+
+/// A `while`: the condition, the invariants, the decreases lines, then the body. A `for` has its step as the last statement of the body.
+fn dwhile(c: &DExpr, lists: [&DConds; 2], body: &DStmts, step: Option<&DStmt>, (names, methods): (&Names, &Methods), depth: usize, out: &mut String) {
+    let pad = "  ".repeat(depth);
+    writeln!(out, "{pad}while {}", dexpr(c, names)).unwrap();
+    for (word, list) in ["invariant", "decreases"].into_iter().zip(lists) {
+        let mut cs = list;
+        while let DConds::Cons(e, next) = cs {
+            writeln!(out, "{pad}  {word} {}", dexpr(e, names)).unwrap();
+            cs = next;
+        }
+    }
+    writeln!(out, "{pad}{{").unwrap();
+    dstmts(body, names, methods, depth + 1, out);
+    if let Some(step) = step {
+        dstmt(step, names, methods, depth + 1, out);
+    }
+    writeln!(out, "{pad}}}").unwrap();
+}
+
+fn dstmt(s: &DStmt, names: &Names, methods: &Methods, depth: usize, out: &mut String) {
+    let pad = "  ".repeat(depth);
+    match s {
+        DStmt::Return(e) => writeln!(out, "{pad}return {};", dexpr(e, names)).unwrap(),
+        DStmt::Local(x, t, e) => writeln!(out, "{pad}var {}: {} := {};", mangle(names.text(*x)), dty(*t), dexpr(e, names)).unwrap(),
+        DStmt::LocalCall(x, t, m, args) => {
+            writeln!(out, "{pad}var {}: {} := {};", mangle(names.text(*x)), dty(*t), call(*m, args, names, methods)).unwrap()
+        }
+        DStmt::ReturnCall(m, args) => {
+            writeln!(out, "{pad}result := {};", call(*m, args, names, methods)).unwrap();
+            writeln!(out, "{pad}return;").unwrap();
+        }
+        DStmt::Assign(x, e) => writeln!(out, "{pad}{} := {};", mangle(names.text(*x)), dexpr(e, names)).unwrap(),
+        DStmt::AssignCall(x, m, args) => writeln!(out, "{pad}{} := {};", mangle(names.text(*x)), call(*m, args, names, methods)).unwrap(),
+        DStmt::While(c, inv, dec, body) => dwhile(c, [inv, dec], body, None, (names, methods), depth, out),
+        DStmt::For(init, c, inv, dec, body, step) => {
+            dstmt(init, names, methods, depth, out);
+            dwhile(c, [inv, dec], body, Some(step), (names, methods), depth, out);
+        }
+        DStmt::If(c, t, f) => {
+            writeln!(out, "{pad}if {} {{", dexpr(c, names)).unwrap();
+            dstmts(t, names, methods, depth + 1, out);
+            if matches!(**f, DStmts::Nil) {
+                writeln!(out, "{pad}}}").unwrap();
+            } else {
+                writeln!(out, "{pad}}} else {{").unwrap();
+                dstmts(f, names, methods, depth + 1, out);
+                writeln!(out, "{pad}}}").unwrap();
             }
         }
-        rest = next;
     }
 }
 
@@ -417,6 +472,13 @@ fn sentence(r: Refusal, names: &Names) -> (u32, String) {
         }
         Refusal::Twice(n, line) => (line, format!("{} is declared twice in the function.", names.text(n))),
         Refusal::Convert(line) => (line, "a conversion between bool and a number.".to_string()),
+        Refusal::WriteParam(n, line) => (line, format!("{} is a parameter. The translator writes only a local.", names.text(n))),
+        Refusal::NoVar(n, line) => (line, format!("{} in the loop contract is no variable.", names.text(n))),
+        Refusal::Misplaced(line) => (
+            line,
+            "a contract line in the wrong place. A requires or an ensures line goes above a function. An invariant or a decreases line goes above a loop."
+                .to_string(),
+        ),
     }
 }
 

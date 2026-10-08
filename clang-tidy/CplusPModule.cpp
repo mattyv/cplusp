@@ -3747,7 +3747,9 @@ private:
 // Upgrade: drop the qualifiers that keep the value, once the core has a rule for them.
 class TreeWriter {
 public:
-  explicit TreeWriter(ASTContext &Context) : Context(Context), SM(Context.getSourceManager()), Mangler(Context.createMangleContext()) {}
+  // `Claimed` takes the `//@` lines that a loop owns, so the orphan scan skips them.
+  TreeWriter(ASTContext &Context, std::set<std::pair<unsigned, unsigned>> &Claimed)
+      : Context(Context), SM(Context.getSourceManager()), Mangler(Context.createMangleContext()), Claimed(Claimed) {}
 
   // The key of a function, decision 0058: its Itanium mangled name. The name tells overloads and namespaces apart, and it is the same
   // for a call and for the definition. A function with no mangled name, or one that is templated, a constructor or a destructor, has
@@ -3785,14 +3787,7 @@ public:
     if (!Opaque) {
       for (const ParmVarDecl *P : FD->parameters())
         Params.push_back(llvm::json::Array{P->getNameAsString(), type(P->getType())});
-      for (const Contract::Line &L : C.Lines) {
-        // The word ends at any white space.
-        const StringRef Text = L.Text;
-        const size_t Cut = Text.find_first_of(" \t\f\v\r");
-        Conds.push_back(llvm::json::Object{
-            {"kind", Text.substr(0, Cut).str()}, {"line", number(L.Number)}, {"text", Cut == StringRef::npos ? "" : Text.substr(Cut).trim().str()},
-            {"params", L.Params}});
-      }
+      Conds = conds(C);
     }
     return llvm::json::Object{{"name", FD->getNameAsString()},
                               {"key", key(FD)},
@@ -3810,6 +3805,28 @@ private:
   ASTContext &Context;
   const SourceManager &SM;
   std::unique_ptr<MangleContext> Mangler;
+  std::set<std::pair<unsigned, unsigned>> &Claimed;
+
+  // The contract lines as data. A line of a loop has no parameters.
+  static llvm::json::Array conds(const Contract &C) {
+    llvm::json::Array Out;
+    for (const Contract::Line &L : C.Lines) {
+      // The word ends at any white space.
+      const StringRef Text = L.Text;
+      const size_t Cut = Text.find_first_of(" \t\f\v\r");
+      Out.push_back(llvm::json::Object{
+          {"kind", Text.substr(0, Cut).str()}, {"line", number(L.Number)}, {"text", Cut == StringRef::npos ? "" : Text.substr(Cut).trim().str()},
+          {"params", L.Params}});
+    }
+    return Out;
+  }
+  // The `//@` lines directly above a loop, claimed for it.
+  llvm::json::Array loopConds(const Stmt *Loop) const {
+    const Contract C = contractAbove(SM, Loop->getBeginLoc());
+    for (const Contract::Line &L : C.Lines)
+      Claimed.insert({L.File, L.Number});
+    return conds(C);
+  }
 
   static llvm::json::Value number(uint64_t N) { return llvm::json::Value(static_cast<int64_t>(N)); }
   unsigned line(SourceLocation At) const { return SM.getExpansionLineNumber(At); }
@@ -3844,6 +3861,15 @@ private:
           break;
         case BuiltinType::UChar:
           return "U8";
+        case BuiltinType::UInt:
+          if (Bits == 32)
+            return "U32";
+          break;
+        case BuiltinType::ULong:
+        case BuiltinType::ULongLong:
+          if (Bits == 64)
+            return "U64";
+          break;
         case BuiltinType::Bool:
           return "Bool";
         default:
@@ -3873,8 +3899,25 @@ private:
     if (const auto *Decl = dyn_cast<DeclStmt>(S); Decl && Decl->isSingleDecl())
       if (const auto *Var = dyn_cast<VarDecl>(Decl->getSingleDecl()); Var && Var->hasLocalStorage() && Var->getInit())
         return tag("Local", llvm::json::Array{Var->getNameAsString(), type(Var->getType()), expr(Var->getInit(), line(S->getBeginLoc())), number(line(S->getBeginLoc()))});
+    if (const auto *Assign = dyn_cast<BinaryOperator>(S); Assign && Assign->getOpcode() == BO_Assign)
+      if (const auto *Target = dyn_cast<DeclRefExpr>(Assign->getLHS()); Target && isVariable(Target->getDecl()))
+        return tag("Assign", llvm::json::Array{Target->getDecl()->getNameAsString(), expr(Assign->getRHS(), line(S->getBeginLoc())), number(line(S->getBeginLoc()))});
+    if (const auto *Step = dyn_cast<UnaryOperator>(S); Step && Step->isIncrementDecrementOp())
+      if (const auto *Target = dyn_cast<DeclRefExpr>(Step->getSubExpr()); Target && isVariable(Target->getDecl()))
+        return tag("Step", llvm::json::Array{Target->getDecl()->getNameAsString(), type(Target->getDecl()->getType()), Step->isIncrementOp(),
+                                             number(line(S->getBeginLoc()))});
+    if (const auto *While = dyn_cast<WhileStmt>(S); While && !While->getConditionVariable())
+      return tag("While", llvm::json::Array{expr(While->getCond(), line(S->getBeginLoc())), loopConds(S), stmts(While->getBody()), number(line(S->getBeginLoc()))});
+    if (const auto *For = dyn_cast<ForStmt>(S); For && For->getCond() && For->getInc() && !For->getConditionVariable())
+      if (const auto *Init = dyn_cast_or_null<DeclStmt>(For->getInit()); Init && Init->isSingleDecl())
+        if (const auto *Var = dyn_cast<VarDecl>(Init->getSingleDecl()); Var && Var->hasLocalStorage() && Var->getInit())
+          return tag("For", llvm::json::Array{stmt(Init), expr(For->getCond(), line(S->getBeginLoc())), stmt(For->getInc()), loopConds(S),
+                                              stmts(For->getBody()), number(line(S->getBeginLoc()))});
     return unknown(S, describe(S), line(S->getBeginLoc()));
   }
+
+  // A parameter or a local: the names the translator reads and writes.
+  static bool isVariable(const ValueDecl *D) { return isa<ParmVarDecl>(D) || (isa<VarDecl>(D) && cast<VarDecl>(D)->hasLocalStorage()); }
 
   llvm::json::Value expr(const Expr *E, unsigned Near) const {
     if (const auto *Literal = dyn_cast<IntegerLiteral>(E); Literal && Literal->getValue().getActiveBits() <= 63)
@@ -3956,7 +3999,7 @@ public:
     for (const Contract::Line &L : C.Lines)
       Claimed.insert({L.File, L.Number});
     if (FD->isThisDeclarationADefinition())
-      append(TreeWriter(*Context).function(FD, C));
+      append(TreeWriter(*Context, Claimed).function(FD, C));
   }
   void onEndOfTranslationUnit() override {
     if (!Context)

@@ -1763,25 +1763,21 @@ fn overloads_from_one_macro_each_have_their_own_method() {
     assert!(ok && said.contains(" 0 errors"), "{said}\n{text}");
 }
 
-/// A literal of a type outside the subset is refused at its line, decision 0060. C++ wraps `-1u`, and a model that dropped the type
-/// proved `-1u < 1u` true.
+/// A literal keeps its type, decision 0060, and the model never wraps, decision 0061. C++ wraps `-1u` and `0u - 1u`, and a model that
+/// dropped the type proved `-1u < 1u` true. Now each wrap fails in Dafny.
 #[test]
-fn an_unsigned_literal_is_refused() {
+fn an_unsigned_wrap_of_literals_fails_in_dafny() {
+    let Some(dafny) = dafny() else { return };
     if !clang_tidy_available() {
         return;
     }
     let dir = tempfile::tempdir().unwrap();
     let (o, out) = model("model-unsigned.cpp", dir.path());
-    let text = stdout(&o);
-    assert_eq!(o.status.code(), Some(1), "stdout: {text} stderr: {}", stderr(&o));
-    let refusals: Vec<&str> = text.lines().filter(|l| l.starts_with("Not provable: ")).collect();
-    for line in [6, 10] {
-        let want = format!("model-unsigned.cpp:{line}: unsigned int: the translator has no rule for it yet.");
-        assert!(refusals.iter().any(|l| l.ends_with(&want)), "{want}: {text}");
-    }
-    assert_eq!(refusals.len(), 2, "{text}");
-    let model = std::fs::read_to_string(&out).unwrap();
-    assert!(bare(&model, "wrong") && bare(&model, "wrong_sub"), "{model}");
+    assert_eq!(o.status.code(), Some(0), "stdout: {} stderr: {}", stdout(&o), stderr(&o));
+    let text = std::fs::read_to_string(&out).unwrap();
+    assert!(full(&text, "wrong") && full(&text, "wrong_sub"), "{text}");
+    let (ok, said) = verify(&dafny, &out);
+    assert!(!ok && said.contains(" 2 errors"), "{said}\n{text}");
 }
 
 /// A contract on a declaration reads that declaration's parameters by place, decision 0060. The definition may name them otherwise.
