@@ -2114,7 +2114,8 @@ pub fn translate_unit(all: &Fns) -> (r: Models)
 // ------------------------------------------------------------------ the contract parser
 
 /// A token of a contract line. The shell cuts the text into tokens. `Op` holds `- ` as `Sub`, and the parser reads it as a
-/// negation where no operand is before it. `Size` is the text `.size()`, decision 0064. `Unknown` is text with no token, by the id of its kind and its line.
+/// negation where no operand is before it. `Size` is the text `.size()`, decision 0064. `Unknown` is text with no token, by the id
+/// of its kind and its line.
 #[derive(Structural, PartialEq, Eq, Clone, Copy, Debug)]
 pub enum Tok {
     Ident(u32),

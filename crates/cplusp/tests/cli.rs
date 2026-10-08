@@ -2003,6 +2003,42 @@ fn sequences_with_no_rule_are_refused_at_their_lines() {
     assert_eq!(refusals.len(), 8, "{text}");
 }
 
+/// A sequence stays one value across a call only because the gate refuses a callee that writes the data behind it, decision 0067.
+/// The model alone would read the span as constant across `g()`. The gate refuses the write, and the translator refuses `g`.
+#[test]
+fn a_callee_that_writes_the_data_behind_a_sequence_is_refused_by_the_gate() {
+    if !clang_tidy_available() {
+        return;
+    }
+    let f = fixture("model-seq-global.cpp");
+    let o = gated(&[f.to_str().unwrap(), "--", "-std=c++23", "-ffp-contract=off"]);
+    let text = stdout(&o);
+    assert_eq!(o.status.code(), Some(1), "stdout: {text} stderr: {}", stderr(&o));
+    assert!(text.lines().any(|l| l.contains("model-seq-global.cpp:8: ") && l.contains("gv changes")), "{text}");
+    let dir = tempfile::tempdir().unwrap();
+    let (o, _) = model("model-seq-global.cpp", dir.path());
+    let text = stdout(&o);
+    assert_eq!(o.status.code(), Some(1), "stdout: {text} stderr: {}", stderr(&o));
+    assert!(text.lines().any(|l| l.ends_with("model-seq-global.cpp:8: BinaryOperator =: the translator has no rule for it yet.")), "{text}");
+}
+
+/// A name that `forall` binds is an exact integer, decision 0067, so the file resolves when the body does not use it or a second
+/// forall binds the same name.
+#[test]
+fn a_bound_name_is_an_integer() {
+    let Some(dafny) = dafny() else { return };
+    if !clang_tidy_available() {
+        return;
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let (o, out) = model("model-forall.cpp", dir.path());
+    assert_eq!(o.status.code(), Some(0), "stdout: {} stderr: {}", stdout(&o), stderr(&o));
+    let text = std::fs::read_to_string(&out).unwrap();
+    assert!(text.contains("forall b_j: int :: "), "{text}");
+    let (ok, said) = verify(&dafny, &out);
+    assert!(ok && said.contains(" 0 errors"), "{said}\n{text}");
+}
+
 /// The model never wraps, decision 0061. An unsigned value below zero and a sum of literals that overflows each fail in Dafny.
 #[test]
 fn unsigned_wrap_and_literal_overflow_fail_in_dafny() {
