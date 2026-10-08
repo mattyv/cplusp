@@ -642,7 +642,7 @@ fn a_sequence_made_from_a_sequence_keeps_its_value_when_its_length_cannot_change
     let all = |e: Expr| fns(vec![f(e)]);
     // A copy, and a span with no fixed extent made from one with a fixed extent, keep the value.
     for (from, to) in [(dynamic, dynamic), (three, dynamic), (three, three)] {
-        let m = translate_function(&f(copy(from, to)), &all(copy(from, to)));
+        let m = translate_function(&f(copy(from, to)), &all(copy(from, to)), &Structs::Nil);
         let Model::Full(m) = m else { panic!("a full model for {from:?} to {to:?}: {m:?}") };
         let DStmts::Cons(s, _, _) = m.body else { panic!("a body") };
         let DStmt::LocalCall(_, _, _, DArgs::Cons(arg, _)) = *s else { panic!("a call") };
@@ -650,7 +650,7 @@ fn a_sequence_made_from_a_sequence_keeps_its_value_when_its_length_cannot_change
     }
     // A fixed extent made from another length, or another element type, is refused.
     for (from, to) in [(dynamic, three), (Ty::Seq(Scalar::I32, Extent::Fixed(4)), three), (Ty::Seq(Scalar::U8, Extent::Dynamic), dynamic)] {
-        let m = translate_function(&f(copy(from, to)), &all(copy(from, to)));
+        let m = translate_function(&f(copy(from, to)), &all(copy(from, to)), &Structs::Nil);
         assert_eq!(bare_refusal(m), Refusal::Extent(5), "{from:?} to {to:?}");
     }
 }
@@ -696,7 +696,7 @@ fn a_struct_of_scalars_is_a_datatype_with_field_reads_and_braced_values() {
     let Model::Full(m) = translate_function(&f, &Fns::Nil, &point_table()) else { panic!("a full model") };
     let dfield = |d: DExpr, f: u32| DExpr::Field(Box::new(d), f);
     let dargs = DArgs::Cons(dfield(DExpr::Var(A), FY), Box::new(DArgs::Cons(dfield(DExpr::Var(A), FX), Box::new(DArgs::Nil))));
-    assert_eq!(strip(m.body), DStmts::Cons(Box::new(DStmt::Return(DExpr::Ctor(POINT, dargs))), 0, Box::new(DStmts::Nil)));
+    assert_eq!(strip(m.body), DStmts::Cons(Box::new(DStmt::Return(DExpr::Ctor(POINT, Box::new(dargs)))), 0, Box::new(DStmts::Nil)));
     // A field of an integer reads as an exact integer in a contract.
     let as_int = |d: DExpr| Box::new(DExpr::AsInt(Box::new(d)));
     let want = DExpr::Bin(BinOp::Eq, as_int(dfield(DExpr::Result, FX)), as_int(dfield(DExpr::Var(A), FY)));

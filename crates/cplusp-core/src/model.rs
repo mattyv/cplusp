@@ -37,7 +37,8 @@ pub enum Extent {
     Fixed(u64),
 }
 
-/// A type of the subset. `Seq` is a read-only sequence of a scalar with its extent, a parameter only, decisions 0064 and 0070. `Other` is a type the
+/// A type of the subset. `Seq` is a read-only sequence of a scalar with its extent, a parameter only, decisions 0064 and 0070.
+/// `Struct` is a struct of the file by its key, decision 0073. `Other` is a type the
 /// translator has no rule for, by the id of its name.
 #[derive(Structural, PartialEq, Eq, Clone, Copy, Debug)]
 pub enum Ty {
@@ -48,6 +49,7 @@ pub enum Ty {
     U64,
     Bool,
     Seq(Scalar, Extent),
+    Struct(u32),
     Other(u32),
 }
 
@@ -104,7 +106,9 @@ pub enum Expr {
     Call(u32, u32, Box<Args>, u32),
     Size(Box<Expr>),
     Index(Box<Expr>, Box<Expr>),
-    SeqCopy(Box<Expr>, Ty, Ty),
+    Copy(Box<Expr>, Ty, Ty),
+    Field(Box<Expr>, u32),
+    Construct(u32, Box<Args>),
     Forall(u32, Box<Expr>),
     Chain(BinOp, BinOp, Box<Expr>, Box<Expr>, Box<Expr>),
     Unknown(u32, u32),
@@ -182,6 +186,20 @@ pub struct Function {
     pub body: Stmts,
 }
 
+/// The structs of one file: the key, the line and the fields of each, decision 0073.
+#[derive(PartialEq, Eq, Debug)]
+pub enum Structs {
+    Nil,
+    Cons(u32, u32, Params, Box<Structs>),
+}
+
+/// The model of each struct of a file: its key and Dafny fields, or the refusal.
+#[derive(PartialEq, Eq, Debug)]
+pub enum StructModels {
+    Nil,
+    Cons(Result<(u32, DParams), Refusal>, Box<StructModels>),
+}
+
 /// The functions of one file.
 #[derive(PartialEq, Eq, Debug)]
 pub enum Fns {
@@ -200,6 +218,7 @@ pub enum DTy {
     UInt64,
     Bool,
     Seq(Scalar),
+    Struct(u32),
 }
 
 /// A Dafny expression. `AsInt` is `(e as int)`, the exact value of a machine integer. `Conv` is `(e as T)`, which Dafny proves
@@ -220,6 +239,8 @@ pub enum DExpr {
     Forall(u32, Box<DExpr>),
     Bound(u32),
     Chain(BinOp, BinOp, Box<DExpr>, Box<DExpr>, Box<DExpr>),
+    Field(Box<DExpr>, u32),
+    Ctor(u32, Box<DArgs>),
 }
 
 #[derive(PartialEq, Eq, Debug)]
@@ -299,6 +320,7 @@ pub enum Models {
 /// `Twice` is a name declared a second time in a function. `Convert` is a cast between `bool` and a number. `WriteParam` is a write
 /// to a parameter. `NoVar` is a name in a loop contract that is no variable. `Misplaced` is a contract line in the wrong place.
 /// `SeqParam` is a sequence that is no parameter. `Extent` is a sequence made from one whose length or element differs.
+/// `NoField` is a field of a contract that its struct does not have.
 #[derive(Structural, PartialEq, Eq, Clone, Copy, Debug)]
 pub enum Refusal {
     Construct(u32, u32),
@@ -314,6 +336,7 @@ pub enum Refusal {
     Misplaced(u32),
     SeqParam(u32),
     Extent(u32),
+    NoField(u32, u32),
 }
 
 // ------------------------------------------------------------------ the rules
@@ -328,6 +351,7 @@ pub open spec fn spec_ty(t: Ty, line: u32) -> Result<DTy, Refusal> {
         Ty::U64 => Ok(DTy::UInt64),
         Ty::Bool => Ok(DTy::Bool),
         Ty::Seq(s, _) => Ok(DTy::Seq(s)),
+        Ty::Struct(k) => Ok(DTy::Struct(k)),
         Ty::Other(k) => Err(Refusal::Construct(k, line)),
     }
 }
@@ -353,10 +377,12 @@ pub open spec fn spec_elem(s: Scalar) -> Ty {
 }
 
 /// A sequence made from a sequence keeps its value when the elements are the same and the length cannot change: the new one has no
-/// fixed extent, or the same extent as the old one, decision 0070.
+/// fixed extent, or the same extent as the old one, decision 0070. A copy of a struct keeps its value as the same struct, decision
+/// 0073.
 pub open spec fn copies(from: Ty, to: Ty) -> bool {
     match (from, to) {
         (Ty::Seq(s1, e1), Ty::Seq(s2, e2)) => s1 == s2 && (e2 == Extent::Dynamic || e1 == e2),
+        (Ty::Struct(a), Ty::Struct(b)) => a == b,
         _ => false,
     }
 }
@@ -441,10 +467,18 @@ pub open spec fn spec_code(e: Expr, line: u32) -> Result<DExpr, Refusal>
             },
             Err(r) => Err(r),
         },
-        Expr::SeqCopy(a, from, to) => if copies(from, to) {
+        Expr::Copy(a, from, to) => if copies(from, to) {
             spec_code(*a, line)
         } else {
             Err(Refusal::Extent(line))
+        },
+        Expr::Field(o, f) => match spec_code(*o, line) {
+            Ok(d) => Ok(DExpr::Field(Box::new(d), f)),
+            Err(r) => Err(r),
+        },
+        Expr::Construct(k, args) => match spec_args(*args, line) {
+            Ok(da) => Ok(DExpr::Ctor(k, Box::new(da))),
+            Err(r) => Err(r),
         },
         Expr::Name(n) => Err(Refusal::Name(n, line)),
         Expr::Unknown(k, l) => Err(Refusal::Construct(k, l)),
@@ -502,7 +536,7 @@ pub open spec fn spec_leaf(d: DExpr, t: Ty, line: u32) -> Result<DExpr, Refusal>
 /// must be a parameter of the declaration `decl`, and it reads the parameter of the definition at its place. A loop contract has
 /// no `ret`, so `result` has no place in it, and a name it does not find is no variable. `v.size()` and `v[e]` read a sequence
 /// parameter, and a chain is two comparisons in one direction, decision 0064.
-pub open spec fn spec_contract(e: Expr, decl: Names, ps: Params, ret: Option<Ty>, bound: Names, line: u32) -> Result<DExpr, Refusal>
+pub open spec fn spec_contract(e: Expr, decl: Names, ps: Params, ret: Option<Ty>, bound: Names, line: u32, sd: Structs) -> Result<DExpr, Refusal>
     decreases e,
 {
     match e {
@@ -519,41 +553,45 @@ pub open spec fn spec_contract(e: Expr, decl: Names, ps: Params, ret: Option<Ty>
             Some(t) => spec_leaf(DExpr::Result, t, line),
             None => Err(Refusal::Syntax(line)),
         },
-        Expr::Bin(op, a, b) => match spec_contract(*a, decl, ps, ret, bound, line) {
-            Ok(da) => match spec_contract(*b, decl, ps, ret, bound, line) {
+        Expr::Bin(op, a, b) => match spec_contract(*a, decl, ps, ret, bound, line, sd) {
+            Ok(da) => match spec_contract(*b, decl, ps, ret, bound, line, sd) {
                 Ok(db) => Ok(DExpr::Bin(op, Box::new(da), Box::new(db))),
                 Err(r) => Err(r),
             },
             Err(r) => Err(r),
         },
-        Expr::Not(a) => match spec_contract(*a, decl, ps, ret, bound, line) {
+        Expr::Not(a) => match spec_contract(*a, decl, ps, ret, bound, line, sd) {
             Ok(da) => Ok(DExpr::Not(Box::new(da))),
             Err(r) => Err(r),
         },
-        Expr::Neg(a) => match spec_contract(*a, decl, ps, ret, bound, line) {
+        Expr::Neg(a) => match spec_contract(*a, decl, ps, ret, bound, line, sd) {
             Ok(da) => Ok(DExpr::Neg(Box::new(da))),
             Err(r) => Err(r),
         },
-        Expr::Paren(a) => spec_contract(*a, decl, ps, ret, bound, line),
+        Expr::Paren(a) => spec_contract(*a, decl, ps, ret, bound, line, sd),
         Expr::Size(o) => match spec_seq_name(*o, decl, ps, ret, bound, line) {
             Ok((p, _)) => Ok(DExpr::Len(Box::new(DExpr::Var(p)))),
             Err(r) => Err(r),
         },
         Expr::Index(o, i) => match spec_seq_name(*o, decl, ps, ret, bound, line) {
-            Ok((p, s)) => match spec_contract(*i, decl, ps, ret, bound, line) {
+            Ok((p, s)) => match spec_contract(*i, decl, ps, ret, bound, line, sd) {
                 Ok(di) => spec_leaf(DExpr::Index(Box::new(DExpr::Var(p)), Box::new(di)), spec_elem(s), line),
                 Err(r) => Err(r),
             },
             Err(r) => Err(r),
         },
-        Expr::Forall(j, body) => match spec_contract(*body, decl, ps, ret, Names::Cons(j, Box::new(bound)), line) {
+        Expr::Forall(j, body) => match spec_contract(*body, decl, ps, ret, Names::Cons(j, Box::new(bound)), line, sd) {
             Ok(db) => Ok(DExpr::Forall(j, Box::new(db))),
             Err(r) => Err(r),
         },
+        Expr::Field(o, f) => match spec_path(Expr::Field(o, f), decl, ps, ret, bound, line, sd) {
+            Ok((d, t)) => spec_leaf(d, t, line),
+            Err(r) => Err(r),
+        },
         Expr::Chain(o1, o2, a, b, c) => if chains(o1, o2) {
-            match spec_contract(*a, decl, ps, ret, bound, line) {
-                Ok(da) => match spec_contract(*b, decl, ps, ret, bound, line) {
-                    Ok(db) => match spec_contract(*c, decl, ps, ret, bound, line) {
+            match spec_contract(*a, decl, ps, ret, bound, line, sd) {
+                Ok(da) => match spec_contract(*b, decl, ps, ret, bound, line, sd) {
+                    Ok(db) => match spec_contract(*c, decl, ps, ret, bound, line, sd) {
                         Ok(dc) => Ok(DExpr::Chain(o1, o2, Box::new(da), Box::new(db), Box::new(dc))),
                         Err(r) => Err(r),
                     },
@@ -565,6 +603,71 @@ pub open spec fn spec_contract(e: Expr, decl: Names, ps: Params, ret: Option<Ty>
             Err(Refusal::Syntax(line))
         },
         Expr::Unknown(k, l) => Err(Refusal::Construct(k, l)),
+        _ => Err(Refusal::Syntax(line)),
+    }
+}
+
+/// The type of the field `f` of the struct `k` in the table of the file.
+pub open spec fn spec_field_ty(sd: Structs, k: u32, f: u32) -> Option<Ty>
+    decreases sd,
+{
+    match sd {
+        Structs::Nil => None,
+        Structs::Cons(key, _, fields, rest) => if key == k {
+            spec_lookup(fields, f)
+        } else {
+            spec_field_ty(*rest, k, f)
+        },
+    }
+}
+
+/// The type of a field name among the fields of a struct.
+pub open spec fn spec_lookup(ps: Params, name: u32) -> Option<Ty>
+    decreases ps,
+{
+    match ps {
+        Params::Nil => None,
+        Params::Cons(n, t, rest) => if n == name {
+            Some(t)
+        } else {
+            spec_lookup(*rest, name)
+        },
+    }
+}
+
+/// A path of a contract that a field reads: a parameter, `result` or a field of a path, with its Dafny form and its type, decision
+/// 0073. A bound name is an integer, so it has no field.
+pub open spec fn spec_path(e: Expr, decl: Names, ps: Params, ret: Option<Ty>, bound: Names, line: u32, sd: Structs) -> Result<
+    (DExpr, Ty),
+    Refusal,
+>
+    decreases e,
+{
+    match e {
+        Expr::Name(n) => if spec_has(bound, n) {
+            Err(Refusal::Syntax(line))
+        } else {
+            match spec_rebind(decl, ps, n) {
+                Some((p, t)) => Ok((DExpr::Var(p), t)),
+                None => match ret {
+                    Some(_) => Err(Refusal::Name(n, line)),
+                    None => Err(Refusal::NoVar(n, line)),
+                },
+            }
+        },
+        Expr::Result => match ret {
+            Some(t) => Ok((DExpr::Result, t)),
+            None => Err(Refusal::Syntax(line)),
+        },
+        Expr::Paren(a) => spec_path(*a, decl, ps, ret, bound, line, sd),
+        Expr::Field(o, f) => match spec_path(*o, decl, ps, ret, bound, line, sd) {
+            Ok((d, Ty::Struct(k))) => match spec_field_ty(sd, k, f) {
+                Some(ft) => Ok((DExpr::Field(Box::new(d), f), ft)),
+                None => Err(Refusal::NoField(f, line)),
+            },
+            Ok(_) => Err(Refusal::Syntax(line)),
+            Err(r) => Err(r),
+        },
         _ => Err(Refusal::Syntax(line)),
     }
 }
@@ -693,7 +796,7 @@ pub open spec fn spec_is_param(ps: Params, name: u32) -> bool
 /// The lines of one kind of the contract of a loop, in their order, decisions 0061 and 0062. Each reads the variables `env` in scope
 /// at the loop, and has no
 /// `result`. A `requires` or an `ensures` line has no place above a loop.
-pub open spec fn spec_loop_conds(cs: Conds, want: CondKind, env: Params) -> Result<DConds, Refusal>
+pub open spec fn spec_loop_conds(cs: Conds, want: CondKind, env: Params, sd: Structs) -> Result<DConds, Refusal>
     decreases cs,
 {
     match cs {
@@ -703,9 +806,9 @@ pub open spec fn spec_loop_conds(cs: Conds, want: CondKind, env: Params) -> Resu
             CondKind::Bad(r) => Err(r),
             CondKind::Requires => Err(Refusal::Misplaced(l)),
             CondKind::Ensures => Err(Refusal::Misplaced(l)),
-            _ => match spec_loop_conds(*rest, want, env) {
+            _ => match spec_loop_conds(*rest, want, env, sd) {
                 Ok(dr) => if k == want {
-                    match spec_contract(e, spec_names_of(env), env, None, Names::Nil, l) {
+                    match spec_contract(e, spec_names_of(env), env, None, Names::Nil, l, sd) {
                         Ok(d) => Ok(DConds::Cons(d, l, Box::new(dr))),
                         Err(r) => Err(r),
                     }
@@ -721,7 +824,7 @@ pub open spec fn spec_loop_conds(cs: Conds, want: CondKind, env: Params) -> Resu
 /// A statement of the body, and a list of them. `env` is the variables in scope, and `ps` the parameters. A call is in a
 /// statement only as the full value of a `return`, of a local or of a write. A write is to a local, never to a parameter.
 // ponytail: `return (f(x));` is refused as a call inside an expression. Upgrade: look through parentheses.
-pub open spec fn spec_stmt(s: Stmt, all: Fns, env: Params, ps: Params) -> Result<DStmt, Refusal>
+pub open spec fn spec_stmt(s: Stmt, all: Fns, env: Params, ps: Params, sd: Structs) -> Result<DStmt, Refusal>
     decreases s,
 {
     match s {
@@ -736,8 +839,8 @@ pub open spec fn spec_stmt(s: Stmt, all: Fns, env: Params, ps: Params) -> Result
             },
         },
         Stmt::If(c, t, f, l) => match spec_code(c, l) {
-            Ok(dc) => match spec_stmts(*t, all, env, ps) {
-                Ok(dt) => match spec_stmts(*f, all, env, ps) {
+            Ok(dc) => match spec_stmts(*t, all, env, ps, sd) {
+                Ok(dt) => match spec_stmts(*f, all, env, ps, sd) {
                     Ok(df) => Ok(DStmt::If(dc, Box::new(dt), Box::new(df))),
                     Err(r) => Err(r),
                 },
@@ -793,30 +896,30 @@ pub open spec fn spec_stmt(s: Stmt, all: Fns, env: Params, ps: Params) -> Result
                 ),
             }
         },
-        Stmt::While(c, lc, body, l) => match spec_loop_conds(*lc, CondKind::Invariant, env) {
+        Stmt::While(c, lc, body, l) => match spec_loop_conds(*lc, CondKind::Invariant, env, sd) {
             Err(r) => Err(r),
-            Ok(inv) => match spec_loop_conds(*lc, CondKind::Decreases, env) {
+            Ok(inv) => match spec_loop_conds(*lc, CondKind::Decreases, env, sd) {
                 Err(r) => Err(r),
                 Ok(dec) => match spec_code(c, l) {
                     Err(r) => Err(r),
-                    Ok(dc) => match spec_stmts(*body, all, env, ps) {
+                    Ok(dc) => match spec_stmts(*body, all, env, ps, sd) {
                         Err(r) => Err(r),
                         Ok(db) => Ok(DStmt::While(dc, inv, dec, Box::new(db))),
                     },
                 },
             },
         },
-        Stmt::For(init, c, step, lc, body, l) => match spec_loop_conds(*lc, CondKind::Invariant, spec_scope(*init, env)) {
+        Stmt::For(init, c, step, lc, body, l) => match spec_loop_conds(*lc, CondKind::Invariant, spec_scope(*init, env), sd) {
             Err(r) => Err(r),
-            Ok(inv) => match spec_loop_conds(*lc, CondKind::Decreases, spec_scope(*init, env)) {
+            Ok(inv) => match spec_loop_conds(*lc, CondKind::Decreases, spec_scope(*init, env), sd) {
                 Err(r) => Err(r),
-                Ok(dec) => match spec_stmt(*init, all, env, ps) {
+                Ok(dec) => match spec_stmt(*init, all, env, ps, sd) {
                     Err(r) => Err(r),
                     Ok(di) => match spec_code(c, l) {
                         Err(r) => Err(r),
-                        Ok(dc) => match spec_stmt(*step, all, spec_scope(*init, env), ps) {
+                        Ok(dc) => match spec_stmt(*step, all, spec_scope(*init, env), ps, sd) {
                             Err(r) => Err(r),
-                            Ok(ds) => match spec_stmts(*body, all, spec_scope(*init, env), ps) {
+                            Ok(ds) => match spec_stmts(*body, all, spec_scope(*init, env), ps, sd) {
                                 Err(r) => Err(r),
                                 Ok(db) => Ok(DStmt::For(Box::new(di), spec_place(*init), dc, inv, dec, Box::new(db), Box::new(ds), spec_place(*step))),
                             },
@@ -829,13 +932,13 @@ pub open spec fn spec_stmt(s: Stmt, all: Fns, env: Params, ps: Params) -> Result
     }
 }
 
-pub open spec fn spec_stmts(ss: Stmts, all: Fns, env: Params, ps: Params) -> Result<DStmts, Refusal>
+pub open spec fn spec_stmts(ss: Stmts, all: Fns, env: Params, ps: Params, sd: Structs) -> Result<DStmts, Refusal>
     decreases ss,
 {
     match ss {
         Stmts::Nil => Ok(DStmts::Nil),
-        Stmts::Cons(s, rest) => match spec_stmt(*s, all, env, ps) {
-            Ok(d) => match spec_stmts(*rest, all, spec_scope(*s, env), ps) {
+        Stmts::Cons(s, rest) => match spec_stmt(*s, all, env, ps, sd) {
+            Ok(d) => match spec_stmts(*rest, all, spec_scope(*s, env), ps, sd) {
                 Ok(dr) => Ok(DStmts::Cons(Box::new(d), spec_place(*s), Box::new(dr))),
                 Err(r) => Err(r),
             },
@@ -864,7 +967,7 @@ pub open spec fn spec_has_result(e: Expr) -> bool
 
 /// The lines of one kind of the contract of a function, in their order. A word with no rule, or a line the shell could not read,
 /// is refused. A `decreases` line is the measure of a recursion, and it names no `result`, decision 0072.
-pub open spec fn spec_conds(cs: Conds, want: CondKind, ps: Params, ret: Ty) -> Result<DConds, Refusal>
+pub open spec fn spec_conds(cs: Conds, want: CondKind, ps: Params, ret: Ty, sd: Structs) -> Result<DConds, Refusal>
     decreases cs,
 {
     match cs {
@@ -873,11 +976,11 @@ pub open spec fn spec_conds(cs: Conds, want: CondKind, ps: Params, ret: Ty) -> R
             CondKind::Other(w) => Err(Refusal::Construct(w, l)),
             CondKind::Bad(r) => Err(r),
             CondKind::Invariant => Err(Refusal::Misplaced(l)),
-            _ => match spec_conds(*rest, want, ps, ret) {
+            _ => match spec_conds(*rest, want, ps, ret, sd) {
                 Ok(dr) => if k == want && k == CondKind::Decreases && spec_has_result(e) {
                     Err(Refusal::Syntax(l))
                 } else if k == want {
-                    match spec_contract(e, decl, ps, Some(ret), Names::Nil, l) {
+                    match spec_contract(e, decl, ps, Some(ret), Names::Nil, l, sd) {
                         Ok(d) => Ok(DConds::Cons(d, l, Box::new(dr))),
                         Err(r) => Err(r),
                     }
@@ -968,16 +1071,16 @@ pub open spec fn spec_twice(f: Function) -> Option<(u32, u32)> {
 
 /// The contract and the body of a function whose signature is in the subset: the requires lines, the ensures lines, the decreases
 /// lines and the body.
-pub open spec fn spec_inside(f: Function, all: Fns) -> Result<(DConds, DConds, DConds, DStmts), Refusal> {
-    match spec_conds(f.conds, CondKind::Requires, f.params, f.ret) {
+pub open spec fn spec_inside(f: Function, all: Fns, sd: Structs) -> Result<(DConds, DConds, DConds, DStmts), Refusal> {
+    match spec_conds(f.conds, CondKind::Requires, f.params, f.ret, sd) {
         Err(r) => Err(r),
-        Ok(req) => match spec_conds(f.conds, CondKind::Ensures, f.params, f.ret) {
+        Ok(req) => match spec_conds(f.conds, CondKind::Ensures, f.params, f.ret, sd) {
             Err(r) => Err(r),
-            Ok(ens) => match spec_conds(f.conds, CondKind::Decreases, f.params, f.ret) {
+            Ok(ens) => match spec_conds(f.conds, CondKind::Decreases, f.params, f.ret, sd) {
                 Err(r) => Err(r),
                 Ok(dec) => match spec_twice(f) {
                     Some((n, l)) => Err(Refusal::Twice(n, l)),
-                    None => match spec_stmts(f.body, all, f.params, f.params) {
+                    None => match spec_stmts(f.body, all, f.params, f.params, sd) {
                         Err(r) => Err(r),
                         Ok(body) => Ok((req, ens, dec, body)),
                     },
@@ -1011,12 +1114,12 @@ pub open spec fn spec_bounds(ps: Params, line: u32, tail: DConds) -> DConds
 }
 
 /// The model of a function among the functions `all` of its file, decision 0058.
-pub open spec fn spec_function(f: Function, all: Fns) -> Model {
+pub open spec fn spec_function(f: Function, all: Fns, sd: Structs) -> Model {
     match spec_params(f.params, f.line) {
         Err(r) => Model::Refused(r),
         Ok(ps) => match spec_value_ty(f.ret, f.line) {
             Err(r) => Model::Refused(r),
-            Ok(ret) => match spec_inside(f, all) {
+            Ok(ret) => match spec_inside(f, all, sd) {
                 Err(r) => Model::Bare(f.name, ps, ret, r),
                 Ok((req, ens, dec, body)) => Model::Full(
                     Method { name: f.name, params: ps, ret, requires: spec_bounds(f.params, f.line, req), ensures: ens, decreases: dec, body },
@@ -1026,13 +1129,44 @@ pub open spec fn spec_function(f: Function, all: Fns) -> Model {
     }
 }
 
+/// The model of a struct: each field a value type of the subset, decision 0073. A field of a sequence has no rule yet.
+pub open spec fn spec_fields(ps: Params, line: u32) -> Result<DParams, Refusal>
+    decreases ps,
+{
+    match ps {
+        Params::Nil => Ok(DParams::Nil),
+        Params::Cons(n, t, rest) => match spec_value_ty(t, line) {
+            Ok(dt) => match spec_fields(*rest, line) {
+                Ok(dr) => Ok(DParams::Cons(n, dt, Box::new(dr))),
+                Err(r) => Err(r),
+            },
+            Err(r) => Err(r),
+        },
+    }
+}
+
+pub open spec fn spec_structs(sd: Structs) -> StructModels
+    decreases sd,
+{
+    match sd {
+        Structs::Nil => StructModels::Nil,
+        Structs::Cons(k, l, fields, rest) => StructModels::Cons(
+            match spec_fields(fields, l) {
+                Ok(df) => Ok((k, df)),
+                Err(r) => Err(r),
+            },
+            Box::new(spec_structs(*rest)),
+        ),
+    }
+}
+
 /// The models of the functions `fs`, each among the functions `all` of the file.
-pub open spec fn spec_unit(fs: Fns, all: Fns) -> Models
+pub open spec fn spec_unit(fs: Fns, all: Fns, sd: Structs) -> Models
     decreases fs,
 {
     match fs {
         Fns::Nil => Models::Nil,
-        Fns::Cons(f, rest) => Models::Cons(spec_function(*f, all), Box::new(spec_unit(*rest, all))),
+        Fns::Cons(f, rest) => Models::Cons(spec_function(*f, all, sd), Box::new(spec_unit(*rest, all, sd))),
     }
 }
 
@@ -1052,7 +1186,9 @@ pub open spec fn unknown_expr(e: Expr) -> bool
         Expr::Call(_, _, args, _) => unknown_args(*args),
         Expr::Size(a) => unknown_expr(*a),
         Expr::Index(a, i) => unknown_expr(*a) || unknown_expr(*i),
-        Expr::SeqCopy(a, _, _) => unknown_expr(*a),
+        Expr::Copy(a, _, _) => unknown_expr(*a),
+        Expr::Field(a, _) => unknown_expr(*a),
+        Expr::Construct(_, args) => unknown_args(*args),
         Expr::Forall(_, a) => unknown_expr(*a),
         Expr::Chain(_, _, a, b, c) => unknown_expr(*a) || unknown_expr(*b) || unknown_expr(*c),
         _ => false,
@@ -1120,7 +1256,9 @@ pub proof fn lemma_unknown_code_is_refused(e: Expr, line: u32)
                 lemma_unknown_code_is_refused(*i, line);
             }
         },
-        Expr::SeqCopy(a, _, _) => lemma_unknown_code_is_refused(*a, line),
+        Expr::Copy(a, _, _) => lemma_unknown_code_is_refused(*a, line),
+        Expr::Field(a, _) => lemma_unknown_code_is_refused(*a, line),
+        Expr::Construct(_, args) => lemma_unknown_args_is_refused(*args, line),
         _ => {},
     }
 }
@@ -1156,11 +1294,11 @@ pub proof fn lemma_unknown_call_is_refused(e: Expr, all: Fns, line: u32)
     }
 }
 
-pub proof fn lemma_unknown_stmt_is_refused(s: Stmt, all: Fns, env: Params, ps: Params)
+pub proof fn lemma_unknown_stmt_is_refused(s: Stmt, all: Fns, env: Params, ps: Params, sd: Structs)
     requires
         unknown_stmt(s),
     ensures
-        spec_stmt(s, all, env, ps).is_err(),
+        spec_stmt(s, all, env, ps, sd).is_err(),
     decreases s,
 {
     match s {
@@ -1175,9 +1313,9 @@ pub proof fn lemma_unknown_stmt_is_refused(s: Stmt, all: Fns, env: Params, ps: P
             if unknown_expr(c) {
                 lemma_unknown_code_is_refused(c, l);
             } else if unknown_stmts(*t) {
-                lemma_unknown_stmts_is_refused(*t, all, env, ps);
+                lemma_unknown_stmts_is_refused(*t, all, env, ps, sd);
             } else {
-                lemma_unknown_stmts_is_refused(*f, all, env, ps);
+                lemma_unknown_stmts_is_refused(*f, all, env, ps, sd);
             }
         },
         Stmt::Local(_, _, e, l) => {
@@ -1198,37 +1336,37 @@ pub proof fn lemma_unknown_stmt_is_refused(s: Stmt, all: Fns, env: Params, ps: P
             if unknown_expr(c) {
                 lemma_unknown_code_is_refused(c, l);
             } else {
-                lemma_unknown_stmts_is_refused(*body, all, env, ps);
+                lemma_unknown_stmts_is_refused(*body, all, env, ps, sd);
             }
         },
         Stmt::For(init, c, step, _, body, l) => {
             if unknown_stmt(*init) {
-                lemma_unknown_stmt_is_refused(*init, all, env, ps);
+                lemma_unknown_stmt_is_refused(*init, all, env, ps, sd);
             } else if unknown_expr(c) {
                 lemma_unknown_code_is_refused(c, l);
             } else if unknown_stmt(*step) {
-                lemma_unknown_stmt_is_refused(*step, all, spec_scope(*init, env), ps);
+                lemma_unknown_stmt_is_refused(*step, all, spec_scope(*init, env), ps, sd);
             } else {
-                lemma_unknown_stmts_is_refused(*body, all, spec_scope(*init, env), ps);
+                lemma_unknown_stmts_is_refused(*body, all, spec_scope(*init, env), ps, sd);
             }
         },
         _ => {},
     }
 }
 
-pub proof fn lemma_unknown_stmts_is_refused(ss: Stmts, all: Fns, env: Params, ps: Params)
+pub proof fn lemma_unknown_stmts_is_refused(ss: Stmts, all: Fns, env: Params, ps: Params, sd: Structs)
     requires
         unknown_stmts(ss),
     ensures
-        spec_stmts(ss, all, env, ps).is_err(),
+        spec_stmts(ss, all, env, ps, sd).is_err(),
     decreases ss,
 {
     match ss {
         Stmts::Cons(s, rest) => {
             if unknown_stmt(*s) {
-                lemma_unknown_stmt_is_refused(*s, all, env, ps);
+                lemma_unknown_stmt_is_refused(*s, all, env, ps, sd);
             } else {
-                lemma_unknown_stmts_is_refused(*rest, all, spec_scope(*s, env), ps);
+                lemma_unknown_stmts_is_refused(*rest, all, spec_scope(*s, env), ps, sd);
             }
         },
         Stmts::Nil => {},
@@ -1236,13 +1374,13 @@ pub proof fn lemma_unknown_stmts_is_refused(ss: Stmts, all: Fns, env: Params, ps
 }
 
 /// A body that holds a node with no rule never gives a full model. The translator never skips one.
-pub proof fn lemma_unknown_is_refused(f: Function, all: Fns)
+pub proof fn lemma_unknown_is_refused(f: Function, all: Fns, sd: Structs)
     requires
         unknown_stmts(f.body),
     ensures
-        !(spec_function(f, all) is Full),
+        !(spec_function(f, all, sd) is Full),
 {
-    lemma_unknown_stmts_is_refused(f.body, all, f.params, f.params);
+    lemma_unknown_stmts_is_refused(f.body, all, f.params, f.params, sd);
 }
 
 pub open spec fn count_stmts(ss: Stmts) -> nat
@@ -1285,42 +1423,42 @@ pub open spec fn count_dstmt(s: DStmt) -> nat
     }
 }
 
-pub proof fn lemma_stmt_kept(s: Stmt, all: Fns, env: Params, ps: Params)
+pub proof fn lemma_stmt_kept(s: Stmt, all: Fns, env: Params, ps: Params, sd: Structs)
     requires
-        spec_stmt(s, all, env, ps).is_ok(),
+        spec_stmt(s, all, env, ps, sd).is_ok(),
     ensures
-        count_dstmt(spec_stmt(s, all, env, ps).unwrap()) == count_stmt(s),
+        count_dstmt(spec_stmt(s, all, env, ps, sd).unwrap()) == count_stmt(s),
     decreases s,
 {
     match s {
         Stmt::If(_, t, f, _) => {
-            lemma_statements_kept(*t, all, env, ps);
-            lemma_statements_kept(*f, all, env, ps);
+            lemma_statements_kept(*t, all, env, ps, sd);
+            lemma_statements_kept(*f, all, env, ps, sd);
         },
         Stmt::While(_, _, body, _) => {
-            lemma_statements_kept(*body, all, env, ps);
+            lemma_statements_kept(*body, all, env, ps, sd);
         },
         Stmt::For(init, _, step, _, body, _) => {
-            lemma_stmt_kept(*init, all, env, ps);
-            lemma_stmt_kept(*step, all, spec_scope(*init, env), ps);
-            lemma_statements_kept(*body, all, spec_scope(*init, env), ps);
+            lemma_stmt_kept(*init, all, env, ps, sd);
+            lemma_stmt_kept(*step, all, spec_scope(*init, env), ps, sd);
+            lemma_statements_kept(*body, all, spec_scope(*init, env), ps, sd);
         },
         _ => {},
     }
 }
 
 /// A translated body has one Dafny statement for each C++ statement, branches and loops included.
-pub proof fn lemma_statements_kept(ss: Stmts, all: Fns, env: Params, ps: Params)
+pub proof fn lemma_statements_kept(ss: Stmts, all: Fns, env: Params, ps: Params, sd: Structs)
     requires
-        spec_stmts(ss, all, env, ps).is_ok(),
+        spec_stmts(ss, all, env, ps, sd).is_ok(),
     ensures
-        count_dstmts(spec_stmts(ss, all, env, ps).unwrap()) == count_stmts(ss),
+        count_dstmts(spec_stmts(ss, all, env, ps, sd).unwrap()) == count_stmts(ss),
     decreases ss,
 {
     match ss {
         Stmts::Cons(s, rest) => {
-            lemma_stmt_kept(*s, all, env, ps);
-            lemma_statements_kept(*rest, all, spec_scope(*s, env), ps);
+            lemma_stmt_kept(*s, all, env, ps, sd);
+            lemma_statements_kept(*rest, all, spec_scope(*s, env), ps, sd);
         },
         Stmts::Nil => {},
     }
@@ -1364,58 +1502,58 @@ pub open spec fn calls_resolve_stmt(s: DStmt, all: Fns) -> bool
     }
 }
 
-pub proof fn lemma_stmt_calls_resolve(s: Stmt, all: Fns, env: Params, ps: Params)
+pub proof fn lemma_stmt_calls_resolve(s: Stmt, all: Fns, env: Params, ps: Params, sd: Structs)
     requires
-        spec_stmt(s, all, env, ps).is_ok(),
+        spec_stmt(s, all, env, ps, sd).is_ok(),
     ensures
-        calls_resolve_stmt(spec_stmt(s, all, env, ps).unwrap(), all),
+        calls_resolve_stmt(spec_stmt(s, all, env, ps, sd).unwrap(), all),
     decreases s,
 {
     match s {
         Stmt::If(_, t, f, _) => {
-            lemma_stmts_calls_resolve(*t, all, env, ps);
-            lemma_stmts_calls_resolve(*f, all, env, ps);
+            lemma_stmts_calls_resolve(*t, all, env, ps, sd);
+            lemma_stmts_calls_resolve(*f, all, env, ps, sd);
         },
         Stmt::While(_, _, body, _) => {
-            lemma_stmts_calls_resolve(*body, all, env, ps);
+            lemma_stmts_calls_resolve(*body, all, env, ps, sd);
         },
         Stmt::For(init, _, step, _, body, _) => {
-            lemma_stmt_calls_resolve(*init, all, env, ps);
-            lemma_stmt_calls_resolve(*step, all, spec_scope(*init, env), ps);
-            lemma_stmts_calls_resolve(*body, all, spec_scope(*init, env), ps);
+            lemma_stmt_calls_resolve(*init, all, env, ps, sd);
+            lemma_stmt_calls_resolve(*step, all, spec_scope(*init, env), ps, sd);
+            lemma_stmts_calls_resolve(*body, all, spec_scope(*init, env), ps, sd);
         },
         _ => {},
     }
 }
 
-pub proof fn lemma_stmts_calls_resolve(ss: Stmts, all: Fns, env: Params, ps: Params)
+pub proof fn lemma_stmts_calls_resolve(ss: Stmts, all: Fns, env: Params, ps: Params, sd: Structs)
     requires
-        spec_stmts(ss, all, env, ps).is_ok(),
+        spec_stmts(ss, all, env, ps, sd).is_ok(),
     ensures
-        calls_resolve(spec_stmts(ss, all, env, ps).unwrap(), all),
+        calls_resolve(spec_stmts(ss, all, env, ps, sd).unwrap(), all),
     decreases ss,
 {
     match ss {
         Stmts::Cons(s, rest) => {
-            lemma_stmt_calls_resolve(*s, all, env, ps);
-            lemma_stmts_calls_resolve(*rest, all, spec_scope(*s, env), ps);
+            lemma_stmt_calls_resolve(*s, all, env, ps, sd);
+            lemma_stmts_calls_resolve(*rest, all, spec_scope(*s, env), ps, sd);
         },
         Stmts::Nil => {},
     }
 }
 
 /// A key with a signature in the subset has a method among the models of the file.
-pub proof fn lemma_callable_has_method(fs: Fns, all: Fns, key: u32)
+pub proof fn lemma_callable_has_method(fs: Fns, all: Fns, key: u32, sd: Structs)
     requires
         spec_callable(fs, key),
     ensures
-        has_method(spec_unit(fs, all), key),
+        has_method(spec_unit(fs, all, sd), key),
     decreases fs,
 {
     match fs {
         Fns::Cons(f, rest) => {
             if !(f.name == key && has_signature(*f)) {
-                lemma_callable_has_method(*rest, all, key);
+                lemma_callable_has_method(*rest, all, key, sd);
             }
         },
         Fns::Nil => {},
@@ -1423,16 +1561,16 @@ pub proof fn lemma_callable_has_method(fs: Fns, all: Fns, key: u32)
 }
 
 /// Each call in a full method of the file names a method of the model of the file, so the Dafny file resolves.
-pub proof fn lemma_calls_resolve(f: Function, all: Fns)
+pub proof fn lemma_calls_resolve(f: Function, all: Fns, sd: Structs)
     requires
-        spec_function(f, all) is Full,
+        spec_function(f, all, sd) is Full,
     ensures
-        calls_resolve(spec_function(f, all)->Full_0.body, all),
-        forall|k: u32| spec_callable(all, k) ==> #[trigger] has_method(spec_unit(all, all), k),
+        calls_resolve(spec_function(f, all, sd)->Full_0.body, all),
+        forall|k: u32| spec_callable(all, k) ==> #[trigger] has_method(spec_unit(all, all, sd), k),
 {
-    lemma_stmts_calls_resolve(f.body, all, f.params, f.params);
-    assert forall|k: u32| spec_callable(all, k) implies #[trigger] has_method(spec_unit(all, all), k) by {
-        lemma_callable_has_method(all, all, k);
+    lemma_stmts_calls_resolve(f.body, all, f.params, f.params, sd);
+    assert forall|k: u32| spec_callable(all, k) implies #[trigger] has_method(spec_unit(all, all, sd), k) by {
+        lemma_callable_has_method(all, all, k, sd);
     }
 }
 
@@ -1450,6 +1588,7 @@ pub fn translate_ty(t: Ty, line: u32) -> (r: Result<DTy, Refusal>)
         Ty::U64 => Ok(DTy::UInt64),
         Ty::Bool => Ok(DTy::Bool),
         Ty::Seq(s, _) => Ok(DTy::Seq(s)),
+        Ty::Struct(k) => Ok(DTy::Struct(k)),
         Ty::Other(k) => Err(Refusal::Construct(k, line)),
     }
 }
@@ -1484,6 +1623,7 @@ pub fn copy_ok(from: Ty, to: Ty) -> (r: bool)
 {
     match (from, to) {
         (Ty::Seq(s1, e1), Ty::Seq(s2, e2)) => s1 == s2 && (e2 == Extent::Dynamic || e1 == e2),
+        (Ty::Struct(a), Ty::Struct(b)) => a == b,
         _ => false,
     }
 }
@@ -1565,10 +1705,18 @@ pub fn translate_code(e: &Expr, line: u32) -> (r: Result<DExpr, Refusal>)
             },
             Err(r) => Err(r),
         },
-        Expr::SeqCopy(a, from, to) => if copy_ok(*from, *to) {
+        Expr::Copy(a, from, to) => if copy_ok(*from, *to) {
             translate_code(a, line)
         } else {
             Err(Refusal::Extent(line))
+        },
+        Expr::Field(o, f) => match translate_code(o, line) {
+            Ok(d) => Ok(DExpr::Field(Box::new(d), *f)),
+            Err(r) => Err(r),
+        },
+        Expr::Construct(k, args) => match translate_args(args, line) {
+            Ok(da) => Ok(DExpr::Ctor(*k, Box::new(da))),
+            Err(r) => Err(r),
         },
         Expr::Name(n) => Err(Refusal::Name(*n, line)),
         Expr::Unknown(k, l) => Err(Refusal::Construct(*k, *l)),
@@ -1625,9 +1773,9 @@ pub fn translate_leaf(d: DExpr, t: Ty, line: u32) -> (r: Result<DExpr, Refusal>)
     }
 }
 
-pub fn translate_contract(e: &Expr, decl: &Names, ps: &Params, ret: Option<Ty>, bound: &Names, line: u32) -> (r: Result<DExpr, Refusal>)
+pub fn translate_contract(e: &Expr, decl: &Names, ps: &Params, ret: Option<Ty>, bound: &Names, line: u32, sd: &Structs) -> (r: Result<DExpr, Refusal>)
     ensures
-        r == spec_contract(*e, *decl, *ps, ret, *bound, line),
+        r == spec_contract(*e, *decl, *ps, ret, *bound, line, *sd),
     decreases e,
 {
     match e {
@@ -1644,28 +1792,28 @@ pub fn translate_contract(e: &Expr, decl: &Names, ps: &Params, ret: Option<Ty>, 
             Some(t) => translate_leaf(DExpr::Result, t, line),
             None => Err(Refusal::Syntax(line)),
         },
-        Expr::Bin(op, a, b) => match translate_contract(a, decl, ps, ret, bound, line) {
-            Ok(da) => match translate_contract(b, decl, ps, ret, bound, line) {
+        Expr::Bin(op, a, b) => match translate_contract(a, decl, ps, ret, bound, line, sd) {
+            Ok(da) => match translate_contract(b, decl, ps, ret, bound, line, sd) {
                 Ok(db) => Ok(DExpr::Bin(*op, Box::new(da), Box::new(db))),
                 Err(r) => Err(r),
             },
             Err(r) => Err(r),
         },
-        Expr::Not(a) => match translate_contract(a, decl, ps, ret, bound, line) {
+        Expr::Not(a) => match translate_contract(a, decl, ps, ret, bound, line, sd) {
             Ok(da) => Ok(DExpr::Not(Box::new(da))),
             Err(r) => Err(r),
         },
-        Expr::Neg(a) => match translate_contract(a, decl, ps, ret, bound, line) {
+        Expr::Neg(a) => match translate_contract(a, decl, ps, ret, bound, line, sd) {
             Ok(da) => Ok(DExpr::Neg(Box::new(da))),
             Err(r) => Err(r),
         },
-        Expr::Paren(a) => translate_contract(a, decl, ps, ret, bound, line),
+        Expr::Paren(a) => translate_contract(a, decl, ps, ret, bound, line, sd),
         Expr::Size(o) => match seq_name(o, decl, ps, ret, bound, line) {
             Ok((p, _)) => Ok(DExpr::Len(Box::new(DExpr::Var(p)))),
             Err(r) => Err(r),
         },
         Expr::Index(o, i) => match seq_name(o, decl, ps, ret, bound, line) {
-            Ok((p, s)) => match translate_contract(i, decl, ps, ret, bound, line) {
+            Ok((p, s)) => match translate_contract(i, decl, ps, ret, bound, line, sd) {
                 Ok(di) => translate_leaf(DExpr::Index(Box::new(DExpr::Var(p)), Box::new(di)), elem(s), line),
                 Err(r) => Err(r),
             },
@@ -1673,15 +1821,19 @@ pub fn translate_contract(e: &Expr, decl: &Names, ps: &Params, ret: Option<Ty>, 
         },
         Expr::Forall(j, body) => {
             let inner = Names::Cons(*j, Box::new(copy_names(bound)));
-            match translate_contract(body, decl, ps, ret, &inner, line) {
+            match translate_contract(body, decl, ps, ret, &inner, line, sd) {
                 Ok(db) => Ok(DExpr::Forall(*j, Box::new(db))),
                 Err(r) => Err(r),
             }
         },
+        Expr::Field(_, _) => match path(e, decl, ps, ret, bound, line, sd) {
+            Ok((d, t)) => translate_leaf(d, t, line),
+            Err(r) => Err(r),
+        },
         Expr::Chain(o1, o2, a, b, c) => if chain_ok(*o1, *o2) {
-            match translate_contract(a, decl, ps, ret, bound, line) {
-                Ok(da) => match translate_contract(b, decl, ps, ret, bound, line) {
-                    Ok(db) => match translate_contract(c, decl, ps, ret, bound, line) {
+            match translate_contract(a, decl, ps, ret, bound, line, sd) {
+                Ok(da) => match translate_contract(b, decl, ps, ret, bound, line, sd) {
+                    Ok(db) => match translate_contract(c, decl, ps, ret, bound, line, sd) {
                         Ok(dc) => Ok(DExpr::Chain(*o1, *o2, Box::new(da), Box::new(db), Box::new(dc))),
                         Err(r) => Err(r),
                     },
@@ -1693,6 +1845,70 @@ pub fn translate_contract(e: &Expr, decl: &Names, ps: &Params, ret: Option<Ty>, 
             Err(Refusal::Syntax(line))
         },
         Expr::Unknown(k, l) => Err(Refusal::Construct(*k, *l)),
+        _ => Err(Refusal::Syntax(line)),
+    }
+}
+
+pub fn field_ty(sd: &Structs, k: u32, f: u32) -> (r: Option<Ty>)
+    ensures
+        r == spec_field_ty(*sd, k, f),
+    decreases sd,
+{
+    match sd {
+        Structs::Nil => None,
+        Structs::Cons(key, _, fields, rest) => if *key == k {
+            lookup(fields, f)
+        } else {
+            field_ty(rest, k, f)
+        },
+    }
+}
+
+pub fn lookup(ps: &Params, name: u32) -> (r: Option<Ty>)
+    ensures
+        r == spec_lookup(*ps, name),
+    decreases ps,
+{
+    match ps {
+        Params::Nil => None,
+        Params::Cons(n, t, rest) => if *n == name {
+            Some(*t)
+        } else {
+            lookup(rest, name)
+        },
+    }
+}
+
+pub fn path(e: &Expr, decl: &Names, ps: &Params, ret: Option<Ty>, bound: &Names, line: u32, sd: &Structs) -> (r: Result<(DExpr, Ty), Refusal>)
+    ensures
+        r == spec_path(*e, *decl, *ps, ret, *bound, line, *sd),
+    decreases e,
+{
+    match e {
+        Expr::Name(n) => if has(bound, *n) {
+            Err(Refusal::Syntax(line))
+        } else {
+            match rebind(decl, ps, *n) {
+                Some((p, t)) => Ok((DExpr::Var(p), t)),
+                None => match ret {
+                    Some(_) => Err(Refusal::Name(*n, line)),
+                    None => Err(Refusal::NoVar(*n, line)),
+                },
+            }
+        },
+        Expr::Result => match ret {
+            Some(t) => Ok((DExpr::Result, t)),
+            None => Err(Refusal::Syntax(line)),
+        },
+        Expr::Paren(a) => path(a, decl, ps, ret, bound, line, sd),
+        Expr::Field(o, f) => match path(o, decl, ps, ret, bound, line, sd) {
+            Ok((d, Ty::Struct(k))) => match field_ty(sd, k, *f) {
+                Some(ft) => Ok((DExpr::Field(Box::new(d), *f), ft)),
+                None => Err(Refusal::NoField(*f, line)),
+            },
+            Ok(_) => Err(Refusal::Syntax(line)),
+            Err(r) => Err(r),
+        },
         _ => Err(Refusal::Syntax(line)),
     }
 }
@@ -1855,9 +2071,9 @@ pub fn is_param(ps: &Params, name: u32) -> (r: bool)
     }
 }
 
-pub fn translate_loop_conds(cs: &Conds, want: CondKind, env: &Params) -> (r: Result<DConds, Refusal>)
+pub fn translate_loop_conds(cs: &Conds, want: CondKind, env: &Params, sd: &Structs) -> (r: Result<DConds, Refusal>)
     ensures
-        r == spec_loop_conds(*cs, want, *env),
+        r == spec_loop_conds(*cs, want, *env, *sd),
     decreases cs,
 {
     match cs {
@@ -1867,9 +2083,9 @@ pub fn translate_loop_conds(cs: &Conds, want: CondKind, env: &Params) -> (r: Res
             CondKind::Bad(r) => Err(*r),
             CondKind::Requires => Err(Refusal::Misplaced(*l)),
             CondKind::Ensures => Err(Refusal::Misplaced(*l)),
-            _ => match translate_loop_conds(rest, want, env) {
+            _ => match translate_loop_conds(rest, want, env, sd) {
                 Ok(dr) => if *k == want {
-                    match translate_contract(e, &names_of(env), env, None, &Names::Nil, *l) {
+                    match translate_contract(e, &names_of(env), env, None, &Names::Nil, *l, sd) {
                         Ok(d) => Ok(DConds::Cons(d, *l, Box::new(dr))),
                         Err(r) => Err(r),
                     }
@@ -1882,9 +2098,9 @@ pub fn translate_loop_conds(cs: &Conds, want: CondKind, env: &Params) -> (r: Res
     }
 }
 
-pub fn translate_stmt(s: &Stmt, all: &Fns, env: &Params, ps: &Params) -> (r: Result<DStmt, Refusal>)
+pub fn translate_stmt(s: &Stmt, all: &Fns, env: &Params, ps: &Params, sd: &Structs) -> (r: Result<DStmt, Refusal>)
     ensures
-        r == spec_stmt(*s, *all, *env, *ps),
+        r == spec_stmt(*s, *all, *env, *ps, *sd),
     decreases s,
 {
     match s {
@@ -1899,8 +2115,8 @@ pub fn translate_stmt(s: &Stmt, all: &Fns, env: &Params, ps: &Params) -> (r: Res
             },
         },
         Stmt::If(c, t, f, l) => match translate_code(c, *l) {
-            Ok(dc) => match translate_stmts(t, all, env, ps) {
-                Ok(dt) => match translate_stmts(f, all, env, ps) {
+            Ok(dc) => match translate_stmts(t, all, env, ps, sd) {
+                Ok(dt) => match translate_stmts(f, all, env, ps, sd) {
                     Ok(df) => Ok(DStmt::If(dc, Box::new(dt), Box::new(df))),
                     Err(r) => Err(r),
                 },
@@ -1950,13 +2166,13 @@ pub fn translate_stmt(s: &Stmt, all: &Fns, env: &Params, ps: &Params) -> (r: Res
                 },
             }
         },
-        Stmt::While(c, lc, body, l) => match translate_loop_conds(lc, CondKind::Invariant, env) {
+        Stmt::While(c, lc, body, l) => match translate_loop_conds(lc, CondKind::Invariant, env, sd) {
             Err(r) => Err(r),
-            Ok(inv) => match translate_loop_conds(lc, CondKind::Decreases, env) {
+            Ok(inv) => match translate_loop_conds(lc, CondKind::Decreases, env, sd) {
                 Err(r) => Err(r),
                 Ok(dec) => match translate_code(c, *l) {
                     Err(r) => Err(r),
-                    Ok(dc) => match translate_stmts(body, all, env, ps) {
+                    Ok(dc) => match translate_stmts(body, all, env, ps, sd) {
                         Err(r) => Err(r),
                         Ok(db) => Ok(DStmt::While(dc, inv, dec, Box::new(db))),
                     },
@@ -1965,17 +2181,17 @@ pub fn translate_stmt(s: &Stmt, all: &Fns, env: &Params, ps: &Params) -> (r: Res
         },
         Stmt::For(init, c, step, lc, body, l) => {
             let inner = scope(init, env);
-            match translate_loop_conds(lc, CondKind::Invariant, &inner) {
+            match translate_loop_conds(lc, CondKind::Invariant, &inner, sd) {
                 Err(r) => Err(r),
-                Ok(inv) => match translate_loop_conds(lc, CondKind::Decreases, &inner) {
+                Ok(inv) => match translate_loop_conds(lc, CondKind::Decreases, &inner, sd) {
                     Err(r) => Err(r),
-                    Ok(dec) => match translate_stmt(init, all, env, ps) {
+                    Ok(dec) => match translate_stmt(init, all, env, ps, sd) {
                         Err(r) => Err(r),
                         Ok(di) => match translate_code(c, *l) {
                             Err(r) => Err(r),
-                            Ok(dc) => match translate_stmt(step, all, &inner, ps) {
+                            Ok(dc) => match translate_stmt(step, all, &inner, ps, sd) {
                                 Err(r) => Err(r),
-                                Ok(ds) => match translate_stmts(body, all, &inner, ps) {
+                                Ok(ds) => match translate_stmts(body, all, &inner, ps, sd) {
                                     Err(r) => Err(r),
                                     Ok(db) => Ok(DStmt::For(Box::new(di), place(init), dc, inv, dec, Box::new(db), Box::new(ds), place(step))),
                                 },
@@ -1989,15 +2205,15 @@ pub fn translate_stmt(s: &Stmt, all: &Fns, env: &Params, ps: &Params) -> (r: Res
     }
 }
 
-pub fn translate_stmts(ss: &Stmts, all: &Fns, env: &Params, ps: &Params) -> (r: Result<DStmts, Refusal>)
+pub fn translate_stmts(ss: &Stmts, all: &Fns, env: &Params, ps: &Params, sd: &Structs) -> (r: Result<DStmts, Refusal>)
     ensures
-        r == spec_stmts(*ss, *all, *env, *ps),
+        r == spec_stmts(*ss, *all, *env, *ps, *sd),
     decreases ss,
 {
     match ss {
         Stmts::Nil => Ok(DStmts::Nil),
-        Stmts::Cons(s, rest) => match translate_stmt(s, all, env, ps) {
-            Ok(d) => match translate_stmts(rest, all, &scope(s, env), ps) {
+        Stmts::Cons(s, rest) => match translate_stmt(s, all, env, ps, sd) {
+            Ok(d) => match translate_stmts(rest, all, &scope(s, env), ps, sd) {
                 Ok(dr) => Ok(DStmts::Cons(Box::new(d), place(s), Box::new(dr))),
                 Err(r) => Err(r),
             },
@@ -2025,9 +2241,9 @@ pub fn has_result(e: &Expr) -> (r: bool)
     }
 }
 
-pub fn translate_conds(cs: &Conds, want: CondKind, ps: &Params, ret: Ty) -> (r: Result<DConds, Refusal>)
+pub fn translate_conds(cs: &Conds, want: CondKind, ps: &Params, ret: Ty, sd: &Structs) -> (r: Result<DConds, Refusal>)
     ensures
-        r == spec_conds(*cs, want, *ps, ret),
+        r == spec_conds(*cs, want, *ps, ret, *sd),
     decreases cs,
 {
     match cs {
@@ -2036,11 +2252,11 @@ pub fn translate_conds(cs: &Conds, want: CondKind, ps: &Params, ret: Ty) -> (r: 
             CondKind::Other(w) => Err(Refusal::Construct(*w, *l)),
             CondKind::Bad(r) => Err(*r),
             CondKind::Invariant => Err(Refusal::Misplaced(*l)),
-            _ => match translate_conds(rest, want, ps, ret) {
+            _ => match translate_conds(rest, want, ps, ret, sd) {
                 Ok(dr) => if *k == want && *k == CondKind::Decreases && has_result(e) {
                     Err(Refusal::Syntax(*l))
                 } else if *k == want {
-                    match translate_contract(e, decl, ps, Some(ret), &Names::Nil, *l) {
+                    match translate_contract(e, decl, ps, Some(ret), &Names::Nil, *l, sd) {
                         Ok(d) => Ok(DConds::Cons(d, *l, Box::new(dr))),
                         Err(r) => Err(r),
                     }
@@ -2163,19 +2379,19 @@ pub fn twice(f: &Function) -> (r: Option<(u32, u32)>)
     }
 }
 
-pub fn translate_inside(f: &Function, all: &Fns) -> (r: Result<(DConds, DConds, DConds, DStmts), Refusal>)
+pub fn translate_inside(f: &Function, all: &Fns, sd: &Structs) -> (r: Result<(DConds, DConds, DConds, DStmts), Refusal>)
     ensures
-        r == spec_inside(*f, *all),
+        r == spec_inside(*f, *all, *sd),
 {
-    match translate_conds(&f.conds, CondKind::Requires, &f.params, f.ret) {
+    match translate_conds(&f.conds, CondKind::Requires, &f.params, f.ret, sd) {
         Err(r) => Err(r),
-        Ok(req) => match translate_conds(&f.conds, CondKind::Ensures, &f.params, f.ret) {
+        Ok(req) => match translate_conds(&f.conds, CondKind::Ensures, &f.params, f.ret, sd) {
             Err(r) => Err(r),
-            Ok(ens) => match translate_conds(&f.conds, CondKind::Decreases, &f.params, f.ret) {
+            Ok(ens) => match translate_conds(&f.conds, CondKind::Decreases, &f.params, f.ret, sd) {
                 Err(r) => Err(r),
                 Ok(dec) => match twice(f) {
                     Some((n, l)) => Err(Refusal::Twice(n, l)),
-                    None => match translate_stmts(&f.body, all, &f.params, &f.params) {
+                    None => match translate_stmts(&f.body, all, &f.params, &f.params, sd) {
                         Err(r) => Err(r),
                         Ok(body) => Ok((req, ens, dec, body)),
                     },
@@ -2209,15 +2425,15 @@ pub fn bounds(ps: &Params, line: u32, tail: DConds) -> (r: DConds)
 }
 
 /// The model of one function among the functions `all` of its file.
-pub fn translate_function(f: &Function, all: &Fns) -> (r: Model)
+pub fn translate_function(f: &Function, all: &Fns, sd: &Structs) -> (r: Model)
     ensures
-        r == spec_function(*f, *all),
+        r == spec_function(*f, *all, *sd),
 {
     match translate_params(&f.params, f.line) {
         Err(r) => Model::Refused(r),
         Ok(ps) => match translate_value_ty(f.ret, f.line) {
             Err(r) => Model::Refused(r),
-            Ok(ret) => match translate_inside(f, all) {
+            Ok(ret) => match translate_inside(f, all, sd) {
                 Err(r) => Model::Bare(f.name, ps, ret, r),
                 Ok((req, ens, dec, body)) => Model::Full(
                     Method { name: f.name, params: ps, ret, requires: bounds(&f.params, f.line, req), ensures: ens, decreases: dec, body },
@@ -2227,23 +2443,58 @@ pub fn translate_function(f: &Function, all: &Fns) -> (r: Model)
     }
 }
 
-fn translate_each(fs: &Fns, all: &Fns) -> (r: Models)
+fn translate_each(fs: &Fns, all: &Fns, sd: &Structs) -> (r: Models)
     ensures
-        r == spec_unit(*fs, *all),
+        r == spec_unit(*fs, *all, *sd),
     decreases fs,
 {
     match fs {
         Fns::Nil => Models::Nil,
-        Fns::Cons(f, rest) => Models::Cons(translate_function(f, all), Box::new(translate_each(rest, all))),
+        Fns::Cons(f, rest) => Models::Cons(translate_function(f, all, sd), Box::new(translate_each(rest, all, sd))),
+    }
+}
+
+fn translate_fields(ps: &Params, line: u32) -> (r: Result<DParams, Refusal>)
+    ensures
+        r == spec_fields(*ps, line),
+    decreases ps,
+{
+    match ps {
+        Params::Nil => Ok(DParams::Nil),
+        Params::Cons(n, t, rest) => match translate_value_ty(*t, line) {
+            Ok(dt) => match translate_fields(rest, line) {
+                Ok(dr) => Ok(DParams::Cons(*n, dt, Box::new(dr))),
+                Err(r) => Err(r),
+            },
+            Err(r) => Err(r),
+        },
+    }
+}
+
+/// The models of the structs of one file, in their order.
+pub fn translate_structs(sd: &Structs) -> (r: StructModels)
+    ensures
+        r == spec_structs(*sd),
+    decreases sd,
+{
+    match sd {
+        Structs::Nil => StructModels::Nil,
+        Structs::Cons(k, l, fields, rest) => {
+            let m = match translate_fields(fields, *l) {
+                Ok(df) => Ok((*k, df)),
+                Err(r) => Err(r),
+            };
+            StructModels::Cons(m, Box::new(translate_structs(rest)))
+        },
     }
 }
 
 /// The models of the functions of one file, in their order.
-pub fn translate_unit(all: &Fns) -> (r: Models)
+pub fn translate_unit(all: &Fns, sd: &Structs) -> (r: Models)
     ensures
-        r == spec_unit(*all, *all),
+        r == spec_unit(*all, *all, *sd),
 {
-    translate_each(all, all)
+    translate_each(all, all, sd)
 }
 
 // ------------------------------------------------------------------ the contract parser
