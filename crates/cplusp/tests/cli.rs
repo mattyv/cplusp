@@ -2330,6 +2330,42 @@ fn prove_names_a_recursion_whose_measure_may_not_decrease() {
     assert!(text.lines().any(|l| l.starts_with("Not provable: ") && l.ends_with(want)), "{text}");
 }
 
+/// A struct of scalars is a Dafny datatype, decision 0073. Field reads, braced values, nested structs and a copy to a parameter prove.
+#[test]
+fn structs_of_scalars_prove() {
+    let Some(dafny) = dafny() else { return };
+    if !clang_tidy_available() {
+        return;
+    }
+    let o = prove("model-struct.cpp", &[], &dafny);
+    let text = stdout(&o);
+    assert_eq!(o.status.code(), Some(0), "stdout: {text} stderr: {}", stderr(&o));
+    assert_eq!(text.lines().last(), Some("ok: proved"), "{text}");
+}
+
+/// Each struct with no rule is refused at its line, decision 0073.
+#[test]
+fn structs_with_no_rule_are_refused_at_their_lines() {
+    if !clang_tidy_available() {
+        return;
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let (o, _) = model("model-struct-refuse.cpp", dir.path());
+    let text = stdout(&o);
+    assert_eq!(o.status.code(), Some(1), "stdout: {text} stderr: {}", stderr(&o));
+    let refusals: Vec<&str> = text.lines().filter(|l| l.starts_with("Not provable: ")).collect();
+    for (line, expected) in [
+        (8, "Handle: the translator has no rule for it yet."),
+        (18, "BinaryOperator =: the translator has no rule for it yet."),
+        (22, "z in the contract is no field of the struct."),
+        (28, "ImplicitValueInitExpr: the translator has no rule for it yet."),
+    ] {
+        let want = format!("model-struct-refuse.cpp:{line}: {expected}");
+        assert!(refusals.iter().any(|l| l.ends_with(&want)), "{want}: {text}");
+    }
+    assert_eq!(refusals.len(), 4, "{text}");
+}
+
 /// Pull `"key":"value"` or `"key":123` out of one JSON line without a JSON library.
 fn field(line: &str, key: &str) -> String {
     let needle = format!("\"{key}\":");
