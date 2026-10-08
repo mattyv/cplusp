@@ -1,12 +1,38 @@
 ---
 name: cplusp-dafny
-description: Rules for writing the Dafny model of a C+P function by hand, one rule per known divergence between C++ and Dafny. Use when writing or reviewing Dafny for cplusp.
+description: Develop and review C+P subsystem contracts, composition proofs and hand-written Dafny models. Use when planning verified C++ changes, reviewing proof scope, or modelling C++ behavior in Dafny.
 ---
 
 # Writing Dafny for C+P
 
-A case in `divergence/dafny/cases/` found every rule here. The case shows the naive model, the divergence, and the mitigation. Follow the rules. When a construct has no rule, stop and write the case first. For the right way under each row the policy allows, read `examples/<row>/`: the C++ with its contract, and the Dafny for it.
+The divergence rules below come from cases in `divergence/dafny/cases/`. The case shows the naive model, the divergence, and the mitigation. Follow the rules. When a construct has no rule, stop and write the case first. For the right way under each row the policy allows, read `examples/<row>/`: the C++ with its contract, and the Dafny for it.
 
+## Whole-program development
+Read [the research report](../../docs/research/formal-verification-llm-coding-report.md) and [the FAQ](../../docs/formal-proof-faq.md) for proof scope and evidence.
+1. Write the subsystem requirement before choosing helpers.
+2. Derive component contracts with input ranges, required results and permitted state effects.
+3. Review whether the contracts cover the requirement. Sorting needs order and preservation of elements, including duplicates.
+4. Prove each body and each caller's callee preconditions.
+5. Prove that composition establishes the subsystem requirement. Check initialization and every public entry point.
+6. Record trusted dependencies, target assumptions and unproved obligations.
+7. Run executable tests, translation regression cases and all relevant proofs after changes.
+8. Report guarantees, remaining assumptions and bounds used by bounded checks.
+Treat a plan as implementation guidance and a formal contract as a machine-checkable requirement.
+Do not weaken contracts, restrict valid inputs or add assumptions merely to make proofs pass.
+Report requirement changes and any code excluded from verification.
+Describe each stateful component's input and output State values. Specify changed fields and preserve the others.
+Check aliasing against C++ rules before using the value model. Use stable module contracts to hide implementation details.
+For loops, prove invariant initialization, preservation, checks inside the loop and the result at exit.
+Prove termination with a valid decreases measure when required.
+Keep ghost calculations and lemmas separate from executable behavior. They must not silently replace C++ computations.
+Validate arithmetic types, promotions, casts, control flow and state updates against the C++.
+Distinguish hand-written models from automatic translation. These rules include features beyond the current translator slice.
+Check the latest numbered decisions before claiming translator support. Unsupported automatic translation must remain a refusal.
+Do not substitute a hand-written model and report the C++ as automatically verified.
+Report translation acceptance, proof outcome and executable test outcome separately.
+A successful model command is not a successful proof. A Dafny proof needs faithful translation to establish C++ behavior.
+Use the report's pilot method to measure correctness, time and cost.
+Treat SPARK guidance as an engineering method, not an LLM performance measurement.
 ## signed_overflow
 
 Map `int32_t` to `newtype int32 = x: int | -0x8000_0000 <= x < 0x8000_0000`, never to `int`.
@@ -33,7 +59,7 @@ For a signed target type, see `narrowing_cast`.
 
 ## signed_division
 
-Dafny `/` and `%` round toward negative infinity, and C++ rounds toward zero.
+Dafny uses Euclidean division with a nonnegative remainder. C++ signed division truncates toward zero.
 Never carry `/` or `%` over on signed values.
 Use `trunc_div(a, b)` and `trunc_rem(a, b)`, which divide the absolute values and then set the sign.
 The contract must require `b != 0`.
