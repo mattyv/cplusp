@@ -75,6 +75,8 @@ enum JExpr {
     Paren(Box<JExpr>),
     Brace(Box<JExpr>),
     Size(Box<JExpr>),
+    Empty(Box<JExpr>),
+    Subspan(Box<JExpr>, Box<JExpr>),
     Copy(Box<JExpr>, JTy, JTy),
     Field(Box<JExpr>, String),
     HasValue(Box<JExpr>),
@@ -247,6 +249,8 @@ fn expr(e: JExpr, names: &mut Names) -> Expr {
         JExpr::Paren(a) => Expr::Paren(Box::new(expr(*a, names))),
         JExpr::Brace(a) => Expr::Brace(Box::new(expr(*a, names))),
         JExpr::Size(a) => Expr::Size(Box::new(expr(*a, names))),
+        JExpr::Empty(a) => Expr::Empty(Box::new(expr(*a, names))),
+        JExpr::Subspan(a, k) => Expr::Subspan(Box::new(expr(*a, names)), Box::new(expr(*k, names))),
         JExpr::Copy(a, from, to) => Expr::Copy(Box::new(expr(*a, names)), ty(from, names), ty(to, names)),
         JExpr::Field(a, f) => Expr::Field(Box::new(expr(*a, names)), names.id(&f)),
         JExpr::HasValue(a) => Expr::HasValue(Box::new(expr(*a, names))),
@@ -327,7 +331,7 @@ fn lex(text: &str, line: u32, names: &mut Names) -> Vec<Tok> {
             let end = word_end(|ch| ch.is_ascii_digit());
             toks.push(rest[..end].parse().map_or_else(|_| Tok::Unknown(names.id("a number above 18446744073709551615"), line), Tok::Int));
             rest = &rest[end..];
-        } else if let Some(t) = [(".size()", Tok::Size), (".has_value()", Tok::HasValue), (".value()", Tok::Value), ("::", Tok::ColonColon)].into_iter().find(|(s, _)| rest.starts_with(s)) {
+        } else if let Some(t) = [(".size()", Tok::Size), (".empty()", Tok::Empty), (".has_value()", Tok::HasValue), (".value()", Tok::Value), ("::", Tok::ColonColon)].into_iter().find(|(s, _)| rest.starts_with(s)) {
             rest = &rest[t.0.len()..];
             toks.push(t.1);
         } else if c == '.' && rest[1..].starts_with(|ch: char| ch.is_ascii_alphabetic() || ch == '_') {
@@ -397,11 +401,11 @@ fn conds(v: Vec<JCond>, names: &mut Names) -> Conds {
 fn expr_names<'a>(e: &'a JExpr, out: &mut Vec<&'a str>) {
     match e {
         JExpr::Var(v, _) => out.push(v),
-        JExpr::Bin(_, a, b) | JExpr::Index(a, b) => {
+        JExpr::Bin(_, a, b) | JExpr::Index(a, b) | JExpr::Subspan(a, b) => {
             expr_names(a, out);
             expr_names(b, out);
         }
-        JExpr::Not(a) | JExpr::Neg(a) | JExpr::Cast(_, a) | JExpr::Paren(a) | JExpr::Brace(a) | JExpr::Size(a) | JExpr::Copy(a, ..) | JExpr::Field(a, _) | JExpr::HasValue(a) | JExpr::Value(a) | JExpr::Wrap(a) => expr_names(a, out),
+        JExpr::Not(a) | JExpr::Neg(a) | JExpr::Cast(_, a) | JExpr::Paren(a) | JExpr::Brace(a) | JExpr::Size(a) | JExpr::Empty(a) | JExpr::Copy(a, ..) | JExpr::Field(a, _) | JExpr::HasValue(a) | JExpr::Value(a) | JExpr::Wrap(a) => expr_names(a, out),
         JExpr::Call(_, _, args, _) | JExpr::Construct(_, args) => args.iter().for_each(|a| expr_names(a, out)),
         JExpr::Lit(..) | JExpr::Bool(_) | JExpr::Nullopt | JExpr::Unknown(..) => {}
     }
@@ -443,7 +447,16 @@ fn unreadable_name(f: &JFunction) -> Option<&str> {
     let mut names = vec![f.name.as_str()];
     names.extend(f.params.iter().map(|(n, _)| n.as_str()));
     f.body.iter().for_each(|s| stmt_names(s, &mut names));
-    names.into_iter().find(|n| !n.chars().all(|c| c.is_ascii_alphanumeric() || c == '_'))
+    names.into_iter().find(|n| !readable(n))
+}
+
+fn readable(name: &str) -> bool {
+    name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
+}
+
+/// The first name of the struct, its own or a field's, with a character that Dafny cannot read.
+fn unreadable_struct_name(st: &JStruct) -> Option<&str> {
+    std::iter::once(st.name.as_str()).chain(st.fields.iter().map(|(n, _)| n.as_str())).find(|n| !readable(n))
 }
 
 fn function(f: JFunction, names: &mut Names) -> Function {
@@ -551,6 +564,7 @@ fn dexpr(e: &DExpr, names: &Names) -> String {
         }
         DExpr::Len(a) => format!("|{}|", dexpr(a, names)),
         DExpr::Index(a, i) => format!("{}[{}]", dexpr(a, names), dexpr(i, names)),
+        DExpr::Drop(a, k) => format!("{}[{}..]", dexpr(a, names), dexpr(k, names)),
         // The prefix `b_` keeps a bound name apart from `v_` and `c_` names.
         DExpr::Forall(j, b) => format!("(forall b_{}: int :: {})", names.text(*j), dexpr(b, names)),
         DExpr::Bound(j) => format!("b_{}", names.text(*j)),
@@ -745,6 +759,7 @@ fn sentence(r: Refusal, names: &Names) -> (u32, String) {
         Refusal::NoVar(n, line) => (line, format!("{} in the loop contract is no variable.", names.text(n))),
         Refusal::SeqParam(line) => (line, "a sequence is in the subset only as a parameter.".to_string()),
         Refusal::HoldsSeq(line) => (line, "a struct that holds a sequence is in the subset only as a parameter.".to_string()),
+        Refusal::Element(line) => (line, "an optional of a struct or a sequence of bool has no rule yet.".to_string()),
         Refusal::Extent(line) => (line, "a sequence or an optional made from one of another type or length.".to_string()),
         Refusal::Misplaced(line) => (
             line,
@@ -796,7 +811,7 @@ pub fn translate(lines: &str) -> Result<Translation> {
         let key = names.id(&st.key);
         names.datatypes.insert(key, if same == 1 { format!("S_{}", st.name) } else { format!("S_{}'{k}", st.name) });
     }
-    let struct_places: Vec<u32> = structs.iter().map(|st| names.place(&st.file, st.line)).collect();
+    let struct_places: Vec<(u32, Option<String>)> = structs.iter().map(|st| (names.place(&st.file, st.line), unreadable_struct_name(st).map(String::from))).collect();
     for st in structs.into_iter().rev() {
         let key = names.id(&st.key);
         let place = names.place(&st.file, st.line);
@@ -811,9 +826,11 @@ pub fn translate(lines: &str) -> Result<Translation> {
     let mut p = Printer { names: &names, methods: &methods, out: PRELUDE.to_string(), lines: Vec::new(), scope: Vec::new(), own: Vec::new() };
     p.lines.extend(PRELUDE.lines().map(|_| None));
     let mut refused_at = Vec::new();
-    for place in struct_places {
+    for (place, unreadable) in struct_places {
         let StructModels::Cons(model, rest) = smodels else { unreachable!("one model for each struct") };
         match model {
+            // The struct is refused, and its callers keep the type. The refusal stands for the file.
+            Ok(_) if unreadable.is_some() => refused_at.push((place, format!("{}: a name with a character Dafny cannot read.", unreadable.unwrap_or_default()))),
             Ok((key, DParams::Nil)) => p.put(0, format!("datatype {0} = {0}()", names.datatypes[&key]), place),
             Ok((key, mut fields)) => {
                 let mut shown = Vec::new();

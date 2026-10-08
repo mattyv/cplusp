@@ -4173,6 +4173,14 @@ private:
     if (const auto *Member = dyn_cast<CXXMemberCallExpr>(E); Member && Member->getNumArgs() == 0 && Member->getMethodDecl() && Member->getMethodDecl()->getNameAsString() == "size")
       if (const Expr *Object = Member->getImplicitObjectArgument(); Object && isSeq(Object->getType()))
         return tag("Size", expr(Object, Near));
+    // `v.empty()`, and `s.subspan(k)` with no explicit second argument, decision 0078. `subspan(k, n)` and `first(n)` stay unknown.
+    if (const auto *Member = dyn_cast<CXXMemberCallExpr>(E); Member && Member->getNumArgs() == 0 && Member->getMethodDecl() && Member->getMethodDecl()->getNameAsString() == "empty")
+      if (const Expr *Object = Member->getImplicitObjectArgument(); Object && isSeq(Object->getType()))
+        return tag("Empty", expr(Object, Near));
+    if (const auto *Member = dyn_cast<CXXMemberCallExpr>(E); Member && Member->getNumArgs() == 2 && isa<CXXDefaultArgExpr>(Member->getArg(1)) &&
+                                                             Member->getMethodDecl() && Member->getMethodDecl()->getNameAsString() == "subspan")
+      if (const Expr *Object = Member->getImplicitObjectArgument(); Object && isSeq(Object->getType()))
+        return tag("Subspan", llvm::json::Array{expr(Object, Near), expr(Member->getArg(0), Near)});
     if (const auto *Operator = dyn_cast<CXXOperatorCallExpr>(E); Operator && Operator->getOperator() == OO_Subscript && Operator->getNumArgs() == 2 &&
                                                                   isSeq(Operator->getArg(0)->getType()))
       return tag("Index", llvm::json::Array{expr(Operator->getArg(0), Near), expr(Operator->getArg(1), Near)});
