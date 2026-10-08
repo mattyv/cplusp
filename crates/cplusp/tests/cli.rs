@@ -2073,6 +2073,119 @@ fn a_narrowing_cast_that_may_not_fit_fails_in_dafny() {
     assert!(!ok && said.contains("int32"), "{said}\n{text}");
 }
 
+/// Run `cplusp prove` on one fixture, with Dafny from the test's search, decision 0068.
+fn prove(name: &str, extra: &[&str], dafny: &Path) -> Output {
+    let f = fixture(name);
+    let plugin = plugin();
+    let mut args = vec!["prove", "--plugin", plugin.to_str().unwrap()];
+    args.extend(extra.iter().copied());
+    args.extend([f.to_str().unwrap(), "--", "-std=c++23", "-ffp-contract=off"]);
+    Command::new(env!("CARGO_BIN_EXE_cplusp")).args(&args).env("DAFNY", dafny).current_dir(root()).output().unwrap()
+}
+
+/// The line that follows the `Not proved:` line which ends with `head`, and the lines under it up to the next `Not proved:`.
+fn under<'a>(text: &'a str, head: &str) -> Vec<&'a str> {
+    let mut lines = text.lines().skip_while(|l| !(l.starts_with("Not proved: ") && l.ends_with(head)));
+    assert!(lines.next().is_some(), "no line ends with {head}: {text}");
+    lines.take_while(|l| l.starts_with("  ")).collect()
+}
+
+/// A file that proves gives `ok: proved` and exit 0, decision 0068.
+#[test]
+fn prove_says_ok_when_each_method_proves() {
+    let Some(dafny) = dafny() else { return };
+    if !clang_tidy_available() {
+        return;
+    }
+    let o = prove("model-clamp.cpp", &[], &dafny);
+    assert_eq!(o.status.code(), Some(0), "stdout: {} stderr: {}", stdout(&o), stderr(&o));
+    assert_eq!(stdout(&o).lines().last(), Some("ok: proved"), "{}", stdout(&o));
+}
+
+/// A failed ensures is named at the C++ return, with the contract line it comes from and the requires lines it had, decision 0068.
+#[test]
+fn prove_names_a_failed_ensures_at_its_return_with_its_contract_and_assumptions() {
+    let Some(dafny) = dafny() else { return };
+    if !clang_tidy_available() {
+        return;
+    }
+    let o = prove("model-clamp-wrong.cpp", &[], &dafny);
+    let text = stdout(&o);
+    assert_eq!(o.status.code(), Some(1), "stdout: {text} stderr: {}", stderr(&o));
+    let lines = under(&text, "model-clamp-wrong.cpp:8: the ensures line does not hold on this return.");
+    assert!(lines.iter().any(|l| l.starts_with("  The contract line: ") && l.ends_with("model-clamp-wrong.cpp:5: ensures x < lo ==> result == hi")), "{text}");
+    assert!(lines.iter().any(|l| l.starts_with("  It assumes: ") && l.ends_with("model-clamp-wrong.cpp:4: requires lo <= hi")), "{text}");
+    assert_eq!(text.lines().filter(|l| l.starts_with("Not proved: ")).count(), 1, "{text}");
+}
+
+/// A value that may not fit its type and an index that may be out of range are each named at their C++ line, in words a bot reads,
+/// decision 0068. The type is the C++ type.
+#[test]
+fn prove_names_a_value_that_may_not_fit_and_an_index_out_of_range() {
+    let Some(dafny) = dafny() else { return };
+    if !clang_tidy_available() {
+        return;
+    }
+    let o = prove("model-wrap.cpp", &[], &dafny);
+    let text = stdout(&o);
+    assert_eq!(o.status.code(), Some(1), "stdout: {text} stderr: {}", stderr(&o));
+    for want in ["model-wrap.cpp:6: the value may not fit uint32_t.", "model-wrap.cpp:11: the value may not fit int32_t."] {
+        assert!(text.lines().any(|l| l.starts_with("Not proved: ") && l.ends_with(want)), "{want}: {text}");
+    }
+    let o = prove("model-seq-wrong.cpp", &[], &dafny);
+    let text = stdout(&o);
+    assert_eq!(o.status.code(), Some(1), "stdout: {text} stderr: {}", stderr(&o));
+    assert!(text.lines().any(|l| l.starts_with("Not proved: ") && l.ends_with("model-seq-wrong.cpp:6: the index may be out of range.")), "{text}");
+}
+
+/// A loop invariant that fails at the start, one that the loop does not keep, and a requires line of a callee that the caller may
+/// not meet are each named at their C++ line, decision 0068.
+#[test]
+fn prove_names_failed_invariants_and_a_callee_requires() {
+    let Some(dafny) = dafny() else { return };
+    if !clang_tidy_available() {
+        return;
+    }
+    let o = prove("model-prove-loops.cpp", &[], &dafny);
+    let text = stdout(&o);
+    assert_eq!(o.status.code(), Some(1), "stdout: {text} stderr: {}", stderr(&o));
+    let lines = under(&text, "model-prove-loops.cpp:7: the invariant may not hold when the loop starts.");
+    assert!(lines.iter().any(|l| l.starts_with("  It assumes: ") && l.ends_with("model-prove-loops.cpp:4: requires 0 <= n")), "{text}");
+    under(&text, "model-prove-loops.cpp:18: the loop may not keep the invariant.");
+    let lines = under(&text, "model-prove-loops.cpp:32: a requires line of the callee may not hold.");
+    assert!(lines.iter().any(|l| l.starts_with("  The contract line: ") && l.ends_with("model-prove-loops.cpp:26: requires x > 0")), "{text}");
+    assert_eq!(text.lines().filter(|l| l.starts_with("Not proved: ")).count(), 3, "{text}");
+}
+
+/// A method that reaches the time limit is unknown, not false, decision 0068.
+#[test]
+fn prove_says_a_time_limit_is_unknown() {
+    let Some(dafny) = dafny() else { return };
+    if !clang_tidy_available() {
+        return;
+    }
+    let o = prove("model-prove-slow.cpp", &["--time-limit", "1"], &dafny);
+    let text = stdout(&o);
+    assert_eq!(o.status.code(), Some(1), "stdout: {text} stderr: {}", stderr(&o));
+    let want = "model-prove-slow.cpp:5: the prover reached its time limit. The result is unknown.";
+    assert!(text.lines().any(|l| l.starts_with("Not proved: ") && l.ends_with(want)), "{text}");
+    assert!(!text.contains("does not hold"), "{text}");
+}
+
+/// `prove` runs the gate first, decisions 0067 and 0068. A file the gate refuses gets the gate's findings and no proof.
+#[test]
+fn prove_runs_the_gate_first() {
+    let Some(dafny) = dafny() else { return };
+    if !clang_tidy_available() {
+        return;
+    }
+    let o = prove("model-seq-global.cpp", &[], &dafny);
+    let text = stdout(&o);
+    assert_eq!(o.status.code(), Some(1), "stdout: {text} stderr: {}", stderr(&o));
+    assert!(text.lines().any(|l| l.contains("model-seq-global.cpp:8: ") && l.contains("gv changes")), "{text}");
+    assert!(!text.contains("Not proved: ") && !text.contains("BinaryOperator ="), "{text}");
+}
+
 /// Pull `"key":"value"` or `"key":123` out of one JSON line without a JSON library.
 fn field(line: &str, key: &str) -> String {
     let needle = format!("\"{key}\":");
