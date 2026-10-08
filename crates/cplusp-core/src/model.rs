@@ -19,7 +19,19 @@ verus! {
 
 // ------------------------------------------------------------------ the C++ side
 
-/// A type of the subset. `Other` is a type the translator has no rule for, by the id of its name.
+/// A scalar type, the element of a sequence, decision 0064.
+#[derive(Structural, PartialEq, Eq, Clone, Copy, Debug)]
+pub enum Scalar {
+    I32,
+    I64,
+    U8,
+    U32,
+    U64,
+    Bool,
+}
+
+/// A type of the subset. `Seq` is a read-only sequence of a scalar, a parameter only, decision 0064. `Other` is a type the
+/// translator has no rule for, by the id of its name.
 #[derive(Structural, PartialEq, Eq, Clone, Copy, Debug)]
 pub enum Ty {
     I32,
@@ -28,6 +40,7 @@ pub enum Ty {
     U32,
     U64,
     Bool,
+    Seq(Scalar),
     Other(u32),
 }
 
@@ -80,6 +93,10 @@ pub enum Expr {
     Paren(Box<Expr>),
     Brace(Box<Expr>),
     Call(u32, u32, Box<Args>, u32),
+    Size(Box<Expr>),
+    Index(Box<Expr>, Box<Expr>),
+    Forall(u32, Box<Expr>),
+    Chain(BinOp, BinOp, Box<Expr>, Box<Expr>, Box<Expr>),
     Unknown(u32, u32),
 }
 
@@ -172,6 +189,7 @@ pub enum DTy {
     UInt32,
     UInt64,
     Bool,
+    Seq(Scalar),
 }
 
 /// A Dafny expression. `AsInt` is `(e as int)`, the exact value of a machine integer. `Conv` is `(e as T)`, which Dafny proves
@@ -187,6 +205,11 @@ pub enum DExpr {
     Neg(Box<DExpr>),
     AsInt(Box<DExpr>),
     Conv(DTy, Box<DExpr>),
+    Len(Box<DExpr>),
+    Index(Box<DExpr>, Box<DExpr>),
+    Forall(u32, Box<DExpr>),
+    Bound(u32),
+    Chain(BinOp, BinOp, Box<DExpr>, Box<DExpr>, Box<DExpr>),
 }
 
 #[derive(PartialEq, Eq, Debug)]
@@ -262,6 +285,7 @@ pub enum Models {
 /// `Callee` is a call to a function with no method, by the id of the callee's name. `Place` is a call that does not stand alone.
 /// `Twice` is a name declared a second time in a function. `Convert` is a cast between `bool` and a number. `WriteParam` is a write
 /// to a parameter. `NoVar` is a name in a loop contract that is no variable. `Misplaced` is a contract line in the wrong place.
+/// `SeqParam` is a sequence that is no parameter.
 #[derive(Structural, PartialEq, Eq, Clone, Copy, Debug)]
 pub enum Refusal {
     Construct(u32, u32),
@@ -275,6 +299,7 @@ pub enum Refusal {
     WriteParam(u32, u32),
     NoVar(u32, u32),
     Misplaced(u32),
+    SeqParam(u32),
 }
 
 // ------------------------------------------------------------------ the rules
@@ -288,8 +313,35 @@ pub open spec fn spec_ty(t: Ty, line: u32) -> Result<DTy, Refusal> {
         Ty::U32 => Ok(DTy::UInt32),
         Ty::U64 => Ok(DTy::UInt64),
         Ty::Bool => Ok(DTy::Bool),
+        Ty::Seq(s) => Ok(DTy::Seq(s)),
         Ty::Other(k) => Err(Refusal::Construct(k, line)),
     }
+}
+
+/// A type of a local or of a result: a type of the subset that is no sequence, decision 0064.
+pub open spec fn spec_value_ty(t: Ty, line: u32) -> Result<DTy, Refusal> {
+    match t {
+        Ty::Seq(_) => Err(Refusal::SeqParam(line)),
+        _ => spec_ty(t, line),
+    }
+}
+
+/// The type of an element of a sequence.
+pub open spec fn spec_elem(s: Scalar) -> Ty {
+    match s {
+        Scalar::I32 => Ty::I32,
+        Scalar::I64 => Ty::I64,
+        Scalar::U8 => Ty::U8,
+        Scalar::U32 => Ty::U32,
+        Scalar::U64 => Ty::U64,
+        Scalar::Bool => Ty::Bool,
+    }
+}
+
+/// Two comparisons that chain, as in Dafny: both up or both down.
+pub open spec fn chains(a: BinOp, b: BinOp) -> bool {
+    ((a == BinOp::Lt || a == BinOp::Le) && (b == BinOp::Lt || b == BinOp::Le)) || ((a == BinOp::Gt || a == BinOp::Ge) && (b
+        == BinOp::Gt || b == BinOp::Ge))
 }
 
 /// An integer type, whose value a contract reads as an exact integer.
@@ -355,10 +407,20 @@ pub open spec fn spec_code(e: Expr, line: u32) -> Result<DExpr, Refusal>
         Expr::Paren(a) => spec_code(*a, line),
         Expr::Brace(a) => spec_code(*a, line),
         Expr::Call(_, _, _, l) => Err(Refusal::Place(l)),
+        Expr::Size(o) => match spec_code(*o, line) {
+            Ok(d) => Ok(DExpr::Conv(DTy::UInt64, Box::new(DExpr::Len(Box::new(d))))),
+            Err(r) => Err(r),
+        },
+        Expr::Index(o, i) => match spec_code(*o, line) {
+            Ok(d) => match spec_code(*i, line) {
+                Ok(di) => Ok(DExpr::Index(Box::new(d), Box::new(di))),
+                Err(r) => Err(r),
+            },
+            Err(r) => Err(r),
+        },
         Expr::Name(n) => Err(Refusal::Name(n, line)),
-        Expr::Result => Err(Refusal::Syntax(line)),
-        Expr::Int(_) => Err(Refusal::Syntax(line)),
         Expr::Unknown(k, l) => Err(Refusal::Construct(k, l)),
+        _ => Err(Refusal::Syntax(line)),
     }
 }
 
@@ -408,42 +470,110 @@ pub open spec fn spec_leaf(d: DExpr, t: Ty, line: u32) -> Result<DExpr, Refusal>
 }
 
 /// An expression of a contract. Arithmetic is on the exact integers, the battery case signed_overflow: each integer name and
-/// `result` read as `as int`, so no step can overflow. A name must be a parameter of the declaration `decl`, and it reads the
-/// parameter of the definition at its place. A loop contract has no `ret`, so `result` has no place in it, and a name it does not
-/// find is no variable.
-pub open spec fn spec_contract(e: Expr, decl: Names, ps: Params, ret: Option<Ty>, line: u32) -> Result<DExpr, Refusal>
+/// `result` read as `as int`, so no step can overflow. A name bound by a `forall` in `bound` is an exact integer. Any other name
+/// must be a parameter of the declaration `decl`, and it reads the parameter of the definition at its place. A loop contract has
+/// no `ret`, so `result` has no place in it, and a name it does not find is no variable. `v.size()` and `v[e]` read a sequence
+/// parameter, and a chain is two comparisons in one direction, decision 0064.
+pub open spec fn spec_contract(e: Expr, decl: Names, ps: Params, ret: Option<Ty>, bound: Names, line: u32) -> Result<DExpr, Refusal>
     decreases e,
 {
     match e {
         Expr::Int(n) => Ok(DExpr::Lit(n)),
-        Expr::Name(n) => match spec_rebind(decl, ps, n) {
-            Some((p, t)) => spec_leaf(DExpr::Var(p), t, line),
-            None => match ret {
-                Some(_) => Err(Refusal::Name(n, line)),
-                None => Err(Refusal::NoVar(n, line)),
-            },
+        Expr::Name(n) => if spec_has(bound, n) {
+            Ok(DExpr::Bound(n))
+        } else {
+            match spec_rebind(decl, ps, n) {
+                Some((p, t)) => spec_leaf(DExpr::Var(p), t, line),
+                None => spec_unnamed(n, ret, line),
+            }
         },
         Expr::Result => match ret {
             Some(t) => spec_leaf(DExpr::Result, t, line),
             None => Err(Refusal::Syntax(line)),
         },
-        Expr::Bin(op, a, b) => match spec_contract(*a, decl, ps, ret, line) {
-            Ok(da) => match spec_contract(*b, decl, ps, ret, line) {
+        Expr::Bin(op, a, b) => match spec_contract(*a, decl, ps, ret, bound, line) {
+            Ok(da) => match spec_contract(*b, decl, ps, ret, bound, line) {
                 Ok(db) => Ok(DExpr::Bin(op, Box::new(da), Box::new(db))),
                 Err(r) => Err(r),
             },
             Err(r) => Err(r),
         },
-        Expr::Not(a) => match spec_contract(*a, decl, ps, ret, line) {
+        Expr::Not(a) => match spec_contract(*a, decl, ps, ret, bound, line) {
             Ok(da) => Ok(DExpr::Not(Box::new(da))),
             Err(r) => Err(r),
         },
-        Expr::Neg(a) => match spec_contract(*a, decl, ps, ret, line) {
+        Expr::Neg(a) => match spec_contract(*a, decl, ps, ret, bound, line) {
             Ok(da) => Ok(DExpr::Neg(Box::new(da))),
             Err(r) => Err(r),
         },
-        Expr::Paren(a) => spec_contract(*a, decl, ps, ret, line),
+        Expr::Paren(a) => spec_contract(*a, decl, ps, ret, bound, line),
+        Expr::Size(o) => match spec_seq_name(*o, decl, ps, ret, bound, line) {
+            Ok((p, _)) => Ok(DExpr::Len(Box::new(DExpr::Var(p)))),
+            Err(r) => Err(r),
+        },
+        Expr::Index(o, i) => match spec_seq_name(*o, decl, ps, ret, bound, line) {
+            Ok((p, s)) => match spec_contract(*i, decl, ps, ret, bound, line) {
+                Ok(di) => spec_leaf(DExpr::Index(Box::new(DExpr::Var(p)), Box::new(di)), spec_elem(s), line),
+                Err(r) => Err(r),
+            },
+            Err(r) => Err(r),
+        },
+        Expr::Forall(j, body) => match spec_contract(*body, decl, ps, ret, Names::Cons(j, Box::new(bound)), line) {
+            Ok(db) => Ok(DExpr::Forall(j, Box::new(db))),
+            Err(r) => Err(r),
+        },
+        Expr::Chain(o1, o2, a, b, c) => if chains(o1, o2) {
+            match spec_contract(*a, decl, ps, ret, bound, line) {
+                Ok(da) => match spec_contract(*b, decl, ps, ret, bound, line) {
+                    Ok(db) => match spec_contract(*c, decl, ps, ret, bound, line) {
+                        Ok(dc) => Ok(DExpr::Chain(o1, o2, Box::new(da), Box::new(db), Box::new(dc))),
+                        Err(r) => Err(r),
+                    },
+                    Err(r) => Err(r),
+                },
+                Err(r) => Err(r),
+            }
+        } else {
+            Err(Refusal::Syntax(line))
+        },
         Expr::Unknown(k, l) => Err(Refusal::Construct(k, l)),
+        _ => Err(Refusal::Syntax(line)),
+    }
+}
+
+/// `name` is bound.
+pub open spec fn spec_has(bound: Names, name: u32) -> bool
+    decreases bound,
+{
+    match bound {
+        Names::Nil => false,
+        Names::Cons(n, rest) => n == name || spec_has(*rest, name),
+    }
+}
+
+/// A name that is no parameter: of the contract of a function, or no variable of a loop contract.
+pub open spec fn spec_unnamed(n: u32, ret: Option<Ty>, line: u32) -> Result<DExpr, Refusal> {
+    match ret {
+        Some(_) => Err(Refusal::Name(n, line)),
+        None => Err(Refusal::NoVar(n, line)),
+    }
+}
+
+/// The sequence that `v.size()` or `v[e]` reads: a name, not bound, of a parameter of sequence type, with its element.
+pub open spec fn spec_seq_name(o: Expr, decl: Names, ps: Params, ret: Option<Ty>, bound: Names, line: u32) -> Result<(u32, Scalar), Refusal> {
+    match o {
+        Expr::Name(n) => if spec_has(bound, n) {
+            Err(Refusal::Syntax(line))
+        } else {
+            match spec_rebind(decl, ps, n) {
+                Some((p, Ty::Seq(s))) => Ok((p, s)),
+                Some(_) => Err(Refusal::Syntax(line)),
+                None => match ret {
+                    Some(_) => Err(Refusal::Name(n, line)),
+                    None => Err(Refusal::NoVar(n, line)),
+                },
+            }
+        },
         _ => Err(Refusal::Syntax(line)),
     }
 }
@@ -466,7 +596,7 @@ pub open spec fn spec_params(ps: Params, line: u32) -> Result<DParams, Refusal>
 
 /// A function has a method when its parameters and its return type are in the subset.
 pub open spec fn has_signature(f: Function) -> bool {
-    spec_params(f.params, f.line).is_ok() && spec_ty(f.ret, f.line).is_ok()
+    spec_params(f.params, f.line).is_ok() && spec_value_ty(f.ret, f.line).is_ok()
 }
 
 /// A key names a function of the file that has a method.
@@ -533,7 +663,7 @@ pub open spec fn spec_loop_conds(cs: Conds, want: CondKind, env: Params) -> Resu
             CondKind::Ensures => Err(Refusal::Misplaced(l)),
             _ => match spec_loop_conds(*rest, want, env) {
                 Ok(dr) => if k == want {
-                    match spec_contract(e, spec_names_of(env), env, None, l) {
+                    match spec_contract(e, spec_names_of(env), env, None, Names::Nil, l) {
                         Ok(d) => Ok(DConds::Cons(d, Box::new(dr))),
                         Err(r) => Err(r),
                     }
@@ -573,7 +703,7 @@ pub open spec fn spec_stmt(s: Stmt, all: Fns, env: Params, ps: Params) -> Result
             },
             Err(r) => Err(r),
         },
-        Stmt::Local(n, t, e, l) => match spec_ty(t, l) {
+        Stmt::Local(n, t, e, l) => match spec_value_ty(t, l) {
             Err(r) => Err(r),
             Ok(dt) => match e {
                 Expr::Call(k, nm, args, at) => match spec_call(k, nm, *args, at, all, l) {
@@ -685,7 +815,7 @@ pub open spec fn spec_conds(cs: Conds, want: CondKind, ps: Params, ret: Ty) -> R
             CondKind::Decreases => Err(Refusal::Misplaced(l)),
             _ => match spec_conds(*rest, want, ps, ret) {
                 Ok(dr) => if k == want {
-                    match spec_contract(e, decl, ps, Some(ret), l) {
+                    match spec_contract(e, decl, ps, Some(ret), Names::Nil, l) {
                         Ok(d) => Ok(DConds::Cons(d, Box::new(dr))),
                         Err(r) => Err(r),
                     }
@@ -791,15 +921,33 @@ pub open spec fn spec_inside(f: Function, all: Fns) -> Result<(DConds, DConds, D
     }
 }
 
+/// The requires lines `tail`, after one for each sequence parameter: its length fits `size_t`, decision 0064.
+pub open spec fn spec_bounds(ps: Params, tail: DConds) -> DConds
+    decreases ps,
+{
+    match ps {
+        Params::Nil => tail,
+        Params::Cons(n, t, rest) => match t {
+            Ty::Seq(_) => DConds::Cons(
+                DExpr::Bin(BinOp::Le, Box::new(DExpr::Len(Box::new(DExpr::Var(n)))), Box::new(DExpr::Lit(0xffff_ffff_ffff_ffff))),
+                Box::new(spec_bounds(*rest, tail)),
+            ),
+            _ => spec_bounds(*rest, tail),
+        },
+    }
+}
+
 /// The model of a function among the functions `all` of its file, decision 0058.
 pub open spec fn spec_function(f: Function, all: Fns) -> Model {
     match spec_params(f.params, f.line) {
         Err(r) => Model::Refused(r),
-        Ok(ps) => match spec_ty(f.ret, f.line) {
+        Ok(ps) => match spec_value_ty(f.ret, f.line) {
             Err(r) => Model::Refused(r),
             Ok(ret) => match spec_inside(f, all) {
                 Err(r) => Model::Bare(f.name, ps, ret, r),
-                Ok((req, ens, body)) => Model::Full(Method { name: f.name, params: ps, ret, requires: req, ensures: ens, body }),
+                Ok((req, ens, body)) => Model::Full(
+                    Method { name: f.name, params: ps, ret, requires: spec_bounds(f.params, req), ensures: ens, body },
+                ),
             },
         },
     }
@@ -829,6 +977,10 @@ pub open spec fn unknown_expr(e: Expr) -> bool
         Expr::Paren(a) => unknown_expr(*a),
         Expr::Brace(a) => unknown_expr(*a),
         Expr::Call(_, _, args, _) => unknown_args(*args),
+        Expr::Size(a) => unknown_expr(*a),
+        Expr::Index(a, i) => unknown_expr(*a) || unknown_expr(*i),
+        Expr::Forall(_, a) => unknown_expr(*a),
+        Expr::Chain(_, _, a, b, c) => unknown_expr(*a) || unknown_expr(*b) || unknown_expr(*c),
         _ => false,
     }
 }
@@ -886,6 +1038,14 @@ pub proof fn lemma_unknown_code_is_refused(e: Expr, line: u32)
         Expr::Cast(_, a) => lemma_unknown_code_is_refused(*a, line),
         Expr::Paren(a) => lemma_unknown_code_is_refused(*a, line),
         Expr::Brace(a) => lemma_unknown_code_is_refused(*a, line),
+        Expr::Size(a) => lemma_unknown_code_is_refused(*a, line),
+        Expr::Index(a, i) => {
+            if unknown_expr(*a) {
+                lemma_unknown_code_is_refused(*a, line);
+            } else {
+                lemma_unknown_code_is_refused(*i, line);
+            }
+        },
         _ => {},
     }
 }
@@ -1214,8 +1374,41 @@ pub fn translate_ty(t: Ty, line: u32) -> (r: Result<DTy, Refusal>)
         Ty::U32 => Ok(DTy::UInt32),
         Ty::U64 => Ok(DTy::UInt64),
         Ty::Bool => Ok(DTy::Bool),
+        Ty::Seq(s) => Ok(DTy::Seq(s)),
         Ty::Other(k) => Err(Refusal::Construct(k, line)),
     }
+}
+
+pub fn translate_value_ty(t: Ty, line: u32) -> (r: Result<DTy, Refusal>)
+    ensures
+        r == spec_value_ty(t, line),
+{
+    match t {
+        Ty::Seq(_) => Err(Refusal::SeqParam(line)),
+        _ => translate_ty(t, line),
+    }
+}
+
+pub fn elem(s: Scalar) -> (r: Ty)
+    ensures
+        r == spec_elem(s),
+{
+    match s {
+        Scalar::I32 => Ty::I32,
+        Scalar::I64 => Ty::I64,
+        Scalar::U8 => Ty::U8,
+        Scalar::U32 => Ty::U32,
+        Scalar::U64 => Ty::U64,
+        Scalar::Bool => Ty::Bool,
+    }
+}
+
+pub fn chain_ok(a: BinOp, b: BinOp) -> (r: bool)
+    ensures
+        r == chains(a, b),
+{
+    ((a == BinOp::Lt || a == BinOp::Le) && (b == BinOp::Lt || b == BinOp::Le)) || ((a == BinOp::Gt || a == BinOp::Ge) && (b
+        == BinOp::Gt || b == BinOp::Ge))
 }
 
 pub fn translate_integral(from: Ty, to: Ty, d: DExpr, line: u32) -> (r: Result<DExpr, Refusal>)
@@ -1276,10 +1469,20 @@ pub fn translate_code(e: &Expr, line: u32) -> (r: Result<DExpr, Refusal>)
         Expr::Paren(a) => translate_code(a, line),
         Expr::Brace(a) => translate_code(a, line),
         Expr::Call(_, _, _, l) => Err(Refusal::Place(*l)),
+        Expr::Size(o) => match translate_code(o, line) {
+            Ok(d) => Ok(DExpr::Conv(DTy::UInt64, Box::new(DExpr::Len(Box::new(d))))),
+            Err(r) => Err(r),
+        },
+        Expr::Index(o, i) => match translate_code(o, line) {
+            Ok(d) => match translate_code(i, line) {
+                Ok(di) => Ok(DExpr::Index(Box::new(d), Box::new(di))),
+                Err(r) => Err(r),
+            },
+            Err(r) => Err(r),
+        },
         Expr::Name(n) => Err(Refusal::Name(*n, line)),
-        Expr::Result => Err(Refusal::Syntax(line)),
-        Expr::Int(_) => Err(Refusal::Syntax(line)),
         Expr::Unknown(k, l) => Err(Refusal::Construct(*k, *l)),
+        _ => Err(Refusal::Syntax(line)),
     }
 }
 
@@ -1332,41 +1535,127 @@ pub fn translate_leaf(d: DExpr, t: Ty, line: u32) -> (r: Result<DExpr, Refusal>)
     }
 }
 
-pub fn translate_contract(e: &Expr, decl: &Names, ps: &Params, ret: Option<Ty>, line: u32) -> (r: Result<DExpr, Refusal>)
+pub fn translate_contract(e: &Expr, decl: &Names, ps: &Params, ret: Option<Ty>, bound: &Names, line: u32) -> (r: Result<DExpr, Refusal>)
     ensures
-        r == spec_contract(*e, *decl, *ps, ret, line),
+        r == spec_contract(*e, *decl, *ps, ret, *bound, line),
     decreases e,
 {
     match e {
         Expr::Int(n) => Ok(DExpr::Lit(*n)),
-        Expr::Name(n) => match rebind(decl, ps, *n) {
-            Some((p, t)) => translate_leaf(DExpr::Var(p), t, line),
-            None => match ret {
-                Some(_) => Err(Refusal::Name(*n, line)),
-                None => Err(Refusal::NoVar(*n, line)),
-            },
+        Expr::Name(n) => if has(bound, *n) {
+            Ok(DExpr::Bound(*n))
+        } else {
+            match rebind(decl, ps, *n) {
+                Some((p, t)) => translate_leaf(DExpr::Var(p), t, line),
+                None => unnamed(*n, ret, line),
+            }
         },
         Expr::Result => match ret {
             Some(t) => translate_leaf(DExpr::Result, t, line),
             None => Err(Refusal::Syntax(line)),
         },
-        Expr::Bin(op, a, b) => match translate_contract(a, decl, ps, ret, line) {
-            Ok(da) => match translate_contract(b, decl, ps, ret, line) {
+        Expr::Bin(op, a, b) => match translate_contract(a, decl, ps, ret, bound, line) {
+            Ok(da) => match translate_contract(b, decl, ps, ret, bound, line) {
                 Ok(db) => Ok(DExpr::Bin(*op, Box::new(da), Box::new(db))),
                 Err(r) => Err(r),
             },
             Err(r) => Err(r),
         },
-        Expr::Not(a) => match translate_contract(a, decl, ps, ret, line) {
+        Expr::Not(a) => match translate_contract(a, decl, ps, ret, bound, line) {
             Ok(da) => Ok(DExpr::Not(Box::new(da))),
             Err(r) => Err(r),
         },
-        Expr::Neg(a) => match translate_contract(a, decl, ps, ret, line) {
+        Expr::Neg(a) => match translate_contract(a, decl, ps, ret, bound, line) {
             Ok(da) => Ok(DExpr::Neg(Box::new(da))),
             Err(r) => Err(r),
         },
-        Expr::Paren(a) => translate_contract(a, decl, ps, ret, line),
+        Expr::Paren(a) => translate_contract(a, decl, ps, ret, bound, line),
+        Expr::Size(o) => match seq_name(o, decl, ps, ret, bound, line) {
+            Ok((p, _)) => Ok(DExpr::Len(Box::new(DExpr::Var(p)))),
+            Err(r) => Err(r),
+        },
+        Expr::Index(o, i) => match seq_name(o, decl, ps, ret, bound, line) {
+            Ok((p, s)) => match translate_contract(i, decl, ps, ret, bound, line) {
+                Ok(di) => translate_leaf(DExpr::Index(Box::new(DExpr::Var(p)), Box::new(di)), elem(s), line),
+                Err(r) => Err(r),
+            },
+            Err(r) => Err(r),
+        },
+        Expr::Forall(j, body) => {
+            let inner = Names::Cons(*j, Box::new(copy_names(bound)));
+            match translate_contract(body, decl, ps, ret, &inner, line) {
+                Ok(db) => Ok(DExpr::Forall(*j, Box::new(db))),
+                Err(r) => Err(r),
+            }
+        },
+        Expr::Chain(o1, o2, a, b, c) => if chain_ok(*o1, *o2) {
+            match translate_contract(a, decl, ps, ret, bound, line) {
+                Ok(da) => match translate_contract(b, decl, ps, ret, bound, line) {
+                    Ok(db) => match translate_contract(c, decl, ps, ret, bound, line) {
+                        Ok(dc) => Ok(DExpr::Chain(*o1, *o2, Box::new(da), Box::new(db), Box::new(dc))),
+                        Err(r) => Err(r),
+                    },
+                    Err(r) => Err(r),
+                },
+                Err(r) => Err(r),
+            }
+        } else {
+            Err(Refusal::Syntax(line))
+        },
         Expr::Unknown(k, l) => Err(Refusal::Construct(*k, *l)),
+        _ => Err(Refusal::Syntax(line)),
+    }
+}
+
+pub fn has(bound: &Names, name: u32) -> (r: bool)
+    ensures
+        r == spec_has(*bound, name),
+    decreases bound,
+{
+    match bound {
+        Names::Nil => false,
+        Names::Cons(n, rest) => *n == name || has(rest, name),
+    }
+}
+
+pub fn copy_names(ns: &Names) -> (r: Names)
+    ensures
+        r == *ns,
+    decreases ns,
+{
+    match ns {
+        Names::Nil => Names::Nil,
+        Names::Cons(n, rest) => Names::Cons(*n, Box::new(copy_names(rest))),
+    }
+}
+
+pub fn unnamed(n: u32, ret: Option<Ty>, line: u32) -> (r: Result<DExpr, Refusal>)
+    ensures
+        r == spec_unnamed(n, ret, line),
+{
+    match ret {
+        Some(_) => Err(Refusal::Name(n, line)),
+        None => Err(Refusal::NoVar(n, line)),
+    }
+}
+
+pub fn seq_name(o: &Expr, decl: &Names, ps: &Params, ret: Option<Ty>, bound: &Names, line: u32) -> (r: Result<(u32, Scalar), Refusal>)
+    ensures
+        r == spec_seq_name(*o, *decl, *ps, ret, *bound, line),
+{
+    match o {
+        Expr::Name(n) => if has(bound, *n) {
+            Err(Refusal::Syntax(line))
+        } else {
+            match rebind(decl, ps, *n) {
+                Some((p, Ty::Seq(s))) => Ok((p, s)),
+                Some(_) => Err(Refusal::Syntax(line)),
+                None => match ret {
+                    Some(_) => Err(Refusal::Name(*n, line)),
+                    None => Err(Refusal::NoVar(*n, line)),
+                },
+            }
+        },
         _ => Err(Refusal::Syntax(line)),
     }
 }
@@ -1392,7 +1681,7 @@ pub fn signature(f: &Function) -> (r: bool)
     ensures
         r == has_signature(*f),
 {
-    translate_params(&f.params, f.line).is_ok() && translate_ty(f.ret, f.line).is_ok()
+    translate_params(&f.params, f.line).is_ok() && translate_value_ty(f.ret, f.line).is_ok()
 }
 
 pub fn callable(fs: &Fns, key: u32) -> (r: bool)
@@ -1474,7 +1763,7 @@ pub fn translate_loop_conds(cs: &Conds, want: CondKind, env: &Params) -> (r: Res
             CondKind::Ensures => Err(Refusal::Misplaced(*l)),
             _ => match translate_loop_conds(rest, want, env) {
                 Ok(dr) => if *k == want {
-                    match translate_contract(e, &names_of(env), env, None, *l) {
+                    match translate_contract(e, &names_of(env), env, None, &Names::Nil, *l) {
                         Ok(d) => Ok(DConds::Cons(d, Box::new(dr))),
                         Err(r) => Err(r),
                     }
@@ -1513,7 +1802,7 @@ pub fn translate_stmt(s: &Stmt, all: &Fns, env: &Params, ps: &Params) -> (r: Res
             },
             Err(r) => Err(r),
         },
-        Stmt::Local(n, t, e, l) => match translate_ty(*t, *l) {
+        Stmt::Local(n, t, e, l) => match translate_value_ty(*t, *l) {
             Err(r) => Err(r),
             Ok(dt) => match e {
                 Expr::Call(k, nm, args, at) => match translate_call(*k, *nm, args, *at, all, *l) {
@@ -1625,7 +1914,7 @@ pub fn translate_conds(cs: &Conds, want: CondKind, ps: &Params, ret: Ty) -> (r: 
             CondKind::Decreases => Err(Refusal::Misplaced(*l)),
             _ => match translate_conds(rest, want, ps, ret) {
                 Ok(dr) => if *k == want {
-                    match translate_contract(e, decl, ps, Some(ret), *l) {
+                    match translate_contract(e, decl, ps, Some(ret), &Names::Nil, *l) {
                         Ok(d) => Ok(DConds::Cons(d, Box::new(dr))),
                         Err(r) => Err(r),
                     }
@@ -1767,6 +2056,23 @@ pub fn translate_inside(f: &Function, all: &Fns) -> (r: Result<(DConds, DConds, 
     }
 }
 
+pub fn bounds(ps: &Params, tail: DConds) -> (r: DConds)
+    ensures
+        r == spec_bounds(*ps, tail),
+    decreases ps,
+{
+    match ps {
+        Params::Nil => tail,
+        Params::Cons(n, t, rest) => match t {
+            Ty::Seq(_) => DConds::Cons(
+                DExpr::Bin(BinOp::Le, Box::new(DExpr::Len(Box::new(DExpr::Var(*n)))), Box::new(DExpr::Lit(0xffff_ffff_ffff_ffff))),
+                Box::new(bounds(rest, tail)),
+            ),
+            _ => bounds(rest, tail),
+        },
+    }
+}
+
 /// The model of one function among the functions `all` of its file.
 pub fn translate_function(f: &Function, all: &Fns) -> (r: Model)
     ensures
@@ -1774,11 +2080,13 @@ pub fn translate_function(f: &Function, all: &Fns) -> (r: Model)
 {
     match translate_params(&f.params, f.line) {
         Err(r) => Model::Refused(r),
-        Ok(ps) => match translate_ty(f.ret, f.line) {
+        Ok(ps) => match translate_value_ty(f.ret, f.line) {
             Err(r) => Model::Refused(r),
             Ok(ret) => match translate_inside(f, all) {
                 Err(r) => Model::Bare(f.name, ps, ret, r),
-                Ok((req, ens, body)) => Model::Full(Method { name: f.name, params: ps, ret, requires: req, ensures: ens, body }),
+                Ok((req, ens, body)) => Model::Full(
+                    Method { name: f.name, params: ps, ret, requires: bounds(&f.params, req), ensures: ens, body },
+                ),
             },
         },
     }
@@ -1806,7 +2114,7 @@ pub fn translate_unit(all: &Fns) -> (r: Models)
 // ------------------------------------------------------------------ the contract parser
 
 /// A token of a contract line. The shell cuts the text into tokens. `Op` holds `- ` as `Sub`, and the parser reads it as a
-/// negation where no operand is before it. `Unknown` is text with no token, by the id of its kind and its line.
+/// negation where no operand is before it. `Size` is the text `.size()`, decision 0064. `Unknown` is text with no token, by the id of its kind and its line.
 #[derive(Structural, PartialEq, Eq, Clone, Copy, Debug)]
 pub enum Tok {
     Ident(u32),
@@ -1816,6 +2124,11 @@ pub enum Tok {
     Bang,
     LParen,
     RParen,
+    LBracket,
+    RBracket,
+    Size,
+    Forall,
+    ColonColon,
     Unknown(u32, u32),
 }
 
@@ -1835,8 +2148,9 @@ fn is_cmp(op: BinOp) -> (b: bool) {
     }
 }
 
-/// The precedence of the contract language, lowest first: `==>`, which groups to the right, then `||`, `&&`, a comparison, which
-/// does not chain, `+` and `-`, `*`, and the prefix `!` and `-`. Parentheses group.
+/// The precedence of the contract language, lowest first: `==>`, which groups to the right, then `||`, `&&`, a comparison or a
+/// chain of two, `+` and `-`, `*`, the prefix `!` and `-`, and the postfix `.size()` and `[e]`. Parentheses group, and `forall j ::`
+/// takes all that follows, decision 0064.
 /// ponytail: the parser is proved to end and to read each token once, not to follow a grammar written as a spec. Upgrade: the
 /// grammar as a spec relation, and a proof that each parse is in it.
 fn parse_implies(toks: &Vec<Tok>, pos: usize, line: u32) -> (r: Result<(Expr, usize), Refusal>)
@@ -1844,7 +2158,7 @@ fn parse_implies(toks: &Vec<Tok>, pos: usize, line: u32) -> (r: Result<(Expr, us
         pos <= toks.len(),
     ensures
         parsed(r, toks@, pos),
-    decreases toks.len() - pos, 7usize,
+    decreases toks.len() - pos, 8usize,
 {
     let (a, p) = match parse_or(toks, pos, line) {
         Ok(x) => x,
@@ -1865,7 +2179,7 @@ fn parse_or(toks: &Vec<Tok>, pos: usize, line: u32) -> (r: Result<(Expr, usize),
         pos <= toks.len(),
     ensures
         parsed(r, toks@, pos),
-    decreases toks.len() - pos, 6usize,
+    decreases toks.len() - pos, 7usize,
 {
     let (mut a, mut p) = match parse_and(toks, pos, line) {
         Ok(x) => x,
@@ -1893,7 +2207,7 @@ fn parse_and(toks: &Vec<Tok>, pos: usize, line: u32) -> (r: Result<(Expr, usize)
         pos <= toks.len(),
     ensures
         parsed(r, toks@, pos),
-    decreases toks.len() - pos, 5usize,
+    decreases toks.len() - pos, 6usize,
 {
     let (mut a, mut p) = match parse_cmp(toks, pos, line) {
         Ok(x) => x,
@@ -1921,7 +2235,7 @@ fn parse_cmp(toks: &Vec<Tok>, pos: usize, line: u32) -> (r: Result<(Expr, usize)
         pos <= toks.len(),
     ensures
         parsed(r, toks@, pos),
-    decreases toks.len() - pos, 4usize,
+    decreases toks.len() - pos, 5usize,
 {
     let (a, p) = match parse_add(toks, pos, line) {
         Ok(x) => x,
@@ -1930,10 +2244,21 @@ fn parse_cmp(toks: &Vec<Tok>, pos: usize, line: u32) -> (r: Result<(Expr, usize)
     if p < toks.len() {
         if let Tok::Op(op) = toks[p] {
             if is_cmp(op) {
-                return match parse_add(toks, p + 1, line) {
-                    Ok((b, q)) => Ok((Expr::Bin(op, Box::new(a), Box::new(b)), q)),
-                    Err(e) => Err(e),
+                let (b, q) = match parse_add(toks, p + 1, line) {
+                    Ok(x) => x,
+                    Err(e) => return Err(e),
                 };
+                if q < toks.len() {
+                    if let Tok::Op(op2) = toks[q] {
+                        if is_cmp(op2) {
+                            return match parse_add(toks, q + 1, line) {
+                                Ok((c, r)) => Ok((Expr::Chain(op, op2, Box::new(a), Box::new(b), Box::new(c)), r)),
+                                Err(e) => Err(e),
+                            };
+                        }
+                    }
+                }
+                return Ok((Expr::Bin(op, Box::new(a), Box::new(b)), q));
             }
         }
     }
@@ -1945,7 +2270,7 @@ fn parse_add(toks: &Vec<Tok>, pos: usize, line: u32) -> (r: Result<(Expr, usize)
         pos <= toks.len(),
     ensures
         parsed(r, toks@, pos),
-    decreases toks.len() - pos, 3usize,
+    decreases toks.len() - pos, 4usize,
 {
     let (mut a, mut p) = match parse_mul(toks, pos, line) {
         Ok(x) => x,
@@ -1978,7 +2303,7 @@ fn parse_mul(toks: &Vec<Tok>, pos: usize, line: u32) -> (r: Result<(Expr, usize)
         pos <= toks.len(),
     ensures
         parsed(r, toks@, pos),
-    decreases toks.len() - pos, 2usize,
+    decreases toks.len() - pos, 3usize,
 {
     let (mut a, mut p) = match parse_unary(toks, pos, line) {
         Ok(x) => x,
@@ -2006,7 +2331,7 @@ fn parse_unary(toks: &Vec<Tok>, pos: usize, line: u32) -> (r: Result<(Expr, usiz
         pos <= toks.len(),
     ensures
         parsed(r, toks@, pos),
-    decreases toks.len() - pos, 1usize,
+    decreases toks.len() - pos, 2usize,
 {
     if pos < toks.len() && toks[pos] == Tok::Bang {
         match parse_unary(toks, pos + 1, line) {
@@ -2019,11 +2344,46 @@ fn parse_unary(toks: &Vec<Tok>, pos: usize, line: u32) -> (r: Result<(Expr, usiz
             Err(e) => Err(e),
         }
     } else {
-        parse_primary(toks, pos, line)
+        parse_postfix(toks, pos, line)
     }
 }
 
-fn parse_primary(toks: &Vec<Tok>, pos: usize, line: u32) -> (r: Result<(Expr, usize), Refusal>)
+fn parse_postfix(toks: &Vec<Tok>, pos: usize, line: u32) -> (r: Result<(Expr, usize), Refusal>)
+    requires
+        pos <= toks.len(),
+    ensures
+        parsed(r, toks@, pos),
+    decreases toks.len() - pos, 1usize,
+{
+    let (mut a, mut p) = match parse_atom(toks, pos, line) {
+        Ok(x) => x,
+        Err(e) => return Err(e),
+    };
+    while p < toks.len() && (toks[p] == Tok::Size || toks[p] == Tok::LBracket)
+        invariant
+            pos < p <= toks.len(),
+            !unknown_expr(a),
+        decreases toks.len() - p,
+    {
+        if toks[p] == Tok::Size {
+            a = Expr::Size(Box::new(a));
+            p = p + 1;
+        } else {
+            match parse_implies(toks, p + 1, line) {
+                Ok((i, q)) => if q < toks.len() && toks[q] == Tok::RBracket {
+                    a = Expr::Index(Box::new(a), Box::new(i));
+                    p = q + 1;
+                } else {
+                    return Err(Refusal::Syntax(line));
+                },
+                Err(e) => return Err(e),
+            }
+        }
+    }
+    Ok((a, p))
+}
+
+fn parse_atom(toks: &Vec<Tok>, pos: usize, line: u32) -> (r: Result<(Expr, usize), Refusal>)
     requires
         pos <= toks.len(),
     ensures
@@ -2044,6 +2404,17 @@ fn parse_primary(toks: &Vec<Tok>, pos: usize, line: u32) -> (r: Result<(Expr, us
                 Err(Refusal::Syntax(line))
             },
             Err(e) => Err(e),
+        },
+        Tok::Forall => if toks.len() - pos > 2 && toks[pos + 2] == Tok::ColonColon {
+            match toks[pos + 1] {
+                Tok::Ident(j) => match parse_implies(toks, pos + 3, line) {
+                    Ok((body, p)) => Ok((Expr::Forall(j, Box::new(body)), p)),
+                    Err(e) => Err(e),
+                },
+                _ => Err(Refusal::Syntax(line)),
+            }
+        } else {
+            Err(Refusal::Syntax(line))
         },
         Tok::Unknown(k, l) => Err(Refusal::Construct(k, l)),
         _ => Err(Refusal::Syntax(line)),
