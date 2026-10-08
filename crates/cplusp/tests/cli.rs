@@ -1937,6 +1937,72 @@ fn a_contract_line_in_a_header_is_refused_at_the_header() {
     assert!(refusals[0].ends_with("model-header-contract.h:3: '=' in a contract: the translator has no rule for it yet."), "{text}");
 }
 
+/// The fourth slice, decision 0064: a const vector and a span of const are Dafny sequences, read by size and index, and contracts
+/// read them with `forall` and chained comparisons. `find` from examples/control_flow proves.
+#[test]
+fn read_only_sequences_verify_in_dafny() {
+    let Some(dafny) = dafny() else { return };
+    if !clang_tidy_available() {
+        return;
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let (o, out) = model("model-seq.cpp", dir.path());
+    assert_eq!(o.status.code(), Some(0), "stdout: {} stderr: {}", stdout(&o), stderr(&o));
+    let text = std::fs::read_to_string(&out).unwrap();
+    assert!(full(&text, "find") && full(&text, "all_below"), "{text}");
+    let (ok, said) = verify(&dafny, &out);
+    assert!(ok && said.contains(" 0 errors"), "{said}\n{text}");
+}
+
+/// The model reads a sequence only in range, decision 0064. A read with no check that the index fits fails in Dafny.
+#[test]
+fn a_read_out_of_range_fails_in_dafny() {
+    let Some(dafny) = dafny() else { return };
+    if !clang_tidy_available() {
+        return;
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let (o, out) = model("model-seq-wrong.cpp", dir.path());
+    assert_eq!(o.status.code(), Some(0), "stdout: {} stderr: {}", stdout(&o), stderr(&o));
+    let text = std::fs::read_to_string(&out).unwrap();
+    assert!(full(&text, "first"), "{text}");
+    let (ok, said) = verify(&dafny, &out);
+    assert!(!ok && said.contains("index out of range"), "{said}\n{text}");
+}
+
+/// Each sequence with no rule is refused at its line, decision 0064: a mutable view, a vector of bool, a sequence that is no
+/// parameter, a member call other than size, an index of a scalar, and a chain of two directions.
+#[test]
+fn sequences_with_no_rule_are_refused_at_their_lines() {
+    if !clang_tidy_available() {
+        return;
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let (o, _) = model("model-seq-refuse.cpp", dir.path());
+    let text = stdout(&o);
+    assert_eq!(o.status.code(), Some(1), "stdout: {text} stderr: {}", stderr(&o));
+    let refusals: Vec<&str> = text.lines().filter(|l| l.starts_with("Not provable: ")).collect();
+    // The plugin names a type outside the subset as the compiler prints it.
+    for (line, ty) in [(6, "std::vector<int32_t>"), (10, "std::span<int32_t>"), (14, "std::vector<bool>")] {
+        let at = format!("model-seq-refuse.cpp:{line}: ");
+        assert!(
+            refusals.iter().any(|l| l.contains(&at) && l.contains(ty) && l.ends_with(": the translator has no rule for it yet.")),
+            "{at}{ty}: {text}"
+        );
+    }
+    for (line, expected) in [
+        (19, "a sequence is in the subset only as a parameter."),
+        (24, "CXXMemberCallExpr: the translator has no rule for it yet."),
+        (27, "a sequence is in the subset only as a parameter."),
+        (31, "the contract line has a form the translator cannot read."),
+        (36, "the contract line has a form the translator cannot read."),
+    ] {
+        let want = format!("model-seq-refuse.cpp:{line}: {expected}");
+        assert!(refusals.iter().any(|l| l.ends_with(&want)), "{want}: {text}");
+    }
+    assert_eq!(refusals.len(), 8, "{text}");
+}
+
 /// The model never wraps, decision 0061. An unsigned value below zero and a sum of literals that overflows each fail in Dafny.
 #[test]
 fn unsigned_wrap_and_literal_overflow_fail_in_dafny() {

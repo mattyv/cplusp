@@ -463,3 +463,101 @@ fn bool_literals_and_the_largest_uint64_literal_translate() {
     // The parser reads the largest literal of a contract.
     assert_eq!(parse_contract(&vec![Tok::Int(u64::MAX)], 3), Ok(Expr::Int(u64::MAX)));
 }
+
+#[test]
+fn a_contract_reads_a_sequence_by_size_index_forall_and_chain() {
+    // forall j :: 0 <= j < v.size() ==> v[j] != 0, over a parameter v of seq<int32>.
+    let v = X;
+    let j = 70;
+    let body = Expr::Bin(
+        BinOp::Implies,
+        b(Expr::Chain(BinOp::Le, BinOp::Lt, b(Expr::Int(0)), b(Expr::Name(j)), b(Expr::Size(b(Expr::Name(v)))))),
+        b(Expr::Bin(BinOp::Ne, b(Expr::Index(b(Expr::Name(v)), b(Expr::Name(j)))), b(Expr::Int(0)))),
+    );
+    let conds = Conds::Cons(CondKind::Ensures, Expr::Forall(j, b(body)), 3, names(&[v]), Box::new(Conds::Nil));
+    let f = Function {
+        name: SAT,
+        line: 4,
+        params: Params::Cons(v, Ty::Seq(Scalar::I32), Box::new(Params::Nil)),
+        ret: Ty::Bool,
+        conds,
+        body: one(Stmt::Return(Expr::Bool(true), 5)),
+    };
+    let Model::Full(m) = translate_function(&f, &Fns::Nil) else { panic!("a full model") };
+    let len = || Box::new(DExpr::Len(Box::new(DExpr::Var(v))));
+    let want = DExpr::Forall(
+        j,
+        Box::new(DExpr::Bin(
+            BinOp::Implies,
+            Box::new(DExpr::Chain(BinOp::Le, BinOp::Lt, Box::new(DExpr::Lit(0)), Box::new(DExpr::Bound(j)), len())),
+            Box::new(DExpr::Bin(
+                BinOp::Ne,
+                Box::new(DExpr::AsInt(Box::new(DExpr::Index(Box::new(DExpr::Var(v)), Box::new(DExpr::Bound(j)))))),
+                Box::new(DExpr::Lit(0)),
+            )),
+        )),
+    );
+    assert_eq!(m.ensures, DConds::Cons(want, Box::new(DConds::Nil)));
+    // The method requires that the length of the sequence fits size_t.
+    let bound = DExpr::Bin(BinOp::Le, len(), Box::new(DExpr::Lit(u64::MAX)));
+    assert_eq!(m.requires, DConds::Cons(bound, Box::new(DConds::Nil)));
+}
+
+#[test]
+fn code_reads_a_sequence_by_size_and_index() {
+    // return v[0] < v.size(); with v of seq<uint8>: the size is (|v| as uint64).
+    let v = X;
+    let seq = Ty::Seq(Scalar::U8);
+    let idx = Expr::Index(b(Expr::Var(v, seq)), b(Expr::Lit(0, Ty::U64)));
+    let size = Expr::Size(b(Expr::Var(v, seq)));
+    let e = Expr::Bin(BinOp::Lt, b(Expr::Cast(CastKind::Integral(Ty::U8, Ty::U64), b(Expr::Cast(CastKind::Read, b(idx))))), b(size));
+    let f = Function { name: SAT, line: 4, params: Params::Cons(v, seq, Box::new(Params::Nil)), ret: Ty::Bool, conds: Conds::Nil, body: one(Stmt::Return(e, 5)) };
+    let Model::Full(m) = translate_function(&f, &Fns::Nil) else { panic!("a full model") };
+    let didx = DExpr::Index(Box::new(DExpr::Var(v)), Box::new(DExpr::Conv(DTy::UInt64, Box::new(DExpr::Lit(0)))));
+    let dsize = DExpr::Conv(DTy::UInt64, Box::new(DExpr::Len(Box::new(DExpr::Var(v)))));
+    let want = DExpr::Bin(BinOp::Lt, Box::new(DExpr::Conv(DTy::UInt64, Box::new(didx))), Box::new(dsize));
+    assert_eq!(m.body, DStmts::Cons(Box::new(DStmt::Return(want)), Box::new(DStmts::Nil)));
+}
+
+#[test]
+fn a_sequence_is_in_the_subset_only_as_a_parameter() {
+    let seq = Ty::Seq(Scalar::I32);
+    let f = Function { ret: seq, ..with_n(Stmts::Nil) };
+    assert_eq!(translate_function(&f, &Fns::Nil), Model::Refused(Refusal::SeqParam(3)));
+    let local = Stmt::Local(SUM, seq, Expr::Var(X, Ty::I32), 4);
+    assert_eq!(bare_refusal(translate_function(&with_n(one(local)), &Fns::Nil)), Refusal::SeqParam(4));
+}
+
+#[test]
+fn a_chain_of_two_directions_and_an_index_of_a_scalar_are_refused() {
+    let ens = |e: Expr| Conds::Cons(CondKind::Ensures, e, 2, names(&[X]), Box::new(Conds::Nil));
+    let mixed = Expr::Chain(BinOp::Lt, BinOp::Gt, b(Expr::Int(0)), b(Expr::Name(X)), b(Expr::Int(1)));
+    let f = Function { conds: ens(mixed), ..with_n(one(Stmt::Return(Expr::Lit(0, Ty::I32), 4))) };
+    assert_eq!(bare_refusal(translate_function(&f, &Fns::Nil)), Refusal::Syntax(2));
+    let index = Expr::Bin(BinOp::Eq, b(Expr::Result), b(Expr::Index(b(Expr::Name(X)), b(Expr::Int(0)))));
+    let f = Function { conds: ens(index), ..with_n(one(Stmt::Return(Expr::Lit(0, Ty::I32), 4))) };
+    assert_eq!(bare_refusal(translate_function(&f, &Fns::Nil)), Refusal::Syntax(2));
+}
+
+#[test]
+fn the_parser_reads_forall_index_size_and_a_chain() {
+    // forall j :: 0 <= j < v.size() ==> v[j] != 0
+    let (v, j) = (X, 70);
+    let toks = vec![
+        Tok::Forall, Tok::Ident(j), Tok::ColonColon,
+        Tok::Int(0), Tok::Op(BinOp::Le), Tok::Ident(j), Tok::Op(BinOp::Lt), Tok::Ident(v), Tok::Size,
+        Tok::Op(BinOp::Implies),
+        Tok::Ident(v), Tok::LBracket, Tok::Ident(j), Tok::RBracket, Tok::Op(BinOp::Ne), Tok::Int(0),
+    ];
+    let want = Expr::Forall(
+        j,
+        b(Expr::Bin(
+            BinOp::Implies,
+            b(Expr::Chain(BinOp::Le, BinOp::Lt, b(Expr::Int(0)), b(Expr::Name(j)), b(Expr::Size(b(Expr::Name(v)))))),
+            b(Expr::Bin(BinOp::Ne, b(Expr::Index(b(Expr::Name(v)), b(Expr::Name(j)))), b(Expr::Int(0)))),
+        )),
+    );
+    assert_eq!(parse_contract(&toks, 3), Ok(want));
+    // An index that does not close is refused.
+    assert_eq!(parse_contract(&vec![Tok::Ident(v), Tok::LBracket, Tok::Int(0)], 4), Err(Refusal::Syntax(4)));
+}
