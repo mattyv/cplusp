@@ -1469,7 +1469,8 @@ fn a_cast_of_a_pointer_to_a_plain_object_is_a_use() {
 }
 
 /// The check of impure operators reads types, so it judges each instantiation, decision 0055. An operator whose parameter becomes a
-/// pointer to non-const can write. A forwarding reference that becomes a const reference cannot. Only that row counts here.
+/// pointer to non-const can write. A forwarding reference that becomes a const reference cannot. An operator in a template that
+/// nothing instantiates is judged by its spelling, as before. Only that row counts here.
 #[test]
 fn the_impure_operator_check_judges_each_instantiation() {
     if !clang_tidy_available() {
@@ -1480,7 +1481,7 @@ fn the_impure_operator_check_judges_each_instantiation() {
     let o = cplusp(&["gate", "--json", "--plugin", plugin.to_str().unwrap(), f.to_str().unwrap(), "--", "-std=c++23", "-ffp-contract=off"]);
     let out = stdout(&o);
     let found: BTreeSet<usize> = out.lines().filter(|l| field(l, "rule") == "operator_overloading").map(|l| field(l, "line").parse::<usize>().unwrap()).collect();
-    assert_eq!(found, BTreeSet::from([8]), "{out}");
+    assert_eq!(found, BTreeSet::from([8, 35, 39]), "{out}");
 }
 
 /// Pull `"key":"value"` or `"key":123` out of one JSON line without a JSON library.

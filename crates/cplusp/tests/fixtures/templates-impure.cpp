@@ -27,3 +27,16 @@ bool operator!=(const Box& a, T&& b) {
 bool differ(const Box& a, const Box& b) {
   return a != b;
 }
+
+// An operator in a template that nothing instantiates is judged by its spelling, as before decision 0055.
+template <class T>
+struct Unused {
+  T v{};
+  Unused& operator+=(const Unused& o) {
+    v += o.v;
+    return *this;
+  }
+  bool operator==(const Unused& o) {
+    return v == o.v;
+  }
+};
