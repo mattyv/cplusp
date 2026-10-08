@@ -3763,8 +3763,9 @@ private:
 class TreeWriter {
 public:
   // `Claimed` takes the `//@` lines that a loop owns, so the orphan scan skips them.
-  TreeWriter(ASTContext &Context, std::set<std::pair<unsigned, unsigned>> &Claimed)
-      : Context(Context), SM(Context.getSourceManager()), Mangler(Context.createMangleContext()), Claimed(Claimed) {}
+  // `Structs` takes each plain struct that a type names, by its key, so the check writes it once.
+  TreeWriter(ASTContext &Context, std::set<std::pair<unsigned, unsigned>> &Claimed, std::map<std::string, llvm::json::Value> &Structs)
+      : Context(Context), SM(Context.getSourceManager()), Mangler(Context.createMangleContext()), Claimed(Claimed), Structs(Structs) {}
 
   // The key of a function, decision 0058: its Itanium mangled name. The name tells overloads and namespaces apart, and it is the same
   // for a call and for the definition. A function with no mangled name, or one that is templated, a constructor or a destructor, has
@@ -3822,6 +3823,7 @@ private:
   const SourceManager &SM;
   std::unique_ptr<MangleContext> Mangler;
   std::set<std::pair<unsigned, unsigned>> &Claimed;
+  std::map<std::string, llvm::json::Value> &Structs;
   mutable const FunctionDecl *Enclosing = nullptr;  // the function that `function` is writing, the floor of a loop's walk upward
 
   // The contract lines as data. A line of a loop has no parameters.
@@ -3923,9 +3925,51 @@ private:
     return N.isNegative() || N.getActiveBits() > 63 || N.isAllOnes() ? llvm::json::Value(nullptr) : llvm::json::Value(static_cast<int64_t>(N.getZExtValue()));
   }
 
+  // The plain struct that a type is, decision 0073, or null. A const and a reference are looked through. Plain means a definition with
+  // a name, no bases, no virtual, no constructor and no member function of the user, and public fields that are each a scalar or a
+  // plain struct, with no const, no reference and no bit field.
+  const CXXRecordDecl *plainStruct(QualType T) const {
+    if (T->isReferenceType())
+      T = T->getPointeeType();
+    const CXXRecordDecl *RD = T.isVolatileQualified() ? nullptr : T->getAsCXXRecordDecl();
+    if (!RD || !RD->hasDefinition())
+      return nullptr;
+    RD = RD->getDefinition();
+    if (RD->isUnion() || RD->isLambda() || !RD->getIdentifier() || RD->isDependentContext() || isa<ClassTemplateSpecializationDecl>(RD) ||
+        RD->getNumBases() || RD->isPolymorphic() || RD->hasUserDeclaredConstructor() || RD->hasUserDeclaredDestructor())
+      return nullptr;
+    for (const Decl *D : RD->decls())
+      if (isa<FunctionTemplateDecl>(D) || (isa<CXXMethodDecl>(D) && !D->isImplicit()))
+        return nullptr;
+    for (const FieldDecl *F : RD->fields()) {
+      const QualType FT = F->getType();
+      if (F->isBitField() || F->getAccess() != AS_public || FT->isReferenceType() || FT.hasQualifiers() || (!scalar(FT) && !plainStruct(FT)))
+        return nullptr;
+    }
+    return RD;
+  }
+
+  // The key of a struct, as the key of a function that has no mangled name: the qualified name, `@` and the place of the definition.
+  std::string structKey(const CXXRecordDecl *RD) const {
+    const SourceLocation Loc = SM.getFileLoc(RD->getLocation());
+    return RD->getQualifiedNameAsString() + "@" + file(Loc) + ":" + std::to_string(line(Loc)) + ":" + std::to_string(SM.getExpansionColumnNumber(Loc));
+  }
+
   llvm::json::Value type(QualType T) const {
     if (const char *S = scalar(T))
       return S;
+    if (const CXXRecordDecl *RD = plainStruct(T)) {
+      const std::string Key = structKey(RD);
+      if (!Structs.count(Key)) {
+        llvm::json::Array Fields;
+        for (const FieldDecl *F : RD->fields())
+          Fields.push_back(llvm::json::Array{F->getNameAsString(), type(F->getType())});
+        const SourceLocation Loc = SM.getFileLoc(RD->getLocation());
+        Structs.emplace(Key, llvm::json::Object{{"struct", Key}, {"name", RD->getNameAsString()}, {"file", file(Loc)}, {"line", number(line(Loc))},
+                                                 {"fields", std::move(Fields)}});
+      }
+      return tag("Struct", Key);
+    }
     if (const char *S = seqElement(T))
       return tag("Seq", llvm::json::Array{S, seqExtent(T)});
     return tag("Other", T.getAsString(Context.getPrintingPolicy()));
@@ -4018,12 +4062,26 @@ private:
     }
     if (const auto *Paren = dyn_cast<ParenExpr>(E))
       return tag("Paren", expr(Paren->getSubExpr(), Near));
-    // A sequence made from one sequence, decision 0070. The core judges the two types.
-    if (const auto *Construct = dyn_cast<CXXConstructExpr>(E); Construct && Construct->getNumArgs() == 1 && seqElement(Construct->getType()) &&
-                                                                seqElement(Construct->getArg(0)->getType()))
-      return tag("SeqCopy", llvm::json::Array{expr(Construct->getArg(0), Near), type(Construct->getArg(0)->getType()), type(Construct->getType())});
+    // A sequence made from one sequence, decision 0070, or a struct made from one struct, decision 0073. The core judges the two types.
+    if (const auto *Construct = dyn_cast<CXXConstructExpr>(E);
+        Construct && Construct->getNumArgs() == 1 &&
+        ((seqElement(Construct->getType()) && seqElement(Construct->getArg(0)->getType())) ||
+         (plainStruct(Construct->getType()) && plainStruct(Construct->getArg(0)->getType()))))
+      return tag("Copy", llvm::json::Array{expr(Construct->getArg(0), Near), type(Construct->getArg(0)->getType()), type(Construct->getType())});
     if (const auto *List = dyn_cast<InitListExpr>(E); List && List->getNumInits() == 1 && List->getType()->isScalarType())
       return tag("Brace", expr(List->getInit(0), Near));
+    // A braced value of a plain struct. A field that the list leaves out is an `ImplicitValueInitExpr`, which stays unknown.
+    if (const auto *List = dyn_cast<InitListExpr>(E); List && plainStruct(List->getType())) {
+      llvm::json::Array Args;
+      for (const Expr *Init : List->inits())
+        Args.push_back(expr(Init, Near));
+      type(List->getType());  // writes the struct
+      return tag("Construct", llvm::json::Array{structKey(plainStruct(List->getType())), std::move(Args)});
+    }
+    // A read of a field of a plain struct.
+    if (const auto *Member = dyn_cast<MemberExpr>(E); Member && !Member->isArrow())
+      if (const auto *Field = dyn_cast<FieldDecl>(Member->getMemberDecl()); Field && plainStruct(Context.getRecordType(Field->getParent())))
+        return tag("Field", llvm::json::Array{expr(Member->getBase(), Near), Field->getNameAsString()});
     // `v.size()` and `v[i]` of a read-only sequence.
     if (const auto *Member = dyn_cast<CXXMemberCallExpr>(E); Member && Member->getNumArgs() == 0 && Member->getMethodDecl() && Member->getMethodDecl()->getNameAsString() == "size")
       if (const Expr *Object = Member->getImplicitObjectArgument(); Object && seqElement(Object->getType()))
@@ -4066,12 +4124,14 @@ public:
     for (const Contract::Line &L : C.Lines)
       Claimed.insert({L.File, L.Number});
     if (FD->isThisDeclarationADefinition())
-      append(TreeWriter(*Context, Claimed).function(FD, C));
+      append(TreeWriter(*Context, Claimed, Structs).function(FD, C));
   }
   void onEndOfTranslationUnit() override {
     if (!Context)
       return;
     const SourceManager &SM = Context->getSourceManager();
+    for (const auto &[Key, Line] : Structs)
+      append(Line);
     for (unsigned I = 0; I < SM.local_sloc_entry_size(); ++I) {
       const SrcMgr::SLocEntry &Entry = SM.getLocalSLocEntry(I);
       if (!Entry.isFile())
@@ -4096,6 +4156,7 @@ private:
   std::string Output;
   ASTContext *Context = nullptr;
   std::set<std::pair<unsigned, unsigned>> Claimed;
+  std::map<std::string, llvm::json::Value> Structs;  // each plain struct that a function names, by key
 
   void append(const llvm::json::Value &V) {
     std::error_code EC;

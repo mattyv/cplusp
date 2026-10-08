@@ -7,8 +7,8 @@ use std::fmt::Write;
 
 use anyhow::{Context, Result};
 use cplusp_core::model::{
-    parse_contract, translate_unit, Args, BinOp, CastKind, CondKind, Conds, DArgs, DConds, DExpr, DParams, DStmt, DStmts, DTy, Expr, Extent, Fns,
-    Function, Method, Model, Models, Names as CNames, Params, Refusal, Scalar, Stmt, Stmts, Tok, Ty,
+    parse_contract, translate_structs, translate_unit, Args, BinOp, CastKind, CondKind, Conds, DArgs, DConds, DExpr, DParams, DStmt, DStmts, DTy, Expr, Extent, Fns,
+    Function, Method, Model, Models, Names as CNames, Params, Refusal, Scalar, Stmt, Stmts, StructModels, Structs, Tok, Ty,
 };
 use serde::Deserialize;
 
@@ -33,6 +33,7 @@ enum JTy {
     U64,
     Bool,
     Seq(JScalar, Option<u64>),
+    Struct(String),
     Other(String),
 }
 
@@ -72,7 +73,9 @@ enum JExpr {
     Paren(Box<JExpr>),
     Brace(Box<JExpr>),
     Size(Box<JExpr>),
-    SeqCopy(Box<JExpr>, JTy, JTy),
+    Copy(Box<JExpr>, JTy, JTy),
+    Field(Box<JExpr>, String),
+    Construct(String, Vec<JExpr>),
     Index(Box<JExpr>, Box<JExpr>),
     Call(String, String, Vec<JExpr>, u32),
     Unknown(String, u32),
@@ -104,7 +107,19 @@ struct JCond {
 #[serde(untagged)]
 enum Item {
     Orphan { orphan: u32, file: String },
+    Struct(JStruct),
     Function(JFunction),
+}
+
+/// A plain struct of the file, decision 0073.
+#[derive(Deserialize)]
+struct JStruct {
+    #[serde(rename = "struct")]
+    key: String,
+    name: String,
+    file: String,
+    line: u32,
+    fields: Vec<(String, JTy)>,
 }
 
 #[derive(Deserialize)]
@@ -131,6 +146,8 @@ struct Names {
     places: Vec<(String, u32)>,
     /// The word and text of each contract line by its place, for the report of the prover.
     contracts: HashMap<u32, (String, String)>,
+    /// The Dafny name of each struct by the id of its key.
+    datatypes: HashMap<u32, String>,
     file: String,
 }
 
@@ -176,6 +193,7 @@ fn ty(t: JTy, names: &mut Names) -> Ty {
             JScalar::U64 => Scalar::U64,
             JScalar::Bool => Scalar::Bool,
         }, extent.map_or(Extent::Dynamic, Extent::Fixed)),
+        JTy::Struct(k) => Ty::Struct(names.id(&k)),
         JTy::Other(s) => Ty::Other(names.id(&s)),
     }
 }
@@ -217,7 +235,13 @@ fn expr(e: JExpr, names: &mut Names) -> Expr {
         JExpr::Paren(a) => Expr::Paren(Box::new(expr(*a, names))),
         JExpr::Brace(a) => Expr::Brace(Box::new(expr(*a, names))),
         JExpr::Size(a) => Expr::Size(Box::new(expr(*a, names))),
-        JExpr::SeqCopy(a, from, to) => Expr::SeqCopy(Box::new(expr(*a, names)), ty(from, names), ty(to, names)),
+        JExpr::Copy(a, from, to) => Expr::Copy(Box::new(expr(*a, names)), ty(from, names), ty(to, names)),
+        JExpr::Field(a, f) => Expr::Field(Box::new(expr(*a, names)), names.id(&f)),
+        JExpr::Construct(k, args) => {
+            let args: Vec<Expr> = args.into_iter().map(|a| expr(a, names)).collect();
+            let args = args.into_iter().rev().fold(Args::Nil, |rest, a| Args::Cons(Box::new(a), Box::new(rest)));
+            Expr::Construct(names.id(&k), Box::new(args))
+        }
         JExpr::Index(a, i) => Expr::Index(Box::new(expr(*a, names)), Box::new(expr(*i, names))),
         JExpr::Call(key, name, args, line) => {
             let args: Vec<Expr> = args.into_iter().map(|a| expr(a, names)).collect();
@@ -290,6 +314,10 @@ fn lex(text: &str, line: u32, names: &mut Names) -> Vec<Tok> {
         } else if let Some(t) = [(".size()", Tok::Size), ("::", Tok::ColonColon)].into_iter().find(|(s, _)| rest.starts_with(s)) {
             rest = &rest[t.0.len()..];
             toks.push(t.1);
+        } else if c == '.' && rest[1..].starts_with(|ch: char| ch.is_ascii_alphabetic() || ch == '_') {
+            let end = 1 + rest[1..].find(|ch: char| !(ch.is_ascii_alphanumeric() || ch == '_')).unwrap_or(rest.len() - 1);
+            toks.push(Tok::Field(names.id(&rest[1..end])));
+            rest = &rest[end..];
         } else if let Some((s, o)) = OPS.iter().find(|(s, _)| rest.starts_with(s)) {
             toks.push(Tok::Op(*o));
             rest = &rest[s.len()..];
@@ -357,8 +385,8 @@ fn expr_names<'a>(e: &'a JExpr, out: &mut Vec<&'a str>) {
             expr_names(a, out);
             expr_names(b, out);
         }
-        JExpr::Not(a) | JExpr::Neg(a) | JExpr::Cast(_, a) | JExpr::Paren(a) | JExpr::Brace(a) | JExpr::Size(a) | JExpr::SeqCopy(a, ..) => expr_names(a, out),
-        JExpr::Call(_, _, args, _) => args.iter().for_each(|a| expr_names(a, out)),
+        JExpr::Not(a) | JExpr::Neg(a) | JExpr::Cast(_, a) | JExpr::Paren(a) | JExpr::Brace(a) | JExpr::Size(a) | JExpr::Copy(a, ..) | JExpr::Field(a, _) => expr_names(a, out),
+        JExpr::Call(_, _, args, _) | JExpr::Construct(_, args) => args.iter().for_each(|a| expr_names(a, out)),
         JExpr::Lit(..) | JExpr::Bool(_) | JExpr::Unknown(..) => {}
     }
 }
@@ -433,7 +461,7 @@ fn dscalar(s: Scalar) -> &'static str {
     }
 }
 
-fn dty(t: DTy) -> String {
+fn dty(t: DTy, names: &Names) -> String {
     match t {
         DTy::Int32 => "int32".to_string(),
         DTy::Int64 => "int64".to_string(),
@@ -442,6 +470,7 @@ fn dty(t: DTy) -> String {
         DTy::UInt64 => "uint64".to_string(),
         DTy::Bool => "bool".to_string(),
         DTy::Seq(s) => format!("seq<{}>", dscalar(s)),
+        DTy::Struct(k) => names.datatypes[&k].clone(),
     }
 }
 
@@ -481,7 +510,17 @@ fn dexpr(e: &DExpr, names: &Names) -> String {
         DExpr::Not(a) => format!("(!{})", dexpr(a, names)),
         DExpr::Neg(a) => format!("(-{})", dexpr(a, names)),
         DExpr::AsInt(a) => format!("({} as int)", dexpr(a, names)),
-        DExpr::Conv(t, a) => format!("({} as {})", dexpr(a, names), dty(*t)),
+        DExpr::Conv(t, a) => format!("({} as {})", dexpr(a, names), dty(*t, names)),
+        DExpr::Field(a, f) => format!("{}.f_{}", dexpr(a, names), names.text(*f)),
+        DExpr::Ctor(k, args) => {
+            let mut shown = Vec::new();
+            let mut rest = &**args;
+            while let DArgs::Cons(a, next) = rest {
+                shown.push(dexpr(a, names));
+                rest = next;
+            }
+            format!("{}({})", names.datatypes[k], shown.join(", "))
+        }
         DExpr::Len(a) => format!("|{}|", dexpr(a, names)),
         DExpr::Index(a, i) => format!("{}[{}]", dexpr(a, names), dexpr(i, names)),
         // The prefix `b_` keeps a bound name apart from `v_` and `c_` names.
@@ -593,10 +632,10 @@ impl Printer<'_> {
         let names = self.names;
         match s {
             DStmt::Return(e) => self.put(depth, format!("return {};", dexpr(e, names)), place),
-            DStmt::Local(x, t, e) => self.put(depth, format!("var {}: {} := {};", mangle(names.text(*x)), dty(*t), dexpr(e, names)), place),
+            DStmt::Local(x, t, e) => self.put(depth, format!("var {}: {} := {};", mangle(names.text(*x)), dty(*t, names), dexpr(e, names)), place),
             DStmt::LocalCall(x, t, m, args) => {
                 let call = self.call(*m, args);
-                self.put(depth, format!("var {}: {} := {call};", mangle(names.text(*x)), dty(*t)), place);
+                self.put(depth, format!("var {}: {} := {call};", mangle(names.text(*x)), dty(*t, names)), place);
             }
             DStmt::ReturnCall(m, args) => {
                 let call = self.call(*m, args);
@@ -632,12 +671,12 @@ impl Printer<'_> {
         let mut shown = Vec::new();
         let mut ps = params;
         while let DParams::Cons(n, t, next) = ps {
-            shown.push(format!("{}: {}", mangle(self.names.text(*n)), dty(*t)));
+            shown.push(format!("{}: {}", mangle(self.names.text(*n)), dty(*t, self.names)));
             ps = next;
         }
         self.out.push('\n');
         self.lines.push(None);
-        self.put(0, format!("method {}({}) returns (result: {})", self.methods[&name], shown.join(", "), dty(ret)), place);
+        self.put(0, format!("method {}({}) returns (result: {})", self.methods[&name], shown.join(", "), dty(ret, self.names)), place);
     }
 
     fn method(&mut self, m: &Method, place: u32) {
@@ -665,6 +704,7 @@ fn sentence(r: Refusal, names: &Names) -> (u32, String) {
     match r {
         Refusal::Construct(k, line) => (line, format!("{}: the translator has no rule for it yet.", names.text(k))),
         Refusal::Name(n, line) => (line, format!("{} in the contract is no parameter.", names.text(n))),
+        Refusal::NoField(f, line) => (line, format!("{} in the contract is no field of the struct.", names.text(f))),
         Refusal::Syntax(line) => (line, "the contract line has a form the translator cannot read.".to_string()),
         Refusal::Backslash(line) => (line, "a contract line that ends in a backslash.".to_string()),
         Refusal::Callee(n, line) => (line, format!("a call to {}, which has no model in view.", names.text(n))),
@@ -695,9 +735,11 @@ pub fn translate(lines: &str) -> Result<Translation> {
     let mut names = Names::default();
     let mut refusals = Vec::new();
     let mut funcs = Vec::new();
+    let mut structs = Vec::new();
     for l in lines.lines().filter(|l| !l.trim().is_empty()) {
         match serde_json::from_str(l).with_context(|| format!("cannot read a line of the tree: {l}"))? {
             Item::Orphan { orphan, file } => refusals.push((file, orphan, "a contract line that belongs to no function.".to_string())),
+            Item::Struct(st) => structs.push(st),
             Item::Function(f) => match unreadable_name(&f) {
                 Some(n) => refusals.push((f.file.clone(), f.line, format!("{n}: a name with a character Dafny cannot read."))),
                 None => funcs.push(f),
@@ -717,12 +759,45 @@ pub fn translate(lines: &str) -> Result<Translation> {
         methods.insert(key, dafny);
         at.insert(key, names.place(&f.file, f.line));
     }
+    // The Dafny name of each struct: `S_{plain}`, or `S_{plain}'{k}` when two structs share a plain name.
+    let mut table = Structs::Nil;
+    for (i, st) in structs.iter().enumerate() {
+        let same = structs.iter().filter(|g| g.name == st.name).count();
+        let k = structs[..=i].iter().filter(|g| g.name == st.name).count();
+        let key = names.id(&st.key);
+        names.datatypes.insert(key, if same == 1 { format!("S_{}", st.name) } else { format!("S_{}'{k}", st.name) });
+    }
+    let struct_places: Vec<u32> = structs.iter().map(|st| names.place(&st.file, st.line)).collect();
+    for st in structs.into_iter().rev() {
+        let key = names.id(&st.key);
+        let place = names.place(&st.file, st.line);
+        names.file = st.file;
+        let fields = st.fields.into_iter().rev().fold(Params::Nil, |rest, (n, t)| Params::Cons(names.id(&n), ty(t, &mut names), Box::new(rest)));
+        table = Structs::Cons(key, place, fields, Box::new(table));
+    }
     let count = funcs.len();
     let fns = funcs.into_iter().rev().map(|f| function(f, &mut names)).fold(Fns::Nil, |rest, f| Fns::Cons(Box::new(f), Box::new(rest)));
-    let mut models = translate_unit(&fns);
+    let mut models = translate_unit(&fns, &table);
+    let mut smodels = translate_structs(&table);
     let mut p = Printer { names: &names, methods: &methods, out: PRELUDE.to_string(), lines: Vec::new(), scope: Vec::new(), own: Vec::new() };
     p.lines.extend(PRELUDE.lines().map(|_| None));
     let mut refused_at = Vec::new();
+    for place in struct_places {
+        let StructModels::Cons(model, rest) = smodels else { unreachable!("one model for each struct") };
+        match model {
+            Ok((key, DParams::Nil)) => p.put(0, format!("datatype {0} = {0}()", names.datatypes[&key]), place),
+            Ok((key, mut fields)) => {
+                let mut shown = Vec::new();
+                while let DParams::Cons(n, t, next) = fields {
+                    shown.push(format!("f_{}: {}", names.text(n), dty(t, &names)));
+                    fields = *next;
+                }
+                p.put(0, format!("datatype {0} = {0}({1})", names.datatypes[&key], shown.join(", ")), place);
+            }
+            Err(r) => refused_at.push(sentence(r, &names)),
+        }
+        smodels = *rest;
+    }
     for _ in 0..count {
         let Models::Cons(model, rest) = models else { unreachable!("one model for each function") };
         let refused = match model {
