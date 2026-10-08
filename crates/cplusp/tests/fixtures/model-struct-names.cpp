@@ -14,3 +14,7 @@ struct N$ {
 int32_t f(const Node& n) {
   return 0;
 }
+
+int32_t g(const N$& m) {
+  return m.x;
+}
