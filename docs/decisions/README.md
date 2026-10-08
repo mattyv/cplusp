@@ -86,3 +86,4 @@ Status is `decided`, `proposed` (the default until someone objects or the thin s
 | [0078](0078-subspan-and-empty.md) | subspan with one argument and empty. Dafny proves the offset is in range | decided |
 | [0079](0079-specification-functions-come-from-a-companion-file.md) | Specification functions come from a companion Dafny file of functions and predicates only. prove refuses an axiom in it | decided |
 | [0080](0080-the-companion-file-is-checked-word-by-word-and-prove-counts-its-methods.md) | The companion file is checked against a list of keywords as Dafny reads it. prove counts the methods that Dafny verified, and names a resolution error | decided |
+| [0081](0081-the-review-falls-back-to-opus.md) | The review falls back to Opus when Fable is not available | decided |
