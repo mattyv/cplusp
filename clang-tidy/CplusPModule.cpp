@@ -3858,6 +3858,9 @@ private:
   }
   // What the bot reads for a node with no rule. An expression statement and the same expression inside another give the same words.
   static std::string describe(const Stmt *S) {
+    // A statement that makes a temporary, such as `r = x;` on an optional, is wrapped for its cleanups. The wrapper is not the construct.
+    if (const auto *Cleanups = dyn_cast<ExprWithCleanups>(S))
+      return describe(Cleanups->getSubExpr());
     if (const auto *Binary = dyn_cast<BinaryOperator>(S))
       return std::string("BinaryOperator ") + Binary->getOpcodeStr().str();
     if (const auto *Unary = dyn_cast<UnaryOperator>(S))
@@ -3925,6 +3928,27 @@ private:
     return N.isNegative() || N.getActiveBits() > 63 || N.isAllOnes() ? llvm::json::Value(nullptr) : llvm::json::Value(static_cast<int64_t>(N.getZExtValue()));
   }
 
+  // The element scalar of a `std::optional` of a scalar, decision 0075, or null: by value, or by const lvalue reference. A write
+  // handle, a volatile optional and an optional of anything else are none.
+  QualType optType(QualType T) const {
+    if (T->isReferenceType()) {
+      if (!T->isLValueReferenceType() || !T->getPointeeType().isConstQualified())
+        return QualType();
+      T = T->getPointeeType();
+    }
+    const auto *Spec = dyn_cast_or_null<ClassTemplateSpecializationDecl>(T->getAsCXXRecordDecl());
+    if (T.isVolatileQualified() || !Spec || !Spec->isInStdNamespace() || Spec->getName() != "optional" || Spec->getTemplateArgs().size() != 1 ||
+        Spec->getTemplateArgs()[0].getKind() != TemplateArgument::Type)
+      return QualType();
+    const QualType Elem = Spec->getTemplateArgs()[0].getAsType();
+    return scalar(Elem) ? Elem : QualType();
+  }
+
+  const char *optElement(QualType T) const {
+    const QualType Elem = optType(T);
+    return Elem.isNull() ? nullptr : scalar(Elem);
+  }
+
   // The plain struct that a type is, decision 0073, or null. A const and a reference are looked through. Plain means a definition with
   // a name, no bases, no virtual, no constructor and no member function of the user, and public fields that are each a scalar or a
   // plain struct, with no const, no reference and no bit field.
@@ -3943,7 +3967,7 @@ private:
         return nullptr;
     for (const FieldDecl *F : RD->fields()) {
       const QualType FT = F->getType();
-      if (F->isBitField() || F->getAccess() != AS_public || FT->isReferenceType() || FT.hasQualifiers() || (!scalar(FT) && !plainStruct(FT)))
+      if (F->isBitField() || F->getAccess() != AS_public || FT->isReferenceType() || FT.hasQualifiers() || (!scalar(FT) && !plainStruct(FT) && !optElement(FT)))
         return nullptr;
     }
     return RD;
@@ -3974,6 +3998,8 @@ private:
     }
     if (const char *S = seqElement(T))
       return tag("Seq", llvm::json::Array{S, seqExtent(T)});
+    if (const char *S = optElement(T))
+      return tag("Opt", S);
     return tag("Other", T.getAsString(Context.getPrintingPolicy()));
   }
 
@@ -4018,6 +4044,9 @@ private:
   static bool isVariable(const ValueDecl *D) { return isa<ParmVarDecl>(D) || (isa<VarDecl>(D) && cast<VarDecl>(D)->hasLocalStorage()); }
 
   llvm::json::Value expr(const Expr *E, unsigned Near) const {
+    // A temporary that needs a cleanup, such as an optional made from `x + 1`, wraps the expression. The wrapper is not the construct.
+    if (const auto *Cleanups = dyn_cast<ExprWithCleanups>(E))
+      return expr(Cleanups->getSubExpr(), Near);
     if (const auto *Flag = dyn_cast<CXXBoolLiteralExpr>(E))
       return tag("Bool", Flag->getValue());
     if (const auto *Literal = dyn_cast<IntegerLiteral>(E); Literal && Literal->getValue().getActiveBits() <= 64)
@@ -4070,6 +4099,48 @@ private:
         ((seqElement(Construct->getType()) && seqElement(Construct->getArg(0)->getType())) ||
          (plainStruct(Construct->getType()) && plainStruct(Construct->getArg(0)->getType()))))
       return tag("Copy", llvm::json::Array{expr(Construct->getArg(0), Near), type(Construct->getArg(0)->getType()), type(Construct->getType())});
+    // An optional of a scalar, decision 0075: `std::nullopt`, a value that the compiler turns into one, and a copy of one. The core
+    // judges the two types of the copy. A construction from any other argument stays unknown.
+    if (const auto *Construct = dyn_cast<CXXConstructExpr>(E); Construct && Construct->getNumArgs() == 1 && optElement(Construct->getType())) {
+      const Expr *Arg = Construct->getArg(0);
+      const QualType From = Arg->getType().getNonReferenceType().getUnqualifiedType().getCanonicalType();
+      const CXXRecordDecl *Tag = From->getAsCXXRecordDecl();
+      if (Tag && Tag->isInStdNamespace() && Tag->getName() == "nullopt_t") {
+        // Only the variable `std::nullopt` itself is `None`, through its implicit casts, parentheses and copies. Any other expression
+        // of the type may hold a call or a read, so it stays an unknown construct.
+        const Expr *Name = Arg->IgnoreParenImpCasts();
+        while (const auto *Copy = dyn_cast<CXXConstructExpr>(Name)) {
+          if (Copy->getNumArgs() != 1)
+            break;
+          Name = Copy->getArg(0)->IgnoreParenImpCasts();
+        }
+        if (const auto *Ref = dyn_cast<DeclRefExpr>(Name); Ref && isa<VarDecl>(Ref->getDecl()) && Ref->getDecl()->isInStdNamespace() &&
+                                                           Ref->getDecl()->getName() == "nullopt")
+          return "Nullopt";
+        return unknown(E, E->getStmtClassName(), Near);
+      }
+      if (optElement(Arg->getType()))
+        return tag("Copy", llvm::json::Array{expr(Arg, Near), type(Arg->getType()), type(Construct->getType())});
+      if (From == optType(Construct->getType()).getCanonicalType()) {
+        // A computed value, `x + 1`, is held in a temporary for the reference parameter of the constructor. The temporary is not the value.
+        if (const auto *Temporary = dyn_cast<MaterializeTemporaryExpr>(Arg))
+          Arg = Temporary->getSubExpr();
+        return tag("Wrap", expr(Arg, Near));
+      }
+    }
+    // `o.has_value()` and `o.value()`.
+    if (const auto *Member = dyn_cast<CXXMemberCallExpr>(E); Member && Member->getNumArgs() == 0 && Member->getMethodDecl())
+      if (const Expr *Object = Member->getImplicitObjectArgument(); Object && optElement(Object->getType())) {
+        const std::string Method = Member->getMethodDecl()->getNameAsString();
+        if (Method == "has_value")
+          return tag("HasValue", expr(Object, Near));
+        if (Method == "value")
+          return tag("Value", expr(Object, Near));
+      }
+    // `*o`.
+    if (const auto *Operator = dyn_cast<CXXOperatorCallExpr>(E); Operator && Operator->getOperator() == OO_Star && Operator->getNumArgs() == 1 &&
+                                                                  optElement(Operator->getArg(0)->getType()))
+      return tag("Value", expr(Operator->getArg(0), Near));
     if (const auto *List = dyn_cast<InitListExpr>(E); List && List->getNumInits() == 1 && List->getType()->isScalarType())
       return tag("Brace", expr(List->getInit(0), Near));
     // A braced value of a plain struct. A field that the list leaves out is an `ImplicitValueInitExpr`, which stays unknown.

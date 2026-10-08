@@ -34,6 +34,7 @@ enum JTy {
     Bool,
     Seq(JScalar, Option<u64>),
     Struct(String),
+    Opt(JScalar),
     Other(String),
 }
 
@@ -75,6 +76,10 @@ enum JExpr {
     Size(Box<JExpr>),
     Copy(Box<JExpr>, JTy, JTy),
     Field(Box<JExpr>, String),
+    HasValue(Box<JExpr>),
+    Value(Box<JExpr>),
+    Nullopt,
+    Wrap(Box<JExpr>),
     Construct(String, Vec<JExpr>),
     Index(Box<JExpr>, Box<JExpr>),
     Call(String, String, Vec<JExpr>, u32),
@@ -177,6 +182,17 @@ impl Names {
 
 // ------------------------------------------------------------------ from JSON to the core's types
 
+fn scalar(s: JScalar) -> Scalar {
+    match s {
+        JScalar::I32 => Scalar::I32,
+        JScalar::I64 => Scalar::I64,
+        JScalar::U8 => Scalar::U8,
+        JScalar::U32 => Scalar::U32,
+        JScalar::U64 => Scalar::U64,
+        JScalar::Bool => Scalar::Bool,
+    }
+}
+
 fn ty(t: JTy, names: &mut Names) -> Ty {
     match t {
         JTy::I32 => Ty::I32,
@@ -185,14 +201,8 @@ fn ty(t: JTy, names: &mut Names) -> Ty {
         JTy::U32 => Ty::U32,
         JTy::U64 => Ty::U64,
         JTy::Bool => Ty::Bool,
-        JTy::Seq(s, extent) => Ty::Seq(match s {
-            JScalar::I32 => Scalar::I32,
-            JScalar::I64 => Scalar::I64,
-            JScalar::U8 => Scalar::U8,
-            JScalar::U32 => Scalar::U32,
-            JScalar::U64 => Scalar::U64,
-            JScalar::Bool => Scalar::Bool,
-        }, extent.map_or(Extent::Dynamic, Extent::Fixed)),
+        JTy::Seq(s, extent) => Ty::Seq(scalar(s), extent.map_or(Extent::Dynamic, Extent::Fixed)),
+        JTy::Opt(s) => Ty::Opt(scalar(s)),
         JTy::Struct(k) => Ty::Struct(names.id(&k)),
         JTy::Other(s) => Ty::Other(names.id(&s)),
     }
@@ -237,6 +247,10 @@ fn expr(e: JExpr, names: &mut Names) -> Expr {
         JExpr::Size(a) => Expr::Size(Box::new(expr(*a, names))),
         JExpr::Copy(a, from, to) => Expr::Copy(Box::new(expr(*a, names)), ty(from, names), ty(to, names)),
         JExpr::Field(a, f) => Expr::Field(Box::new(expr(*a, names)), names.id(&f)),
+        JExpr::HasValue(a) => Expr::HasValue(Box::new(expr(*a, names))),
+        JExpr::Value(a) => Expr::Value(Box::new(expr(*a, names))),
+        JExpr::Nullopt => Expr::Nullopt,
+        JExpr::Wrap(a) => Expr::Wrap(Box::new(expr(*a, names))),
         JExpr::Construct(k, args) => {
             let args: Vec<Expr> = args.into_iter().map(|a| expr(a, names)).collect();
             let args = args.into_iter().rev().fold(Args::Nil, |rest, a| Args::Cons(Box::new(a), Box::new(rest)));
@@ -311,7 +325,7 @@ fn lex(text: &str, line: u32, names: &mut Names) -> Vec<Tok> {
             let end = word_end(|ch| ch.is_ascii_digit());
             toks.push(rest[..end].parse().map_or_else(|_| Tok::Unknown(names.id("a number above 18446744073709551615"), line), Tok::Int));
             rest = &rest[end..];
-        } else if let Some(t) = [(".size()", Tok::Size), ("::", Tok::ColonColon)].into_iter().find(|(s, _)| rest.starts_with(s)) {
+        } else if let Some(t) = [(".size()", Tok::Size), (".has_value()", Tok::HasValue), (".value()", Tok::Value), ("::", Tok::ColonColon)].into_iter().find(|(s, _)| rest.starts_with(s)) {
             rest = &rest[t.0.len()..];
             toks.push(t.1);
         } else if c == '.' && rest[1..].starts_with(|ch: char| ch.is_ascii_alphabetic() || ch == '_') {
@@ -385,9 +399,9 @@ fn expr_names<'a>(e: &'a JExpr, out: &mut Vec<&'a str>) {
             expr_names(a, out);
             expr_names(b, out);
         }
-        JExpr::Not(a) | JExpr::Neg(a) | JExpr::Cast(_, a) | JExpr::Paren(a) | JExpr::Brace(a) | JExpr::Size(a) | JExpr::Copy(a, ..) | JExpr::Field(a, _) => expr_names(a, out),
+        JExpr::Not(a) | JExpr::Neg(a) | JExpr::Cast(_, a) | JExpr::Paren(a) | JExpr::Brace(a) | JExpr::Size(a) | JExpr::Copy(a, ..) | JExpr::Field(a, _) | JExpr::HasValue(a) | JExpr::Value(a) | JExpr::Wrap(a) => expr_names(a, out),
         JExpr::Call(_, _, args, _) | JExpr::Construct(_, args) => args.iter().for_each(|a| expr_names(a, out)),
-        JExpr::Lit(..) | JExpr::Bool(_) | JExpr::Unknown(..) => {}
+        JExpr::Lit(..) | JExpr::Bool(_) | JExpr::Nullopt | JExpr::Unknown(..) => {}
     }
 }
 
@@ -452,7 +466,8 @@ const PRELUDE: &str = "newtype int32 = x: int | -0x8000_0000 <= x < 0x8000_0000\
 newtype int64 = x: int | -0x8000_0000_0000_0000 <= x < 0x8000_0000_0000_0000\n\
 newtype uint8 = x: int | 0 <= x < 0x100\n\
 newtype uint32 = x: int | 0 <= x < 0x1_0000_0000\n\
-newtype uint64 = x: int | 0 <= x < 0x1_0000_0000_0000_0000\n";
+newtype uint64 = x: int | 0 <= x < 0x1_0000_0000_0000_0000\n\
+datatype Option<T> = None | Some(value: T)\n";
 
 fn dscalar(s: Scalar) -> &'static str {
     match s {
@@ -475,6 +490,7 @@ fn dty(t: DTy, names: &Names) -> String {
         DTy::Bool => "bool".to_string(),
         DTy::Seq(s) => format!("seq<{}>", dscalar(s)),
         DTy::Struct(k) => names.datatypes[&k].clone(),
+        DTy::Opt(s) => format!("Option<{}>", dscalar(s)),
     }
 }
 
@@ -516,6 +532,10 @@ fn dexpr(e: &DExpr, names: &Names) -> String {
         DExpr::AsInt(a) => format!("({} as int)", dexpr(a, names)),
         DExpr::Conv(t, a) => format!("({} as {})", dexpr(a, names), dty(*t, names)),
         DExpr::Field(a, f) => format!("{}.f_{}", dexpr(a, names), names.text(*f)),
+        DExpr::IsSome(a) => format!("{}.Some?", dexpr(a, names)),
+        DExpr::Get(a) => format!("{}.value", dexpr(a, names)),
+        DExpr::Nothing => "None".to_string(),
+        DExpr::Just(a) => format!("Some({})", dexpr(a, names)),
         DExpr::Ctor(k, args) => {
             let mut shown = Vec::new();
             let mut rest = &**args;
@@ -720,7 +740,7 @@ fn sentence(r: Refusal, names: &Names) -> (u32, String) {
         Refusal::WriteParam(n, line) => (line, format!("{} is a parameter. The translator writes only a local.", names.text(n))),
         Refusal::NoVar(n, line) => (line, format!("{} in the loop contract is no variable.", names.text(n))),
         Refusal::SeqParam(line) => (line, "a sequence is in the subset only as a parameter.".to_string()),
-        Refusal::Extent(line) => (line, "a sequence made from one of another length or element.".to_string()),
+        Refusal::Extent(line) => (line, "a sequence or an optional made from one of another type or length.".to_string()),
         Refusal::Misplaced(line) => (
             line,
             "a contract line in the wrong place. A requires, an ensures or a decreases line goes above a function. An invariant or a decreases line goes above a loop."

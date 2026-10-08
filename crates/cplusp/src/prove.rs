@@ -84,6 +84,7 @@ fn sentence(message: &str) -> String {
     let fit = |t: &str| format!("the value may not fit {t}.");
     match message {
         "a postcondition could not be proved on this return path" => "the ensures line may not hold on this return.".to_string(),
+        "destructor 'value' can only be applied to datatype values constructed by 'Some'" => "the optional may be empty here.".to_string(),
         "index out of range" => "the index may be out of range.".to_string(),
         "this loop invariant could not be proved on entry" => "the invariant may not hold when the loop starts.".to_string(),
         "this invariant could not be proved to be maintained by the loop" => "the loop may not keep the invariant.".to_string(),
