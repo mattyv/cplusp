@@ -485,32 +485,13 @@ pub open spec fn spec_call(key: u32, name: u32, args: Args, at: u32, all: Fns, l
     }
 }
 
-/// The parameter list `acc` with each local of the statements put in front of it, decision 0061. Each name is declared once in a
-/// function, decision 0058, so the flat list names each variable once.
-pub open spec fn spec_locals_stmt(s: Stmt, acc: Params) -> Params
-    decreases s,
-{
+/// The variables in scope after a statement, decision 0062: a local adds its name and type in front of the variables before it.
+/// A local inside a branch or a loop body stays inside, so the scope after any other statement is the scope before it.
+pub open spec fn spec_scope(s: Stmt, env: Params) -> Params {
     match s {
-        Stmt::Local(n, t, _, _) => Params::Cons(n, t, Box::new(acc)),
-        Stmt::If(_, t, f, _) => spec_locals(*f, spec_locals(*t, acc)),
-        Stmt::While(_, _, body, _) => spec_locals(*body, acc),
-        Stmt::For(init, _, step, _, body, _) => spec_locals(*body, spec_locals_stmt(*step, spec_locals_stmt(*init, acc))),
-        _ => acc,
+        Stmt::Local(n, t, _, _) => Params::Cons(n, t, Box::new(env)),
+        _ => env,
     }
-}
-
-pub open spec fn spec_locals(ss: Stmts, acc: Params) -> Params
-    decreases ss,
-{
-    match ss {
-        Stmts::Nil => acc,
-        Stmts::Cons(s, rest) => spec_locals(*rest, spec_locals_stmt(*s, acc)),
-    }
-}
-
-/// The variables of a function, its locals and its parameters, with their types. A loop contract reads its names here.
-pub open spec fn spec_env(f: Function) -> Params {
-    spec_locals(f.body, f.params)
 }
 
 /// The names of a list of variables, in order.
@@ -533,7 +514,8 @@ pub open spec fn spec_is_param(ps: Params, name: u32) -> bool
     }
 }
 
-/// The lines of one kind of the contract of a loop, in their order, decision 0061. Each reads the variables `env`, and has no
+/// The lines of one kind of the contract of a loop, in their order, decisions 0061 and 0062. Each reads the variables `env` in scope
+/// at the loop, and has no
 /// `result`. A `requires` or an `ensures` line has no place above a loop.
 pub open spec fn spec_loop_conds(cs: Conds, want: CondKind, env: Params) -> Result<DConds, Refusal>
     decreases cs,
@@ -560,7 +542,7 @@ pub open spec fn spec_loop_conds(cs: Conds, want: CondKind, env: Params) -> Resu
     }
 }
 
-/// A statement of the body, and a list of them. `env` is the variables of the function, and `ps` its parameters. A call is in a
+/// A statement of the body, and a list of them. `env` is the variables in scope, and `ps` the parameters. A call is in a
 /// statement only as the full value of a `return`, of a local or of a write. A write is to a local, never to a parameter.
 // ponytail: `return (f(x));` is refused as a call inside an expression. Upgrade: look through parentheses.
 pub open spec fn spec_stmt(s: Stmt, all: Fns, env: Params, ps: Params) -> Result<DStmt, Refusal>
@@ -648,17 +630,17 @@ pub open spec fn spec_stmt(s: Stmt, all: Fns, env: Params, ps: Params) -> Result
                 },
             },
         },
-        Stmt::For(init, c, step, lc, body, l) => match spec_loop_conds(*lc, CondKind::Invariant, env) {
+        Stmt::For(init, c, step, lc, body, l) => match spec_loop_conds(*lc, CondKind::Invariant, spec_scope(*init, env)) {
             Err(r) => Err(r),
-            Ok(inv) => match spec_loop_conds(*lc, CondKind::Decreases, env) {
+            Ok(inv) => match spec_loop_conds(*lc, CondKind::Decreases, spec_scope(*init, env)) {
                 Err(r) => Err(r),
                 Ok(dec) => match spec_stmt(*init, all, env, ps) {
                     Err(r) => Err(r),
                     Ok(di) => match spec_code(c, l) {
                         Err(r) => Err(r),
-                        Ok(dc) => match spec_stmt(*step, all, env, ps) {
+                        Ok(dc) => match spec_stmt(*step, all, spec_scope(*init, env), ps) {
                             Err(r) => Err(r),
-                            Ok(ds) => match spec_stmts(*body, all, env, ps) {
+                            Ok(ds) => match spec_stmts(*body, all, spec_scope(*init, env), ps) {
                                 Err(r) => Err(r),
                                 Ok(db) => Ok(DStmt::For(Box::new(di), dc, inv, dec, Box::new(db), Box::new(ds))),
                             },
@@ -677,7 +659,7 @@ pub open spec fn spec_stmts(ss: Stmts, all: Fns, env: Params, ps: Params) -> Res
     match ss {
         Stmts::Nil => Ok(DStmts::Nil),
         Stmts::Cons(s, rest) => match spec_stmt(*s, all, env, ps) {
-            Ok(d) => match spec_stmts(*rest, all, env, ps) {
+            Ok(d) => match spec_stmts(*rest, all, spec_scope(*s, env), ps) {
                 Ok(dr) => Ok(DStmts::Cons(Box::new(d), Box::new(dr))),
                 Err(r) => Err(r),
             },
@@ -796,7 +778,7 @@ pub open spec fn spec_inside(f: Function, all: Fns) -> Result<(DConds, DConds, D
             Err(r) => Err(r),
             Ok(ens) => match spec_twice(f) {
                 Some((n, l)) => Err(Refusal::Twice(n, l)),
-                None => match spec_stmts(f.body, all, spec_env(f), f.params) {
+                None => match spec_stmts(f.body, all, f.params, f.params) {
                     Err(r) => Err(r),
                     Ok(body) => Ok((req, ens, body)),
                 },
@@ -986,9 +968,9 @@ pub proof fn lemma_unknown_stmt_is_refused(s: Stmt, all: Fns, env: Params, ps: P
             } else if unknown_expr(c) {
                 lemma_unknown_code_is_refused(c, l);
             } else if unknown_stmt(*step) {
-                lemma_unknown_stmt_is_refused(*step, all, env, ps);
+                lemma_unknown_stmt_is_refused(*step, all, spec_scope(*init, env), ps);
             } else {
-                lemma_unknown_stmts_is_refused(*body, all, env, ps);
+                lemma_unknown_stmts_is_refused(*body, all, spec_scope(*init, env), ps);
             }
         },
         _ => {},
@@ -1007,7 +989,7 @@ pub proof fn lemma_unknown_stmts_is_refused(ss: Stmts, all: Fns, env: Params, ps
             if unknown_stmt(*s) {
                 lemma_unknown_stmt_is_refused(*s, all, env, ps);
             } else {
-                lemma_unknown_stmts_is_refused(*rest, all, env, ps);
+                lemma_unknown_stmts_is_refused(*rest, all, spec_scope(*s, env), ps);
             }
         },
         Stmts::Nil => {},
@@ -1021,7 +1003,7 @@ pub proof fn lemma_unknown_is_refused(f: Function, all: Fns)
     ensures
         !(spec_function(f, all) is Full),
 {
-    lemma_unknown_stmts_is_refused(f.body, all, spec_env(f), f.params);
+    lemma_unknown_stmts_is_refused(f.body, all, f.params, f.params);
 }
 
 pub open spec fn count_stmts(ss: Stmts) -> nat
@@ -1081,8 +1063,8 @@ pub proof fn lemma_stmt_kept(s: Stmt, all: Fns, env: Params, ps: Params)
         },
         Stmt::For(init, _, step, _, body, _) => {
             lemma_stmt_kept(*init, all, env, ps);
-            lemma_stmt_kept(*step, all, env, ps);
-            lemma_statements_kept(*body, all, env, ps);
+            lemma_stmt_kept(*step, all, spec_scope(*init, env), ps);
+            lemma_statements_kept(*body, all, spec_scope(*init, env), ps);
         },
         _ => {},
     }
@@ -1099,7 +1081,7 @@ pub proof fn lemma_statements_kept(ss: Stmts, all: Fns, env: Params, ps: Params)
     match ss {
         Stmts::Cons(s, rest) => {
             lemma_stmt_kept(*s, all, env, ps);
-            lemma_statements_kept(*rest, all, env, ps);
+            lemma_statements_kept(*rest, all, spec_scope(*s, env), ps);
         },
         Stmts::Nil => {},
     }
@@ -1160,8 +1142,8 @@ pub proof fn lemma_stmt_calls_resolve(s: Stmt, all: Fns, env: Params, ps: Params
         },
         Stmt::For(init, _, step, _, body, _) => {
             lemma_stmt_calls_resolve(*init, all, env, ps);
-            lemma_stmt_calls_resolve(*step, all, env, ps);
-            lemma_stmts_calls_resolve(*body, all, env, ps);
+            lemma_stmt_calls_resolve(*step, all, spec_scope(*init, env), ps);
+            lemma_stmts_calls_resolve(*body, all, spec_scope(*init, env), ps);
         },
         _ => {},
     }
@@ -1177,7 +1159,7 @@ pub proof fn lemma_stmts_calls_resolve(ss: Stmts, all: Fns, env: Params, ps: Par
     match ss {
         Stmts::Cons(s, rest) => {
             lemma_stmt_calls_resolve(*s, all, env, ps);
-            lemma_stmts_calls_resolve(*rest, all, env, ps);
+            lemma_stmts_calls_resolve(*rest, all, spec_scope(*s, env), ps);
         },
         Stmts::Nil => {},
     }
@@ -1209,7 +1191,7 @@ pub proof fn lemma_calls_resolve(f: Function, all: Fns)
         calls_resolve(spec_function(f, all)->Full_0.body, all),
         forall|k: u32| spec_callable(all, k) ==> #[trigger] has_method(spec_unit(all, all), k),
 {
-    lemma_stmts_calls_resolve(f.body, all, spec_env(f), f.params);
+    lemma_stmts_calls_resolve(f.body, all, f.params, f.params);
     assert forall|k: u32| spec_callable(all, k) implies #[trigger] has_method(spec_unit(all, all), k) by {
         lemma_callable_has_method(all, all, k);
     }
@@ -1441,46 +1423,14 @@ pub fn copy_params(ps: &Params) -> (r: Params)
     }
 }
 
-pub fn locals_stmt(s: &Stmt, acc: Params) -> (r: Params)
+pub fn scope(s: &Stmt, env: &Params) -> (r: Params)
     ensures
-        r == spec_locals_stmt(*s, acc),
-    decreases s,
+        r == spec_scope(*s, *env),
 {
     match s {
-        Stmt::Local(n, t, _, _) => Params::Cons(*n, *t, Box::new(acc)),
-        Stmt::If(_, t, f, _) => {
-            let mid = locals(t, acc);
-            locals(f, mid)
-        },
-        Stmt::While(_, _, body, _) => locals(body, acc),
-        Stmt::For(init, _, step, _, body, _) => {
-            let a = locals_stmt(init, acc);
-            let b = locals_stmt(step, a);
-            locals(body, b)
-        },
-        _ => acc,
+        Stmt::Local(n, t, _, _) => Params::Cons(*n, *t, Box::new(copy_params(env))),
+        _ => copy_params(env),
     }
-}
-
-pub fn locals(ss: &Stmts, acc: Params) -> (r: Params)
-    ensures
-        r == spec_locals(*ss, acc),
-    decreases ss,
-{
-    match ss {
-        Stmts::Nil => acc,
-        Stmts::Cons(s, rest) => {
-            let a = locals_stmt(s, acc);
-            locals(rest, a)
-        },
-    }
-}
-
-pub fn env_of(f: &Function) -> (r: Params)
-    ensures
-        r == spec_env(*f),
-{
-    locals(&f.body, copy_params(&f.params))
 }
 
 pub fn names_of(ps: &Params) -> (r: Names)
@@ -1613,24 +1563,27 @@ pub fn translate_stmt(s: &Stmt, all: &Fns, env: &Params, ps: &Params) -> (r: Res
                 },
             },
         },
-        Stmt::For(init, c, step, lc, body, l) => match translate_loop_conds(lc, CondKind::Invariant, env) {
-            Err(r) => Err(r),
-            Ok(inv) => match translate_loop_conds(lc, CondKind::Decreases, env) {
+        Stmt::For(init, c, step, lc, body, l) => {
+            let inner = scope(init, env);
+            match translate_loop_conds(lc, CondKind::Invariant, &inner) {
                 Err(r) => Err(r),
-                Ok(dec) => match translate_stmt(init, all, env, ps) {
+                Ok(inv) => match translate_loop_conds(lc, CondKind::Decreases, &inner) {
                     Err(r) => Err(r),
-                    Ok(di) => match translate_code(c, *l) {
+                    Ok(dec) => match translate_stmt(init, all, env, ps) {
                         Err(r) => Err(r),
-                        Ok(dc) => match translate_stmt(step, all, env, ps) {
+                        Ok(di) => match translate_code(c, *l) {
                             Err(r) => Err(r),
-                            Ok(ds) => match translate_stmts(body, all, env, ps) {
+                            Ok(dc) => match translate_stmt(step, all, &inner, ps) {
                                 Err(r) => Err(r),
-                                Ok(db) => Ok(DStmt::For(Box::new(di), dc, inv, dec, Box::new(db), Box::new(ds))),
+                                Ok(ds) => match translate_stmts(body, all, &inner, ps) {
+                                    Err(r) => Err(r),
+                                    Ok(db) => Ok(DStmt::For(Box::new(di), dc, inv, dec, Box::new(db), Box::new(ds))),
+                                },
                             },
                         },
                     },
                 },
-            },
+            }
         },
         Stmt::Unknown(k, l) => Err(Refusal::Construct(*k, *l)),
     }
@@ -1644,7 +1597,7 @@ pub fn translate_stmts(ss: &Stmts, all: &Fns, env: &Params, ps: &Params) -> (r: 
     match ss {
         Stmts::Nil => Ok(DStmts::Nil),
         Stmts::Cons(s, rest) => match translate_stmt(s, all, env, ps) {
-            Ok(d) => match translate_stmts(rest, all, env, ps) {
+            Ok(d) => match translate_stmts(rest, all, &scope(s, env), ps) {
                 Ok(dr) => Ok(DStmts::Cons(Box::new(d), Box::new(dr))),
                 Err(r) => Err(r),
             },
@@ -1800,7 +1753,7 @@ pub fn translate_inside(f: &Function, all: &Fns) -> (r: Result<(DConds, DConds, 
             Err(r) => Err(r),
             Ok(ens) => match twice(f) {
                 Some((n, l)) => Err(Refusal::Twice(n, l)),
-                None => match translate_stmts(&f.body, all, &env_of(f), &f.params) {
+                None => match translate_stmts(&f.body, all, &f.params, &f.params) {
                     Err(r) => Err(r),
                     Ok(body) => Ok((req, ens, body)),
                 },
