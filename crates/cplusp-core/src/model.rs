@@ -38,8 +38,8 @@ pub enum Extent {
 }
 
 /// A type of the subset. `Seq` is a read-only sequence of a scalar with its extent, a parameter only, decisions 0064 and 0070.
-/// `Struct` is a struct of the file by its key, decision 0073. `Other` is a type the
-/// translator has no rule for, by the id of its name.
+/// `Struct` is a struct of the file by its key, decision 0073. `Opt` is a `std::optional` of a scalar, decision 0075. `Other` is a
+/// type the translator has no rule for, by the id of its name.
 #[derive(Structural, PartialEq, Eq, Clone, Copy, Debug)]
 pub enum Ty {
     I32,
@@ -50,6 +50,7 @@ pub enum Ty {
     Bool,
     Seq(Scalar, Extent),
     Struct(u32),
+    Opt(Scalar),
     Other(u32),
 }
 
@@ -87,8 +88,9 @@ pub enum CastKind {
 /// An expression. In code, a name and a literal carry their type, which the compiler gave, decision 0060. A literal is never
 /// negative, since a minus is an operator, so it holds the full range of `uint64_t`, decision 0063. `Bool` is `true` or `false`. In a contract, a name
 /// carries no type, and the translator finds it among the parameters, and `Int` is an exact integer. `Brace` is a braced value of one scalar, such as `int64_t{a}`. `Call` is a call by the
-/// key of its callee, the id of the callee's name for a refusal, its arguments and its line. `Unknown` is a construct with no rule,
-/// by the id of its kind and its line.
+/// key of its callee, the id of the callee's name for a refusal, its arguments and its line. `HasValue` and `Value` read an
+/// optional, `Nullopt` is `std::nullopt`, and `Wrap` is a value that the compiler turns into an optional, decision 0075. `Unknown`
+/// is a construct with no rule, by the id of its kind and its line.
 #[derive(PartialEq, Eq, Debug)]
 pub enum Expr {
     Int(u64),
@@ -111,6 +113,10 @@ pub enum Expr {
     Construct(u32, Box<Args>),
     Forall(u32, Box<Expr>),
     Chain(BinOp, BinOp, Box<Expr>, Box<Expr>, Box<Expr>),
+    HasValue(Box<Expr>),
+    Value(Box<Expr>),
+    Nullopt,
+    Wrap(Box<Expr>),
     Unknown(u32, u32),
 }
 
@@ -219,10 +225,12 @@ pub enum DTy {
     Bool,
     Seq(Scalar),
     Struct(u32),
+    Opt(Scalar),
 }
 
 /// A Dafny expression. `AsInt` is `(e as int)`, the exact value of a machine integer. `Conv` is `(e as T)`, which Dafny proves
-/// fits `T`. A Dafny expression has no call.
+/// fits `T`. `IsSome` is `e.Some?`, `Get` is `e.value`, which Dafny proves holds a value, and `Nothing` and `Just` are `None` and
+/// `Some(e)`. A Dafny expression has no call.
 #[derive(PartialEq, Eq, Debug)]
 pub enum DExpr {
     Lit(u64),
@@ -241,6 +249,10 @@ pub enum DExpr {
     Chain(BinOp, BinOp, Box<DExpr>, Box<DExpr>, Box<DExpr>),
     Field(Box<DExpr>, u32),
     Ctor(u32, Box<DArgs>),
+    IsSome(Box<DExpr>),
+    Get(Box<DExpr>),
+    Nothing,
+    Just(Box<DExpr>),
 }
 
 #[derive(PartialEq, Eq, Debug)]
@@ -352,6 +364,7 @@ pub open spec fn spec_ty(t: Ty, line: u32) -> Result<DTy, Refusal> {
         Ty::Bool => Ok(DTy::Bool),
         Ty::Seq(s, _) => Ok(DTy::Seq(s)),
         Ty::Struct(k) => Ok(DTy::Struct(k)),
+        Ty::Opt(s) => Ok(DTy::Opt(s)),
         Ty::Other(k) => Err(Refusal::Construct(k, line)),
     }
 }
@@ -378,11 +391,12 @@ pub open spec fn spec_elem(s: Scalar) -> Ty {
 
 /// A sequence made from a sequence keeps its value when the elements are the same and the length cannot change: the new one has no
 /// fixed extent, or the same extent as the old one, decision 0070. A copy of a struct keeps its value as the same struct, decision
-/// 0073.
+/// 0073, and a copy of an optional as an optional of the same scalar, decision 0075.
 pub open spec fn copies(from: Ty, to: Ty) -> bool {
     match (from, to) {
         (Ty::Seq(s1, e1), Ty::Seq(s2, e2)) => s1 == s2 && (e2 == Extent::Dynamic || e1 == e2),
         (Ty::Struct(a), Ty::Struct(b)) => a == b,
+        (Ty::Opt(a), Ty::Opt(b)) => a == b,
         _ => false,
     }
 }
@@ -480,6 +494,19 @@ pub open spec fn spec_code(e: Expr, line: u32) -> Result<DExpr, Refusal>
             Ok(da) => Ok(DExpr::Ctor(k, Box::new(da))),
             Err(r) => Err(r),
         },
+        Expr::HasValue(o) => match spec_code(*o, line) {
+            Ok(d) => Ok(DExpr::IsSome(Box::new(d))),
+            Err(r) => Err(r),
+        },
+        Expr::Value(o) => match spec_code(*o, line) {
+            Ok(d) => Ok(DExpr::Get(Box::new(d))),
+            Err(r) => Err(r),
+        },
+        Expr::Nullopt => Ok(DExpr::Nothing),
+        Expr::Wrap(a) => match spec_code(*a, line) {
+            Ok(d) => Ok(DExpr::Just(Box::new(d))),
+            Err(r) => Err(r),
+        },
         Expr::Name(n) => Err(Refusal::Name(n, line)),
         Expr::Unknown(k, l) => Err(Refusal::Construct(k, l)),
         _ => Err(Refusal::Syntax(line)),
@@ -535,7 +562,8 @@ pub open spec fn spec_leaf(d: DExpr, t: Ty, line: u32) -> Result<DExpr, Refusal>
 /// `result` read as `as int`, so no step can overflow. A name bound by a `forall` in `bound` is an exact integer. Any other name
 /// must be a parameter of the declaration `decl`, and it reads the parameter of the definition at its place. A loop contract has
 /// no `ret`, so `result` has no place in it, and a name it does not find is no variable. `v.size()` and `v[e]` read a sequence
-/// parameter, and a chain is two comparisons in one direction, decision 0064.
+/// parameter, and a chain is two comparisons in one direction, decision 0064. `o.has_value()` and `o.value()` read an optional on
+/// a path, and the value of an integer is an exact integer, decision 0075.
 pub open spec fn spec_contract(e: Expr, decl: Names, ps: Params, ret: Option<Ty>, bound: Names, line: u32, sd: Structs) -> Result<DExpr, Refusal>
     decreases e,
 {
@@ -586,6 +614,16 @@ pub open spec fn spec_contract(e: Expr, decl: Names, ps: Params, ret: Option<Ty>
         },
         Expr::Field(o, f) => match spec_path(Expr::Field(o, f), decl, ps, ret, bound, line, sd) {
             Ok((d, t)) => spec_leaf(d, t, line),
+            Err(r) => Err(r),
+        },
+        Expr::HasValue(o) => match spec_path(*o, decl, ps, ret, bound, line, sd) {
+            Ok((d, Ty::Opt(_))) => Ok(DExpr::IsSome(Box::new(d))),
+            Ok(_) => Err(Refusal::Syntax(line)),
+            Err(r) => Err(r),
+        },
+        Expr::Value(o) => match spec_path(*o, decl, ps, ret, bound, line, sd) {
+            Ok((d, Ty::Opt(s))) => spec_leaf(DExpr::Get(Box::new(d)), spec_elem(s), line),
+            Ok(_) => Err(Refusal::Syntax(line)),
             Err(r) => Err(r),
         },
         Expr::Chain(o1, o2, a, b, c) => if chains(o1, o2) {
@@ -960,6 +998,9 @@ pub open spec fn spec_has_result(e: Expr) -> bool
         Expr::Size(a) => spec_has_result(*a),
         Expr::Index(a, i) => spec_has_result(*a) || spec_has_result(*i),
         Expr::Forall(_, a) => spec_has_result(*a),
+        Expr::Field(a, _) => spec_has_result(*a),
+        Expr::HasValue(a) => spec_has_result(*a),
+        Expr::Value(a) => spec_has_result(*a),
         Expr::Chain(_, _, a, b, c) => spec_has_result(*a) || spec_has_result(*b) || spec_has_result(*c),
         _ => false,
     }
@@ -1191,6 +1232,9 @@ pub open spec fn unknown_expr(e: Expr) -> bool
         Expr::Construct(_, args) => unknown_args(*args),
         Expr::Forall(_, a) => unknown_expr(*a),
         Expr::Chain(_, _, a, b, c) => unknown_expr(*a) || unknown_expr(*b) || unknown_expr(*c),
+        Expr::HasValue(a) => unknown_expr(*a),
+        Expr::Value(a) => unknown_expr(*a),
+        Expr::Wrap(a) => unknown_expr(*a),
         _ => false,
     }
 }
@@ -1259,6 +1303,9 @@ pub proof fn lemma_unknown_code_is_refused(e: Expr, line: u32)
         Expr::Copy(a, _, _) => lemma_unknown_code_is_refused(*a, line),
         Expr::Field(a, _) => lemma_unknown_code_is_refused(*a, line),
         Expr::Construct(_, args) => lemma_unknown_args_is_refused(*args, line),
+        Expr::HasValue(a) => lemma_unknown_code_is_refused(*a, line),
+        Expr::Value(a) => lemma_unknown_code_is_refused(*a, line),
+        Expr::Wrap(a) => lemma_unknown_code_is_refused(*a, line),
         _ => {},
     }
 }
@@ -1589,6 +1636,7 @@ pub fn translate_ty(t: Ty, line: u32) -> (r: Result<DTy, Refusal>)
         Ty::Bool => Ok(DTy::Bool),
         Ty::Seq(s, _) => Ok(DTy::Seq(s)),
         Ty::Struct(k) => Ok(DTy::Struct(k)),
+        Ty::Opt(s) => Ok(DTy::Opt(s)),
         Ty::Other(k) => Err(Refusal::Construct(k, line)),
     }
 }
@@ -1624,6 +1672,7 @@ pub fn copy_ok(from: Ty, to: Ty) -> (r: bool)
     match (from, to) {
         (Ty::Seq(s1, e1), Ty::Seq(s2, e2)) => s1 == s2 && (e2 == Extent::Dynamic || e1 == e2),
         (Ty::Struct(a), Ty::Struct(b)) => a == b,
+        (Ty::Opt(a), Ty::Opt(b)) => a == b,
         _ => false,
     }
 }
@@ -1716,6 +1765,19 @@ pub fn translate_code(e: &Expr, line: u32) -> (r: Result<DExpr, Refusal>)
         },
         Expr::Construct(k, args) => match translate_args(args, line) {
             Ok(da) => Ok(DExpr::Ctor(*k, Box::new(da))),
+            Err(r) => Err(r),
+        },
+        Expr::HasValue(o) => match translate_code(o, line) {
+            Ok(d) => Ok(DExpr::IsSome(Box::new(d))),
+            Err(r) => Err(r),
+        },
+        Expr::Value(o) => match translate_code(o, line) {
+            Ok(d) => Ok(DExpr::Get(Box::new(d))),
+            Err(r) => Err(r),
+        },
+        Expr::Nullopt => Ok(DExpr::Nothing),
+        Expr::Wrap(a) => match translate_code(a, line) {
+            Ok(d) => Ok(DExpr::Just(Box::new(d))),
             Err(r) => Err(r),
         },
         Expr::Name(n) => Err(Refusal::Name(*n, line)),
@@ -1828,6 +1890,16 @@ pub fn translate_contract(e: &Expr, decl: &Names, ps: &Params, ret: Option<Ty>, 
         },
         Expr::Field(_, _) => match path(e, decl, ps, ret, bound, line, sd) {
             Ok((d, t)) => translate_leaf(d, t, line),
+            Err(r) => Err(r),
+        },
+        Expr::HasValue(o) => match path(o, decl, ps, ret, bound, line, sd) {
+            Ok((d, Ty::Opt(_))) => Ok(DExpr::IsSome(Box::new(d))),
+            Ok(_) => Err(Refusal::Syntax(line)),
+            Err(r) => Err(r),
+        },
+        Expr::Value(o) => match path(o, decl, ps, ret, bound, line, sd) {
+            Ok((d, Ty::Opt(s))) => translate_leaf(DExpr::Get(Box::new(d)), elem(s), line),
+            Ok(_) => Err(Refusal::Syntax(line)),
             Err(r) => Err(r),
         },
         Expr::Chain(o1, o2, a, b, c) => if chain_ok(*o1, *o2) {
@@ -2236,6 +2308,9 @@ pub fn has_result(e: &Expr) -> (r: bool)
         Expr::Size(a) => has_result(a),
         Expr::Index(a, i) => has_result(a) || has_result(i),
         Expr::Forall(_, a) => has_result(a),
+        Expr::Field(a, _) => has_result(a),
+        Expr::HasValue(a) => has_result(a),
+        Expr::Value(a) => has_result(a),
         Expr::Chain(_, _, a, b, c) => has_result(a) || has_result(b) || has_result(c),
         _ => false,
     }
@@ -2500,8 +2575,9 @@ pub fn translate_unit(all: &Fns, sd: &Structs) -> (r: Models)
 // ------------------------------------------------------------------ the contract parser
 
 /// A token of a contract line. The shell cuts the text into tokens. `Op` holds `- ` as `Sub`, and the parser reads it as a
-/// negation where no operand is before it. `Size` is the text `.size()`, decision 0064. `Field` is `.name`, decision 0073. `Unknown` is text with no token, by the id
-/// of its kind and its line.
+/// negation where no operand is before it. `Size` is the text `.size()`, decision 0064. `Field` is `.name`, decision 0073.
+/// `HasValue` and `Value` are the texts `.has_value()` and `.value()`, decision 0075. `Unknown` is text with no token, by the id of
+/// its kind and its line.
 #[derive(Structural, PartialEq, Eq, Clone, Copy, Debug)]
 pub enum Tok {
     Ident(u32),
@@ -2515,6 +2591,8 @@ pub enum Tok {
     RBracket,
     Size,
     Field(u32),
+    HasValue,
+    Value,
     Forall,
     ColonColon,
     Unknown(u32, u32),
@@ -2739,7 +2817,7 @@ fn parse_unary(toks: &Vec<Tok>, pos: usize, line: u32) -> (r: Result<(Expr, usiz
 /// A token that follows an atom: `.size()`, `.name` or `[`.
 fn is_postfix(t: Tok) -> bool {
     match t {
-        Tok::Size | Tok::Field(_) | Tok::LBracket => true,
+        Tok::Size | Tok::Field(_) | Tok::HasValue | Tok::Value | Tok::LBracket => true,
         _ => false,
     }
 }
@@ -2766,6 +2844,12 @@ fn parse_postfix(toks: &Vec<Tok>, pos: usize, line: u32) -> (r: Result<(Expr, us
             p = p + 1;
         } else if let Tok::Field(f) = toks[p] {
             a = Expr::Field(Box::new(a), f);
+            p = p + 1;
+        } else if toks[p] == Tok::HasValue {
+            a = Expr::HasValue(Box::new(a));
+            p = p + 1;
+        } else if toks[p] == Tok::Value {
+            a = Expr::Value(Box::new(a));
             p = p + 1;
         } else {
             match parse_implies(toks, p + 1, line) {
