@@ -1118,3 +1118,74 @@ fn a_specification_function_has_no_place_in_code_or_with_result_in_a_decreases_l
     let f = Function { conds: Conds::Cons(CondKind::Decreases, dec, 2, names(&[X]), Box::new(Conds::Nil)), ..with_n(one(Stmt::Return(Expr::Lit(0, Ty::I32), 4))) };
     assert_eq!(bare_refusal(translate_function(&f, &Fns::Nil, &Structs::Nil)), Refusal::Syntax(2));
 }
+
+#[test]
+fn the_parser_reads_exists_and_several_bound_names() {
+    // exists k :: k < a, and forall i, j :: i < j
+    let toks = vec![Tok::Exists, Tok::Ident(70), Tok::ColonColon, Tok::Ident(70), Tok::Op(BinOp::Lt), Tok::Ident(A)];
+    assert_eq!(parse_contract(&toks, 3), Ok(Expr::Exists(70, b(Expr::Bin(BinOp::Lt, b(Expr::Name(70)), b(Expr::Name(A)))))));
+    let toks = vec![Tok::Forall, Tok::Ident(70), Tok::Comma, Tok::Ident(71), Tok::ColonColon, Tok::Ident(70), Tok::Op(BinOp::Lt), Tok::Ident(71)];
+    let want = Expr::Forall(70, b(Expr::Forall(71, b(Expr::Bin(BinOp::Lt, b(Expr::Name(70)), b(Expr::Name(71)))))));
+    assert_eq!(parse_contract(&toks, 3), Ok(want));
+    // A comma with no name after it, and no name at all, are refused.
+    assert_eq!(parse_contract(&vec![Tok::Forall, Tok::Ident(70), Tok::Comma, Tok::ColonColon, Tok::Ident(70)], 3), Err(Refusal::Syntax(3)));
+    assert_eq!(parse_contract(&vec![Tok::Exists, Tok::ColonColon, Tok::Ident(70)], 3), Err(Refusal::Syntax(3)));
+}
+
+#[test]
+fn exists_binds_an_exact_integer_in_a_contract() {
+    // requires exists k :: 0 <= k < v.size() && v[k] == a, over a sequence parameter v and an integer a
+    let k = 70;
+    let body = Expr::Bin(
+        BinOp::And,
+        b(Expr::Chain(BinOp::Le, BinOp::Lt, b(Expr::Int(0)), b(Expr::Name(k)), b(Expr::Size(b(Expr::Name(X)))))),
+        b(Expr::Bin(BinOp::Eq, b(Expr::Index(b(Expr::Name(X)), b(Expr::Name(k)))), b(Expr::Name(A)))),
+    );
+    let f = Function {
+        name: SAT,
+        line: 14,
+        params: Params::Cons(X, Ty::Seq(Scalar::I32, Extent::Dynamic), Box::new(Params::Cons(A, Ty::I32, Box::new(Params::Nil)))),
+        ret: Ty::Bool,
+        conds: Conds::Cons(CondKind::Requires, Expr::Exists(k, b(body)), 13, names(&[X, A]), Box::new(Conds::Nil)),
+        body: one(Stmt::Return(Expr::Bool(true), 15)),
+    };
+    let Model::Full(m) = translate_function(&f, &Fns::Nil, &Structs::Nil) else { panic!("a full model") };
+    let int = |d: DExpr| Box::new(DExpr::AsInt(Box::new(d)));
+    let want = DExpr::Exists(
+        k,
+        Box::new(DExpr::Bin(
+            BinOp::And,
+            Box::new(DExpr::Chain(BinOp::Le, BinOp::Lt, Box::new(DExpr::Lit(0)), Box::new(DExpr::Bound(k)), Box::new(DExpr::Len(Box::new(DExpr::Var(X)))))),
+            Box::new(DExpr::Bin(BinOp::Eq, int(DExpr::Index(Box::new(DExpr::Var(X)), Box::new(DExpr::Bound(k)))), int(DExpr::Var(A)))),
+        )),
+    );
+    assert_eq!(strip_conds(m.requires), DConds::Cons(want, 0, Box::new(DConds::Nil)));
+}
+
+#[test]
+fn a_contract_reads_true_and_false() {
+    // result == true || x == false, decision 0084
+    let toks = vec![Tok::Result, Tok::Op(BinOp::Eq), Tok::Bool(true), Tok::Op(BinOp::Or), Tok::Ident(X), Tok::Op(BinOp::Eq), Tok::Bool(false)];
+    let e = parse_contract(&toks, 3).unwrap();
+    let want = Expr::Bin(
+        BinOp::Or,
+        b(Expr::Bin(BinOp::Eq, b(Expr::Result), b(Expr::Bool(true)))),
+        b(Expr::Bin(BinOp::Eq, b(Expr::Name(X)), b(Expr::Bool(false)))),
+    );
+    assert_eq!(e, want);
+    let f = Function {
+        name: SAT,
+        line: 10,
+        params: Params::Cons(X, Ty::Bool, Box::new(Params::Nil)),
+        ret: Ty::Bool,
+        conds: Conds::Cons(CondKind::Ensures, e, 9, names(&[X]), Box::new(Conds::Nil)),
+        body: one(Stmt::Return(Expr::Bool(true), 11)),
+    };
+    let Model::Full(m) = translate_function(&f, &Fns::Nil, &Structs::Nil) else { panic!("a full model") };
+    let dwant = DExpr::Bin(
+        BinOp::Or,
+        Box::new(DExpr::Bin(BinOp::Eq, Box::new(DExpr::Result), Box::new(DExpr::Bool(true)))),
+        Box::new(DExpr::Bin(BinOp::Eq, Box::new(DExpr::Var(X)), Box::new(DExpr::Bool(false)))),
+    );
+    assert_eq!(strip_conds(m.ensures), DConds::Cons(dwant, 0, Box::new(DConds::Nil)));
+}

@@ -2752,6 +2752,54 @@ fn prove_names_a_run_that_verified_too_few_items() {
     assert!(text.lines().any(|l| l.starts_with("Not provable: ") && l.ends_with(want)), "{want}: {text}");
 }
 
+/// Hex literals, exists, forall with two bound names, and true and false prove, decisions 0082 and 0084.
+#[test]
+fn hex_literals_exists_and_several_bound_names_prove() {
+    let Some(dafny) = dafny() else { return };
+    if !clang_tidy_available() {
+        return;
+    }
+    let o = prove("model-quant.cpp", &[], &dafny);
+    let text = stdout(&o);
+    assert_eq!(o.status.code(), Some(0), "stdout: {text} stderr: {}", stderr(&o));
+    assert_eq!(text.lines().last(), Some("ok: proved"), "{text}");
+}
+
+/// A hex literal too large for uint64_t is refused, and / in a contract still has no rule, decision 0082.
+#[test]
+fn a_hex_literal_too_large_and_a_division_in_a_contract_are_refused() {
+    if !clang_tidy_available() {
+        return;
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let (o, _) = model("model-quant-refuse.cpp", dir.path());
+    let text = stdout(&o);
+    assert_eq!(o.status.code(), Some(1), "stdout: {text} stderr: {}", stderr(&o));
+    let refusals: Vec<&str> = text.lines().filter(|l| l.starts_with("Not provable: ")).collect();
+    for want in [
+        "model-quant-refuse.cpp:4: the contract line has a form the translator cannot read.",
+        "model-quant-refuse.cpp:9: '/' in a contract: the translator has no rule for it yet.",
+    ] {
+        assert!(refusals.iter().any(|l| l.ends_with(want)), "{want}: {text}");
+    }
+    assert_eq!(refusals.len(), 2, "{text}");
+}
+
+/// An error inside a function of the companion file prints in the words of Dafny, not as a return of a method, decision 0084.
+#[test]
+fn an_error_in_the_companion_file_prints_in_the_words_of_dafny() {
+    let Some(dafny) = dafny() else { return };
+    if !clang_tidy_available() {
+        return;
+    }
+    let o = prove("model-spec-wording.cpp", &[], &dafny);
+    let text = stdout(&o);
+    assert_eq!(o.status.code(), Some(1), "stdout: {text} stderr: {}", stderr(&o));
+    let want = "model-spec-wording.spec.dfy:1: Dafny says: a postcondition could not be proved on this return path.";
+    assert!(text.lines().any(|l| l.starts_with("Not proved: ") && l.ends_with(want)), "{want}: {text}");
+    assert!(!text.contains("may not hold on this return"), "{text}");
+}
+
 /// Pull `"key":"value"` or `"key":123` out of one JSON line without a JSON library.
 fn field(line: &str, key: &str) -> String {
     let needle = format!("\"{key}\":");
