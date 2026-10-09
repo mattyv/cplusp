@@ -62,6 +62,8 @@ pub enum BinOp {
     Add,
     Sub,
     Mul,
+    Div,
+    Rem,
     Lt,
     Le,
     Gt,
@@ -93,7 +95,8 @@ pub enum CastKind {
 /// optional, `Nullopt` is `std::nullopt`, and `Wrap` is a value that the compiler turns into an optional, decision 0075. `Empty`
 /// is `v.empty()` and `Subspan` is `s.subspan(k)`, decision 0078. `Apply` is a call in a contract of a function of the companion
 /// file, by the id of its name, decision 0079. `Suffix`, `Prefix` and `Slice` are `v[i..]`, `v[..j]` and `v[i..j]` in a contract,
-/// decision 0085. `Unknown` is a construct with no rule, by the id of its kind and its line.
+/// decision 0085. `Divide` is `/` or `%` in code, with the type of its result, decision 0088. `Unknown` is a construct with no
+/// rule, by the id of its kind and its line.
 #[derive(PartialEq, Eq, Debug)]
 pub enum Expr {
     Int(u64),
@@ -127,6 +130,7 @@ pub enum Expr {
     Suffix(Box<Expr>, Box<Expr>),
     Prefix(Box<Expr>, Box<Expr>),
     Slice(Box<Expr>, Box<Expr>, Box<Expr>),
+    Divide(BinOp, Box<Expr>, Box<Expr>, Ty),
     Unknown(u32, u32),
 }
 
@@ -241,7 +245,9 @@ pub enum DTy {
 /// A Dafny expression. `AsInt` is `(e as int)`, the exact value of a machine integer. `Conv` is `(e as T)`, which Dafny proves
 /// fits `T`. `IsSome` is `e.Some?`, `Get` is `e.value`, which Dafny proves holds a value, and `Nothing` and `Just` are `None` and
 /// `Some(e)`. `Drop` is `s[k..]`, which Dafny proves is in range, decision 0078. `Apply` calls a function of the companion file,
-/// decision 0079. `Take` is `s[..j]` and `Slice` is `s[i..j]`, decision 0085. A Dafny expression calls no method.
+/// decision 0079. `Take` is `s[..j]` and `Slice` is `s[i..j]`, decision 0085. `TDiv` and `TRem` are `trunc_div` and `trunc_rem`
+/// on the exact integers. `DivIn` is `(trunc_div(a, b) as T)`, and `RemIn` is the remainder of `T`, which also needs the quotient to
+/// fit `T`, decision 0088. A Dafny expression calls no method.
 #[derive(PartialEq, Eq, Debug)]
 pub enum DExpr {
     Lit(u64),
@@ -269,6 +275,10 @@ pub enum DExpr {
     Apply(u32, Box<DArgs>),
     Take(Box<DExpr>, Box<DExpr>),
     Slice(Box<DExpr>, Box<DExpr>, Box<DExpr>),
+    TDiv(Box<DExpr>, Box<DExpr>),
+    TRem(Box<DExpr>, Box<DExpr>),
+    DivIn(Box<DExpr>, Box<DExpr>, DTy),
+    RemIn(Box<DExpr>, Box<DExpr>, DTy),
 }
 
 #[derive(PartialEq, Eq, Debug)]
@@ -521,12 +531,27 @@ pub open spec fn spec_code(e: Expr, line: u32) -> Result<DExpr, Refusal>
             Ok(_) => Ok(DExpr::Var(v)),
             Err(r) => Err(r),
         },
-        Expr::Bin(op, a, b) => match spec_code(*a, line) {
-            Ok(da) => match spec_code(*b, line) {
-                Ok(db) => Ok(DExpr::Bin(op, Box::new(da), Box::new(db))),
+        Expr::Bin(op, a, b) => if op == BinOp::Div || op == BinOp::Rem {
+            Err(Refusal::Syntax(line))
+        } else {
+            match spec_code(*a, line) {
+                Ok(da) => match spec_code(*b, line) {
+                    Ok(db) => Ok(DExpr::Bin(op, Box::new(da), Box::new(db))),
+                    Err(r) => Err(r),
+                },
                 Err(r) => Err(r),
-            },
-            Err(r) => Err(r),
+            }
+        },
+        Expr::Divide(op, a, b, t) => if !(op == BinOp::Div || op == BinOp::Rem) {
+            Err(Refusal::Syntax(line))
+        } else {
+            match spec_code(*a, line) {
+                Ok(da) => match spec_code(*b, line) {
+                    Ok(db) => spec_divide(op, da, db, t, line),
+                    Err(r) => Err(r),
+                },
+                Err(r) => Err(r),
+            }
         },
         Expr::Not(a) => match spec_code(*a, line) {
             Ok(da) => Ok(DExpr::Not(Box::new(da))),
@@ -634,6 +659,31 @@ pub open spec fn spec_rebind(decl: Names, ps: Params, name: u32) -> Option<(u32,
     }
 }
 
+/// A binary operator of a contract on the exact integers. `/` and `%` truncate as in C++, decision 0088.
+pub open spec fn spec_binary(op: BinOp, da: DExpr, db: DExpr) -> DExpr {
+    if op == BinOp::Div {
+        DExpr::TDiv(Box::new(da), Box::new(db))
+    } else if op == BinOp::Rem {
+        DExpr::TRem(Box::new(da), Box::new(db))
+    } else {
+        DExpr::Bin(op, Box::new(da), Box::new(db))
+    }
+}
+
+/// `/` or `%` of code on the integer type `t`, decision 0088. Each operand reads as an exact integer.
+pub open spec fn spec_divide(op: BinOp, da: DExpr, db: DExpr, t: Ty, line: u32) -> Result<DExpr, Refusal> {
+    match spec_ty(t, line) {
+        Err(r) => Err(r),
+        Ok(dt) => if !is_integer(t) {
+            Err(Refusal::Convert(line))
+        } else if op == BinOp::Div {
+            Ok(DExpr::DivIn(Box::new(DExpr::AsInt(Box::new(da))), Box::new(DExpr::AsInt(Box::new(db))), dt))
+        } else {
+            Ok(DExpr::RemIn(Box::new(DExpr::AsInt(Box::new(da))), Box::new(DExpr::AsInt(Box::new(db))), dt))
+        },
+    }
+}
+
 /// A leaf of a contract: an integer reads as its exact value, `(x as int)`, and a bool as itself.
 pub open spec fn spec_leaf(d: DExpr, t: Ty, line: u32) -> Result<DExpr, Refusal> {
     match spec_ty(t, line) {
@@ -672,7 +722,7 @@ pub open spec fn spec_contract(e: Expr, decl: Names, ps: Params, ret: Option<Ty>
         },
         Expr::Bin(op, a, b) => match spec_contract(*a, decl, ps, ret, bound, line, sd) {
             Ok(da) => match spec_contract(*b, decl, ps, ret, bound, line, sd) {
-                Ok(db) => Ok(DExpr::Bin(op, Box::new(da), Box::new(db))),
+                Ok(db) => Ok(spec_binary(op, da, db)),
                 Err(r) => Err(r),
             },
             Err(r) => Err(r),
@@ -1399,6 +1449,7 @@ pub open spec fn unknown_expr(e: Expr) -> bool
         Expr::Suffix(a, i) => unknown_expr(*a) || unknown_expr(*i),
         Expr::Prefix(a, j) => unknown_expr(*a) || unknown_expr(*j),
         Expr::Slice(a, i, j) => unknown_expr(*a) || unknown_expr(*i) || unknown_expr(*j),
+        Expr::Divide(_, a, b, _) => unknown_expr(*a) || unknown_expr(*b),
         _ => false,
     }
 }
@@ -1445,6 +1496,13 @@ pub proof fn lemma_unknown_code_is_refused(e: Expr, line: u32)
 {
     match e {
         Expr::Bin(_, a, b) => {
+            if unknown_expr(*a) {
+                lemma_unknown_code_is_refused(*a, line);
+            } else {
+                lemma_unknown_code_is_refused(*b, line);
+            }
+        },
+        Expr::Divide(_, a, b, _) => {
             if unknown_expr(*a) {
                 lemma_unknown_code_is_refused(*a, line);
             } else {
@@ -1949,12 +2007,27 @@ pub fn translate_code(e: &Expr, line: u32) -> (r: Result<DExpr, Refusal>)
             Ok(_) => Ok(DExpr::Var(*v)),
             Err(r) => Err(r),
         },
-        Expr::Bin(op, a, b) => match translate_code(a, line) {
-            Ok(da) => match translate_code(b, line) {
-                Ok(db) => Ok(DExpr::Bin(*op, Box::new(da), Box::new(db))),
+        Expr::Bin(op, a, b) => if *op == BinOp::Div || *op == BinOp::Rem {
+            Err(Refusal::Syntax(line))
+        } else {
+            match translate_code(a, line) {
+                Ok(da) => match translate_code(b, line) {
+                    Ok(db) => Ok(DExpr::Bin(*op, Box::new(da), Box::new(db))),
+                    Err(r) => Err(r),
+                },
                 Err(r) => Err(r),
-            },
-            Err(r) => Err(r),
+            }
+        },
+        Expr::Divide(op, a, b, t) => if !(*op == BinOp::Div || *op == BinOp::Rem) {
+            Err(Refusal::Syntax(line))
+        } else {
+            match translate_code(a, line) {
+                Ok(da) => match translate_code(b, line) {
+                    Ok(db) => divide(*op, da, db, *t, line),
+                    Err(r) => Err(r),
+                },
+                Err(r) => Err(r),
+            }
         },
         Expr::Not(a) => match translate_code(a, line) {
             Ok(da) => Ok(DExpr::Not(Box::new(da))),
@@ -2064,6 +2137,35 @@ pub fn rebind(decl: &Names, ps: &Params, name: u32) -> (r: Option<(u32, Ty)>)
     }
 }
 
+pub fn binary(op: BinOp, da: DExpr, db: DExpr) -> (r: DExpr)
+    ensures
+        r == spec_binary(op, da, db),
+{
+    if op == BinOp::Div {
+        DExpr::TDiv(Box::new(da), Box::new(db))
+    } else if op == BinOp::Rem {
+        DExpr::TRem(Box::new(da), Box::new(db))
+    } else {
+        DExpr::Bin(op, Box::new(da), Box::new(db))
+    }
+}
+
+pub fn divide(op: BinOp, da: DExpr, db: DExpr, t: Ty, line: u32) -> (r: Result<DExpr, Refusal>)
+    ensures
+        r == spec_divide(op, da, db, t, line),
+{
+    match translate_ty(t, line) {
+        Err(r) => Err(r),
+        Ok(dt) => if !(t == Ty::I32 || t == Ty::I64 || t == Ty::U8 || t == Ty::U32 || t == Ty::U64) {
+            Err(Refusal::Convert(line))
+        } else if op == BinOp::Div {
+            Ok(DExpr::DivIn(Box::new(DExpr::AsInt(Box::new(da))), Box::new(DExpr::AsInt(Box::new(db))), dt))
+        } else {
+            Ok(DExpr::RemIn(Box::new(DExpr::AsInt(Box::new(da))), Box::new(DExpr::AsInt(Box::new(db))), dt))
+        },
+    }
+}
+
 pub fn translate_leaf(d: DExpr, t: Ty, line: u32) -> (r: Result<DExpr, Refusal>)
     ensures
         r == spec_leaf(d, t, line),
@@ -2100,7 +2202,7 @@ pub fn translate_contract(e: &Expr, decl: &Names, ps: &Params, ret: Option<Ty>, 
         },
         Expr::Bin(op, a, b) => match translate_contract(a, decl, ps, ret, bound, line, sd) {
             Ok(da) => match translate_contract(b, decl, ps, ret, bound, line, sd) {
-                Ok(db) => Ok(DExpr::Bin(*op, Box::new(da), Box::new(db))),
+                Ok(db) => Ok(binary(*op, da, db)),
                 Err(r) => Err(r),
             },
             Err(r) => Err(r),
@@ -3086,15 +3188,22 @@ fn parse_mul(toks: &Vec<Tok>, pos: usize, line: u32) -> (r: Result<(Expr, usize)
         Ok(x) => x,
         Err(e) => return Err(e),
     };
-    while p < toks.len() && toks[p] == Tok::Op(BinOp::Mul)
+    while p < toks.len() && (toks[p] == Tok::Op(BinOp::Mul) || toks[p] == Tok::Op(BinOp::Div) || toks[p] == Tok::Op(BinOp::Rem))
         invariant
             pos < p <= toks.len(),
             !unknown_expr(a),
         decreases toks.len() - p,
     {
+        let op = if toks[p] == Tok::Op(BinOp::Mul) {
+            BinOp::Mul
+        } else if toks[p] == Tok::Op(BinOp::Div) {
+            BinOp::Div
+        } else {
+            BinOp::Rem
+        };
         match parse_unary(toks, p + 1, line) {
             Ok((b, q)) => {
-                a = Expr::Bin(BinOp::Mul, Box::new(a), Box::new(b));
+                a = Expr::Bin(op, Box::new(a), Box::new(b));
                 p = q;
             },
             Err(e) => return Err(e),
