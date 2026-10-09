@@ -92,7 +92,8 @@ pub enum CastKind {
 /// key of its callee, the id of the callee's name for a refusal, its arguments and its line. `HasValue` and `Value` read an
 /// optional, `Nullopt` is `std::nullopt`, and `Wrap` is a value that the compiler turns into an optional, decision 0075. `Empty`
 /// is `v.empty()` and `Subspan` is `s.subspan(k)`, decision 0078. `Apply` is a call in a contract of a function of the companion
-/// file, by the id of its name, decision 0079. `Unknown` is a construct with no rule, by the id of its kind and its line.
+/// file, by the id of its name, decision 0079. `Suffix`, `Prefix` and `Slice` are `v[i..]`, `v[..j]` and `v[i..j]` in a contract,
+/// decision 0085. `Unknown` is a construct with no rule, by the id of its kind and its line.
 #[derive(PartialEq, Eq, Debug)]
 pub enum Expr {
     Int(u64),
@@ -123,6 +124,9 @@ pub enum Expr {
     Empty(Box<Expr>),
     Subspan(Box<Expr>, Box<Expr>),
     Apply(u32, Box<Args>),
+    Suffix(Box<Expr>, Box<Expr>),
+    Prefix(Box<Expr>, Box<Expr>),
+    Slice(Box<Expr>, Box<Expr>, Box<Expr>),
     Unknown(u32, u32),
 }
 
@@ -237,7 +241,7 @@ pub enum DTy {
 /// A Dafny expression. `AsInt` is `(e as int)`, the exact value of a machine integer. `Conv` is `(e as T)`, which Dafny proves
 /// fits `T`. `IsSome` is `e.Some?`, `Get` is `e.value`, which Dafny proves holds a value, and `Nothing` and `Just` are `None` and
 /// `Some(e)`. `Drop` is `s[k..]`, which Dafny proves is in range, decision 0078. `Apply` calls a function of the companion file,
-/// decision 0079. A Dafny expression calls no method.
+/// decision 0079. `Take` is `s[..j]` and `Slice` is `s[i..j]`, decision 0085. A Dafny expression calls no method.
 #[derive(PartialEq, Eq, Debug)]
 pub enum DExpr {
     Lit(u64),
@@ -263,6 +267,8 @@ pub enum DExpr {
     Just(Box<DExpr>),
     Drop(Box<DExpr>, Box<DExpr>),
     Apply(u32, Box<DArgs>),
+    Take(Box<DExpr>, Box<DExpr>),
+    Slice(Box<DExpr>, Box<DExpr>, Box<DExpr>),
 }
 
 #[derive(PartialEq, Eq, Debug)]
@@ -694,6 +700,18 @@ pub open spec fn spec_contract(e: Expr, decl: Names, ps: Params, ret: Option<Ty>
             Ok((d, t)) => spec_leaf(d, t, line),
             Err(r) => Err(r),
         },
+        Expr::Suffix(o, i) => match spec_path(Expr::Suffix(o, i), decl, ps, ret, bound, line, sd) {
+            Ok((d, t)) => spec_leaf(d, t, line),
+            Err(r) => Err(r),
+        },
+        Expr::Prefix(o, j) => match spec_path(Expr::Prefix(o, j), decl, ps, ret, bound, line, sd) {
+            Ok((d, t)) => spec_leaf(d, t, line),
+            Err(r) => Err(r),
+        },
+        Expr::Slice(o, i, j) => match spec_path(Expr::Slice(o, i, j), decl, ps, ret, bound, line, sd) {
+            Ok((d, t)) => spec_leaf(d, t, line),
+            Err(r) => Err(r),
+        },
         Expr::Forall(j, body) => match spec_contract(*body, decl, ps, ret, Names::Cons(j, Box::new(bound)), line, sd) {
             Ok(db) => Ok(DExpr::Forall(j, Box::new(db))),
             Err(r) => Err(r),
@@ -822,6 +840,33 @@ pub open spec fn spec_path(e: Expr, decl: Names, ps: Params, ret: Option<Ty>, bo
         Expr::Index(o, i) => match spec_path(*o, decl, ps, ret, bound, line, sd) {
             Ok((d, Ty::Seq(s, _))) => match spec_contract(*i, decl, ps, ret, bound, line, sd) {
                 Ok(di) => Ok((DExpr::Index(Box::new(d), Box::new(di)), spec_elem(s))),
+                Err(r) => Err(r),
+            },
+            Ok(_) => Err(Refusal::Syntax(line)),
+            Err(r) => Err(r),
+        },
+        Expr::Suffix(o, i) => match spec_path(*o, decl, ps, ret, bound, line, sd) {
+            Ok((d, Ty::Seq(s, _))) => match spec_contract(*i, decl, ps, ret, bound, line, sd) {
+                Ok(di) => Ok((DExpr::Drop(Box::new(d), Box::new(di)), Ty::Seq(s, Extent::Dynamic))),
+                Err(r) => Err(r),
+            },
+            Ok(_) => Err(Refusal::Syntax(line)),
+            Err(r) => Err(r),
+        },
+        Expr::Prefix(o, j) => match spec_path(*o, decl, ps, ret, bound, line, sd) {
+            Ok((d, Ty::Seq(s, _))) => match spec_contract(*j, decl, ps, ret, bound, line, sd) {
+                Ok(dj) => Ok((DExpr::Take(Box::new(d), Box::new(dj)), Ty::Seq(s, Extent::Dynamic))),
+                Err(r) => Err(r),
+            },
+            Ok(_) => Err(Refusal::Syntax(line)),
+            Err(r) => Err(r),
+        },
+        Expr::Slice(o, i, j) => match spec_path(*o, decl, ps, ret, bound, line, sd) {
+            Ok((d, Ty::Seq(s, _))) => match spec_contract(*i, decl, ps, ret, bound, line, sd) {
+                Ok(di) => match spec_contract(*j, decl, ps, ret, bound, line, sd) {
+                    Ok(dj) => Ok((DExpr::Slice(Box::new(d), Box::new(di), Box::new(dj)), Ty::Seq(s, Extent::Dynamic))),
+                    Err(r) => Err(r),
+                },
                 Err(r) => Err(r),
             },
             Ok(_) => Err(Refusal::Syntax(line)),
@@ -1101,6 +1146,9 @@ pub open spec fn spec_has_result(e: Expr) -> bool
         Expr::Empty(a) => spec_has_result(*a),
         Expr::Apply(_, args) => spec_has_result_args(*args),
         Expr::Index(a, i) => spec_has_result(*a) || spec_has_result(*i),
+        Expr::Suffix(a, i) => spec_has_result(*a) || spec_has_result(*i),
+        Expr::Prefix(a, j) => spec_has_result(*a) || spec_has_result(*j),
+        Expr::Slice(a, i, j) => spec_has_result(*a) || spec_has_result(*i) || spec_has_result(*j),
         Expr::Forall(_, a) => spec_has_result(*a),
         Expr::Exists(_, a) => spec_has_result(*a),
         Expr::Field(a, _) => spec_has_result(*a),
@@ -1348,6 +1396,9 @@ pub open spec fn unknown_expr(e: Expr) -> bool
         Expr::Empty(a) => unknown_expr(*a),
         Expr::Subspan(a, k) => unknown_expr(*a) || unknown_expr(*k),
         Expr::Apply(_, args) => unknown_args(*args),
+        Expr::Suffix(a, i) => unknown_expr(*a) || unknown_expr(*i),
+        Expr::Prefix(a, j) => unknown_expr(*a) || unknown_expr(*j),
+        Expr::Slice(a, i, j) => unknown_expr(*a) || unknown_expr(*i) || unknown_expr(*j),
         _ => false,
     }
 }
@@ -2073,7 +2124,7 @@ pub fn translate_contract(e: &Expr, decl: &Names, ps: &Params, ret: Option<Ty>, 
             Ok(_) => Err(Refusal::Syntax(line)),
             Err(r) => Err(r),
         },
-        Expr::Index(_, _) => match path(e, decl, ps, ret, bound, line, sd) {
+        Expr::Index(_, _) | Expr::Suffix(_, _) | Expr::Prefix(_, _) | Expr::Slice(_, _, _) => match path(e, decl, ps, ret, bound, line, sd) {
             Ok((d, t)) => translate_leaf(d, t, line),
             Err(r) => Err(r),
         },
@@ -2211,6 +2262,33 @@ pub fn path(e: &Expr, decl: &Names, ps: &Params, ret: Option<Ty>, bound: &Names,
         Expr::Index(o, i) => match path(o, decl, ps, ret, bound, line, sd) {
             Ok((d, Ty::Seq(s, _))) => match translate_contract(i, decl, ps, ret, bound, line, sd) {
                 Ok(di) => Ok((DExpr::Index(Box::new(d), Box::new(di)), elem(s))),
+                Err(r) => Err(r),
+            },
+            Ok(_) => Err(Refusal::Syntax(line)),
+            Err(r) => Err(r),
+        },
+        Expr::Suffix(o, i) => match path(o, decl, ps, ret, bound, line, sd) {
+            Ok((d, Ty::Seq(s, _))) => match translate_contract(i, decl, ps, ret, bound, line, sd) {
+                Ok(di) => Ok((DExpr::Drop(Box::new(d), Box::new(di)), Ty::Seq(s, Extent::Dynamic))),
+                Err(r) => Err(r),
+            },
+            Ok(_) => Err(Refusal::Syntax(line)),
+            Err(r) => Err(r),
+        },
+        Expr::Prefix(o, j) => match path(o, decl, ps, ret, bound, line, sd) {
+            Ok((d, Ty::Seq(s, _))) => match translate_contract(j, decl, ps, ret, bound, line, sd) {
+                Ok(dj) => Ok((DExpr::Take(Box::new(d), Box::new(dj)), Ty::Seq(s, Extent::Dynamic))),
+                Err(r) => Err(r),
+            },
+            Ok(_) => Err(Refusal::Syntax(line)),
+            Err(r) => Err(r),
+        },
+        Expr::Slice(o, i, j) => match path(o, decl, ps, ret, bound, line, sd) {
+            Ok((d, Ty::Seq(s, _))) => match translate_contract(i, decl, ps, ret, bound, line, sd) {
+                Ok(di) => match translate_contract(j, decl, ps, ret, bound, line, sd) {
+                    Ok(dj) => Ok((DExpr::Slice(Box::new(d), Box::new(di), Box::new(dj)), Ty::Seq(s, Extent::Dynamic))),
+                    Err(r) => Err(r),
+                },
                 Err(r) => Err(r),
             },
             Ok(_) => Err(Refusal::Syntax(line)),
@@ -2523,6 +2601,9 @@ pub fn has_result(e: &Expr) -> (r: bool)
         Expr::Empty(a) => has_result(a),
         Expr::Apply(_, args) => has_result_args(args),
         Expr::Index(a, i) => has_result(a) || has_result(i),
+        Expr::Suffix(a, i) => has_result(a) || has_result(i),
+        Expr::Prefix(a, j) => has_result(a) || has_result(j),
+        Expr::Slice(a, i, j) => has_result(a) || has_result(i) || has_result(j),
         Expr::Forall(_, a) => has_result(a),
         Expr::Exists(_, a) => has_result(a),
         Expr::Field(a, _) => has_result(a),
@@ -2821,6 +2902,7 @@ pub enum Tok {
     Value,
     Empty,
     Comma,
+    DotDot,
     Forall,
     Exists,
     ColonColon,
@@ -3083,11 +3165,36 @@ fn parse_postfix(toks: &Vec<Tok>, pos: usize, line: u32) -> (r: Result<(Expr, us
         } else if toks[p] == Tok::Empty {
             a = Expr::Empty(Box::new(a));
             p = p + 1;
+        } else if toks.len() - p > 1 && toks[p + 1] == Tok::DotDot {
+            match parse_implies(toks, p + 2, line) {
+                Ok((j, q)) => if q < toks.len() && toks[q] == Tok::RBracket {
+                    a = Expr::Prefix(Box::new(a), Box::new(j));
+                    p = q + 1;
+                } else {
+                    return Err(Refusal::Syntax(line));
+                },
+                Err(e) => return Err(e),
+            }
         } else {
             match parse_implies(toks, p + 1, line) {
                 Ok((i, q)) => if q < toks.len() && toks[q] == Tok::RBracket {
                     a = Expr::Index(Box::new(a), Box::new(i));
                     p = q + 1;
+                } else if q < toks.len() && toks[q] == Tok::DotDot {
+                    if toks.len() - q > 1 && toks[q + 1] == Tok::RBracket {
+                        a = Expr::Suffix(Box::new(a), Box::new(i));
+                        p = q + 2;
+                    } else {
+                        match parse_implies(toks, q + 1, line) {
+                            Ok((j, r)) => if r < toks.len() && toks[r] == Tok::RBracket {
+                                a = Expr::Slice(Box::new(a), Box::new(i), Box::new(j));
+                                p = r + 1;
+                            } else {
+                                return Err(Refusal::Syntax(line));
+                            },
+                            Err(e) => return Err(e),
+                        }
+                    }
                 } else {
                     return Err(Refusal::Syntax(line));
                 },
