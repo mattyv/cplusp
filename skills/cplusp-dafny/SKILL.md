@@ -48,6 +48,40 @@ Report translation acceptance, proof outcome and executable test outcome separat
 A successful model command is not a successful proof. A Dafny proof needs faithful translation to establish C++ behavior.
 Use the report's pilot method to measure correctness, time and cost.
 Treat SPARK guidance as an engineering method, not an LLM performance measurement.
+
+## Contract lines that the translator reads
+
+This list is true at decision 0112. Read the later decisions before you rely on it.
+`cplusp prove` translates the C++ and the `//@` lines to Dafny, and runs Dafny. It says `ok: proved`, or `Not proved: FILE:LINE: sentence` for a proof that fails, or `Not provable: FILE:LINE: sentence` for a form that has no rule.
+
+Where each line goes:
+- Above a function: `requires`, `ensures`, `modifies` and `decreases`.
+- Above a loop: `invariant` and `decreases`. A loop line reads the variables in scope at the loop, decision 0062.
+- Above a statement in a body: `assert E` and `apply L(a, b)`, decision 0099. `L` is a lemma of the companion file.
+
+What a contract expression can hold:
+- The parameters, `result`, and `old(x)` in an ensures line, decision 0096. The arithmetic is on exact integers, so a contract cannot overflow.
+- `&&`, `||`, `!`, `==>`, `c ? a : b`, `forall i :: ...` and `exists i :: ...`.
+- `v.size()`, `v[i]`, `v[i..]`, `v[..j]` and `v[i..j]` of a sequence, and `o.has_value()` and `o.value()` of an optional.
+- Hex literals, `true`, `false` and a character such as `'0'`, decision 0106.
+- A `constexpr` integer constant of the file, when C++ finds it from the function, decisions 0106 and 0107.
+- An enumerator such as `Kind::Small`, decision 0109.
+- A pure `const` member function, and a function or predicate of the companion file, decisions 0079 and 0090.
+
+The modifies line:
+- It names each non-const reference parameter (`T&`) that the function writes, and nothing else, decisions 0108 and 0110. The translator refuses a function with a reference parameter that the line does not name.
+- A function that only reads a value takes it by value or by `const T&`.
+- The gate also reads `modifies` and `reads` lines for globals, decision 0035. The translator has no rule for a global yet, so it refuses `reads` and a global on a `modifies` line.
+
+The companion file:
+- `NAME.spec.dfy` next to `NAME.cpp` holds the functions, predicates and lemmas that the contracts name, decisions 0079, 0080 and 0099.
+- Each lemma has a body. A lemma or a function with no body is an axiom, and the translator refuses it.
+- A name must not start with a prefix of the model: `v_`, `c_`, `S_`, `E_`, `f_`, `b_` or `trunc_`, decision 0083.
+
+Trusted code and calls:
+- `CPLUSP_TRUSTED("reason")` above a function makes its contract an axiom. `prove` names each one on a `Trusted:` line, decisions 0102 and 0103.
+- A call inside an expression runs before its statement, when C++ runs it once, decision 0104.
+- A call that writes back its object or a reference stands alone, or is the start value of a local, decisions 0096 and 0108.
 ## signed_overflow
 
 Map `int32_t` to `newtype int32 = x: int | -0x8000_0000 <= x < 0x8000_0000`, never to `int`.
@@ -93,6 +127,8 @@ Dafny has shifts on bit-vector types only, so map `uint32_t` to `bv32` in code t
 Dafny accepts a shift by the full width, but C++ does not.
 Write `requires n < 32`, never `requires n <= 32`.
 The same holds for right shifts and for every other width.
+The translator models `a >> n` as `shr(a, n, W)`, with `W` the width after promotion, decision 0106. Dafny proves `0 <= n < W` at each shift.
+The translator has no rule for `<<` yet.
 
 ## sign_compare
 
@@ -118,6 +154,7 @@ A value model cannot see two names for one object.
 So the gate refuses a call in which two reference arguments reach one object and one of them can write, row `aliasing`, decision 0033.
 No contract carries a clause about addresses. A value has no address.
 A const reference is a value in.
+Name each non-const reference parameter on the `//@ modifies` line, decision 0108. In an ensures line, `x` is the value after the call and `old(x)` the value before it.
 
 ## const_alias
 
@@ -233,6 +270,8 @@ Write `if b then 1 else 0`.
 Model an `enum class` as a datatype of its enumerators.
 A cast from an integer needs a `requires` that the value is an enumerator, in the C++ contract and in the model.
 A flags type, where `|` makes values no enumerator names, is a `bv32` in the model, and a cast to it needs no enumerator precondition.
+The translator takes an `enum class` whose enumerators have no values written, decision 0109. It refuses a cast of an enum and every operator except `==` and `!=`.
+A `switch` over such an enum is a match. The translator refuses a `default`, a `[[fallthrough]]`, several labels on one body, and a `break` that does not end a case.
 
 ## size_minus_one
 
@@ -389,7 +428,7 @@ Never do arithmetic on a position before the `None` case is handled.
 
 A `switch` falls through to the next case without a break, and a Dafny `match` never does.
 No case runs into the next without `[[fallthrough]]`, and the gate enforces it.
-Model a marked fall-through as one arm with both bodies.
+In a hand-written model, a marked fall-through is one arm with both bodies. The translator refuses it, decision 0109.
 
 ## switch_missing_case
 
@@ -490,6 +529,7 @@ A trusted contract that omits it is false.
 The gate reads the `modifies` and `reads` lines, decision 0035, and refuses an access to a global they do not list, also through a call.
 It judges the code the compiler generates, decision 0037, so a destructor, a copy or a lambda inside a std call counts where it runs.
 The gate reads the lines of a trusted function too, so a trusted body that forgets one is refused. A reviewer still reads what the lines claim.
+A name on the line that names a reference parameter is that parameter, not a global with the same name, decisions 0111 and 0112.
 
 ## static_local
 
