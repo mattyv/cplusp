@@ -99,3 +99,4 @@ Status is `decided`, `proposed` (the default until someone objects or the thin s
 | [0091](0091-end-to-end-program-validation-ladder.md) | Validate C+P through increasingly complex programs | decided |
 | [0092](0092-test-application-scale-as-well-as-proof-complexity.md) | Test application scale as well as proof complexity | decided |
 | [0093](0093-test-the-skill-as-an-application-development-process.md) | Test the skill as an application development process | decided |
+| [0094](0094-a-constructor-is-a-method-that-gives-the-value.md) | A constructor with only a member init list is a method that gives the value it builds | decided |
