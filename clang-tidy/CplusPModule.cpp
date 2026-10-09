@@ -1334,7 +1334,10 @@ struct Contract {
 // body of its function.
 // ponytail: a floor in another file than the loop, as under a macro, is ignored. Such a loop can then claim its function's lines, and
 // the core refuses them as lines in the wrong place, which is loud. Upgrade: compare the lines in the file of the loop's expansion.
-Contract contractAbove(const SourceManager &SM, SourceLocation First, SourceLocation Floor = SourceLocation()) {
+// `SkipComments` steps over a whole-line `//` comment that is no `//@` line, and over a one-line `/* */` comment, decision 0099. Only the lines
+// of a body use it.
+// ponytail: a block comment over several lines ends the walk. Upgrade: the lexer's comment tokens.
+Contract contractAbove(const SourceManager &SM, SourceLocation First, SourceLocation Floor = SourceLocation(), bool SkipComments = false) {
   Contract C;
   First = SM.getExpansionLoc(First);
   if (First.isInvalid())
@@ -1364,6 +1367,8 @@ Contract contractAbove(const SourceManager &SM, SourceLocation First, SourceLoca
     if (Begin <= FloorStart && Floor.isValid())
       break;
     if (Line.starts_with("CPLUSP_"))
+      continue;
+    if (SkipComments && ((Line.starts_with("//") && !Line.starts_with("//@")) || (Line.starts_with("/*") && Line.ends_with("*/"))))
       continue;
     // A comment that ends in a backslash goes on in the next line. So the line above can be the tail of a `//@` line.
     size_t Head = Begin;
@@ -3865,11 +3870,51 @@ private:
   // The `//@` lines directly above a loop, claimed for it. They stop at the start of the body of the function, so a loop on the line of
   // its function leaves the function its lines.
   llvm::json::Array loopConds(const Stmt *Loop) const {
-    const Stmt *Body = Enclosing ? Enclosing->getBody() : nullptr;
-    const Contract C = contractAbove(SM, Loop->getBeginLoc(), Body ? Body->getBeginLoc() : SourceLocation());
+    Contract C = linesAbove(Loop);
     for (const Contract::Line &L : C.Lines)
       Claimed.insert({L.File, L.Number});
+    // An assert or apply line above a loop is a statement before it, `bodyLines`. The loop keeps its invariant and decreases lines.
+    C.Lines.erase(std::remove_if(C.Lines.begin(), C.Lines.end(), isBodyLine), C.Lines.end());
     return conds(C);
+  }
+  // The `//@` lines directly above a statement, up to the start of the body of the function.
+  Contract linesAbove(const Stmt *S, bool SkipComments = false) const {
+    const Stmt *Body = Enclosing ? Enclosing->getBody() : nullptr;
+    return contractAbove(SM, S->getBeginLoc(), Body ? Body->getBeginLoc() : SourceLocation(), SkipComments);
+  }
+  // Whether only white space is before the statement on its line. A statement after code, as the `if` of `} else if`, takes no line above.
+  bool startsItsLine(const Stmt *S) const {
+    const SourceLocation At = SM.getExpansionLoc(S->getBeginLoc());
+    if (At.isInvalid())
+      return false;
+    const auto [File, Offset] = SM.getDecomposedLoc(At);
+    bool Invalid = false;
+    const StringRef Text = SM.getBufferData(File, &Invalid);
+    if (Invalid)
+      return false;
+    const size_t Newline = Text.substr(0, Offset).rfind('\n');
+    return Text.slice(Newline == StringRef::npos ? 0 : Newline + 1, Offset).trim().empty();
+  }
+  static bool isBodyLine(const Contract::Line &L) {
+    const StringRef Text = L.Text;
+    const StringRef Word = Text.substr(0, Text.find_first_of(" \t\f\v\r"));
+    return Word == "assert" || Word == "apply";
+  }
+  // The assert and apply lines directly above a statement, as statements of their own, decision 0099. A line that an outer statement on
+  // the same line took first is not taken again.
+  void bodyLines(const Stmt *S, llvm::json::Array &Out) const {
+    if (!startsItsLine(S))
+      return;
+    Contract C = linesAbove(S, true);
+    // A line that is no assert or apply line is dropped, and so is one that was taken already.
+    C.Lines.erase(std::remove_if(C.Lines.begin(), C.Lines.end(), [&](const Contract::Line &L) { return !isBodyLine(L) || !Claimed.insert({L.File, L.Number}).second; }),
+                  C.Lines.end());
+    for (const Contract::Line &L : C.Lines) {
+      Contract One;
+      One.Lines.push_back(L);
+      llvm::json::Value Cond = std::move(conds(One).front());
+      Out.push_back(tag(StringRef(L.Text).starts_with("assert") ? "Assert" : "Apply", std::move(Cond)));
+    }
   }
 
   static llvm::json::Value number(uint64_t N) { return llvm::json::Value(N); }
@@ -4123,10 +4168,14 @@ private:
   llvm::json::Array stmts(const Stmt *S) const {
     llvm::json::Array Out;
     if (const auto *Block = dyn_cast<CompoundStmt>(S))
-      for (const Stmt *Child : Block->body())
+      for (const Stmt *Child : Block->body()) {
+        bodyLines(Child, Out);
         Out.push_back(stmt(Child));
-    else
+      }
+    else {
+      bodyLines(S, Out);
       Out.push_back(stmt(S));
+    }
     return Out;
   }
 
@@ -4457,12 +4506,21 @@ public:
         ++Number;
         Rest = Tail;
         if (Line.contains("//@") && !Claimed.count({ID.getHashValue(), Number}))
-          append(llvm::json::Object{{"orphan", static_cast<int64_t>(Number)}, {"file", SM.getFilename(Start).str()}});
+          append(llvm::json::Object{{"orphan", static_cast<int64_t>(Number)}, {"file", SM.getFilename(Start).str()}, {"word", orphanWord(Line)}});
       }
     }
   }
 
 private:
+  // The word of a line that starts with `//@`, else empty. The translator says more for an assert or apply line, decision 0099.
+  static std::string orphanWord(StringRef Line) {
+    Line = Line.trim();
+    if (!Line.consume_front("//@"))
+      return "";
+    Line = Line.ltrim();
+    return Line.substr(0, Line.find_first_of(" \t\f\v\r")).str();
+  }
+
   std::string Output;
   ASTContext *Context = nullptr;
   std::set<std::pair<unsigned, unsigned>> Claimed;

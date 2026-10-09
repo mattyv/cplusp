@@ -103,6 +103,7 @@ fn sentence(message: &str) -> String {
     match message {
         "a postcondition could not be proved on this return path" => "the ensures line may not hold on this return.".to_string(),
         "destructor 'value' can only be applied to datatype values constructed by 'Some'" => "the optional may be empty here.".to_string(),
+        "assertion might not hold" => "the assert line may not hold.".to_string(),
         "index out of range" => "the index may be out of range.".to_string(),
         "lower bound out of range" => "the offset may be past the end.".to_string(),
         "this loop invariant could not be proved on entry" => "the invariant may not hold when the loop starts.".to_string(),
@@ -142,16 +143,35 @@ pub fn run(t: &Translation, limit: u32, refused: bool, source: &str, shown: &dyn
         .with_context(|| format!("cannot run {dafny}"))?;
     let output = format!("{}{}", String::from_utf8_lossy(&run.stdout), String::from_utf8_lossy(&run.stderr));
     let found = errors(&output);
-    // A warning of a declaration with no body, on a line of the companion file, is an axiom, decision 0079. Only these warnings count.
+    // A warning on a line of the companion file refuses the file, decisions 0079, 0099 and 0101. A declaration, a forall statement or a loop with no body is
+    // an axiom. A lemma with no body is named at its own name, because Dafny warns at its first ensures line. Any other is named at its own line.
     let map = &t.map;
-    let axioms: Vec<(String, usize)> = output
-        .lines()
-        .filter_map(|l| at(l, "Warning"))
-        .filter(|(_, m)| m.contains("bodyless") || m.contains("{:axiom}"))
-        .filter(|(line, _)| line.checked_sub(1).is_some_and(|n| map.companion.contains(&n)))
-        .filter_map(|(line, _)| map.lines[line - 1].as_ref().map(|l| map.places[l.place as usize].clone()))
-        .map(|(path, line)| (path, line as usize))
-        .collect();
+    let mut axioms: Vec<(String, usize, String)> = Vec::new();
+    for (line, message) in output.lines().filter_map(|l| at(l, "Warning")).filter(|(line, _)| line.checked_sub(1).is_some_and(|n| map.companion.contains(&n))) {
+        let bodyless = message.contains("bodyless") || message.contains("{:axiom}");
+        // ponytail: an allow-list of the harmless kinds, which is only the missing trigger. Any other warning refuses the file. The ceiling is a good file
+        // with another harmless warning, which is refused too. Upgrade: add the kind to the list.
+        if message.starts_with("Could not find a trigger for this quantifier") {
+            continue;
+        }
+        let lemma = map.decls.iter().rev().find(|(at, _)| *at <= line).filter(|(_, lemma)| *lemma && bodyless);
+        let at = lemma.map_or(line, |(at, _)| *at);
+        let said = if bodyless {
+            format!("a {} with no body is an axiom.", if lemma.is_some() { "lemma" } else { "function" })
+        } else if message.starts_with("this forall statement has no body") {
+            "a forall statement with no body is an axiom.".to_string()
+        } else if message.starts_with("this loop has no body") {
+            "a loop with no body is an axiom.".to_string()
+        } else {
+            format!("Dafny warns here: {}.", message.trim().trim_end_matches('.'))
+        };
+        if let Some((path, number)) = map.lines[at - 1].as_ref().map(|l| map.places[l.place as usize].clone()) {
+            let found = (path, number as usize, said);
+            if !axioms.contains(&found) {
+                axioms.push(found);
+            }
+        }
+    }
     // The core decides: it reads the exit status, the summary, the error lines, the refusals, the axioms and the methods together, decisions 0077 and 0080.
     let (summary, unread) = output.lines().find_map(counts).map_or((None, None), |(c, r)| (Some(c), r));
     // A line at the end of the file, one past the last line of the companion file, is the last line, decision 0083.
@@ -166,8 +186,8 @@ pub fn run(t: &Translation, limit: u32, refused: bool, source: &str, shown: &dyn
         eprint!("dafny failed\n{output}");
         return Ok(ExitCode::from(2));
     }
-    for (path, line) in &axioms {
-        println!("Not provable: {}:{line}: a function with no body is an axiom.", shown(path));
+    for (path, line, said) in &axioms {
+        println!("Not provable: {}:{line}: {said}", shown(path));
     }
     let here = |line: usize| line.checked_sub(1).and_then(|n| map.lines.get(n)).and_then(Option::as_ref);
     for e in &found {

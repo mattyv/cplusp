@@ -106,6 +106,9 @@ enum JStmt {
     SetField(String, JExpr, u32),
     Call(String, String, Vec<JExpr>, u32),
     Exit(u32),
+    /// A `//@ assert` or `//@ apply` line in the body, decision 0099.
+    Assert(JCond),
+    Apply(JCond),
     While(JExpr, Vec<JCond>, Vec<JStmt>, u32),
     For(Box<JStmt>, JExpr, Box<JStmt>, Vec<JCond>, Vec<JStmt>, u32),
     Unknown(String, u32),
@@ -124,7 +127,13 @@ struct JCond {
 #[derive(Deserialize)]
 #[serde(untagged)]
 enum Item {
-    Orphan { orphan: u32, file: String },
+    Orphan {
+        orphan: u32,
+        file: String,
+        /// The word of the line, when it starts with `//@`.
+        #[serde(default)]
+        word: String,
+    },
     Struct(JStruct),
     Function(JFunction),
 }
@@ -171,6 +180,10 @@ struct Names {
     file: String,
     /// The functions that the companion file declares. Empty when there is no file or the scan refused it, decision 0079.
     declared: Vec<String>,
+    /// The lemmas that the companion file declares, apart from the functions, decision 0099.
+    lemmas: Vec<String>,
+    /// The sentence of a body line that the core refuses as `Syntax`, by the place of the line.
+    said: HashMap<u32, String>,
     /// The first call to an undeclared name in a contract line, by the place of the line.
     bad_calls: HashMap<u32, String>,
     /// The member names of each struct by its key, for the contracts of its member functions, decision 0090.
@@ -320,6 +333,8 @@ fn stmt(s: JStmt, names: &mut Names) -> Stmt {
             Stmt::Call(names.id(&key), names.id(&name), Box::new(args), names.here(line))
         }
         JStmt::Exit(line) => Stmt::Exit(names.here(line)),
+        JStmt::Assert(c) => body_line(c, false, names),
+        JStmt::Apply(c) => body_line(c, true, names),
         JStmt::While(c, cs, body, line) => Stmt::While(expr(c, names), Box::new(conds(cs, names)), Box::new(stmts(body, names)), names.here(line)),
         JStmt::For(init, c, step, cs, body, line) => {
             let init = Box::new(stmt(*init, names));
@@ -327,6 +342,60 @@ fn stmt(s: JStmt, names: &mut Names) -> Stmt {
             Stmt::For(init, c, Box::new(stmt(*step, names)), Box::new(conds(cs, names)), Box::new(stmts(body, names)), names.here(line))
         }
         JStmt::Unknown(k, line) => Stmt::Unknown(names.id(&k), names.here(line)),
+    }
+}
+
+/// An assert line or an apply line of a body, decision 0099. A line the core cannot take as a fact or a call is a statement that it refuses at the
+/// line: `Stmt::Unknown` for a token with no rule, and else `assert result`, which is `Syntax`. `names.said` has the sentence for a `Syntax` of its own.
+fn body_line(c: JCond, apply: bool, names: &mut Names) -> Stmt {
+    let line = names.place(&c.file, c.line);
+    names.contracts.insert(line, (c.kind.clone(), c.text.trim().to_string()));
+    // ponytail: a line the core cannot take is `assert result`, which the core refuses as `Syntax` at the line. The ceiling is that this relies on the
+    // core refusing `result` in an assert line. Upgrade: a `Stmt::Bad(Refusal)` in the core, like `CondKind::Bad`.
+    fn syntax(line: u32, said: Option<String>, names: &mut Names) -> Stmt {
+        names.said.extend(said.map(|s| (line, s)));
+        Stmt::Assert(Expr::Result, line)
+    }
+    // A backslash at the end splices the next line into the comment. The line the author wrote is not the one the plugin read.
+    if c.text.ends_with('\\') {
+        return syntax(line, Some("a contract line that ends in a backslash.".to_string()), names);
+    }
+    let (head, text) = if apply {
+        // `L(a, b)`: a name, then `(`, then the arguments. The name is a lemma of the companion file, and the rest is lexed as a contract.
+        let text = c.text.trim_start();
+        let end = text.find(|ch: char| !(ch.is_ascii_alphanumeric() || ch == '_')).unwrap_or(text.len());
+        let (head, rest) = text.split_at(end);
+        let rest = rest.trim_start();
+        if head.is_empty() || head.starts_with(|ch: char| ch.is_ascii_digit()) || !rest.starts_with('(') {
+            return syntax(line, None, names);
+        }
+        if !names.lemmas.iter().any(|l| l == head) {
+            return syntax(line, Some(format!("{head} is no lemma of the companion file.")), names);
+        }
+        // The call ends at the `)` that closes its `(`. Anything after it is a form the translator cannot read.
+        let mut depth = 0usize;
+        let close = rest.char_indices().find(|(_, ch)| {
+            depth = (depth + usize::from(*ch == '(')).saturating_sub(usize::from(*ch == ')'));
+            *ch == ')' && depth == 0
+        });
+        if close.is_none_or(|(i, _)| !rest[i + 1..].trim().is_empty()) {
+            return syntax(line, None, names);
+        }
+        (Some(head), &rest[1..])
+    } else {
+        (None, c.text.as_str())
+    };
+    let mut toks: Vec<Tok> = head.into_iter().flat_map(|h| [Tok::Ident(names.id(h)), Tok::LParen]).collect();
+    toks.extend(lex(text, line, names));
+    // A call to an undeclared name is refused by `sentence` at this line.
+    if names.bad_calls.contains_key(&line) {
+        return syntax(line, None, names);
+    }
+    match (parse_contract(&toks, line), apply) {
+        (Ok(Expr::Apply(n, args)), true) => Stmt::Apply(n, args, line),
+        (Ok(e), false) => Stmt::Assert(e, line),
+        (Err(Refusal::Construct(k, l)), _) => Stmt::Unknown(k, l),
+        _ => syntax(line, None, names),
     }
 }
 
@@ -489,13 +558,13 @@ fn conds(v: Vec<JCond>, names: &mut Names) -> Conds {
 
 // ------------------------------------------------------------------ the companion file
 
-/// The keywords of Dafny 4.11 that a companion file may not hold, decision 0080. The words that it may hold are `function`, `predicate`,
-/// `ghost`, `requires`, `ensures`, `decreases`, `reads`, `if`, `then`, `else`, `var`, `match`, `case`, `forall`, `exists`, `true`, `false`,
+/// The keywords of Dafny 4.11 that a companion file may not hold, decisions 0080 and 0099. The words that it may hold are `function`, `predicate`,
+/// `lemma`, `assert`, `ghost`, `requires`, `ensures`, `decreases`, `reads`, `if`, `then`, `else`, `var`, `match`, `case`, `forall`, `exists`, `true`, `false`,
 /// `as`, `is`, `in`, `int`, `nat`, `bool`, `seq`, `set`, `map` and `multiset`.
 const BANNED: &[&str] = &[
-    "abstract", "allocated", "assert", "assume", "break", "by", "calc", "char", "class", "codatatype", "colemma", "comethod", "const", "constructor",
+    "abstract", "allocated", "assume", "break", "by", "calc", "char", "class", "codatatype", "colemma", "comethod", "const", "constructor",
     "continue", "copredicate", "datatype", "default", "expect", "export", "extends", "fresh", "greatest", "imap", "import", "include", "inductive",
-    "invariant", "iset", "iterator", "label", "lemma", "least", "method", "modifies", "modify", "module", "nameonly", "new", "newtype", "null", "object",
+    "invariant", "iset", "iterator", "label", "least", "method", "modifies", "modify", "module", "nameonly", "new", "newtype", "null", "object",
     "old", "opaque", "opened", "ORDINAL", "print", "provides", "real", "refines", "return", "returns", "reveal", "reveals", "static", "string", "this",
     "to", "trait", "twostate", "type", "unchanged", "while", "witness", "yield", "yields",
 ];
@@ -505,16 +574,19 @@ const MODEL_NAMES: &[&str] = &["Option", "Some", "None", "Vec", "value", "int32"
 
 /// The sentence for a word of a companion file that is not allowed.
 fn only_functions(word: &str) -> String {
-    format!("{word}: a companion file can hold only functions and predicates.")
+    format!("{word}: a companion file can hold only functions, predicates and lemmas.")
 }
 
-/// The refusals of a companion file as (line, sentence), and the names it declares, decision 0080. The scan reads comments as Dafny does:
+/// A declaration of the companion file: its name, the line of the name, and whether it is a lemma.
+type Declared = (String, u32, bool);
+
+/// The refusals of a companion file as (line, sentence), and the declarations it holds, decision 0080. The scan reads comments as Dafny does:
 /// `//` to the end of the line, and `/* */` that nest. It refuses a comment that does not end, each `"`, `@` and `{:`, and each keyword of
-/// Dafny that is not on the short list. Each word is refused once for each line. The file holds nothing else than `function` and
-/// `predicate` declarations then, and a file with a refusal declares no name.
+/// Dafny that is not on the short list. Each word is refused once for each line. The file holds nothing else than `function`, `predicate`
+/// and `lemma` declarations then, and a file with a refusal declares no name.
 // ponytail: a string is skipped to the next quote on its line, because the file is refused at the quote anyway. A file with no quote
 // has no string. Upgrade: the lexer in the core, decision 0077.
-fn scan_companion(text: &str) -> (Vec<(u32, String)>, Vec<String>) {
+fn scan_companion(text: &str) -> (Vec<(u32, String)>, Vec<Declared>) {
     // The bytes first, decision 0083. Dafny ends a line at a carriage return alone, so the lines below are those of a file with no lone one.
     let mut bad = Vec::new();
     let mut line = 1u32;
@@ -534,7 +606,8 @@ fn scan_companion(text: &str) -> (Vec<(u32, String)>, Vec<String>) {
     let (mut refused, mut declared) = (Vec::new(), Vec::new());
     let mut depth = 0usize;
     let mut opened = 0u32;
-    let mut after_decl = false;
+    // The word before the name: 0 none, 1 `function` or `predicate`, 2 `lemma`.
+    let mut after_decl = 0u8;
     for (n, line) in text.lines().enumerate() {
         let n = n as u32 + 1;
         let mut rest = line;
@@ -561,13 +634,17 @@ fn scan_companion(text: &str) -> (Vec<(u32, String)>, Vec<String>) {
             } else if c.is_ascii_alphabetic() || c == '_' || c == '?' {
                 used = rest.find(|ch: char| !(ch.is_ascii_alphanumeric() || matches!(ch, '_' | '\'' | '?'))).unwrap_or(rest.len());
                 let w = &rest[..used];
-                if after_decl {
+                if after_decl != 0 {
                     if MODEL_NAMES.contains(&w) || ["v_", "c_", "S_", "f_", "b_", "trunc_"].iter().any(|p| w.starts_with(p)) {
                         refused.push((n, format!("{w}: a name that the model uses.")));
                     }
-                    declared.push(w.to_string());
+                    declared.push((w.to_string(), n, after_decl == 2));
                 }
-                after_decl = matches!(w, "function" | "predicate");
+                after_decl = match w {
+                    "function" | "predicate" => 1,
+                    "lemma" => 2,
+                    _ => 0,
+                };
                 if BANNED.contains(&w) {
                     refused.push((n, only_functions(w)));
                 }
@@ -596,7 +673,7 @@ fn scan_companion(text: &str) -> (Vec<(u32, String)>, Vec<String>) {
                 used = 2;
             }
             if !c.is_whitespace() && !in_comment {
-                after_decl = false;
+                after_decl = 0;
             }
             rest = &rest[used..];
         }
@@ -648,7 +725,7 @@ fn stmt_names<'a>(s: &'a JStmt, out: &mut Vec<&'a str>) {
         JStmt::Step(n, ..) => out.push(n),
         JStmt::SetField(_, e, _) => expr_names(e, out),
         JStmt::Call(_, _, args, _) => args.iter().for_each(|a| expr_names(a, out)),
-        JStmt::Exit(_) => {}
+        JStmt::Exit(_) | JStmt::Assert(_) | JStmt::Apply(_) => {}
         JStmt::While(c, _, body, _) => {
             expr_names(c, out);
             body.iter().for_each(|s| stmt_names(s, out));
@@ -883,6 +960,8 @@ pub struct Map {
     pub lines: Vec<Option<Line>>,
     /// The indexes in `lines` of the companion file's text, decision 0079.
     pub companion: std::ops::Range<usize>,
+    /// The declarations of the companion file as (line in the Dafny text, is a lemma), in order, decision 0099.
+    pub decls: Vec<(usize, bool)>,
     /// The file and line of each place.
     pub places: Vec<(String, u32)>,
     /// The word and text of the contract line at a place, as the author wrote them.
@@ -1009,6 +1088,8 @@ impl Printer<'_> {
                 self.put(depth, format!("{call};"), place);
             }
             DStmt::Exit => self.put(depth, "return;".to_string(), place),
+            DStmt::Assert(e) => self.put(depth, format!("assert {};", dexpr(e, names)), place),
+            DStmt::Apply(l, args) => self.put(depth, format!("{}({});", names.text(*l), dargs(args, names).join(", ")), place),
             DStmt::Local(x, t, e) => self.put(depth, format!("var {}: {} := {};", mangle(names.text(*x)), dty(*t, names), dexpr(e, names)), place),
             DStmt::LocalCall(x, t, m, args) => {
                 let call = self.call(*m, args);
@@ -1125,6 +1206,7 @@ fn sentence(r: Refusal, names: &Names) -> (u32, String) {
         Refusal::NoField(f, line) => (line, format!("{} in the contract is no field of the struct.", names.text(f))),
         Refusal::NotPure(n, line) => (line, format!("{} is no pure member function of its struct.", names.text(n))),
         Refusal::Syntax(line) if names.bad_calls.contains_key(&line) => (line, format!("{} is no function of the companion file.", names.bad_calls[&line])),
+        Refusal::Syntax(line) if names.said.contains_key(&line) => (line, names.said[&line].clone()),
         Refusal::Syntax(line) => (line, "the contract line has a form the translator cannot read.".to_string()),
         Refusal::Backslash(line) => (line, "a contract line that ends in a backslash.".to_string()),
         Refusal::Callee(n, line) => (line, format!("a call to {}, which has no model in view.", names.text(n))),
@@ -1134,7 +1216,7 @@ fn sentence(r: Refusal, names: &Names) -> (u32, String) {
         Refusal::Twice(n, line) => (line, format!("{} is declared twice in the function.", names.text(n))),
         Refusal::Convert(line) => (line, "a conversion between bool and a number.".to_string()),
         Refusal::WriteParam(n, line) => (line, format!("{} is a parameter. The translator writes only a local.", names.text(n))),
-        Refusal::NoVar(n, line) => (line, format!("{} in the loop contract is no variable.", names.text(n))),
+        Refusal::NoVar(n, line) => (line, format!("{} in the {} line is no variable.", names.text(n), names.contracts.get(&line).map_or("contract", |c| c.0.as_str()))),
         Refusal::SeqParam(line) => (line, "a sequence is in the subset only as a parameter.".to_string()),
         Refusal::HoldsSeq(line) => (line, "a struct that holds a sequence is in the subset only as a parameter.".to_string()),
         Refusal::Element(line) => (line, "an optional of a struct or a sequence of bool has no rule yet.".to_string()),
@@ -1162,10 +1244,14 @@ pub fn translate(lines: &str, companion: Option<(&str, &str)>) -> Result<Transla
     let mut funcs = Vec::new();
     let mut structs = Vec::new();
     let mut companion_ok = false;
+    // The declarations of the companion file as (line of its name in the file, is a lemma), for the prover's axiom check.
+    let mut decls: Vec<(usize, bool)> = Vec::new();
     if let Some((path, text)) = companion {
         let (refused, declared) = scan_companion(text);
         refusals.extend(refused.into_iter().map(|(line, sentence)| (path.to_string(), line, sentence)));
-        names.declared = declared;
+        names.declared = declared.iter().filter(|d| !d.2).map(|d| d.0.clone()).collect();
+        names.lemmas = declared.iter().filter(|d| d.2).map(|d| d.0.clone()).collect();
+        decls = declared.into_iter().map(|d| (d.1 as usize, d.2)).collect();
         companion_ok = refusals.is_empty();
     }
     // A function that names a struct refused for its name has no method: the Dafny text would print the name. The refusal of the struct stands.
@@ -1179,7 +1265,10 @@ pub fn translate(lines: &str, companion: Option<(&str, &str)>) -> Result<Transla
         items.iter().filter_map(|(i, _)| if let Item::Struct(st) = i { unreadable_struct_name(st).map(|_| serde_json::to_string(&st.key).unwrap_or_default()) } else { None }).collect();
     for (item, l) in items {
         match item {
-            Item::Orphan { orphan, file } => refusals.push((file, orphan, "a contract line that belongs to no function.".to_string())),
+            Item::Orphan { orphan, file, word } => {
+                let said = if word == "assert" || word == "apply" { "an assert or apply line needs a statement below it in its block." } else { "a contract line that belongs to no function." };
+                refusals.push((file, orphan, said.to_string()));
+            }
             Item::Struct(st) => structs.push(st),
             Item::Function(_) if unreadable_keys.iter().any(|k| l.contains(k.as_str())) => {}
             Item::Function(f) => match unreadable_name(&f) {
@@ -1299,6 +1388,8 @@ pub fn translate(lines: &str, companion: Option<(&str, &str)>) -> Result<Transla
     p.lines.extend(companion_places);
     p.out.push_str(&companion_text);
     let companion_lines = start..p.lines.len();
+    // The lines of the file are those of the Dafny text from `start + 1`. Nothing is printed when the scan refused the file.
+    let decls = if companion_ok { decls.into_iter().map(|(n, lemma)| (start + n, lemma)).collect() } else { Vec::new() };
     let (dafny, lines) = (p.out, p.lines);
     for (place, sentence) in refused_at {
         let (file, line) = names.places[place as usize].clone();
@@ -1306,5 +1397,5 @@ pub fn translate(lines: &str, companion: Option<(&str, &str)>) -> Result<Transla
     }
     refusals.sort();
     refusals.dedup();
-    Ok(Translation { dafny, methods: printed, refusals, map: Map { lines, companion: companion_lines, places: names.places, contracts: names.contracts } })
+    Ok(Translation { dafny, methods: printed, refusals, map: Map { lines, companion: companion_lines, decls, places: names.places, contracts: names.contracts } })
 }
