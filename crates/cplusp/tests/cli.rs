@@ -3530,3 +3530,61 @@ fn a_caller_of_a_refused_function_that_writes_a_reference_resolves() {
     assert!(!text.contains("Dafny says"), "{text}");
     assert!(!text.lines().any(|l| l.starts_with("Not proved: ")), "{text}");
 }
+
+/// An enum class is a datatype, and a switch over it is a match: a case that returns, a case that ends with a break, a nested switch,
+/// an enum in a struct and in a contract, decision 0109.
+#[test]
+fn enums_and_switches_prove() {
+    let Some(dafny) = dafny() else { return };
+    if !clang_tidy_available() {
+        return;
+    }
+    let o = prove("model-enum.cpp", &[], &dafny);
+    let text = stdout(&o);
+    assert_eq!(o.status.code(), Some(0), "stdout: {text} stderr: {}", stderr(&o));
+    assert_eq!(text.lines().last(), Some("ok: proved"), "{text}");
+}
+
+/// A case that does not meet the contract, and a value of an enum that a branch may not change, are named at their lines, decision
+/// 0109.
+#[test]
+fn prove_names_a_switch_that_does_not_meet_its_contract() {
+    let Some(dafny) = dafny() else { return };
+    if !clang_tidy_available() {
+        return;
+    }
+    let o = prove("model-enum-wrong.cpp", &[], &dafny);
+    let text = stdout(&o);
+    assert_eq!(o.status.code(), Some(1), "stdout: {text} stderr: {}", stderr(&o));
+    let failed: Vec<&str> = text.lines().filter(|l| l.starts_with("Not proved: ")).collect();
+    for want in ["model-enum-wrong.cpp:12: the ensures line may not hold on this return.", "model-enum-wrong.cpp:23: the ensures line may not hold on this return."] {
+        assert!(failed.iter().any(|l| l.ends_with(want)), "{want}: {text}");
+    }
+    assert_eq!(failed.len(), 2, "{text}");
+}
+
+/// A marked fall, a default, a break in another place, an enum with values written, a cast of an enum and an order of enums are
+/// refused at their lines, decision 0109.
+#[test]
+fn switches_and_enums_with_no_rule_are_refused() {
+    if !clang_tidy_available() {
+        return;
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let (o, _) = model("model-enum-refuse.cpp", dir.path());
+    let text = stdout(&o);
+    assert_eq!(o.status.code(), Some(1), "stdout: {text} stderr: {}", stderr(&o));
+    let refusals: Vec<&str> = text.lines().filter(|l| l.starts_with("Not provable: ")).collect();
+    let wants = [
+        "model-enum-refuse.cpp:14: AttributedStmt: the translator has no rule for it yet.",
+        "model-enum-refuse.cpp:27: DefaultStmt: the translator has no rule for it yet.",
+        "model-enum-refuse.cpp:36: BreakStmt: the translator has no rule for it yet.",
+        "model-enum-refuse.cpp:47: Flag: the translator has no rule for it yet.",
+        "model-enum-refuse.cpp:52: CXXStaticCastExpr IntegralCast: the translator has no rule for it yet.",
+        "model-enum-refuse.cpp:56: BinaryOperator <: the translator has no rule for it yet.",
+    ];
+    for want in wants {
+        assert!(refusals.iter().any(|l| l.ends_with(want)), "{want}: {text}");
+    }
+    assert_eq!(refusals.len(), wants.len(), "{text}");
+}

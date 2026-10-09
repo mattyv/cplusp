@@ -114,6 +114,7 @@ Status is `decided`, `proposed` (the default until someone objects or the thin s
 | [0106](0106-small-forms.md) | int8_t, int16_t and uint16_t, a right shift, named constexpr constants, and characters in contracts | decided |
 | [0107](0107-the-name-and-value-of-a-constant.md) | A constant reads as its true value. A field, a member or a namespace constant hides a constant of the file. The shift sentence names a negative amount | decided |
 | [0108](0108-a-reference-parameter-that-the-function-writes.md) | A T& parameter on the modifies line takes a value in and gives it back. Each T& must be on that line | decided |
+| [0109](0109-enums-and-switch.md) | An enum class with no values written is a datatype, and a switch over it is a match | decided |
 | [0110](0110-the-form-and-place-of-a-modifies-line.md) | A modifies line is a list of names. Any other form is refused first. The misplaced sentence names it | decided |
 | [0111](0111-a-parameter-on-a-modifies-line-is-no-global.md) | A name on a modifies or reads line that names a parameter is that parameter, not a global | decided |
 | [0112](0112-only-a-reference-parameter-hides-a-global.md) | Only a reference parameter hides a global on a modifies line | decided |

@@ -2354,3 +2354,101 @@ fn a_reference_to_a_struct_writes_the_whole_value_and_each_field() {
         )
     );
 }
+
+const KIND: u32 = 200;
+const K: u32 = 201;
+const WEIGHT: u32 = 202;
+
+fn kind() -> Ty {
+    Ty::Enum(KIND)
+}
+
+/// `int32_t weight(Kind k)` with ensures result == (k == Kind::Small ? 1 : 10), and a switch with a case for each enumerator.
+fn weight_fn() -> Function {
+    let ens = Expr::Bin(
+        BinOp::Eq,
+        b(Expr::Result),
+        b(Expr::Cond(b(Expr::Bin(BinOp::Eq, b(Expr::Name(K)), b(Expr::Enumerator(KIND, 0)))), b(Expr::Int(1)), b(Expr::Int(10)))),
+    );
+    let cases = Cases::Cons(
+        0,
+        Box::new(one(Stmt::Return(Expr::Lit(1, Ty::I32), 10))),
+        Box::new(Cases::Cons(1, Box::new(one(Stmt::Return(Expr::Lit(10, Ty::I32), 12))), Box::new(Cases::Nil))),
+    );
+    Function {
+        name: WEIGHT,
+        line: 7,
+        params: Params::Cons(K, kind(), Box::new(Params::Nil)),
+        ret: Ty::I32,
+        trusted: false,
+        conds: Conds::Cons(CondKind::Ensures, ens, 6, names(&[K]), Box::new(Conds::Nil)),
+        body: Stmts::Cons(
+            Box::new(Stmt::Switch(read(K, kind()), Box::new(cases), 8)),
+            Box::new(one(Stmt::Return(Expr::Lit(0, Ty::I32), 14))),
+        ),
+    }
+}
+
+#[test]
+fn a_switch_over_an_enum_is_a_match_and_an_enumerator_is_a_constructor() {
+    let Model::Full(m) = translate_function(&weight_fn(), &Fns::Nil, &Structs::Nil) else { panic!("a full model") };
+    assert_eq!(m.params, DParams::Cons(K, DTy::Enum(KIND), Box::new(DParams::Nil)));
+    let cases = DCases::Cons(
+        0,
+        Box::new(DStmts::Cons(Box::new(DStmt::Return(lit32(1))), 10, Box::new(DStmts::Nil))),
+        Box::new(DCases::Cons(1, Box::new(DStmts::Cons(Box::new(DStmt::Return(lit32(10))), 12, Box::new(DStmts::Nil))), Box::new(DCases::Nil))),
+    );
+    // The cases keep their places, so a failure inside one maps to its line.
+    assert_eq!(
+        m.body,
+        DStmts::Cons(
+            Box::new(DStmt::Match(DExpr::Var(K), Box::new(cases))),
+            8,
+            Box::new(DStmts::Cons(Box::new(DStmt::Return(lit32(0))), 14, Box::new(DStmts::Nil))),
+        )
+    );
+    // An enum is no integer, so a contract reads it as itself.
+    let want = DExpr::Bin(
+        BinOp::Eq,
+        Box::new(DExpr::AsInt(Box::new(DExpr::Result))),
+        Box::new(DExpr::Ite(
+            Box::new(DExpr::Bin(BinOp::Eq, Box::new(DExpr::Var(K)), Box::new(DExpr::Enumerator(KIND, 0)))),
+            Box::new(DExpr::Lit(1)),
+            Box::new(DExpr::Lit(10)),
+        )),
+    );
+    assert_eq!(strip_conds(m.ensures), DConds::Cons(want, 0, Box::new(DConds::Nil)));
+}
+
+#[test]
+fn an_enum_is_a_value_of_a_local_and_a_result() {
+    // Kind pick() { Kind k = Kind::Small; return k; }
+    let f = Function {
+        name: WEIGHT,
+        line: 20,
+        params: Params::Nil,
+        ret: kind(),
+        trusted: false,
+        conds: Conds::Nil,
+        body: Stmts::Cons(
+            Box::new(Stmt::Local(K, kind(), Expr::Enumerator(KIND, 0), 21)),
+            Box::new(one(Stmt::Return(read(K, kind()), 22))),
+        ),
+    };
+    let Model::Full(m) = translate_function(&f, &Fns::Nil, &Structs::Nil) else { panic!("a full model") };
+    assert_eq!(m.ret, DTy::Enum(KIND));
+    assert_eq!(
+        strip(m.body),
+        DStmts::Cons(
+            Box::new(DStmt::Local(K, DTy::Enum(KIND), DExpr::Enumerator(KIND, 0))),
+            0,
+            Box::new(DStmts::Cons(Box::new(DStmt::Return(DExpr::Var(K))), 0, Box::new(DStmts::Nil))),
+        )
+    );
+}
+
+#[test]
+fn a_contract_reads_an_enumerator_by_its_token() {
+    let toks = vec![Tok::Ident(K), Tok::Op(BinOp::Eq), Tok::Enumerator(KIND, 1)];
+    assert_eq!(parse_contract(&toks, 3), Ok(Expr::Bin(BinOp::Eq, b(Expr::Name(K)), b(Expr::Enumerator(KIND, 1)))));
+}
