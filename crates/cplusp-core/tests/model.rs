@@ -237,15 +237,49 @@ fn a_call_that_stands_alone_names_the_method_of_its_callee() {
 }
 
 #[test]
-fn a_call_inside_an_expression_or_an_argument_is_refused_at_its_line() {
+fn a_call_inside_an_expression_runs_before_its_statement() {
     let all = fns(vec![sat(one(Stmt::Return(Expr::Lit(0, Ty::I32), 15)))]);
-    let plus = Expr::Bin(BinOp::Add, b(call(SAT, vec![Expr::Lit(1, Ty::I32), Expr::Lit(2, Ty::I32)], 38)), b(Expr::Lit(1, Ty::I32)));
-    assert_eq!(bare_refusal(translate_function(&succ(plus), &all, &Structs::Nil)), Refusal::Place(38));
-    let nested = call(SAT, vec![call(SAT, vec![Expr::Lit(1, Ty::I32), Expr::Lit(2, Ty::I32)], 39), Expr::Lit(2, Ty::I32)], 39);
-    assert_eq!(bare_refusal(translate_function(&succ(nested), &all, &Structs::Nil)), Refusal::Place(39));
-    let cond = Stmt::If(call(SAT, vec![Expr::Lit(1, Ty::I32), Expr::Lit(2, Ty::I32)], 40), Box::new(Stmts::Nil), Box::new(Stmts::Nil), 40);
-    let f = Function { body: one(cond), ..succ(Expr::Lit(0, Ty::I32)) };
-    assert_eq!(bare_refusal(translate_function(&f, &all, &Structs::Nil)), Refusal::Place(40));
+    let c = |l: u32| call(SAT, vec![Expr::Lit(1, Ty::I32), Expr::Lit(2, Ty::I32)], l);
+    let args = || DArgs::Cons(lit32(1), Box::new(DArgs::Cons(lit32(2), Box::new(DArgs::Nil))));
+    let run = |t: u32, a: DArgs, rest: DCalls| DCalls::Cons(t, DTy::Int32, SAT, a, Box::new(rest));
+    // return sat(1, 2) + 1;
+    let plus = Expr::Bin(BinOp::Add, b(c(38)), b(Expr::Lit(1, Ty::I32)));
+    let Model::Full(m) = translate_function(&succ(plus), &all, &Structs::Nil) else { panic!("a full model") };
+    let want = DStmt::Pre(run(0, args(), DCalls::Nil), Box::new(DStmt::Return(DExpr::Bin(BinOp::Add, Box::new(DExpr::Temp(0)), Box::new(lit32(1))))));
+    assert_eq!(strip(m.body), DStmts::Cons(Box::new(want), 0, Box::new(DStmts::Nil)));
+    // return sat(sat(1, 2), 2); the inner call runs first.
+    let nested = call(SAT, vec![c(39), Expr::Lit(2, Ty::I32)], 39);
+    let Model::Full(m) = translate_function(&succ(nested), &all, &Structs::Nil) else { panic!("a full model") };
+    let outer = DArgs::Cons(DExpr::Temp(0), Box::new(DArgs::Cons(lit32(2), Box::new(DArgs::Nil))));
+    let want = DStmt::Pre(run(0, args(), DCalls::Nil), Box::new(DStmt::ReturnCall(SAT, outer)));
+    assert_eq!(strip(m.body), DStmts::Cons(Box::new(want), 0, Box::new(DStmts::Nil)));
+    // if (sat(1, 2) + sat(1, 2) > 0) {}: two calls in the order of the source, numbered 0 and 1.
+    let two = Expr::Bin(BinOp::Gt, b(Expr::Bin(BinOp::Add, b(c(40)), b(c(40)))), b(Expr::Lit(0, Ty::I32)));
+    let body = Stmts::Cons(Box::new(Stmt::If(two, Box::new(Stmts::Nil), Box::new(Stmts::Nil), 40)), Box::new(one(Stmt::Return(Expr::Lit(0, Ty::I32), 41))));
+    let f = Function { body, ..succ(Expr::Lit(0, Ty::I32)) };
+    let Model::Full(m) = translate_function(&f, &all, &Structs::Nil) else { panic!("a full model") };
+    let DStmts::Cons(first, _, _) = strip(m.body) else { panic!("a body") };
+    let cond = DExpr::Bin(BinOp::Gt, Box::new(DExpr::Bin(BinOp::Add, Box::new(DExpr::Temp(0)), Box::new(DExpr::Temp(1)))), Box::new(lit32(0)));
+    let want = DStmt::Pre(run(0, args(), run(1, args(), DCalls::Nil)), Box::new(DStmt::If(cond, Box::new(DStmts::Nil), Box::new(DStmts::Nil))));
+    assert_eq!(*first, want);
+}
+
+#[test]
+fn a_call_that_cpp_may_not_evaluate_once_is_refused_at_its_line() {
+    let all = fns(vec![sat(one(Stmt::Return(Expr::Lit(0, Ty::I32), 15)))]);
+    let c = |l: u32| call(SAT, vec![Expr::Lit(1, Ty::I32), Expr::Lit(2, Ty::I32)], l);
+    let positive = |l: u32| Expr::Bin(BinOp::Gt, b(c(l)), b(Expr::Lit(0, Ty::I32)));
+    let with = |s: Stmt| Function { body: Stmts::Cons(Box::new(s), Box::new(one(Stmt::Return(Expr::Lit(0, Ty::I32), 50)))), ..succ(Expr::Lit(0, Ty::I32)) };
+    // if (true && sat(1, 2) > 0) {}: the right of && may not run.
+    let and = Expr::Bin(BinOp::And, b(Expr::Bool(true)), b(positive(42)));
+    let f = with(Stmt::If(and, Box::new(Stmts::Nil), Box::new(Stmts::Nil), 42));
+    assert_eq!(bare_refusal(translate_function(&f, &all, &Structs::Nil)), Refusal::Place(42));
+    // return true ? sat(1, 2) : 0; a branch may not run.
+    let branch = Expr::Cond(b(Expr::Bool(true)), b(c(44)), b(Expr::Lit(0, Ty::I32)));
+    assert_eq!(bare_refusal(translate_function(&succ(branch), &all, &Structs::Nil)), Refusal::Place(44));
+    // while (sat(1, 2) > 0) {}: a loop condition runs again at each turn.
+    let f = with(Stmt::While(positive(46), Box::new(Conds::Nil), Box::new(Stmts::Nil), 46));
+    assert_eq!(bare_refusal(translate_function(&f, &all, &Structs::Nil)), Refusal::Place(46));
 }
 
 #[test]

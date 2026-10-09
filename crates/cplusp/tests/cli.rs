@@ -1680,7 +1680,7 @@ fn the_model_of_saturating_add_and_successor_verifies_in_dafny() {
     assert!(ok && said.contains(" 0 errors"), "{said}\n{text}");
 }
 
-/// Each call, local and cast that the second slice has no rule for is refused at its line, decision 0058. A refused function keeps a
+/// Each call, local and cast that the second slice has no rule for is refused at its line, decisions 0058 and 0104. A refused function keeps a
 /// method with no contract and no body, so its callers still have a model, and the model still resolves in Dafny.
 #[test]
 fn calls_locals_and_casts_with_no_rule_are_refused_at_their_lines() {
@@ -1693,10 +1693,7 @@ fn calls_locals_and_casts_with_no_rule_are_refused_at_their_lines() {
     let text = stdout(&o);
     assert_eq!(o.status.code(), Some(1), "stdout: {text} stderr: {}", stderr(&o));
     let refusals: Vec<&str> = text.lines().filter(|l| l.starts_with("Not provable: ")).collect();
-    let inside = "a call out of place. The translator takes a call as the full value of a return or of a local, or alone when it writes its object or gives no value.";
     for (line, expected) in [
-        (12, inside),
-        (16, inside),
         (20, "a call to declared, which has no model in view."),
         (24, "CXXMethodDecl: the translator has no rule for it yet."),
         (28, "a call to T::one, which has no model in view."),
@@ -1712,13 +1709,13 @@ fn calls_locals_and_casts_with_no_rule_are_refused_at_their_lines() {
         let want = format!("model-calls.cpp:{line}: {expected}");
         assert!(refusals.iter().any(|l| l.ends_with(&want)), "{want}: {text}");
     }
-    assert_eq!(refusals.len(), 13, "{text}");
+    assert_eq!(refusals.len(), 11, "{text}");
     let model = std::fs::read_to_string(&out).unwrap();
-    // Decision 0061 gives `y = 2;` in `assigns` a rule.
-    for name in ["id", "calls_bad", "calls_refused", "add", "assigns"] {
+    // Decision 0061 gives `y = 2;` in `assigns` a rule, and decision 0104 a call inside an expression in `inside` and `nested`.
+    for name in ["id", "calls_bad", "calls_refused", "add", "assigns", "inside", "nested"] {
         assert!(full(&model, name), "{name}: {model}");
     }
-    for name in ["inside", "nested", "to_declared", "to_member", "twice", "shadow", "from_bool", "no_start", "two_names", "bad_contract", "refused_body", "defaulted"] {
+    for name in ["to_declared", "to_member", "twice", "shadow", "from_bool", "no_start", "two_names", "bad_contract", "refused_body", "defaulted"] {
         assert!(bare(&model, name), "{name}: {model}");
     }
     assert!(method_lines(&model, "declared").is_none() && method_lines(&model, "one").is_none(), "{model}");
@@ -3071,7 +3068,7 @@ fn writes_with_no_rule_are_refused_at_their_lines() {
         "model-mut-refuse.cpp:23: the call writes its object, and the translator writes back only a local.",
         "model-mut-refuse.cpp:27: the contract line has a form the translator cannot read.",
         "model-mut-refuse.cpp:37: ReturnStmt: the translator has no rule for it yet.",
-        "model-mut-refuse.cpp:45: a call out of place. The translator takes a call as the full value of a return or of a local, or alone when it writes its object or gives no value.",
+        "model-mut-refuse.cpp:45: a call out of place. The translator takes a call where it always runs once, and a call that writes its object or gives no value only alone.",
         "model-mut-refuse.cpp:53: CXXOperatorCallExpr: the translator has no rule for it yet.",
     ] {
         assert!(refusals.iter().any(|l| l.ends_with(want)), "{want}: {text}");
@@ -3136,7 +3133,7 @@ fn conditionals_and_functors_with_no_rule_are_refused_at_their_lines() {
     let refusals: Vec<&str> = text.lines().filter(|l| l.starts_with("Not provable: ")).collect();
     for want in [
         "model-cond-refuse.cpp:11: operator() is no pure member function of its struct.",
-        "model-cond-refuse.cpp:21: a call out of place. The translator takes a call as the full value of a return or of a local, or alone when it writes its object or gives no value.",
+        "model-cond-refuse.cpp:21: a call out of place. The translator takes a call where it always runs once, and a call that writes its object or gives no value only alone.",
         "model-cond-refuse.cpp:24: the contract line has a form the translator cannot read.",
     ] {
         assert!(refusals.iter().any(|l| l.ends_with(want)), "{want}: {text}");
@@ -3318,4 +3315,55 @@ fn a_call_of_a_function_with_no_body_and_no_marker_is_refused() {
     let want = "model-trusted-refuse.cpp:8: a call to read_status, which has no model in view.";
     assert!(refusals.iter().any(|l| l.ends_with(want)), "{want}: {text}");
     assert_eq!(refusals.len(), 1, "{text}");
+}
+
+/// A call inside an expression runs before its statement, so a nested call, a call in an operand and a call in a condition
+/// prove, decision 0104.
+#[test]
+fn calls_inside_expressions_prove() {
+    let Some(dafny) = dafny() else { return };
+    if !clang_tidy_available() {
+        return;
+    }
+    let o = prove("model-lift.cpp", &[], &dafny);
+    let text = stdout(&o);
+    assert_eq!(o.status.code(), Some(0), "stdout: {text} stderr: {}", stderr(&o));
+    assert_eq!(text.lines().last(), Some("ok: proved"), "{text}");
+}
+
+/// A call before its statement keeps the requires lines of its callee, and its value is the value of the callee, decision 0104.
+#[test]
+fn prove_names_a_call_inside_an_expression_that_does_not_meet_a_contract() {
+    let Some(dafny) = dafny() else { return };
+    if !clang_tidy_available() {
+        return;
+    }
+    let o = prove("model-lift-wrong.cpp", &[], &dafny);
+    let text = stdout(&o);
+    assert_eq!(o.status.code(), Some(1), "stdout: {text} stderr: {}", stderr(&o));
+    let failed: Vec<&str> = text.lines().filter(|l| l.starts_with("Not proved: ")).collect();
+    for want in ["model-lift-wrong.cpp:10: a requires line of the callee may not hold.", "model-lift-wrong.cpp:16: the ensures line may not hold on this return."] {
+        assert!(failed.iter().any(|l| l.ends_with(want)), "{want}: {text}");
+    }
+    assert_eq!(failed.len(), 2, "{text}");
+}
+
+/// A call on the right of &&, in a branch of ?:, or in a loop condition, is refused at its line: C++ may not run it, or runs it
+/// again at each turn, decision 0104.
+#[test]
+fn a_call_that_cpp_may_not_run_once_is_refused_at_its_line() {
+    if !clang_tidy_available() {
+        return;
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let (o, _) = model("model-lift-refuse.cpp", dir.path());
+    let text = stdout(&o);
+    assert_eq!(o.status.code(), Some(1), "stdout: {text} stderr: {}", stderr(&o));
+    let refusals: Vec<&str> = text.lines().filter(|l| l.starts_with("Not provable: ")).collect();
+    let place = "a call out of place. The translator takes a call where it always runs once, and a call that writes its object or gives no value only alone.";
+    for line in [9, 13, 18] {
+        let want = format!("model-lift-refuse.cpp:{line}: {place}");
+        assert!(refusals.iter().any(|l| l.ends_with(&want)), "{want}: {text}");
+    }
+    assert_eq!(refusals.len(), 3, "{text}");
 }
