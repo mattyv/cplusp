@@ -74,7 +74,7 @@ int32_t calls_bad(int32_t x) {
 // A refused body keeps the method with no contract and no body, so a caller proves nothing from it.
 //@ ensures result == 0
 int32_t refused_body(int32_t x) {
-  return x % 2;
+  return x << 2;
 }
 
 int32_t calls_refused(int32_t x) {

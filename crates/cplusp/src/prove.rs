@@ -7,7 +7,7 @@ use std::process::{Command, ExitCode, Stdio};
 use anyhow::{Context, Result};
 use cplusp_core::verdict::{verdict, Verdict};
 
-use crate::model::{Line, Map, Translation};
+use crate::model::{Line, Map, Translation, PRELUDE};
 
 /// Where to look for Dafny, after the env var `DAFNY`.
 const INSTALLED: &str = "/opt/dafny/dafny/dafny";
@@ -191,7 +191,11 @@ pub fn run(t: &Translation, limit: u32, refused: bool, source: &str, shown: &dyn
             continue;
         };
         let (path, line) = &map.places[*place as usize];
-        println!("Not proved: {}:{line}: {}", shown(path), sentence(message));
+        // A call of trunc_div or trunc_rem whose `requires b != 0` of the prelude fails is a divisor that may be zero, decision 0088.
+        let zero = message == "function precondition could not be proved"
+            && e.related.iter().any(|r| PRELUDE.lines().nth(r.wrapping_sub(1)) == Some("  requires b != 0"));
+        let said = if zero { "the divisor may be zero.".to_string() } else { sentence(message) };
+        println!("Not proved: {}:{line}: {said}", shown(path));
         let mut told = vec![*place];
         for l in e.related.iter().filter_map(|r| here(*r)) {
             if !told.contains(&l.place) {

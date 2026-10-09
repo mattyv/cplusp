@@ -44,6 +44,8 @@ enum JOp {
     Add,
     Sub,
     Mul,
+    Div,
+    Rem,
     Lt,
     Le,
     Gt,
@@ -69,6 +71,7 @@ enum JExpr {
     Bool(bool),
     Var(String, JTy),
     Bin(JOp, Box<JExpr>, Box<JExpr>),
+    Divide(JOp, Box<JExpr>, Box<JExpr>, JTy),
     Not(Box<JExpr>),
     Neg(Box<JExpr>),
     Cast(JCast, Box<JExpr>),
@@ -221,6 +224,8 @@ fn op(o: JOp) -> BinOp {
         JOp::Add => BinOp::Add,
         JOp::Sub => BinOp::Sub,
         JOp::Mul => BinOp::Mul,
+        JOp::Div => BinOp::Div,
+        JOp::Rem => BinOp::Rem,
         JOp::Lt => BinOp::Lt,
         JOp::Le => BinOp::Le,
         JOp::Gt => BinOp::Gt,
@@ -238,6 +243,7 @@ fn expr(e: JExpr, names: &mut Names) -> Expr {
         JExpr::Bool(b) => Expr::Bool(b),
         JExpr::Var(v, t) => Expr::Var(names.id(&v), ty(t, names)),
         JExpr::Bin(o, a, b) => Expr::Bin(op(o), Box::new(expr(*a, names)), Box::new(expr(*b, names))),
+        JExpr::Divide(o, a, b, t) => Expr::Divide(op(o), Box::new(expr(*a, names)), Box::new(expr(*b, names)), ty(t, names)),
         JExpr::Not(a) => Expr::Not(Box::new(expr(*a, names))),
         JExpr::Neg(a) => Expr::Neg(Box::new(expr(*a, names))),
         JExpr::Cast(k, a) => {
@@ -303,7 +309,7 @@ fn stmts(v: Vec<JStmt>, names: &mut Names) -> Stmts {
 
 /// Cut the text of a contract line into tokens. Any character with no token is `Tok::Unknown`, and the parser refuses the line there.
 fn lex(text: &str, line: u32, names: &mut Names) -> Vec<Tok> {
-    const OPS: [(&str, BinOp); 12] = [
+    const OPS: [(&str, BinOp); 14] = [
         ("==>", BinOp::Implies),
         ("&&", BinOp::And),
         ("||", BinOp::Or),
@@ -316,6 +322,8 @@ fn lex(text: &str, line: u32, names: &mut Names) -> Vec<Tok> {
         ("+", BinOp::Add),
         ("-", BinOp::Sub),
         ("*", BinOp::Mul),
+        ("/", BinOp::Div),
+        ("%", BinOp::Rem),
     ];
     let mut toks = Vec::new();
     let mut rest = text;
@@ -518,7 +526,7 @@ fn scan_companion(text: &str) -> (Vec<(u32, String)>, Vec<String>) {
                 used = rest.find(|ch: char| !(ch.is_ascii_alphanumeric() || matches!(ch, '_' | '\'' | '?'))).unwrap_or(rest.len());
                 let w = &rest[..used];
                 if after_decl {
-                    if MODEL_NAMES.contains(&w) || ["v_", "c_", "S_", "f_", "b_"].iter().any(|p| w.starts_with(p)) {
+                    if MODEL_NAMES.contains(&w) || ["v_", "c_", "S_", "f_", "b_", "trunc_"].iter().any(|p| w.starts_with(p)) {
                         refused.push((n, format!("{w}: a name that the model uses.")));
                     }
                     declared.push(w.to_string());
@@ -575,7 +583,7 @@ fn scan_companion(text: &str) -> (Vec<(u32, String)>, Vec<String>) {
 fn expr_names<'a>(e: &'a JExpr, out: &mut Vec<&'a str>) {
     match e {
         JExpr::Var(v, _) => out.push(v),
-        JExpr::Bin(_, a, b) | JExpr::Index(a, b) | JExpr::Subspan(a, b) => {
+        JExpr::Bin(_, a, b) | JExpr::Divide(_, a, b, _) | JExpr::Index(a, b) | JExpr::Subspan(a, b) => {
             expr_names(a, out);
             expr_names(b, out);
         }
@@ -651,13 +659,40 @@ fn function(f: JFunction, names: &mut Names) -> Function {
 
 // ------------------------------------------------------------------ the Dafny text
 
-const PRELUDE: &str = "newtype int32 = x: int | -0x8000_0000 <= x < 0x8000_0000\n\
-newtype int64 = x: int | -0x8000_0000_0000_0000 <= x < 0x8000_0000_0000_0000\n\
-newtype uint8 = x: int | 0 <= x < 0x100\n\
-newtype uint32 = x: int | 0 <= x < 0x1_0000_0000\n\
-newtype uint64 = x: int | 0 <= x < 0x1_0000_0000_0000_0000\n\
-datatype Option<T> = None | Some(value: T)\n\
-type Vec<T> = s: seq<T> | |s| < 0x1_0000_0000_0000_0000 witness []\n";
+pub const PRELUDE: &str = r"newtype int32 = x: int | -0x8000_0000 <= x < 0x8000_0000
+newtype int64 = x: int | -0x8000_0000_0000_0000 <= x < 0x8000_0000_0000_0000
+newtype uint8 = x: int | 0 <= x < 0x100
+newtype uint32 = x: int | 0 <= x < 0x1_0000_0000
+newtype uint64 = x: int | 0 <= x < 0x1_0000_0000_0000_0000
+datatype Option<T> = None | Some(value: T)
+type Vec<T> = s: seq<T> | |s| < 0x1_0000_0000_0000_0000 witness []
+function trunc_size(x: int): nat { if x < 0 then -x else x }
+lemma trunc_div_size(x: nat, m: nat)
+  requires m >= 1
+  ensures x / m <= x
+{
+  if m > 1 {
+    assert x / m * m <= x;
+  }
+}
+function trunc_div(a: int, b: int): int
+  requires b != 0
+  ensures trunc_size(trunc_div(a, b)) <= trunc_size(a)
+  ensures trunc_div(a, b) < 0 ==> (a < 0) != (b < 0)
+{
+  trunc_div_size(trunc_size(a), trunc_size(b));
+  var q := trunc_size(a) / trunc_size(b);
+  if (a < 0) == (b < 0) then q else -q
+}
+function trunc_rem(a: int, b: int): int
+  requires b != 0
+  ensures trunc_size(trunc_rem(a, b)) < trunc_size(b)
+  ensures trunc_rem(a, b) < 0 ==> a < 0
+{
+  var r := trunc_size(a) % trunc_size(b);
+  if a < 0 then -r else r
+}
+";
 
 fn dscalar(s: Scalar, names: &Names) -> String {
     match s {
@@ -690,6 +725,8 @@ fn dop(o: BinOp) -> &'static str {
         BinOp::Add => "+",
         BinOp::Sub => "-",
         BinOp::Mul => "*",
+        BinOp::Div => "/",
+        BinOp::Rem => "%",
         BinOp::Lt => "<",
         BinOp::Le => "<=",
         BinOp::Gt => ">",
@@ -748,6 +785,14 @@ fn dexpr(e: &DExpr, names: &Names) -> String {
         DExpr::Exists(j, b) => format!("(exists b_{}: int :: {})", names.text(*j), dexpr(b, names)),
         DExpr::Bound(j) => format!("b_{}", names.text(*j)),
         DExpr::Apply(f, args) => format!("{}({})", names.text(*f), dargs(args, names).join(", ")),
+        DExpr::TDiv(a, b) => format!("trunc_div({}, {})", dexpr(a, names), dexpr(b, names)),
+        DExpr::TRem(a, b) => format!("trunc_rem({}, {})", dexpr(a, names), dexpr(b, names)),
+        DExpr::DivIn(a, b, t) => format!("(trunc_div({}, {}) as {})", dexpr(a, names), dexpr(b, names), dty(*t, names)),
+        // The let checks that the quotient fits T before it gives the remainder, as C++ requires. `q'` cannot clash with a C++ name.
+        DExpr::RemIn(a, b, t) => {
+            let (a, b, t) = (dexpr(a, names), dexpr(b, names), dty(*t, names));
+            format!("(var q' := (trunc_div({a}, {b}) as {t}); (trunc_rem({a}, {b}) as {t}))")
+        }
         DExpr::Chain(o1, o2, a, b, c) => format!("({} {} {} {} {})", dexpr(a, names), dop(*o1), dexpr(b, names), dop(*o2), dexpr(c, names)),
     }
 }

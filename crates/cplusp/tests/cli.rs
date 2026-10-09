@@ -1558,7 +1558,7 @@ fn the_translator_refuses_what_it_has_no_rule_for() {
     assert_eq!(o.status.code(), Some(1), "stdout: {text} stderr: {}", stderr(&o));
     let refusals: Vec<&str> = text.lines().filter(|l| l.starts_with("Not provable: ")).collect();
     assert_eq!(refusals.len(), 2, "{text}");
-    assert!(refusals.iter().any(|l| l.ends_with("model-refuse.cpp:9: BinaryOperator %: the translator has no rule for it yet.")), "{text}");
+    assert!(refusals.iter().any(|l| l.ends_with("model-refuse.cpp:9: BinaryOperator <<: the translator has no rule for it yet.")), "{text}");
     assert!(refusals.iter().any(|l| l.ends_with("model-refuse.cpp:12: y in the contract is no parameter.")), "{text}");
     let model = std::fs::read_to_string(&out).unwrap();
     assert!(full(&model, "one"), "{model}");
@@ -1705,7 +1705,7 @@ fn calls_locals_and_casts_with_no_rule_are_refused_at_their_lines() {
         (54, "DeclStmt: the translator has no rule for it yet."),
         (59, "DeclStmt: the translator has no rule for it yet."),
         (64, "'=' in a contract: the translator has no rule for it yet."),
-        (77, "BinaryOperator %: the translator has no rule for it yet."),
+        (77, "BinaryOperator <<: the translator has no rule for it yet."),
         (90, "CXXDefaultArgExpr: the translator has no rule for it yet."),
     ] {
         let want = format!("model-calls.cpp:{line}: {expected}");

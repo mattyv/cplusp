@@ -4086,6 +4086,10 @@ private:
       case BO_LOr: Op = "Or"; break;
       default: break;
       }
+      // Division and remainder of integers carry the type of their result, decision 0088. Division of floating point stays unknown.
+      if (!Op && (Binary->getOpcode() == BO_Div || Binary->getOpcode() == BO_Rem) && Binary->getType()->isIntegerType())
+        return tag("Divide", llvm::json::Array{Binary->getOpcode() == BO_Div ? "Div" : "Rem", expr(Binary->getLHS(), Near), expr(Binary->getRHS(), Near),
+                                               type(Binary->getType())});
       if (!Op)
         return unknown(E, describe(E), Near);
       return tag("Bin", llvm::json::Array{Op, expr(Binary->getLHS(), Near), expr(Binary->getRHS(), Near)});

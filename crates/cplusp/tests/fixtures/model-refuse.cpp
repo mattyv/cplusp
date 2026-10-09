@@ -6,7 +6,7 @@ int32_t one() {
 
 //@ ensures result == 1
 int32_t call_one() {
-  return 7 % 2;
+  return 7 << 2;
 }
 
 //@ ensures result == y
