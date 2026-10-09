@@ -3372,3 +3372,52 @@ fn a_call_that_cpp_may_not_run_once_is_refused_at_its_line() {
     }
     assert_eq!(refusals.len(), 5, "{text}");
 }
+
+/// int8_t, int16_t and uint16_t, a right shift of an unsigned and of a negative signed value, a named constexpr constant in code
+/// and in a contract, and a character in a contract, prove, decision 0106.
+#[test]
+fn small_forms_prove() {
+    let Some(dafny) = dafny() else { return };
+    if !clang_tidy_available() {
+        return;
+    }
+    let o = prove("model-small.cpp", &[], &dafny);
+    let text = stdout(&o);
+    assert_eq!(o.status.code(), Some(0), "stdout: {text} stderr: {}", stderr(&o));
+    assert_eq!(text.lines().last(), Some("ok: proved"), "{text}");
+}
+
+/// A narrowing to int8_t that may not fit, and a shift whose amount may not be below the width, are named at their lines,
+/// decision 0106.
+#[test]
+fn prove_names_a_narrowing_and_a_shift_that_may_fail() {
+    let Some(dafny) = dafny() else { return };
+    if !clang_tidy_available() {
+        return;
+    }
+    let o = prove("model-small-wrong.cpp", &[], &dafny);
+    let text = stdout(&o);
+    assert_eq!(o.status.code(), Some(1), "stdout: {text} stderr: {}", stderr(&o));
+    let failed: Vec<&str> = text.lines().filter(|l| l.starts_with("Not proved: ")).collect();
+    for want in ["model-small-wrong.cpp:4: the value may not fit int8_t.", "model-small-wrong.cpp:8: the shift amount may not be below the width of the type."] {
+        assert!(failed.iter().any(|l| l.ends_with(want)), "{want}: {text}");
+    }
+    assert_eq!(failed.len(), 2, "{text}");
+}
+
+/// A variable that is not constexpr is no constant of a contract, and a left shift has no rule, decision 0106.
+#[test]
+fn a_variable_in_a_contract_and_a_left_shift_are_refused() {
+    if !clang_tidy_available() {
+        return;
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let (o, _) = model("model-small-refuse.cpp", dir.path());
+    let text = stdout(&o);
+    assert_eq!(o.status.code(), Some(1), "stdout: {text} stderr: {}", stderr(&o));
+    let refusals: Vec<&str> = text.lines().filter(|l| l.starts_with("Not provable: ")).collect();
+    for want in ["model-small-refuse.cpp:6: scale in the contract is no parameter.", "model-small-refuse.cpp:12: BinaryOperator <<: the translator has no rule for it yet."] {
+        assert!(refusals.iter().any(|l| l.ends_with(want)), "{want}: {text}");
+    }
+    assert_eq!(refusals.len(), 2, "{text}");
+}

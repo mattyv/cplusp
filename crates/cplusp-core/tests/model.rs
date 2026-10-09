@@ -2087,3 +2087,34 @@ fn a_trusted_member_function_is_never_pure() {
     let Models::Cons(u, _) = *rest else { panic!("a model of the user") };
     assert_eq!(bare_refusal(u), Refusal::NotPure(VALUE, 19));
 }
+
+#[test]
+fn three_small_integer_types_and_a_right_shift() {
+    // int8_t to_byte(int32_t x) { return static_cast<int8_t>(x); }
+    let cast = Expr::Cast(CastKind::Integral(Ty::I32, Ty::I8), b(read(X, Ty::I32)));
+    let f = Function {
+        name: SAT,
+        line: 3,
+        params: Params::Cons(X, Ty::I32, Box::new(Params::Nil)),
+        ret: Ty::I8,
+        trusted: false,
+        conds: Conds::Nil,
+        body: one(Stmt::Return(cast, 4)),
+    };
+    let Model::Full(m) = translate_function(&f, &Fns::Nil, &Structs::Nil) else { panic!("a full model") };
+    assert_eq!(m.ret, DTy::Int8);
+    assert_eq!(strip(m.body), DStmts::Cons(Box::new(DStmt::Return(DExpr::Conv(DTy::Int8, Box::new(DExpr::Var(X))))), 0, Box::new(DStmts::Nil)));
+    assert_eq!(translate_ty(Ty::I16, 3), Ok(DTy::Int16));
+    assert_eq!(translate_ty(Ty::U16, 3), Ok(DTy::UInt16));
+    // A contract reads an int16_t as an exact integer.
+    let ps = Params::Cons(X, Ty::I16, Box::new(Params::Nil));
+    assert_eq!(translate_contract(&Expr::Name(X), &names(&[X]), &ps, Some(Ty::I16), &Names::Nil, 2, &Structs::Nil), Ok(DExpr::AsInt(Box::new(DExpr::Var(X)))));
+    // uint32_t shift(uint32_t x, uint32_t n) { return x >> n; }: the width is that of the type after promotion.
+    let int = |n: u32| Box::new(DExpr::AsInt(Box::new(DExpr::Var(n))));
+    let shr = Expr::Shr(b(read(X, Ty::U32)), b(read(B, Ty::U32)), Ty::U32);
+    assert_eq!(translate_code(&shr, 3), Ok(DExpr::ShrIn(int(X), int(B), DTy::UInt32, 32)));
+    let wide = Expr::Shr(b(read(X, Ty::I64)), b(read(B, Ty::I32)), Ty::I64);
+    assert_eq!(translate_code(&wide, 3), Ok(DExpr::ShrIn(int(X), int(B), DTy::Int64, 64)));
+    // A shift of a bool has no rule.
+    assert_eq!(translate_code(&Expr::Shr(b(Expr::Bool(true)), b(Expr::Bool(true)), Ty::Bool), 3), Err(Refusal::Convert(3)));
+}

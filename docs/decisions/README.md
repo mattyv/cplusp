@@ -111,3 +111,4 @@ Status is `decided`, `proposed` (the default until someone objects or the thin s
 | [0103](0103-what-a-trusted-function-promises.md) | A trusted function also promises to change no value or const parameter. A reason is one line. Trusted: lines come first | decided |
 | [0104](0104-a-call-inside-an-expression.md) | A call inside an expression runs before its statement, into a temporary. A call that C++ may not run once is refused | decided |
 | [0105](0105-a-constructor-call-in-an-expression.md) | A constructor call inside an expression runs before its statement. The sentence of a call out of place names a dropped value | decided |
+| [0106](0106-small-forms.md) | int8_t, int16_t and uint16_t, a right shift, named constexpr constants, and characters in contracts | decided |
