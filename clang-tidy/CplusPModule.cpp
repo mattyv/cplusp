@@ -3965,6 +3965,11 @@ public:
     }
     return Out;
   }
+  // Writes the item of an enum class of the file, so a contract can name its enumerators though no code names its type, decision 0114.
+  void writeEnum(const EnumDecl *ED) const {
+    if (plainEnum(Context.getTypeDeclType(ED)))
+      enumType(ED);
+  }
   // The line of the tree for a named constant, or null.
   llvm::json::Value constantLine(const VarDecl *Var) const {
     const std::optional<llvm::APSInt> Value = constant(Var);
@@ -4204,7 +4209,7 @@ private:
     for (const FieldDecl *F : RD->fields()) {
       const QualType FT = F->getType();
       if (F->isBitField() || FT->isReferenceType() || FT.hasQualifiers() ||
-          (!scalar(FT) && !plainStruct(FT) && !optElement(FT) && seqElement(FT, true).isNull())) {
+          (!scalar(FT) && !plainEnum(FT) && !plainStruct(FT) && !optElement(FT) && seqElement(FT, true).isNull())) {
         Plain = false;
         break;
       }
@@ -4286,6 +4291,51 @@ private:
     return RD->getQualifiedNameAsString() + "@" + file(Loc) + ":" + std::to_string(line(Loc)) + ":" + std::to_string(SM.getExpansionColumnNumber(Loc));
   }
 
+  // The enum class of the file that a type is, decision 0109, or null: a definition in a user file, scoped, with an enumerator and no value
+  // written for any. A qualified type is none, as for `scalar`.
+  const EnumDecl *plainEnum(QualType T) const {
+    // A const value is the same value. Any other qualifier is none, as for `scalar`.
+    QualType Canon = T.getCanonicalType();
+    Canon.removeLocalConst();
+    if (Canon.hasQualifiers())
+      return nullptr;
+    const auto *Type = dyn_cast<EnumType>(Canon.getTypePtr());
+    const EnumDecl *ED = Type ? Type->getDecl()->getDefinition() : nullptr;
+    if (!ED || !ED->isScoped() || SM.isInSystemHeader(ED->getLocation()) || ED->enumerators().empty())
+      return nullptr;
+    for (const EnumConstantDecl *E : ED->enumerators())
+      if (E->getInitExpr())
+        return nullptr;
+    return ED;
+  }
+  // The place of an enumerator among those of its enum, decision 0109.
+  static unsigned enumeratorPlace(const EnumDecl *ED, const EnumConstantDecl *Enumerator) {
+    unsigned Place = 0;
+    for (const EnumConstantDecl *E : ED->enumerators()) {
+      if (E == Enumerator)
+        break;
+      ++Place;
+    }
+    return Place;
+  }
+  // The key of an enum, as the key of a struct.
+  std::string enumKey(const EnumDecl *ED) const {
+    const SourceLocation Loc = SM.getFileLoc(ED->getLocation());
+    return ED->getQualifiedNameAsString() + "@" + file(Loc) + ":" + std::to_string(line(Loc)) + ":" + std::to_string(SM.getExpansionColumnNumber(Loc));
+  }
+  // The enum as a type, written once with its enumerators in order.
+  llvm::json::Value enumType(const EnumDecl *ED) const {
+    const std::string Key = enumKey(ED);
+    if (!Structs.count(Key)) {
+      llvm::json::Array Names;
+      for (const EnumConstantDecl *E : ED->enumerators())
+        Names.push_back(E->getNameAsString());
+      const SourceLocation Loc = SM.getFileLoc(ED->getLocation());
+      Structs.emplace(Key, llvm::json::Object{{"enum", Key}, {"name", ED->getNameAsString()}, {"file", file(Loc)}, {"line", number(line(Loc))}, {"enumerators", std::move(Names)}});
+    }
+    return tag("Enum", Key);
+  }
+
   // A parameter of type `T&` for a scalar or a struct of the file is `Mut(T)`, decision 0108, else null. A const reference is a value, and any other
   // reference stays `Other`.
   llvm::json::Value mutRef(QualType T) const {
@@ -4312,6 +4362,8 @@ private:
       return S;
     if (const char *S = smallScalar(T))
       return S;
+    if (const EnumDecl *ED = plainEnum(T))
+      return enumType(ED);
     // Decision 0074: a struct is by value or by const lvalue reference. Any other reference stays `Other`.
     const bool Writable = T->isReferenceType() && !(T->isLValueReferenceType() && T->getPointeeType().isConstQualified());
     if (const CXXRecordDecl *RD = Writable ? nullptr : plainStruct(T)) {
@@ -4370,6 +4422,8 @@ private:
       return unknown(S, describe(S), line(S->getBeginLoc()));
     if (const auto *Return = dyn_cast<ReturnStmt>(S); Return && Return->getRetValue())
       return tag("Return", llvm::json::Array{expr(Return->getRetValue(), line(S->getBeginLoc())), number(line(S->getBeginLoc()))});
+    if (const auto *Switch = dyn_cast<SwitchStmt>(S); Switch && !Switch->getInit() && !Switch->getConditionVariable() && plainEnum(Switch->getCond()->IgnoreParenImpCasts()->getType()))
+      return switchOf(Switch);
     if (const auto *Decl = dyn_cast<DeclStmt>(S); Decl && Decl->isSingleDecl())
       if (const auto *Var = dyn_cast<VarDecl>(Decl->getSingleDecl()); Var && Var->hasLocalStorage() && Var->getInit())
         return tag("Local", llvm::json::Array{Var->getNameAsString(), type(Var->getType()), expr(Var->getInit(), line(S->getBeginLoc())), number(line(S->getBeginLoc()))});
@@ -4415,6 +4469,57 @@ private:
           return tag("For", llvm::json::Array{stmt(Init), expr(For->getCond(), line(S->getBeginLoc())), stmt(For->getInc()), loopConds(S),
                                               stmts(For->getBody()), number(line(S->getBeginLoc()))});
     return unknown(S, describe(S), line(S->getBeginLoc()));
+  }
+
+  // A switch over a value of an enum, decision 0109: the cases in source order, each with the place of its enumerator and its statements up to the
+  // next label. A `break` that ends a case is dropped. A default, a label with another label for its body, and anything before the first label stay
+  // unknown, by their nodes.
+  llvm::json::Value switchOf(const SwitchStmt *Switch) const {
+    const unsigned At = line(Switch->getBeginLoc());
+    const auto *Body = dyn_cast_or_null<CompoundStmt>(Switch->getBody());
+    if (!Body)
+      return unknown(Switch, describe(Switch), At);
+    const EnumDecl *ED = plainEnum(Switch->getCond()->IgnoreParenImpCasts()->getType());
+    enumType(ED);
+    llvm::json::Array Cases;
+    std::vector<const Stmt *> Current;
+    const auto close = [&]() {
+      // A body in braces, with the break after them or inside them, is the statements of the block, decision 0114. Any other shape stays as it is.
+      if (!Current.empty() && isa<CompoundStmt>(Current.front()) && (Current.size() == 1 || (Current.size() == 2 && isa<BreakStmt>(Current.back())))) {
+        const auto Block = cast<CompoundStmt>(Current.front())->body();
+        Current.assign(Block.begin(), Block.end());
+      }
+      if (!Current.empty() && isa<BreakStmt>(Current.back()))
+        Current.pop_back();
+      llvm::json::Array Out;
+      for (const Stmt *Child : Current) {
+        bodyLines(Child, Out);
+        Out.push_back(stmt(Child));
+      }
+      Cases.back().getAsArray()->push_back(std::move(Out));
+      Current.clear();
+    };
+    for (const Stmt *Child : Body->body()) {
+      if (isa<DefaultStmt>(Child) || (isa<CaseStmt>(Child) && (isa<CaseStmt>(cast<CaseStmt>(Child)->getSubStmt()) || isa<DefaultStmt>(cast<CaseStmt>(Child)->getSubStmt()))))
+        return unknown(Child, describe(isa<CaseStmt>(Child) ? cast<CaseStmt>(Child)->getSubStmt() : Child), line(Child->getBeginLoc()));
+      if (const auto *Label = dyn_cast<CaseStmt>(Child)) {
+        const auto *Name = dyn_cast<DeclRefExpr>(Label->getLHS()->IgnoreParenImpCasts());
+        const auto *Enumerator = Name ? dyn_cast<EnumConstantDecl>(Name->getDecl()) : nullptr;
+        if (!Enumerator || Enumerator->getDeclContext() != ED || Label->getRHS())
+          return unknown(Child, describe(Child), line(Child->getBeginLoc()));
+        if (!Cases.empty())
+          close();
+        Cases.push_back(llvm::json::Array{number(enumeratorPlace(ED, Enumerator))});
+        Current.push_back(Label->getSubStmt());
+      } else if (Cases.empty()) {
+        return unknown(Child, describe(Child), line(Child->getBeginLoc()));
+      } else {
+        Current.push_back(Child);
+      }
+    }
+    if (!Cases.empty())
+      close();
+    return tag("Switch", llvm::json::Array{expr(Switch->getCond()->IgnoreParenImpCasts(), At), enumKey(ED), std::move(Cases), number(At)});
   }
 
   // A field of a struct reference parameter, `p.f`, as the parameter and the field, or two nulls, decision 0108.
@@ -4492,6 +4597,12 @@ private:
       const ValueDecl *D = Ref->getDecl();
       if (isa<ParmVarDecl>(D) || (isa<VarDecl>(D) && cast<VarDecl>(D)->hasLocalStorage()))
         return tag("Var", llvm::json::Array{D->getNameAsString(), varType(D)});
+      // An enumerator of such an enum is its place among the enumerators, decision 0109.
+      if (const auto *Enumerator = dyn_cast<EnumConstantDecl>(D))
+        if (const auto *ED = dyn_cast<EnumDecl>(Enumerator->getDeclContext()); ED && plainEnum(Context.getTypeDeclType(ED)) == ED->getDefinition()) {
+          enumType(ED);
+          return tag("Enumerator", llvm::json::Array{enumKey(ED), number(enumeratorPlace(ED, Enumerator))});
+        }
       // A named constant is its value, decision 0106. A negative one is the negation of a literal, as `-5` is.
       if (const std::optional<llvm::APSInt> Value = constant(D)) {
         // The magnitude of a negative value, taken one bit wider so that the minimum of a type does not overflow.
@@ -4542,6 +4653,9 @@ private:
       if (!Op && (Binary->getOpcode() == BO_Div || Binary->getOpcode() == BO_Rem) && Binary->getType()->isIntegerType())
         return tag("Divide", llvm::json::Array{Binary->getOpcode() == BO_Div ? "Div" : "Rem", expr(Binary->getLHS(), Near), expr(Binary->getRHS(), Near),
                                                type(Binary->getType())});
+      // Two values of an enum are compared for equality only, decision 0109.
+      if (Op && StringRef(Op) != "Eq" && StringRef(Op) != "Ne" && plainEnum(Binary->getLHS()->getType()))
+        return unknown(E, describe(E), Near);
       // A right shift carries the type of its result, decision 0106. A left shift has no rule.
       if (!Op && Binary->getOpcode() == BO_Shr)
         return tag("Shr", llvm::json::Array{expr(Binary->getLHS(), Near), expr(Binary->getRHS(), Near), type(Binary->getType())});
@@ -4573,7 +4687,7 @@ private:
       llvm::json::Value Kind = Cast->getCastKind() == CK_LValueToRValue ? llvm::json::Value("Read")
                                : Cast->getCastKind() == CK_NoOp         ? llvm::json::Value("NoOp")
                                : Cast->getCastKind() == CK_ConstructorConversion ? llvm::json::Value("Construct")
-                               : Cast->getCastKind() == CK_IntegralCast ? tag("Integral", llvm::json::Array{type(Cast->getSubExpr()->getType()), type(Cast->getType())})
+                               : Cast->getCastKind() == CK_IntegralCast && !plainEnum(Cast->getSubExpr()->getType()) && !plainEnum(Cast->getType()) ? tag("Integral", llvm::json::Array{type(Cast->getSubExpr()->getType()), type(Cast->getType())})
                                                                         : tag("Other", std::string(Cast->getStmtClassName()) + " " + Cast->getCastKindName());
       return tag("Cast", llvm::json::Array{std::move(Kind), expr(Cast->getSubExpr(), Near)});
     }
@@ -4706,6 +4820,7 @@ public:
     Finder->addMatcher(
         functionDecl(unless(isImplicit()), unless(isTemplateInstantiation()), unless(isExpansionInSystemHeader())).bind("fn"), this);
     Finder->addMatcher(varDecl(isConstexpr(), unless(isExpansionInSystemHeader())).bind("constant"), this);
+    Finder->addMatcher(enumDecl(isDefinition(), unless(isExpansionInSystemHeader())).bind("enum"), this);
     Finder->addMatcher(translationUnitDecl(), this);
   }
   void check(const MatchFinder::MatchResult &Result) override {
@@ -4715,6 +4830,11 @@ public:
       llvm::json::Value Line = TreeWriter(*Context, Claimed, Structs).constantLine(Var);
       if (Line.kind() != llvm::json::Value::Null)
         append(Line);
+      return;
+    }
+    // Each enum class of the file is written, whether or not a type names it, decision 0114.
+    if (const auto *ED = Result.Nodes.getNodeAs<EnumDecl>("enum")) {
+      TreeWriter(*Context, Claimed, Structs).writeEnum(ED);
       return;
     }
     const auto *FD = Result.Nodes.getNodeAs<FunctionDecl>("fn");

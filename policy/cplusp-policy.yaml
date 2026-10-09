@@ -488,6 +488,19 @@ rules:
           c_style_casts: CStyleCastExpr
       - matcher: cxxFunctionalCastExpr(unless(has(initListExpr())), hasDestinationType(hasCanonicalType(anyOf(isInteger(), realFloatingPointType(), enumType()))))
 
+  - id: enum_cast
+    construct: A conversion of a number to an enum class that has no values written
+    area: casts
+    canonical: No stance. The model reads each value of the enum as an enumerator
+    decision: ban
+    why: A number that is no enumerator makes a value that the model of the enum does not have. The prover then trusts a switch that the program does not follow. A verified caller trusts each value, so the row holds in trusted code too.
+    use_instead: a function that switches on the number and returns an enumerator for each case.
+    stage: gate
+    detect:
+      - matcher: 'castExpr(anyOf(explicitCastExpr(), implicitCastExpr(hasParent(initListExpr()))), unless(hasParent(substNonTypeTemplateParmExpr())), hasType(hasCanonicalType(enumType(hasDeclaration(enumDecl(isScoped(), unless(isExpansionInSystemHeader()), has(enumConstantDecl()), unless(hasDescendant(enumConstantDecl(has(expr()))))))))), unless(anyOf(hasCastKind("CK_NoOp"), hasCastKind("CK_LValueToRValue"))))'
+      - matcher: 'explicitCastExpr(hasType(anyOf(hasCanonicalType(pointerType(pointee(hasCanonicalType(enumType(hasDeclaration(enumDecl(isScoped(), unless(isExpansionInSystemHeader()), has(enumConstantDecl()), unless(hasDescendant(enumConstantDecl(has(expr()))))))))))), hasCanonicalType(referenceType(pointee(hasCanonicalType(enumType(hasDeclaration(enumDecl(isScoped(), unless(isExpansionInSystemHeader()), has(enumConstantDecl()), unless(hasDescendant(enumConstantDecl(has(expr()))))))))))))), unless(hasCastKind("CK_NoOp")))'
+      - matcher: 'declRefExpr(to(functionDecl(hasName("::std::bit_cast"), returns(hasCanonicalType(enumType(hasDeclaration(enumDecl(isScoped(), unless(isExpansionInSystemHeader()), has(enumConstantDecl()), unless(hasDescendant(enumConstantDecl(has(expr()))))))))))))'
+
   - id: reinterpret_const_cast
     construct: "`reinterpret_cast`, `const_cast`"
     area: casts

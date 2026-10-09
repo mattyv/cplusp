@@ -7,7 +7,7 @@ use std::fmt::Write;
 
 use anyhow::{Context, Result};
 use cplusp_core::model::{
-    parse_contract, translate_structs, translate_unit, Args, BinOp, CastKind, CondKind, Conds, DArgs, DCalls, DConds, DExpr, DParams, DStmt, DStmts, DTy, Expr, Extent, Fns,
+    parse_contract, translate_structs, translate_unit, Args, BinOp, Cases, CastKind, CondKind, Conds, DArgs, DCalls, DCases, DConds, DExpr, DParams, DStmt, DStmts, DTy, Expr, Extent, Fns,
     Function, Members, Method, Model, Models, Names as CNames, Obj, Objs, Params, Refusal, Scalar, Stmt, Stmts, StructModels, Structs, Tok, Ty,
 };
 use serde::Deserialize;
@@ -40,6 +40,8 @@ enum JTy {
     Struct(String),
     /// A parameter of type `T&`, decision 0108.
     Mut(JScalar),
+    /// An enum class of the file by its key, decision 0109.
+    Enum(String),
     Opt(JScalar),
     This(String),
     ThisMut(String),
@@ -81,6 +83,8 @@ enum JExpr {
     Bin(JOp, Box<JExpr>, Box<JExpr>),
     Divide(JOp, Box<JExpr>, Box<JExpr>, JTy),
     Shr(Box<JExpr>, Box<JExpr>, JTy),
+    /// An enumerator by the key of its enum and its place, decision 0109.
+    Enumerator(String, u32),
     Not(Box<JExpr>),
     Neg(Box<JExpr>),
     Cast(JCast, Box<JExpr>),
@@ -112,6 +116,8 @@ enum JStmt {
     SetField(String, JExpr, u32),
     /// `p.f = e` where `p` is a reference parameter, decision 0108.
     SetRefField(String, String, JExpr, u32),
+    /// A switch over an enum, decision 0109: its condition, the key of the enum, the cases as (place of the enumerator, statements), and the line.
+    Switch(JExpr, String, Vec<(u32, Vec<JStmt>)>, u32),
     Call(String, String, Vec<JExpr>, u32),
     Exit(u32),
     /// A `//@ assert` or `//@ apply` line in the body, decision 0099.
@@ -147,8 +153,20 @@ enum Item {
         constant: String,
         value: String,
     },
+    Enum(JEnum),
     Struct(JStruct),
     Function(JFunction),
+}
+
+/// An enum class of the file, decision 0109.
+#[derive(Deserialize)]
+struct JEnum {
+    #[serde(rename = "enum")]
+    key: String,
+    name: String,
+    file: String,
+    line: u32,
+    enumerators: Vec<String>,
 }
 
 /// A plain struct of the file, decision 0073.
@@ -222,6 +240,8 @@ struct Names {
     struct_fields: HashMap<String, Vec<String>>,
     /// The named constants of the file, as (name, value), decision 0106. A contract reads such a name as its value.
     constants: Vec<(String, i128)>,
+    /// The enums of the file as (plain name, id of key, enumerators), for `Kind::Small` in a contract, decision 0109.
+    enums: Vec<(String, u32, Vec<String>)>,
     /// The names of the parameters and locals of the function that is being converted. They hide a constant of the same name.
     shadow: Vec<String>,
 }
@@ -279,6 +299,7 @@ fn ty(t: JTy, names: &mut Names) -> Ty {
         JTy::Opt(s) => Ty::Opt(scalar(s, names)),
         JTy::Struct(k) => Ty::Struct(names.id(&k)),
         JTy::Mut(s) => Ty::Mut(scalar(s, names)),
+        JTy::Enum(k) => Ty::Enum(names.id(&k)),
         JTy::This(k) => Ty::This(names.id(&k)),
         JTy::ThisMut(k) => Ty::ThisMut(names.id(&k)),
         JTy::Void => Ty::Void,
@@ -312,6 +333,7 @@ fn expr(e: JExpr, names: &mut Names) -> Expr {
         JExpr::Bin(o, a, b) => Expr::Bin(op(o), Box::new(expr(*a, names)), Box::new(expr(*b, names))),
         JExpr::Divide(o, a, b, t) => Expr::Divide(op(o), Box::new(expr(*a, names)), Box::new(expr(*b, names)), ty(t, names)),
         JExpr::Shr(a, b, t) => Expr::Shr(Box::new(expr(*a, names)), Box::new(expr(*b, names)), ty(t, names)),
+        JExpr::Enumerator(k, i) => Expr::Enumerator(names.id(&k), i),
         JExpr::Not(a) => Expr::Not(Box::new(expr(*a, names))),
         JExpr::Neg(a) => Expr::Neg(Box::new(expr(*a, names))),
         JExpr::Cast(k, a) => {
@@ -359,6 +381,12 @@ fn stmt(s: JStmt, names: &mut Names) -> Stmt {
         JStmt::Assign(n, e, line) => Stmt::Assign(names.id(&n), expr(e, names), names.here(line)),
         JStmt::Step(n, t, up, line) => Stmt::Step(names.id(&n), ty(t, names), up, names.here(line)),
         JStmt::SetField(f, e, line) => Stmt::SetField(names.id(&f), expr(e, names), names.here(line)),
+        JStmt::Switch(e, k, cases, line) => {
+            let place = names.here(line);
+            let key = names.id(&k);
+            let cases = cases.into_iter().rev().fold(Cases::Nil, |rest, (i, body)| Cases::Cons(i, Box::new(stmts(body, names)), Box::new(rest)));
+            Stmt::Switch(expr(e, names), key, Box::new(cases), place)
+        }
         JStmt::SetRefField(p, f, e, line) => Stmt::SetRefField(names.id(&p), names.id(&f), expr(e, names), names.here(line)),
         JStmt::Call(key, name, args, line) => {
             let args: Vec<Expr> = args.into_iter().map(|a| expr(a, names)).collect();
@@ -576,10 +604,38 @@ fn bound_names(toks: &[Tok]) -> Vec<u32> {
     bound
 }
 
+/// `Kind::Small` for an enum class of the file and an enumerator of it reads as the enumerator, decision 0109. A name that a quantifier binds is no
+/// enum, and neither is a plain name that two enums share.
+fn fold_enumerators(toks: Vec<Tok>, names: &Names) -> Vec<Tok> {
+    if names.enums.is_empty() {
+        return toks;
+    }
+    let bound = bound_names(&toks);
+    let mut out = Vec::with_capacity(toks.len());
+    let mut i = 0;
+    while i < toks.len() {
+        if let [Tok::Ident(a), Tok::ColonColon, Tok::Ident(b), ..] = toks[i..] {
+            let (kind, member) = (names.text(a), names.text(b));
+            let mut same = names.enums.iter().filter(|(n, _, _)| n == kind);
+            if let (Some((_, key, list)), None, false) = (same.next(), same.next(), bound.contains(&a)) {
+                if let Some(at) = list.iter().position(|e| e == member) {
+                    out.push(Tok::Enumerator(*key, at as u32));
+                    i += 3;
+                    continue;
+                }
+            }
+        }
+        out.push(toks[i]);
+        i += 1;
+    }
+    out
+}
+
 /// A name that is a named constant of the file reads as its value, decision 0106. A parameter, a local or a name that a quantifier binds hides the
 /// constant. So does a name that is called or follows `::`.
 // ponytail: a name bound by a quantifier hides the constant on the whole line. Upgrade: scope the binder.
 fn fold_constants(toks: Vec<Tok>, names: &Names) -> Vec<Tok> {
+    let toks = fold_enumerators(toks, names);
     if names.constants.is_empty() {
         return toks;
     }
@@ -744,7 +800,7 @@ fn scan_companion(text: &str) -> (Vec<(u32, String)>, Vec<Declared>) {
                 used = rest.find(|ch: char| !(ch.is_ascii_alphanumeric() || matches!(ch, '_' | '\'' | '?'))).unwrap_or(rest.len());
                 let w = &rest[..used];
                 if after_decl != 0 {
-                    if MODEL_NAMES.contains(&w) || ["v_", "c_", "S_", "f_", "b_", "trunc_"].iter().any(|p| w.starts_with(p)) {
+                    if MODEL_NAMES.contains(&w) || ["v_", "c_", "S_", "E_", "f_", "b_", "trunc_"].iter().any(|p| w.starts_with(p)) {
                         refused.push((n, format!("{w}: a name that the model uses.")));
                     }
                     declared.push((w.to_string(), n, after_decl == 2));
@@ -816,7 +872,7 @@ fn expr_names<'a>(e: &'a JExpr, out: &mut Vec<&'a str>) {
         }
         JExpr::Not(a) | JExpr::Neg(a) | JExpr::Cast(_, a) | JExpr::Paren(a) | JExpr::Brace(a) | JExpr::Size(a) | JExpr::Empty(a) | JExpr::Copy(a, ..) | JExpr::Field(a, _) | JExpr::HasValue(a) | JExpr::Value(a) | JExpr::Wrap(a) => expr_names(a, out),
         JExpr::Call(_, _, args, _) | JExpr::Construct(_, args) => args.iter().for_each(|a| expr_names(a, out)),
-        JExpr::Lit(..) | JExpr::Bool(_) | JExpr::Nullopt | JExpr::Unknown(..) => {}
+        JExpr::Lit(..) | JExpr::Bool(_) | JExpr::Nullopt | JExpr::Enumerator(..) | JExpr::Unknown(..) => {}
     }
 }
 
@@ -833,6 +889,10 @@ fn stmt_names<'a>(s: &'a JStmt, out: &mut Vec<&'a str>) {
         }
         JStmt::Step(n, ..) => out.push(n),
         JStmt::SetField(_, e, _) => expr_names(e, out),
+        JStmt::Switch(e, _, cases, _) => {
+            expr_names(e, out);
+            cases.iter().flat_map(|(_, body)| body).for_each(|s| stmt_names(s, out));
+        }
         JStmt::SetRefField(p, _, e, _) => {
             out.push(p);
             expr_names(e, out);
@@ -882,6 +942,11 @@ fn readable(name: &str) -> bool {
 /// The first name of the struct, its own or a field's, with a character that Dafny cannot read.
 fn unreadable_struct_name(st: &JStruct) -> Option<&str> {
     std::iter::once(st.name.as_str()).chain(st.fields.iter().map(|(n, _)| n.as_str())).find(|n| !readable(n))
+}
+
+/// The first name of the enum, its own or an enumerator's, with a character that Dafny cannot read, decision 0109.
+fn unreadable_enum_name(en: &JEnum) -> Option<&str> {
+    std::iter::once(en.name.as_str()).chain(en.enumerators.iter().map(String::as_str)).find(|n| !readable(n))
 }
 
 fn function(f: JFunction, names: &mut Names) -> Function {
@@ -989,7 +1054,7 @@ fn dty(t: DTy, names: &Names) -> String {
         DTy::UInt16 => "uint16".to_string(),
         DTy::Bool => "bool".to_string(),
         DTy::Seq(s) => format!("Vec<{}>", dscalar(s, names)),
-        DTy::Struct(k) => names.datatypes[&k].clone(),
+        DTy::Struct(k) | DTy::Enum(k) => names.datatypes[&k].clone(),
         DTy::Opt(s) => format!("Option<{}>", dscalar(s, names)),
         // A method that gives no value has no `result`, so no caller prints this type.
         DTy::Void => String::new(),
@@ -1050,6 +1115,7 @@ fn dexpr(e: &DExpr, names: &Names) -> String {
         DExpr::Get(a) => format!("{}.value", dexpr(a, names)),
         DExpr::Nothing => "None".to_string(),
         DExpr::Just(a) => format!("Some({})", dexpr(a, names)),
+        DExpr::Enumerator(k, i) => format!("{}'{}", names.datatypes[k], names.enums.iter().find(|e| e.1 == *k).and_then(|e| e.2.get(*i as usize)).map_or("'unknown", String::as_str)),
         DExpr::Ctor(k, args) => format!("{}({})", names.datatypes[k], dargs(args, names).join(", ")),
         DExpr::Len(a) => format!("|{}|", dexpr(a, names)),
         DExpr::Index(a, i) => format!("{}[{}]", dexpr(a, names), dexpr(i, names)),
@@ -1236,6 +1302,18 @@ impl Printer<'_> {
                 let (object, call) = self.update(objs, *m, args);
                 let x = mangle(names.text(*x));
                 self.put(depth, format!("var {x}: {}; {x}, {object} := {call};", dty(*t, names)), place);
+            }
+            DStmt::Match(d, k, cases) => {
+                self.put(depth, format!("match {} {{", dexpr(d, names)), place);
+                let mut rest = &**cases;
+                while let DCases::Cons(i, body, next) = rest {
+                    let case = dexpr(&DExpr::Enumerator(*k, *i), names);
+                    self.put(depth + 1, format!("case {case} => {{"), place);
+                    self.stmts(body, depth + 2);
+                    self.put(depth + 1, "}".to_string(), place);
+                    rest = next;
+                }
+                self.put(depth, "}".to_string(), place);
             }
             DStmt::CallStmt(m, args) => {
                 let call = self.call(*m, args);
@@ -1441,6 +1519,7 @@ pub fn translate(lines: &str, companion: Option<(&str, &str)>) -> Result<Transla
     let mut refusals = Vec::new();
     let mut funcs = Vec::new();
     let mut structs = Vec::new();
+    let mut enums = Vec::new();
     let mut companion_ok = false;
     // The declarations of the companion file as (line of its name in the file, is a lemma), for the prover's axiom check.
     let mut decls: Vec<(usize, bool)> = Vec::new();
@@ -1453,14 +1532,42 @@ pub fn translate(lines: &str, companion: Option<(&str, &str)>) -> Result<Transla
         companion_ok = refusals.is_empty();
     }
     // A function that names a struct refused for its name has no method: the Dafny text would print the name. The refusal of the struct stands.
-    // ponytail: a struct that holds a struct refused for its name is not caught. Upgrade: close the set under the fields.
     // A dropped function shows its other defects only after the struct is renamed.
     let mut items = Vec::new();
     for l in lines.lines().filter(|l| !l.trim().is_empty()) {
         items.push((serde_json::from_str(l).with_context(|| format!("cannot read a line of the tree: {l}"))?, l));
     }
-    let unreadable_keys: Vec<String> =
-        items.iter().filter_map(|(i, _)| if let Item::Struct(st) = i { unreadable_struct_name(st).map(|_| serde_json::to_string(&st.key).unwrap_or_default()) } else { None }).collect();
+    // A function that names a struct or an enum refused for its name has no method, with no refusal of its own.
+    let mut unreadable_keys: Vec<String> = items
+        .iter()
+        .filter_map(|(i, _)| match i {
+            Item::Struct(st) => unreadable_struct_name(st).map(|_| &st.key),
+            Item::Enum(en) => unreadable_enum_name(en).map(|_| &en.key),
+            _ => None,
+        })
+        .map(|key| serde_json::to_string(key).unwrap_or_default())
+        .collect();
+    // A struct with a field of such a type has no datatype either, and nor has a struct that holds that struct, with no refusal of its own, decision 0115.
+    let mut dropped = Vec::new();
+    loop {
+        let more: Vec<(String, String)> = items
+            .iter()
+            .filter_map(|(i, l)| match i {
+                Item::Struct(st) if unreadable_struct_name(st).is_none() && unreadable_keys.iter().any(|k| l.contains(k.as_str())) => {
+                    Some((st.key.clone(), serde_json::to_string(&st.key).unwrap_or_default()))
+                }
+                _ => None,
+            })
+            .filter(|(key, _)| !dropped.contains(key))
+            .collect();
+        if more.is_empty() {
+            break;
+        }
+        for (key, quoted) in more {
+            dropped.push(key);
+            unreadable_keys.push(quoted);
+        }
+    }
     for (item, l) in items {
         match item {
             Item::Orphan { orphan, file, word } => {
@@ -1468,6 +1575,11 @@ pub fn translate(lines: &str, companion: Option<(&str, &str)>) -> Result<Transla
                 refusals.push((file, orphan, said.to_string()));
             }
             Item::Constant { constant, value } => names.constants.extend(value.parse().ok().map(|v| (constant, v))),
+            Item::Enum(en) => match unreadable_enum_name(&en) {
+                Some(n) => refusals.push((en.file.clone(), en.line, format!("{n}: a name with a character Dafny cannot read."))),
+                None => enums.push(en),
+            },
+            Item::Struct(st) if dropped.contains(&st.key) => {}
             Item::Struct(st) => structs.push(st),
             Item::Function(_) if unreadable_keys.iter().any(|k| l.contains(k.as_str())) => {}
             Item::Function(f) => match unreadable_name(&f) {
@@ -1509,6 +1621,15 @@ pub fn translate(lines: &str, companion: Option<(&str, &str)>) -> Result<Transla
         if let Some((reason, file, line)) = &f.trusted {
             reasons.insert(key, (file.clone(), *line, f.name.clone(), reason.clone()));
         }
+    }
+    // The Dafny name of each enum: `E_{plain}`, or `E_{plain}'{k}` when two enums share a plain name, decision 0109.
+    let enum_places: Vec<(u32, u32)> = enums.iter().map(|en: &JEnum| (names.place(&en.file, en.line), names.id(&en.key))).collect();
+    for (i, en) in enums.iter().enumerate() {
+        let same = enums.iter().filter(|g| g.name == en.name).count();
+        let k = enums[..=i].iter().filter(|g| g.name == en.name).count();
+        let key = names.id(&en.key);
+        names.datatypes.insert(key, if same == 1 { format!("E_{}", en.name) } else { format!("E_{}'{k}", en.name) });
+        names.enums.push((en.name.clone(), key, en.enumerators.clone()));
     }
     // The Dafny name of each struct: `S_{plain}`, or `S_{plain}'{k}` when two structs share a plain name.
     let mut table = Structs::Nil;
@@ -1554,6 +1675,11 @@ pub fn translate(lines: &str, companion: Option<(&str, &str)>) -> Result<Transla
     let mut p = Printer { names: &names, methods: &methods, rets: &rets, out: PRELUDE.to_string(), lines: Vec::new(), scope: Vec::new(), own: Vec::new(), writes: false, fresh: 0, temps: 0 };
     p.lines.extend(PRELUDE.lines().map(|_| None));
     let mut refused_at = Vec::new();
+    for (en, (place, key)) in enums.iter().zip(enum_places) {
+        let name = &names.datatypes[&key];
+        let constructors: Vec<String> = en.enumerators.iter().map(|e| format!("{name}'{e}")).collect();
+        p.put(0, format!("datatype {name} = {}", constructors.join(" | ")), place);
+    }
     for (place, unreadable) in struct_places {
         let StructModels::Cons(model, rest) = smodels else { unreachable!("one model for each struct") };
         match model {
