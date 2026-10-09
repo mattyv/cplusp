@@ -15,8 +15,9 @@ size_t index(size_t i, size_t j, size_t cols) {
 }
 
 //@ requires i < rows && j < cols && m.size() == rows * cols
-//@ ensures result == m[i * cols + j]
+//@ ensures result == At(m, rows, cols, i, j)
 int32_t at(const std::vector<int32_t>& m, size_t rows, size_t cols, size_t i, size_t j) {
+  //@ apply IndexBelowSize(i, j, rows, cols)
   return m[index(i, j, cols)];
 }
 
@@ -24,5 +25,6 @@ int32_t at(const std::vector<int32_t>& m, size_t rows, size_t cols, size_t i, si
 //@ requires rows > 0 && cols > 0 && m.size() == rows * cols
 //@ ensures result == m[m.size() - 1]
 int32_t corner(const std::vector<int32_t>& m, size_t rows, size_t cols) {
+  //@ apply CornerIndex(rows, cols)
   return at(m, rows, cols, rows - 1, cols - 1);
 }
