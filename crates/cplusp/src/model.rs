@@ -655,8 +655,9 @@ fn unreadable_struct_name(st: &JStruct) -> Option<&str> {
 fn function(f: JFunction, names: &mut Names) -> Function {
     let name = names.id(&f.key);
     names.file = f.file;
-    names.this_members = match f.params.first() {
-        Some((_, JTy::This(k))) => names.members.get(k).cloned().unwrap_or_default(),
+    // A constructor reads the members of the value it builds, decision 0094.
+    names.this_members = match (f.params.first(), &f.ret) {
+        (Some((_, JTy::This(k))), _) | (_, JTy::This(k)) => names.members.get(k).cloned().unwrap_or_default(),
         _ => Vec::new(),
     };
     // A parameter with no name is named by its position, as `'N`. C++ cannot write that, so it clashes with no name. The mangling makes it `v_'N`.
@@ -1079,9 +1080,10 @@ pub fn translate(lines: &str, companion: Option<(&str, &str)>) -> Result<Transla
     let mut methods = Methods::new();
     // The place of each function, by the id of its key, for its method header.
     let mut at = HashMap::new();
-    // A member function is named by its struct too, `Struct'name`, decision 0089. C++ cannot write `'`, so it clashes with no name.
-    let plain = |f: &JFunction| match f.params.first() {
-        Some((_, JTy::This(k))) => format!("{}'{}", structs.iter().find(|s| s.key == *k).map_or("", |s| s.name.as_str()), f.name),
+    // A member function is named by its struct too, `Struct'name`, decision 0089. So is a constructor, whose result is `This`, decision
+    // 0094. C++ cannot write `'`, so it clashes with no name.
+    let plain = |f: &JFunction| match (f.params.first(), &f.ret) {
+        (Some((_, JTy::This(k))), _) | (_, JTy::This(k)) => format!("{}'{}", structs.iter().find(|s| s.key == *k).map_or("", |s| s.name.as_str()), f.name),
         _ => f.name.clone(),
     };
     for (i, f) in funcs.iter().enumerate() {

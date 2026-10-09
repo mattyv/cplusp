@@ -3796,8 +3796,10 @@ public:
   // Upgrade: a core rule for these, and their real signature.
   llvm::json::Value function(const FunctionDecl *FD, const Contract &C) const {
     const CXXMethodDecl *Member = constMember(FD);
+    const CXXConstructorDecl *Constructor = valueConstructor(FD);
     const char *Opaque = FD->isTemplated()                         ? "FunctionTemplateDecl"
-                         : isa<CXXMethodDecl>(FD) && !Member ? "CXXMethodDecl"
+                         : isa<CXXConstructorDecl>(FD) && !Constructor ? "CXXConstructorDecl"
+                         : isa<CXXMethodDecl>(FD) && !Member && !Constructor ? "CXXMethodDecl"
                          : !FD->getBody()         ? "FunctionDecl without body"
                                                   : nullptr;
     llvm::json::Array Params, Conds;
@@ -3810,6 +3812,16 @@ public:
         Params.push_back(llvm::json::Array{P->getNameAsString(), type(P->getType())});
       Conds = conds(C, Member != nullptr);
     }
+    // A constructor gives the struct that it builds, decision 0094. Its result type is `This`, and its contract has no `this` parameter.
+    if (Constructor)
+      return llvm::json::Object{{"name", FD->getNameAsString()},
+                                {"key", key(FD)},
+                                {"file", file(FD->getLocation())},
+                                {"line", number(line(FD->getLocation()))},
+                                {"params", std::move(Params)},
+                                {"ret", thisType(Constructor->getParent())},
+                                {"conds", std::move(Conds)},
+                                {"body", constructorBody(Constructor)}};
     return llvm::json::Object{{"name", FD->getNameAsString()},
                               {"key", key(FD)},
                               {"file", file(FD->getLocation())},
@@ -3964,9 +3976,10 @@ private:
   }
 
   // The plain struct that a type is, decision 0073, or null. A const and a reference are looked through. Plain means a definition with
-  // a name, no bases, no virtual function, no constructor, no destructor and no member template, and fields that are each a scalar, a plain
+  // a name, no bases, no virtual function, no destructor and no member template, and fields that are each a scalar, a plain
   // struct, an optional of a scalar (decision 0075) or a sequence (decision 0076), with no const, no reference and no bit field. Member
-  // functions, static members and access do not matter, decision 0089.
+  // functions, static members and access do not matter, decision 0089. Nor do constructors, decision 0094: a constructor that is no
+  // value constructor is refused where it is written.
   const CXXRecordDecl *plainStruct(QualType T) const {
     if (T->isReferenceType())
       T = T->getPointeeType();
@@ -3975,7 +3988,7 @@ private:
       return nullptr;
     RD = RD->getDefinition();
     if (RD->isUnion() || RD->isLambda() || !RD->getIdentifier() || RD->isDependentContext() || isa<ClassTemplateSpecializationDecl>(RD) ||
-        RD->getNumBases() || RD->isPolymorphic() || RD->hasUserDeclaredConstructor() || RD->hasUserDeclaredDestructor())
+        RD->getNumBases() || RD->isPolymorphic() || RD->hasUserDeclaredDestructor())
       return nullptr;
     // A member function, a static member and a private field do not change the value of the struct, decision 0089. A member template still has no rule, decision 0089.
     for (const Decl *D : RD->decls())
@@ -3995,6 +4008,38 @@ private:
     }
     Visiting.erase(RD);
     return Plain ? RD : nullptr;
+  }
+
+  // A constructor that is written as a function, decision 0094: a constructor of a plain struct that is no copy or move constructor,
+  // delegates to none, has an empty body, and gives each field exactly one value in its member init list. A field that the list leaves out
+  // would take its default, which has no rule. Null for any other function. A constructor that is only declared is looked up by its definition.
+  const CXXConstructorDecl *valueConstructor(const FunctionDecl *FD) const {
+    const FunctionDecl *Def = nullptr;
+    if (!isa<CXXConstructorDecl>(FD) || !FD->hasBody(Def))
+      return nullptr;
+    const auto *C = cast<CXXConstructorDecl>(Def);
+    if (C->isTemplated() || C->getDescribedFunctionTemplate() || C->isDeleted() || C->isDefaulted() || C->isCopyOrMoveConstructor() ||
+        C->isDelegatingConstructor() || !plainStruct(Context.getRecordType(C->getParent())))
+      return nullptr;
+    const auto *Body = dyn_cast<CompoundStmt>(C->getBody());
+    if (!Body || !Body->body_empty())
+      return nullptr;
+    std::set<const FieldDecl *> Given;
+    for (const CXXCtorInitializer *Init : C->inits())
+      if (!Init->isWritten() || !Init->isMemberInitializer() || !Given.insert(Init->getMember()).second)
+        return nullptr;
+    return Given.size() == static_cast<size_t>(std::distance(C->getParent()->field_begin(), C->getParent()->field_end())) ? C : nullptr;
+  }
+
+  // The body of a value constructor: it returns the struct, built from the values of its init list in the order of the fields.
+  llvm::json::Array constructorBody(const CXXConstructorDecl *C) const {
+    const unsigned At = line(C->getLocation());
+    llvm::json::Array Args;
+    for (const FieldDecl *F : C->getParent()->fields())
+      for (const CXXCtorInitializer *Init : C->inits())
+        if (Init->getMember() == F)
+          Args.push_back(expr(Init->getInit(), At));
+    return llvm::json::Array{tag("Return", llvm::json::Array{tag("Construct", llvm::json::Array{structKey(C->getParent()), std::move(Args)}), number(At)})};
   }
 
   // A member function that is written as a function, decision 0089: not static, not virtual, `const`, no ref-qualifier, not an operator, a
@@ -4138,6 +4183,19 @@ private:
       if (Unary->getOpcode() == UO_Minus)
         return tag("Neg", expr(Unary->getSubExpr(), Near));
       return unknown(E, describe(E), Near);
+    }
+    // A call of a value constructor, `S s(a)`, `S s{a}`, `S(a)` and `return S(a)`, is a call of it, decision 0094. The functional cast of
+    // one argument wraps the construction, and the call stands for both.
+    {
+      const Expr *Built = E;
+      if (const auto *Cast = dyn_cast<CXXFunctionalCastExpr>(E); Cast && Cast->getCastKind() == CK_ConstructorConversion)
+        Built = Cast->getSubExpr()->IgnoreParens();
+      if (const auto *Construct = dyn_cast<CXXConstructExpr>(Built); Construct && valueConstructor(Construct->getConstructor())) {
+        llvm::json::Array Args;
+        for (const Expr *Arg : Construct->arguments())
+          Args.push_back(expr(Arg, line(E->getBeginLoc())));
+        return tag("Call", llvm::json::Array{key(Construct->getConstructor()), name(Construct->getConstructor()), std::move(Args), number(line(E->getBeginLoc()))});
+      }
     }
     if (const auto *Cast = dyn_cast<CastExpr>(E)) {
       llvm::json::Value Kind = Cast->getCastKind() == CK_LValueToRValue ? llvm::json::Value("Read")
