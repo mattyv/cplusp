@@ -1927,3 +1927,82 @@ fn a_bound_name_is_no_function() {
     };
     assert_eq!(bare_refusal(translate_function(&f, &Fns::Nil, &cap_table(true))), Refusal::Syntax(2));
 }
+
+const YY: u32 = 190;
+const LEM: u32 = 191;
+
+#[test]
+fn an_assert_line_states_a_fact_about_the_variables_in_scope() {
+    // int32_t f(int32_t x) { int32_t y = x; //@ assert y == x  //@ apply L(y)  return y; }
+    let fact = |e: Expr| Stmt::Assert(e, 5);
+    let body = |s: Stmt| {
+        Stmts::Cons(
+            Box::new(Stmt::Local(YY, Ty::I32, read(X, Ty::I32), 4)),
+            Box::new(Stmts::Cons(
+                Box::new(s),
+                Box::new(Stmts::Cons(
+                    Box::new(Stmt::Apply(LEM, Box::new(Args::Cons(b(Expr::Name(YY)), Box::new(Args::Nil))), 6)),
+                    Box::new(one(Stmt::Return(read(YY, Ty::I32), 7))),
+                )),
+            )),
+        )
+    };
+    let f = |s: Stmt| Function { name: SAT, line: 3, params: Params::Cons(X, Ty::I32, Box::new(Params::Nil)), ret: Ty::I32, conds: Conds::Nil, body: body(s) };
+    let Model::Full(m) = translate_function(&f(fact(Expr::Bin(BinOp::Eq, b(Expr::Name(YY)), b(Expr::Name(X))))), &Fns::Nil, &Structs::Nil) else {
+        panic!("a full model")
+    };
+    let i = |n| Box::new(DExpr::AsInt(Box::new(DExpr::Var(n))));
+    let DStmts::Cons(_, _, rest) = m.body else { panic!("a local") };
+    let DStmts::Cons(a, la, rest) = *rest else { panic!("an assert") };
+    assert_eq!((*a, la), (DStmt::Assert(DExpr::Bin(BinOp::Eq, i(YY), i(X))), 5));
+    let DStmts::Cons(p, lp, _) = *rest else { panic!("an apply") };
+    assert_eq!((*p, lp), (DStmt::Apply(LEM, DArgs::Cons(DExpr::AsInt(Box::new(DExpr::Var(YY))), Box::new(DArgs::Nil))), 6));
+    // A name out of scope is no variable, and an assert line names no result.
+    let out = fact(Expr::Bin(BinOp::Eq, b(Expr::Name(Q)), b(Expr::Int(0))));
+    assert_eq!(bare_refusal(translate_function(&f(out), &Fns::Nil, &Structs::Nil)), Refusal::NoVar(Q, 5));
+    let res = fact(Expr::Bin(BinOp::Eq, b(Expr::Result), b(Expr::Int(0))));
+    assert_eq!(bare_refusal(translate_function(&f(res), &Fns::Nil, &Structs::Nil)), Refusal::Syntax(5));
+}
+
+#[test]
+fn a_contract_in_the_body_of_a_member_function_reads_the_object_as_the_body_leaves_it() {
+    // void Counter::reset() with int32_t a = 0; then //@ assert n_ == 0 && old(n_) >= 0, and a loop with //@ invariant n_ == a.
+    let this = |t: Ty| Params::Cons(THIS, t, Box::new(Params::Nil));
+    let fact = Expr::Bin(BinOp::And, b(Expr::Bin(BinOp::Eq, b(Expr::Name(CN)), b(Expr::Int(0)))), b(Expr::Bin(BinOp::Ge, b(Expr::Old(b(Expr::Name(CN)))), b(Expr::Int(0)))));
+    let inv = Conds::Cons(CondKind::Invariant, Expr::Bin(BinOp::Eq, b(Expr::Name(CN)), b(Expr::Name(A))), 13, Names::Nil, Box::new(Conds::Nil));
+    let body = Stmts::Cons(
+        Box::new(Stmt::Local(A, Ty::I32, Expr::Lit(0, Ty::I32), 11)),
+        Box::new(Stmts::Cons(
+            Box::new(Stmt::Assert(fact, 12)),
+            Box::new(one(Stmt::While(Expr::Bool(false), Box::new(inv), Box::new(Stmts::Nil), 14))),
+        )),
+    );
+    let f = Function { name: BUMP, line: 10, params: this(Ty::ThisMut(COUNTER)), ret: Ty::Void, conds: Conds::Nil, body };
+    let Model::Full(m) = translate_function(&f, &Fns::Nil, &counter_table()) else { panic!("a full model") };
+    let field = |o: DExpr| Box::new(DExpr::AsInt(Box::new(DExpr::Field(Box::new(o), CN))));
+    let DStmts::Cons(_, _, rest) = m.body else { panic!("a local") };
+    let DStmts::Cons(a, _, rest) = *rest else { panic!("an assert") };
+    let want = DExpr::Bin(
+        BinOp::And,
+        Box::new(DExpr::Bin(BinOp::Eq, field(DExpr::After), Box::new(DExpr::Lit(0)))),
+        Box::new(DExpr::Bin(BinOp::Ge, field(DExpr::Var(THIS)), Box::new(DExpr::Lit(0)))),
+    );
+    assert_eq!(*a, DStmt::Assert(want));
+    let DStmts::Cons(w, _, _) = *rest else { panic!("a loop") };
+    let DStmt::While(_, inv, _, _) = *w else { panic!("a while") };
+    let local = Box::new(DExpr::AsInt(Box::new(DExpr::Var(A))));
+    assert_eq!(strip_conds(inv), DConds::Cons(DExpr::Bin(BinOp::Eq, field(DExpr::After), local), 0, Box::new(DConds::Nil)));
+    // In a const member function the object is this, and old() has no meaning.
+    let body = Stmts::Cons(
+        Box::new(Stmt::Local(A, Ty::I32, Expr::Lit(0, Ty::I32), 11)),
+        Box::new(one(Stmt::Assert(Expr::Bin(BinOp::Eq, b(Expr::Name(CN)), b(Expr::Name(A))), 12))),
+    );
+    let g = Function { params: this(Ty::This(COUNTER)), body, ..f };
+    let Model::Full(m) = translate_function(&g, &Fns::Nil, &counter_table()) else { panic!("a full model") };
+    let DStmts::Cons(_, _, rest) = m.body else { panic!("a local") };
+    let DStmts::Cons(a, _, _) = *rest else { panic!("an assert") };
+    assert_eq!(*a, DStmt::Assert(DExpr::Bin(BinOp::Eq, field(DExpr::Var(THIS)), Box::new(DExpr::AsInt(Box::new(DExpr::Var(A)))))));
+    let old = Stmt::Assert(Expr::Bin(BinOp::Ge, b(Expr::Old(b(Expr::Name(CN)))), b(Expr::Int(0))), 12);
+    let h = Function { body: one(old), ..g };
+    assert_eq!(bare_refusal(translate_function(&h, &Fns::Nil, &counter_table())), Refusal::Syntax(12));
+}

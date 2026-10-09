@@ -2612,8 +2612,8 @@ fn a_call_to_a_name_the_companion_file_does_not_declare_is_refused() {
     assert_eq!(refusals.len(), 1, "{text}");
 }
 
-/// A companion file that holds an attribute, a lemma or an assume is refused at each word, and then it declares no function,
-/// decision 0079.
+/// A companion file that holds an attribute, a method or an assume is refused at each word, and then it declares no function,
+/// decisions 0079 and 0099.
 #[test]
 fn a_companion_file_with_other_words_is_refused() {
     if !clang_tidy_available() {
@@ -2624,8 +2624,8 @@ fn a_companion_file_with_other_words_is_refused() {
     let text = stdout(&o);
     assert_eq!(o.status.code(), Some(1), "stdout: {text} stderr: {}", stderr(&o));
     let refusals: Vec<&str> = text.lines().filter(|l| l.starts_with("Not provable: ")).collect();
-    for (file, line, word) in [("model-spec-words.spec.dfy", 1, "{:"), ("model-spec-words.spec.dfy", 3, "lemma"), ("model-spec-words.spec.dfy", 6, "assume")] {
-        let want = format!("{file}:{line}: {word}: a companion file can hold only functions and predicates.");
+    for (file, line, word) in [("model-spec-words.spec.dfy", 1, "{:"), ("model-spec-words.spec.dfy", 3, "method"), ("model-spec-words.spec.dfy", 6, "assume")] {
+        let want = format!("{file}:{line}: {word}: a companion file can hold only functions, predicates and lemmas.");
         assert!(refusals.iter().any(|l| l.ends_with(&want)), "{want}: {text}");
     }
     let want = "model-spec-words.cpp:4: Max is no function of the companion file.";
@@ -2669,7 +2669,7 @@ fn prove_refuses_each_companion_file_that_hid_an_axiom_or_the_model() {
     if !clang_tidy_available() {
         return;
     }
-    let word = |w: &str| format!("{w}: a companion file can hold only functions and predicates.");
+    let word = |w: &str| format!("{w}: a companion file can hold only functions, predicates and lemmas.");
     let cases: [(&str, Vec<(u32, String)>); 4] = [
         ("unclosed", vec![(2, "a comment that does not end.".to_string())]),
         ("string", vec![(1, word("\"")), (2, word("{:"))]),
@@ -3141,4 +3141,74 @@ fn conditionals_and_functors_with_no_rule_are_refused_at_their_lines() {
         assert!(refusals.iter().any(|l| l.ends_with(want)), "{want}: {text}");
     }
     assert_eq!(refusals.len(), 3, "{text}");
+}
+
+/// Assert lines, apply lines that call lemmas of the companion file, and a loop contract that names a field of the object in a
+/// member function that writes it, prove, decision 0099.
+#[test]
+fn assert_and_apply_lines_prove() {
+    let Some(dafny) = dafny() else { return };
+    if !clang_tidy_available() {
+        return;
+    }
+    let o = prove("model-assert.cpp", &[], &dafny);
+    let text = stdout(&o);
+    assert_eq!(o.status.code(), Some(0), "stdout: {text} stderr: {}", stderr(&o));
+    assert_eq!(text.lines().last(), Some("ok: proved"), "{text}");
+}
+
+/// An assert line that may not hold, and an apply line whose lemma has a requires line that may not hold, are named at their
+/// lines, decision 0099.
+#[test]
+fn prove_names_an_assert_line_and_an_apply_line_that_may_not_hold() {
+    let Some(dafny) = dafny() else { return };
+    if !clang_tidy_available() {
+        return;
+    }
+    let o = prove("model-assert-wrong.cpp", &[], &dafny);
+    let text = stdout(&o);
+    assert_eq!(o.status.code(), Some(1), "stdout: {text} stderr: {}", stderr(&o));
+    let failed: Vec<&str> = text.lines().filter(|l| l.starts_with("Not proved: ")).collect();
+    for want in ["model-assert-wrong.cpp:4: the assert line may not hold.", "model-assert-wrong.cpp:9: a requires line of the callee may not hold."] {
+        assert!(failed.iter().any(|l| l.ends_with(want)), "{want}: {text}");
+    }
+    assert_eq!(failed.len(), 2, "{text}");
+}
+
+/// An assert line that names result, an apply line of a name that is no lemma of the companion file, and an assert line below
+/// the last statement of its block, are refused at their lines, decision 0099.
+#[test]
+fn assert_and_apply_lines_with_no_rule_are_refused_at_their_lines() {
+    if !clang_tidy_available() {
+        return;
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let (o, _) = model("model-assert-refuse.cpp", dir.path());
+    let text = stdout(&o);
+    assert_eq!(o.status.code(), Some(1), "stdout: {text} stderr: {}", stderr(&o));
+    let refusals: Vec<&str> = text.lines().filter(|l| l.starts_with("Not provable: ")).collect();
+    for want in [
+        "model-assert-refuse.cpp:5: the contract line has a form the translator cannot read.",
+        "model-assert-refuse.cpp:10: Missing is no lemma of the companion file.",
+        "model-assert-refuse.cpp:17: an assert or apply line needs a statement below it in its block.",
+        "model-assert-refuse.cpp:21: Double is no lemma of the companion file.",
+    ] {
+        assert!(refusals.iter().any(|l| l.ends_with(want)), "{want}: {text}");
+    }
+    assert_eq!(refusals.len(), 4, "{text}");
+}
+
+/// A lemma with no body in the companion file is an axiom, so prove refuses the file and never says proved, decision 0099.
+#[test]
+fn prove_refuses_a_lemma_with_no_body_in_the_companion_file() {
+    let Some(dafny) = dafny() else { return };
+    if !clang_tidy_available() {
+        return;
+    }
+    let o = prove("model-spec-lemma.cpp", &[], &dafny);
+    let text = stdout(&o);
+    assert_eq!(o.status.code(), Some(1), "stdout: {text} stderr: {}", stderr(&o));
+    let want = "model-spec-lemma.spec.dfy:2: a lemma with no body is an axiom.";
+    assert!(text.lines().any(|l| l.starts_with("Not provable: ") && l.ends_with(want)), "{want}: {text}");
+    assert!(!text.contains("ok: proved"), "{text}");
 }
