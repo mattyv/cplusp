@@ -2935,7 +2935,7 @@ fn pure_member_functions_are_functions_that_contracts_call() {
 }
 
 /// A contract that calls a member function that is not pure, or a name that is no member function, is refused at its line,
-/// decision 0090.
+/// decision 0090. So is one that calls a member whose own contract is refused, decision 0095.
 #[test]
 fn a_contract_that_calls_a_member_function_that_is_not_pure_is_refused() {
     if !clang_tidy_available() {
@@ -2949,10 +2949,42 @@ fn a_contract_that_calls_a_member_function_that_is_not_pure_is_refused() {
     for want in [
         "model-pure-refuse.cpp:13: copy is no pure member function of its struct.",
         "model-pure-refuse.cpp:18: three is no pure member function of its struct.",
+        "model-pure-refuse.cpp:26: nosuch in the contract is no parameter.",
+        "model-pure-refuse.cpp:32: refused is no pure member function of its struct.",
     ] {
         assert!(refusals.iter().any(|l| l.ends_with(want)), "{want}: {text}");
     }
-    assert_eq!(refusals.len(), 2, "{text}");
+    assert_eq!(refusals.len(), 4, "{text}");
+}
+
+/// An integer argument of a member function in a contract passes as the type of its parameter, from a parameter and from result,
+/// decision 0095.
+#[test]
+fn the_arguments_of_a_member_function_in_a_contract_pass_as_its_parameter_types() {
+    let Some(dafny) = dafny() else { return };
+    if !clang_tidy_available() {
+        return;
+    }
+    let o = prove("model-pure-args.cpp", &[], &dafny);
+    let text = stdout(&o);
+    assert_eq!(o.status.code(), Some(0), "stdout: {text} stderr: {}", stderr(&o));
+    assert_eq!(text.lines().last(), Some("ok: proved"), "{text}");
+}
+
+/// A contract that calls a member function outside its requires lines is named at the contract line, with the requires line that
+/// may not hold, decision 0095.
+#[test]
+fn prove_names_a_contract_call_outside_the_requires_of_a_member_function() {
+    let Some(dafny) = dafny() else { return };
+    if !clang_tidy_available() {
+        return;
+    }
+    let o = prove("model-pure-args-wrong.cpp", &[], &dafny);
+    let text = stdout(&o);
+    assert_eq!(o.status.code(), Some(1), "stdout: {text} stderr: {}", stderr(&o));
+    let head = "model-pure-args-wrong.cpp:14: a requires line of the member function may not hold here.";
+    assert!(text.lines().any(|l| l.starts_with("Not proved: ") && l.ends_with(head)), "{head}: {text}");
+    assert!(under(&text, head).iter().any(|l| l.ends_with("model-pure-args-wrong.cpp:7: requires n_ < 1000")), "{text}");
 }
 
 /// Pull `"key":"value"` or `"key":123` out of one JSON line without a JSON library.

@@ -1411,9 +1411,10 @@ const VALUE: u32 = 141;
 const VKEY: u32 = 142;
 const NKEY: u32 = 143;
 
-/// Counter with its members valid and value. `Some(t)` marks a pure member that gives a `t`.
+/// Counter with its members valid and value. `Some(t)` marks a pure member that gives a `t`, with this as its only parameter.
 fn members_table(valid: Option<Ty>, value: Option<Ty>) -> Structs {
-    let ms = Members::Cons(VALID, VKEY, valid, Box::new(Members::Cons(VALUE, NKEY, value, Box::new(Members::Nil))));
+    let pure = |t: Option<Ty>| t.map(|t| (t, Params::Cons(THIS, Ty::This(COUNTER), Box::new(Params::Nil))));
+    let ms = Members::Cons(VALID, VKEY, pure(valid), Box::new(Members::Cons(VALUE, NKEY, pure(value), Box::new(Members::Nil))));
     Structs::Cons(COUNTER, 4, Params::Cons(CN, Ty::I32, Box::new(Params::Nil)), ms, Box::new(Structs::Nil))
 }
 
@@ -1545,4 +1546,51 @@ fn the_parser_reads_a_call_of_a_member_function_on_a_path() {
     assert_eq!(parse_contract(&toks, 3), Ok(Expr::MApply(b(Expr::Name(A)), VALUE, Box::new(args))));
     // A field with no call stays a field.
     assert_eq!(parse_contract(&vec![Tok::Ident(A), Tok::Field(VALUE)], 3), Ok(Expr::Field(b(Expr::Name(A)), VALUE)));
+}
+
+const LE: u32 = 160;
+const LEKEY: u32 = 161;
+
+#[test]
+fn an_integer_argument_of_a_member_function_passes_as_the_type_of_its_parameter() {
+    // bool Counter::le(int32_t k) const, called as c.le(x) in a contract, with x an int32_t parameter
+    let le = Params::Cons(THIS, Ty::This(COUNTER), Box::new(Params::Cons(X, Ty::I32, Box::new(Params::Nil))));
+    let ms = Members::Cons(LE, LEKEY, Some((Ty::Bool, le)), Box::new(Members::Nil));
+    let table = Structs::Cons(COUNTER, 4, Params::Cons(CN, Ty::I32, Box::new(Params::Nil)), ms, Box::new(Structs::Nil));
+    let req = Expr::MApply(b(Expr::Name(A)), LE, Box::new(Args::Cons(b(Expr::Name(B)), Box::new(Args::Nil))));
+    let f = Function {
+        name: SAT,
+        line: 20,
+        params: Params::Cons(A, Ty::Struct(COUNTER), Box::new(Params::Cons(B, Ty::I32, Box::new(Params::Nil)))),
+        ret: Ty::Bool,
+        conds: Conds::Cons(CondKind::Requires, req, 19, names(&[A, B]), Box::new(Conds::Nil)),
+        body: one(Stmt::Return(Expr::Bool(true), 21)),
+    };
+    let Model::Full(m) = translate_function(&f, &Fns::Nil, &table) else { panic!("a full model") };
+    let arg = DExpr::Conv(DTy::Int32, Box::new(DExpr::AsInt(Box::new(DExpr::Var(B)))));
+    let want = DExpr::FCall(LEKEY, Box::new(DArgs::Cons(DExpr::Var(A), Box::new(DArgs::Cons(arg, Box::new(DArgs::Nil))))));
+    assert_eq!(strip_conds(m.requires), DConds::Cons(want, 0, Box::new(DConds::Nil)));
+}
+
+#[test]
+fn a_member_function_whose_contract_is_refused_is_not_pure() {
+    // value has one return, but its requires line names nothing. So value is not pure, and a contract that calls it is refused.
+    let field = Expr::Cast(CastKind::Read, b(Expr::Field(b(Expr::Var(THIS, Ty::This(COUNTER))), CN)));
+    let value = Function {
+        conds: Conds::Cons(CondKind::Requires, Expr::Name(99), 8, names(&[THIS]), Box::new(Conds::Nil)),
+        ..value_fn(one(Stmt::Return(field, 10)))
+    };
+    let ens = Expr::Bin(BinOp::Eq, b(Expr::Result), b(Expr::MApply(b(Expr::Name(A)), VALUE, Box::new(Args::Nil))));
+    let user = Function {
+        name: SAT,
+        line: 20,
+        params: Params::Cons(A, Ty::Struct(COUNTER), Box::new(Params::Nil)),
+        ret: Ty::I32,
+        conds: Conds::Cons(CondKind::Ensures, ens, 19, names(&[A]), Box::new(Conds::Nil)),
+        body: one(Stmt::Return(Expr::Lit(0, Ty::I32), 21)),
+    };
+    let Models::Cons(first, rest) = translate_unit(&fns(vec![value, user]), &members_table(None, Some(Ty::I32))) else { panic!("models") };
+    assert_eq!(bare_refusal(first), Refusal::Name(99, 8));
+    let Models::Cons(second, _) = *rest else { panic!("models") };
+    assert_eq!(bare_refusal(second), Refusal::NotPure(VALUE, 19));
 }

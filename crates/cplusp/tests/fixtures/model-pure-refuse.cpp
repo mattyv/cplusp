@@ -19,3 +19,17 @@ int32_t first(const Counter& c) {
 int32_t second(const Counter& c) {
   return 0;
 }
+
+struct Other {
+  int32_t n_;
+
+  //@ requires nosuch > 0
+  bool refused() const {
+    return n_ > 0;
+  }
+};
+
+//@ ensures result == o.refused()
+bool third(const Other& o) {
+  return true;
+}
