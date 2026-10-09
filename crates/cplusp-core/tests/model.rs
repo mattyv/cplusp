@@ -1909,3 +1909,21 @@ fn a_contract_calls_the_operator_of_a_functor() {
     let obj = DExpr::Field(Box::new(DExpr::Var(THIS)), FC);
     assert_eq!(first, DExpr::Bin(BinOp::Eq, Box::new(DExpr::AsInt(Box::new(DExpr::Result))), Box::new(op(obj, x()))));
 }
+
+#[test]
+fn a_bound_name_is_no_function() {
+    // int32_t f(CapAt c, int32_t x) with ensures forall c :: 0 <= c < 1 ==> c(x) == x
+    let ps = Params::Cons(F, Ty::Struct(CAP), Box::new(Params::Cons(X, Ty::I32, Box::new(Params::Nil))));
+    let range = Expr::Chain(BinOp::Le, BinOp::Lt, b(Expr::Int(0)), b(Expr::Name(F)), b(Expr::Int(1)));
+    let call = Expr::Apply(F, Box::new(Args::Cons(b(Expr::Name(X)), Box::new(Args::Nil))));
+    let ens = Expr::Forall(F, b(Expr::Bin(BinOp::Implies, b(range), b(Expr::Bin(BinOp::Eq, b(call), b(Expr::Name(X)))))));
+    let f = Function {
+        name: SAT,
+        line: 3,
+        params: ps,
+        ret: Ty::I32,
+        conds: Conds::Cons(CondKind::Ensures, ens, 2, names(&[F, X]), Box::new(Conds::Nil)),
+        body: one(Stmt::Return(read(X, Ty::I32), 4)),
+    };
+    assert_eq!(bare_refusal(translate_function(&f, &Fns::Nil, &cap_table(true))), Refusal::Syntax(2));
+}

@@ -3121,8 +3121,8 @@ fn prove_names_a_conditional_that_does_not_meet_its_contract() {
     assert_eq!(failed.len(), 2, "{text}");
 }
 
-/// A contract that calls a functor whose operator() is not pure, and a call in a branch of a conditional, are refused at their
-/// lines, decision 0098.
+/// A contract that calls a functor whose operator() is not pure, a call in a branch of a conditional, and a call of a name that a
+/// quantifier binds, are refused at their lines, decisions 0098 and 0100.
 #[test]
 fn conditionals_and_functors_with_no_rule_are_refused_at_their_lines() {
     if !clang_tidy_available() {
@@ -3136,8 +3136,9 @@ fn conditionals_and_functors_with_no_rule_are_refused_at_their_lines() {
     for want in [
         "model-cond-refuse.cpp:11: operator() is no pure member function of its struct.",
         "model-cond-refuse.cpp:21: a call out of place. The translator takes a call as the full value of a return or of a local, or alone when it writes its object or gives no value.",
+        "model-cond-refuse.cpp:24: the contract line has a form the translator cannot read.",
     ] {
         assert!(refusals.iter().any(|l| l.ends_with(want)), "{want}: {text}");
     }
-    assert_eq!(refusals.len(), 2, "{text}");
+    assert_eq!(refusals.len(), 3, "{text}");
 }

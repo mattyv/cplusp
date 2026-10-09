@@ -104,3 +104,4 @@ Status is `decided`, `proposed` (the default until someone objects or the thin s
 | [0096](0096-a-member-function-that-writes-its-object.md) | A member function that writes its object takes it in and gives it back. Field writes, compound assignment, void | decided |
 | [0097](0097-an-optional-field-write-has-no-rule-yet.md) | A write to an optional field has no rule yet. `return f();` of a void call is refused. A dropped value names where a call can stand | decided |
 | [0098](0098-the-conditional-operator-and-functors.md) | The conditional operator in code and contracts, and a struct with an operator() as a functor | decided |
+| [0100](0100-a-bound-name-is-no-function.md) | A call of a name that a quantifier binds is refused | decided |

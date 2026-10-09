@@ -33,3 +33,18 @@ int32_t to_int(bool b) {
   }
   return 0;
 }
+
+// A functor that is not idempotent, so a contract with two calls differs from one with one call, decision 0100.
+struct AddOne {
+  //@ requires x < 1000
+  //@ ensures result == x + 1
+  int32_t operator()(int32_t x) const { return x + 1; }
+};
+
+//@ requires x < 500
+//@ ensures result == a(a(x))
+int32_t add_two(AddOne a, int32_t x) {
+  int32_t y = a(x);
+  int32_t z = a(y);
+  return z;
+}
