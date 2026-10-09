@@ -3089,3 +3089,55 @@ fn field(line: &str, key: &str) -> String {
         rest.chars().take_while(|c| c.is_ascii_digit()).collect()
     }
 }
+
+/// The conditional operator in code and in contracts, and a struct with an operator() called in code and in a contract, prove,
+/// decision 0098.
+#[test]
+fn conditionals_and_functors_prove() {
+    let Some(dafny) = dafny() else { return };
+    if !clang_tidy_available() {
+        return;
+    }
+    let o = prove("model-cond.cpp", &[], &dafny);
+    let text = stdout(&o);
+    assert_eq!(o.status.code(), Some(0), "stdout: {text} stderr: {}", stderr(&o));
+    assert_eq!(text.lines().last(), Some("ok: proved"), "{text}");
+}
+
+/// An ensures line that a conditional does not meet, and a branch that may overflow, are named at their lines, decision 0098.
+#[test]
+fn prove_names_a_conditional_that_does_not_meet_its_contract() {
+    let Some(dafny) = dafny() else { return };
+    if !clang_tidy_available() {
+        return;
+    }
+    let o = prove("model-cond-wrong.cpp", &[], &dafny);
+    let text = stdout(&o);
+    assert_eq!(o.status.code(), Some(1), "stdout: {text} stderr: {}", stderr(&o));
+    let failed: Vec<&str> = text.lines().filter(|l| l.starts_with("Not proved: ")).collect();
+    for want in ["model-cond-wrong.cpp:6: the ensures line may not hold on this return.", "model-cond-wrong.cpp:10: the value may not fit int32_t."] {
+        assert!(failed.iter().any(|l| l.ends_with(want)), "{want}: {text}");
+    }
+    assert_eq!(failed.len(), 2, "{text}");
+}
+
+/// A contract that calls a functor whose operator() is not pure, and a call in a branch of a conditional, are refused at their
+/// lines, decision 0098.
+#[test]
+fn conditionals_and_functors_with_no_rule_are_refused_at_their_lines() {
+    if !clang_tidy_available() {
+        return;
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let (o, _) = model("model-cond-refuse.cpp", dir.path());
+    let text = stdout(&o);
+    assert_eq!(o.status.code(), Some(1), "stdout: {text} stderr: {}", stderr(&o));
+    let refusals: Vec<&str> = text.lines().filter(|l| l.starts_with("Not provable: ")).collect();
+    for want in [
+        "model-cond-refuse.cpp:11: operator() is no pure member function of its struct.",
+        "model-cond-refuse.cpp:21: a call out of place. The translator takes a call as the full value of a return or of a local, or alone when it writes its object or gives no value.",
+    ] {
+        assert!(refusals.iter().any(|l| l.ends_with(want)), "{want}: {text}");
+    }
+    assert_eq!(refusals.len(), 2, "{text}");
+}

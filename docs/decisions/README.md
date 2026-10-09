@@ -103,3 +103,4 @@ Status is `decided`, `proposed` (the default until someone objects or the thin s
 | [0095](0095-the-arguments-of-a-member-function-in-a-contract.md) | Arguments of a member function in a contract pass as its parameter types. A member is pure only when its contract has a model. Overloads are left out | decided |
 | [0096](0096-a-member-function-that-writes-its-object.md) | A member function that writes its object takes it in and gives it back. Field writes, compound assignment, void | decided |
 | [0097](0097-an-optional-field-write-has-no-rule-yet.md) | A write to an optional field has no rule yet. `return f();` of a void call is refused. A dropped value names where a call can stand | decided |
+| [0098](0098-the-conditional-operator-and-functors.md) | The conditional operator in code and contracts, and a struct with an operator() as a functor | decided |

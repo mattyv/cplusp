@@ -1805,3 +1805,107 @@ fn a_requires_line_of_a_constructor_has_no_object_yet() {
     let valid = ctor(Expr::Apply(VALID, Box::new(Args::Nil)));
     assert_eq!(bare_refusal(translate_function(&valid, &Fns::Nil, &table)), Refusal::NoObject(VALID, 7));
 }
+
+const CAP: u32 = 180;
+const LIMIT: u32 = 181;
+const OPKEY: u32 = 182;
+const F: u32 = 183;
+const HOLDER: u32 = 184;
+const FC: u32 = 185;
+
+/// `struct CapAt { int32_t limit; }` with its `operator()` of the key OPKEY, pure when `pure` holds.
+fn cap_table(pure: bool) -> Structs {
+    let op = if pure { Some((Ty::I32, Params::Cons(THIS, Ty::This(CAP), Box::new(Params::Cons(X, Ty::I32, Box::new(Params::Nil)))))) } else { None };
+    Structs::Cons(CAP, 4, Params::Cons(LIMIT, Ty::I32, Box::new(Params::Nil)), Members::Cons(CALL_OP, OPKEY, op, Box::new(Members::Nil)), Box::new(Structs::Nil))
+}
+
+#[test]
+fn a_conditional_chooses_a_branch_in_code_and_in_contracts() {
+    // int32_t cap(int32_t x, int32_t limit) with ensures result == (x < limit ? x : limit), and return x < limit ? x : limit;
+    let ps = Params::Cons(X, Ty::I32, Box::new(Params::Cons(LIMIT, Ty::I32, Box::new(Params::Nil))));
+    let cond = Expr::Cond(b(Expr::Bin(BinOp::Lt, b(Expr::Name(X)), b(Expr::Name(LIMIT)))), b(Expr::Name(X)), b(Expr::Name(LIMIT)));
+    let ens = Expr::Bin(BinOp::Eq, b(Expr::Result), b(Expr::Paren(b(cond))));
+    let code = Expr::Cond(b(Expr::Bin(BinOp::Lt, b(read(X, Ty::I32)), b(read(LIMIT, Ty::I32)))), b(read(X, Ty::I32)), b(read(LIMIT, Ty::I32)));
+    let f = Function {
+        name: SAT,
+        line: 3,
+        params: ps,
+        ret: Ty::I32,
+        conds: Conds::Cons(CondKind::Ensures, ens, 2, names(&[X, LIMIT]), Box::new(Conds::Nil)),
+        body: one(Stmt::Return(code, 4)),
+    };
+    let Model::Full(m) = translate_function(&f, &Fns::Nil, &Structs::Nil) else { panic!("a full model") };
+    let v = |n| Box::new(DExpr::Var(n));
+    let want = DExpr::Ite(Box::new(DExpr::Bin(BinOp::Lt, v(X), v(LIMIT))), v(X), v(LIMIT));
+    assert_eq!(strip(m.body), DStmts::Cons(Box::new(DStmt::Return(want)), 0, Box::new(DStmts::Nil)));
+    let i = |n| Box::new(DExpr::AsInt(Box::new(DExpr::Var(n))));
+    let want = DExpr::Bin(BinOp::Eq, Box::new(DExpr::AsInt(Box::new(DExpr::Result))), Box::new(DExpr::Ite(Box::new(DExpr::Bin(BinOp::Lt, i(X), i(LIMIT))), i(X), i(LIMIT))));
+    assert_eq!(strip_conds(m.ensures), DConds::Cons(want, 0, Box::new(DConds::Nil)));
+    // A branch holds no call, as any expression of code.
+    let call_in = Expr::Cond(b(Expr::Bool(true)), b(call(SUCC, vec![read(X, Ty::I32)], 4)), b(read(X, Ty::I32)));
+    let f = Function { conds: Conds::Nil, body: one(Stmt::Return(call_in, 4)), ..f };
+    assert_eq!(bare_refusal(translate_function(&f, &Fns::Nil, &Structs::Nil)), Refusal::Place(4));
+}
+
+#[test]
+fn the_parser_reads_a_conditional() {
+    let (a, bb, c, d, e) = (Tok::Ident(1), Tok::Ident(2), Tok::Ident(3), Tok::Ident(60), Tok::Ident(61));
+    let n = |x| b(Expr::Name(x));
+    let (q, k) = (Tok::Question, Tok::Colon);
+    // a ? b : c
+    assert_eq!(parse_contract(&vec![a, q, bb, k, c], 3), Ok(Expr::Cond(n(1), n(2), n(3))));
+    // a || b ? c : d is (a || b) ? c : d, and a ==> b ? c : d is a ==> (b ? c : d).
+    assert_eq!(parse_contract(&vec![a, Tok::Op(BinOp::Or), bb, q, c, k, d], 3), Ok(Expr::Cond(b(Expr::Bin(BinOp::Or, n(1), n(2))), n(3), n(60))));
+    assert_eq!(parse_contract(&vec![a, Tok::Op(BinOp::Implies), bb, q, c, k, d], 3), Ok(Expr::Bin(BinOp::Implies, n(1), b(Expr::Cond(n(2), n(3), n(60))))));
+    // a ? b : c ? d : e groups to the right, and a ? b ? c : d : e reads the middle part to its colon.
+    assert_eq!(parse_contract(&vec![a, q, bb, k, c, q, d, k, e], 3), Ok(Expr::Cond(n(1), n(2), b(Expr::Cond(n(3), n(60), n(61))))));
+    assert_eq!(parse_contract(&vec![a, q, bb, q, c, k, d, k, e], 3), Ok(Expr::Cond(n(1), b(Expr::Cond(n(2), n(3), n(60))), n(61))));
+    // A quantifier in the middle part ends at the colon.
+    let fa = vec![a, q, Tok::Forall, Tok::Ident(60), Tok::ColonColon, bb, k, c];
+    assert_eq!(parse_contract(&fa, 3), Ok(Expr::Cond(n(1), b(Expr::Forall(60, n(2))), n(3))));
+    // No colon, no last part, or a colon with no question mark.
+    assert_eq!(parse_contract(&vec![a, q, bb], 3), Err(Refusal::Syntax(3)));
+    assert_eq!(parse_contract(&vec![a, q, bb, k], 3), Err(Refusal::Syntax(3)));
+    assert_eq!(parse_contract(&vec![a, k, bb], 3), Err(Refusal::Syntax(3)));
+}
+
+#[test]
+fn a_contract_calls_the_operator_of_a_functor() {
+    // int32_t cap_twice(CapAt f, int32_t x) with ensures result == f(f(x))
+    let ps = Params::Cons(F, Ty::Struct(CAP), Box::new(Params::Cons(X, Ty::I32, Box::new(Params::Nil))));
+    let inner = Expr::Apply(F, Box::new(Args::Cons(b(Expr::Name(X)), Box::new(Args::Nil))));
+    let ens = Expr::Bin(BinOp::Eq, b(Expr::Result), b(Expr::Apply(F, Box::new(Args::Cons(b(inner), Box::new(Args::Nil))))));
+    let f = Function {
+        name: SAT,
+        line: 3,
+        params: ps,
+        ret: Ty::I32,
+        conds: Conds::Cons(CondKind::Ensures, ens, 2, names(&[F, X]), Box::new(Conds::Nil)),
+        body: one(Stmt::Return(read(X, Ty::I32), 4)),
+    };
+    let Model::Full(m) = translate_function(&f, &Fns::Nil, &cap_table(true)) else { panic!("a full model") };
+    let op = |o: DExpr, arg: DExpr| {
+        DExpr::AsInt(Box::new(DExpr::FCall(OPKEY, Box::new(DArgs::Cons(o, Box::new(DArgs::Cons(DExpr::Conv(DTy::Int32, Box::new(arg)), Box::new(DArgs::Nil))))))))
+    };
+    let x = || DExpr::AsInt(Box::new(DExpr::Var(X)));
+    let want = DExpr::Bin(BinOp::Eq, Box::new(DExpr::AsInt(Box::new(DExpr::Result))), Box::new(op(DExpr::Var(F), op(DExpr::Var(F), x()))));
+    assert_eq!(strip_conds(m.ensures), DConds::Cons(want, 0, Box::new(DConds::Nil)));
+    // An operator() that is not pure is refused at the line.
+    assert_eq!(bare_refusal(translate_function(&f, &Fns::Nil, &cap_table(false))), Refusal::NotPure(CALL_OP, 2));
+    // A field of the object: struct Wrap { CapAt c; } with int32_t Wrap::run(int32_t x) const and ensures result == c(x).
+    let wrap = Structs::Cons(HOLDER, 8, Params::Cons(FC, Ty::Struct(CAP), Box::new(Params::Nil)), Members::Nil, Box::new(cap_table(true)));
+    let ps = Params::Cons(THIS, Ty::This(HOLDER), Box::new(Params::Cons(X, Ty::I32, Box::new(Params::Nil))));
+    let ens = Expr::Bin(BinOp::Eq, b(Expr::Result), b(Expr::Apply(FC, Box::new(Args::Cons(b(Expr::Name(X)), Box::new(Args::Nil))))));
+    let g = Function {
+        name: SAT,
+        line: 10,
+        params: ps,
+        ret: Ty::I32,
+        conds: Conds::Cons(CondKind::Ensures, ens, 9, names(&[THIS, X]), Box::new(Conds::Nil)),
+        body: one(Stmt::Return(read(X, Ty::I32), 11)),
+    };
+    let Model::Full(m) = translate_function(&g, &Fns::Nil, &wrap) else { panic!("a full model") };
+    let DConds::Cons(first, _, _) = m.ensures else { panic!("an ensures line") };
+    let obj = DExpr::Field(Box::new(DExpr::Var(THIS)), FC);
+    assert_eq!(first, DExpr::Bin(BinOp::Eq, Box::new(DExpr::AsInt(Box::new(DExpr::Result))), Box::new(op(obj, x()))));
+}
