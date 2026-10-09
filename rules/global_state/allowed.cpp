@@ -206,8 +206,8 @@ void rattle() {
 
 int32_t level = 0;
 
-// A name on the modifies line that names a parameter is that parameter, as in C++ scope, decision 0111. The global with the same name
-// does not change, so the caller lists nothing.
+// A name on the modifies line that names a reference parameter is that parameter, as in C++ scope, decisions 0111 and 0112. The global
+// with the same name does not change, so the caller lists nothing.
 //@ requires level < 100
 //@ modifies level
 //@ ensures level == old(level) + 1

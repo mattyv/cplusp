@@ -116,3 +116,4 @@ Status is `decided`, `proposed` (the default until someone objects or the thin s
 | [0108](0108-a-reference-parameter-that-the-function-writes.md) | A T& parameter on the modifies line takes a value in and gives it back. Each T& must be on that line | decided |
 | [0110](0110-the-form-and-place-of-a-modifies-line.md) | A modifies line is a list of names. Any other form is refused first. The misplaced sentence names it | decided |
 | [0111](0111-a-parameter-on-a-modifies-line-is-no-global.md) | A name on a modifies or reads line that names a parameter is that parameter, not a global | decided |
+| [0112](0112-only-a-reference-parameter-hides-a-global.md) | Only a reference parameter hides a global on a modifies line | decided |
