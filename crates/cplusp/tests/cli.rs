@@ -2765,9 +2765,9 @@ fn hex_literals_exists_and_several_bound_names_prove() {
     assert_eq!(text.lines().last(), Some("ok: proved"), "{text}");
 }
 
-/// A hex literal too large for uint64_t is refused, and / in a contract still has no rule, decision 0082.
+/// A hex literal too large for uint64_t is refused, and a shift in a contract has no rule, decisions 0082 and 0088.
 #[test]
-fn a_hex_literal_too_large_and_a_division_in_a_contract_are_refused() {
+fn a_hex_literal_too_large_and_a_shift_in_a_contract_are_refused() {
     if !clang_tidy_available() {
         return;
     }
@@ -2778,7 +2778,7 @@ fn a_hex_literal_too_large_and_a_division_in_a_contract_are_refused() {
     let refusals: Vec<&str> = text.lines().filter(|l| l.starts_with("Not provable: ")).collect();
     for want in [
         "model-quant-refuse.cpp:4: a number above 18446744073709551615: the translator has no rule for it yet.",
-        "model-quant-refuse.cpp:9: '/' in a contract: the translator has no rule for it yet.",
+        "model-quant-refuse.cpp:9: the contract line has a form the translator cannot read.",
         "model-quant-refuse.cpp:15: an octal number: the translator has no rule for it yet.",
         "model-quant-refuse.cpp:20: a number with the suffix e3: the translator has no rule for it yet.",
         "model-quant-refuse.cpp:25: a number with no digits after 0x: the translator has no rule for it yet.",
