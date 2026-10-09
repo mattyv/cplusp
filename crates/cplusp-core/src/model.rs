@@ -629,10 +629,13 @@ pub open spec fn spec_pre(c: DCalls, s: DStmt) -> DStmt {
     }
 }
 
-/// The type of the value of the callee `key`: a value type, decision 0064.
+/// The type of the value of the callee `key`: a value type, decision 0064, or the struct that a constructor builds, decision 0105.
 pub open spec fn spec_callee_ty(all: Fns, key: u32, line: u32, sd: Structs) -> Result<DTy, Refusal> {
     match spec_find(all, key) {
-        Some(f) => spec_value_ty(f.ret, line, sd),
+        Some(f) => match f.ret {
+            Ty::This(_) => spec_ret_ty(f.ret, line, sd),
+            _ => spec_value_ty(f.ret, line, sd),
+        },
         None => Err(Refusal::Syntax(line)),
     }
 }
@@ -3363,7 +3366,10 @@ pub fn callee_ty(all: &Fns, key: u32, line: u32, sd: &Structs) -> (r: Result<DTy
         r == spec_callee_ty(*all, key, line, *sd),
 {
     match find(all, key) {
-        Some(f) => translate_value_ty(f.ret, line, sd),
+        Some(f) => match f.ret {
+            Ty::This(_) => ret_ty(f.ret, line, sd),
+            _ => translate_value_ty(f.ret, line, sd),
+        },
         None => Err(Refusal::Syntax(line)),
     }
 }
