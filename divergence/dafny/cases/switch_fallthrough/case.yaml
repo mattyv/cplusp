@@ -18,4 +18,4 @@ witness:
 rule: |
   A `switch` falls through to the next case without a break, and a Dafny `match` never does.
   No case runs into the next without `[[fallthrough]]`, and the gate enforces it.
-  Model a marked fall-through as one arm with both bodies.
+  In a hand-written model, a marked fall-through is one arm with both bodies. The translator refuses it, decision 0109.
