@@ -38,7 +38,7 @@ pub enum Extent {
     Fixed(u64),
 }
 
-/// A type of the subset. `Seq` is a read-only sequence of a scalar with its extent, a parameter only, decisions 0064 and 0070.
+/// A type of the subset. `I8`, `I16` and `U16` are `int8_t`, `int16_t` and `uint16_t`, decision 0106. `Seq` is a read-only sequence of a scalar with its extent, a parameter only, decisions 0064 and 0070.
 /// `Struct` is a struct of the file by its key, decision 0073. `Opt` is a `std::optional` of a scalar, decision 0075. `This` is the
 /// object of a `const` member function of the struct by its key, a parameter by value, decision 0089. `ThisMut` is the object of a
 /// member function that writes it, which takes it in and gives it back, decision 0096. `ThisAfter` is that object after the call,
@@ -52,6 +52,9 @@ pub enum Ty {
     U8,
     U32,
     U64,
+    I8,
+    I16,
+    U16,
     Bool,
     Seq(Scalar, Extent),
     Struct(u32),
@@ -106,7 +109,7 @@ pub enum CastKind {
 /// file, by the id of its name, decision 0079. `Suffix`, `Prefix` and `Slice` are `v[i..]`, `v[..j]` and `v[i..j]` in a contract,
 /// decision 0085. `Divide` is `/` or `%` in code, with the type of its result, decision 0088. `MApply` is `o.f(args)` in a contract,
 /// a call of a member function by the id of its name, decision 0090. `Old` is `old(e)` in an ensures line, decision 0096. `Cond` is
-/// `c ? a : b`, decision 0098. `Unknown` is a construct with no
+/// `c ? a : b`, decision 0098. `Shr` is `a >> n` in code, with the type of its result, decision 0106. `Unknown` is a construct with no
 /// rule, by the id of its kind and its line.
 #[derive(PartialEq, Eq, Debug)]
 pub enum Expr {
@@ -145,6 +148,7 @@ pub enum Expr {
     MApply(Box<Expr>, u32, Box<Args>),
     Old(Box<Expr>),
     Cond(Box<Expr>, Box<Expr>, Box<Expr>),
+    Shr(Box<Expr>, Box<Expr>, Ty),
     Unknown(u32, u32),
 }
 
@@ -268,6 +272,9 @@ pub enum DTy {
     UInt8,
     UInt32,
     UInt64,
+    Int8,
+    Int16,
+    UInt16,
     Bool,
     Seq(Scalar),
     Struct(u32),
@@ -282,7 +289,8 @@ pub enum DTy {
 /// on the exact integers. `DivIn` is `(trunc_div(a, b) as T)`, and `RemIn` is the remainder of `T`, which also needs the quotient to
 /// fit `T`, decision 0088. `FCall` calls the function of a pure member function by its key, decision 0090. `After` is `this'`, the
 /// object of a member function that writes it, as the body leaves it, decision 0096. `Ite` is `if c then a else b`, decision 0098.
-/// `Temp` reads a temporary that a call before the statement set, decision 0104. A Dafny expression calls no method.
+/// `Temp` reads a temporary that a call before the statement set, decision 0104. `ShrIn` is `(shr(a, n, W) as T)`, a right shift
+/// of the width `W`, decision 0106. A Dafny expression calls no method.
 #[derive(PartialEq, Eq, Debug)]
 pub enum DExpr {
     Lit(u64),
@@ -318,6 +326,7 @@ pub enum DExpr {
     After,
     Ite(Box<DExpr>, Box<DExpr>, Box<DExpr>),
     Temp(u32),
+    ShrIn(Box<DExpr>, Box<DExpr>, DTy, u32),
 }
 
 /// The calls that run before a statement, in the order that they run: each sets a temporary of the statement by its number, of a
@@ -470,6 +479,9 @@ pub open spec fn spec_ty(t: Ty, line: u32) -> Result<DTy, Refusal> {
         Ty::U8 => Ok(DTy::UInt8),
         Ty::U32 => Ok(DTy::UInt32),
         Ty::U64 => Ok(DTy::UInt64),
+        Ty::I8 => Ok(DTy::Int8),
+        Ty::I16 => Ok(DTy::Int16),
+        Ty::U16 => Ok(DTy::UInt16),
         Ty::Bool => Ok(DTy::Bool),
         Ty::Seq(Scalar::Bool, _) => Err(Refusal::Element(line)),
         Ty::Seq(s, _) => Ok(DTy::Seq(s)),
@@ -584,7 +596,32 @@ pub open spec fn chains(a: BinOp, b: BinOp) -> bool {
 
 /// An integer type, whose value a contract reads as an exact integer.
 pub open spec fn is_integer(t: Ty) -> bool {
-    t == Ty::I32 || t == Ty::I64 || t == Ty::U8 || t == Ty::U32 || t == Ty::U64
+    t == Ty::I32 || t == Ty::I64 || t == Ty::U8 || t == Ty::U32 || t == Ty::U64 || t == Ty::I8 || t == Ty::I16 || t == Ty::U16
+}
+
+/// The width in bits of an integer type, decision 0106.
+pub open spec fn spec_width(t: Ty) -> u32 {
+    match t {
+        Ty::I8 => 8,
+        Ty::U8 => 8,
+        Ty::I16 => 16,
+        Ty::U16 => 16,
+        Ty::I32 => 32,
+        Ty::U32 => 32,
+        _ => 64,
+    }
+}
+
+/// `a >> n` of code on the integer type `t`, decision 0106: `shr` of both operands as exact integers, with the width of `t`.
+pub open spec fn spec_shift(da: DExpr, dn: DExpr, t: Ty, line: u32) -> Result<DExpr, Refusal> {
+    match spec_ty(t, line) {
+        Err(r) => Err(r),
+        Ok(dt) => if !is_integer(t) {
+            Err(Refusal::Convert(line))
+        } else {
+            Ok(DExpr::ShrIn(Box::new(DExpr::AsInt(Box::new(da))), Box::new(DExpr::AsInt(Box::new(dn))), dt, spec_width(t)))
+        },
+    }
 }
 
 /// An integral cast, decision 0058. Both types must be in the subset, and neither may be `bool`. The cast is `(e as T)`, so Dafny
@@ -699,6 +736,16 @@ pub open spec fn spec_lift(e: Expr, all: Fns, line: u32, sd: Structs, n: u32, op
                     },
                 },
             }
+        },
+        Expr::Shr(a, b, t) => match spec_lift(*a, all, line, sd, n, open) {
+            Err(r) => Err(r),
+            Ok((ca, da, n1)) => match spec_lift(*b, all, line, sd, n1, open) {
+                Err(r) => Err(r),
+                Ok((cb, db, n2)) => match spec_shift(da, db, t, line) {
+                    Err(r) => Err(r),
+                    Ok(d) => Ok((spec_append_calls(ca, cb), d, n2)),
+                },
+            },
         },
         Expr::Not(a) => match spec_lift(*a, all, line, sd, n, open) {
             Err(r) => Err(r),
@@ -2154,6 +2201,9 @@ pub open spec fn spec_int_dty(t: Ty) -> Option<DTy> {
         Ty::U8 => Some(DTy::UInt8),
         Ty::U32 => Some(DTy::UInt32),
         Ty::U64 => Some(DTy::UInt64),
+        Ty::I8 => Some(DTy::Int8),
+        Ty::I16 => Some(DTy::Int16),
+        Ty::U16 => Some(DTy::UInt16),
         _ => None,
     }
 }
@@ -2286,6 +2336,7 @@ pub open spec fn unknown_expr(e: Expr) -> bool
         Expr::Prefix(a, j) => unknown_expr(*a) || unknown_expr(*j),
         Expr::Slice(a, i, j) => unknown_expr(*a) || unknown_expr(*i) || unknown_expr(*j),
         Expr::Divide(_, a, b, _) => unknown_expr(*a) || unknown_expr(*b),
+        Expr::Shr(a, b, _) => unknown_expr(*a) || unknown_expr(*b),
         Expr::Old(a) => unknown_expr(*a),
         Expr::Cond(c, a, b) => unknown_expr(*c) || unknown_expr(*a) || unknown_expr(*b),
         _ => false,
@@ -2761,6 +2812,12 @@ pub proof fn lemma_lift_resolves(e: Expr, all: Fns, line: u32, sd: Structs, n: u
             lemma_lift_resolves(*b, all, line, sd, n1, open);
             lemma_append_resolves(spec_lift(*a, all, line, sd, n, open).unwrap().0, spec_lift(*b, all, line, sd, n1, open).unwrap().0, all, sd);
         },
+        Expr::Shr(a, b, _) => {
+            lemma_lift_resolves(*a, all, line, sd, n, open);
+            let n1 = spec_lift(*a, all, line, sd, n, open).unwrap().2;
+            lemma_lift_resolves(*b, all, line, sd, n1, open);
+            lemma_append_resolves(spec_lift(*a, all, line, sd, n, open).unwrap().0, spec_lift(*b, all, line, sd, n1, open).unwrap().0, all, sd);
+        },
         Expr::Index(a, b) => {
             lemma_lift_resolves(*a, all, line, sd, n, open);
             let n1 = spec_lift(*a, all, line, sd, n, open).unwrap().2;
@@ -2836,6 +2893,13 @@ pub proof fn lemma_unknown_lift_is_refused(e: Expr, all: Fns, line: u32, sd: Str
             }
         },
         Expr::Divide(_, a, b, _) => {
+            if unknown_expr(*a) {
+                lemma_unknown_lift_is_refused(*a, all, line, sd, n, open);
+            } else if spec_lift(*a, all, line, sd, n, open).is_ok() {
+                lemma_unknown_lift_is_refused(*b, all, line, sd, spec_lift(*a, all, line, sd, n, open).unwrap().2, open);
+            }
+        },
+        Expr::Shr(a, b, _) => {
             if unknown_expr(*a) {
                 lemma_unknown_lift_is_refused(*a, all, line, sd, n, open);
             } else if spec_lift(*a, all, line, sd, n, open).is_ok() {
@@ -2919,6 +2983,10 @@ pub proof fn lemma_closed_runs_no_call(e: Expr, all: Fns, line: u32, sd: Structs
             lemma_closed_runs_no_call(*b, all, line, sd, spec_lift(*a, all, line, sd, n, false).unwrap().2);
         },
         Expr::Divide(_, a, b, _) => {
+            lemma_closed_runs_no_call(*a, all, line, sd, n);
+            lemma_closed_runs_no_call(*b, all, line, sd, spec_lift(*a, all, line, sd, n, false).unwrap().2);
+        },
+        Expr::Shr(a, b, _) => {
             lemma_closed_runs_no_call(*a, all, line, sd, n);
             lemma_closed_runs_no_call(*b, all, line, sd, spec_lift(*a, all, line, sd, n, false).unwrap().2);
         },
@@ -3193,6 +3261,9 @@ pub fn translate_ty(t: Ty, line: u32) -> (r: Result<DTy, Refusal>)
         Ty::U8 => Ok(DTy::UInt8),
         Ty::U32 => Ok(DTy::UInt32),
         Ty::U64 => Ok(DTy::UInt64),
+        Ty::I8 => Ok(DTy::Int8),
+        Ty::I16 => Ok(DTy::Int16),
+        Ty::U16 => Ok(DTy::UInt16),
         Ty::Bool => Ok(DTy::Bool),
         Ty::Seq(Scalar::Bool, _) => Err(Refusal::Element(line)),
         Ty::Seq(s, _) => Ok(DTy::Seq(s)),
@@ -3431,6 +3502,16 @@ pub fn lift(e: &Expr, all: &Fns, line: u32, sd: &Structs, n: u32, open: bool) ->
                 },
             }
         },
+        Expr::Shr(a, b, t) => match lift(a, all, line, sd, n, open) {
+            Err(r) => Err(r),
+            Ok((ca, da, n1)) => match lift(b, all, line, sd, n1, open) {
+                Err(r) => Err(r),
+                Ok((cb, db, n2)) => match shift(da, db, *t, line) {
+                    Err(r) => Err(r),
+                    Ok(d) => Ok((append_calls(ca, cb), d, n2)),
+                },
+            },
+        },
         Expr::Not(a) => match lift(a, all, line, sd, n, open) {
             Err(r) => Err(r),
             Ok((c, d, n1)) => Ok((c, DExpr::Not(Box::new(d)), n1)),
@@ -3604,7 +3685,7 @@ pub fn divide(op: BinOp, da: DExpr, db: DExpr, t: Ty, line: u32) -> (r: Result<D
 {
     match translate_ty(t, line) {
         Err(r) => Err(r),
-        Ok(dt) => if !(t == Ty::I32 || t == Ty::I64 || t == Ty::U8 || t == Ty::U32 || t == Ty::U64) {
+        Ok(dt) => if !integer(t) {
             Err(Refusal::Convert(line))
         } else if op == BinOp::Div {
             Ok(DExpr::DivIn(Box::new(DExpr::AsInt(Box::new(da))), Box::new(DExpr::AsInt(Box::new(db))), dt))
@@ -3614,12 +3695,48 @@ pub fn divide(op: BinOp, da: DExpr, db: DExpr, t: Ty, line: u32) -> (r: Result<D
     }
 }
 
+pub fn integer(t: Ty) -> (r: bool)
+    ensures
+        r == is_integer(t),
+{
+    t == Ty::I32 || t == Ty::I64 || t == Ty::U8 || t == Ty::U32 || t == Ty::U64 || t == Ty::I8 || t == Ty::I16 || t == Ty::U16
+}
+
+pub fn width(t: Ty) -> (r: u32)
+    ensures
+        r == spec_width(t),
+{
+    match t {
+        Ty::I8 => 8,
+        Ty::U8 => 8,
+        Ty::I16 => 16,
+        Ty::U16 => 16,
+        Ty::I32 => 32,
+        Ty::U32 => 32,
+        _ => 64,
+    }
+}
+
+pub fn shift(da: DExpr, dn: DExpr, t: Ty, line: u32) -> (r: Result<DExpr, Refusal>)
+    ensures
+        r == spec_shift(da, dn, t, line),
+{
+    match translate_ty(t, line) {
+        Err(r) => Err(r),
+        Ok(dt) => if !integer(t) {
+            Err(Refusal::Convert(line))
+        } else {
+            Ok(DExpr::ShrIn(Box::new(DExpr::AsInt(Box::new(da))), Box::new(DExpr::AsInt(Box::new(dn))), dt, width(t)))
+        },
+    }
+}
+
 pub fn translate_leaf(d: DExpr, t: Ty, line: u32) -> (r: Result<DExpr, Refusal>)
     ensures
         r == spec_leaf(d, t, line),
 {
     match translate_ty(t, line) {
-        Ok(_) => if t == Ty::I32 || t == Ty::I64 || t == Ty::U8 || t == Ty::U32 || t == Ty::U64 {
+        Ok(_) => if integer(t) {
             Ok(DExpr::AsInt(Box::new(d)))
         } else {
             Ok(d)
@@ -4840,6 +4957,7 @@ pub fn copy_dexpr(d: &DExpr) -> (r: DExpr)
         DExpr::After => DExpr::After,
         DExpr::Ite(x0, x1, x2) => DExpr::Ite(Box::new(copy_dexpr(x0)), Box::new(copy_dexpr(x1)), Box::new(copy_dexpr(x2))),
         DExpr::Temp(x0) => DExpr::Temp(*x0),
+        DExpr::ShrIn(x0, x1, x2, x3) => DExpr::ShrIn(Box::new(copy_dexpr(x0)), Box::new(copy_dexpr(x1)), *x2, *x3),
     }
 }
 
@@ -5042,6 +5160,9 @@ pub fn int_dty(t: Ty) -> (r: Option<DTy>)
         Ty::U8 => Some(DTy::UInt8),
         Ty::U32 => Some(DTy::UInt32),
         Ty::U64 => Some(DTy::UInt64),
+        Ty::I8 => Some(DTy::Int8),
+        Ty::I16 => Some(DTy::Int16),
+        Ty::U16 => Some(DTy::UInt16),
         _ => None,
     }
 }
