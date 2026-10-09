@@ -36,6 +36,7 @@ enum JTy {
     Seq(JScalar, Option<u64>),
     Struct(String),
     Opt(JScalar),
+    This(String),
     Other(String),
 }
 
@@ -215,6 +216,7 @@ fn ty(t: JTy, names: &mut Names) -> Ty {
         JTy::Seq(s, extent) => Ty::Seq(scalar(s, names), extent.map_or(Extent::Dynamic, Extent::Fixed)),
         JTy::Opt(s) => Ty::Opt(scalar(s, names)),
         JTy::Struct(k) => Ty::Struct(names.id(&k)),
+        JTy::This(k) => Ty::This(names.id(&k)),
         JTy::Other(s) => Ty::Other(names.id(&s)),
     }
 }
@@ -1036,10 +1038,15 @@ pub fn translate(lines: &str, companion: Option<(&str, &str)>) -> Result<Transla
     let mut methods = Methods::new();
     // The place of each function, by the id of its key, for its method header.
     let mut at = HashMap::new();
+    // A member function is named by its struct too, `Struct'name`, decision 0089. C++ cannot write `'`, so it clashes with no name.
+    let plain = |f: &JFunction| match f.params.first() {
+        Some((_, JTy::This(k))) => format!("{}'{}", structs.iter().find(|s| s.key == *k).map_or("", |s| s.name.as_str()), f.name),
+        _ => f.name.clone(),
+    };
     for (i, f) in funcs.iter().enumerate() {
-        let same = funcs.iter().filter(|g| g.name == f.name).count();
-        let k = funcs[..=i].iter().filter(|g| g.name == f.name).count();
-        let dafny = if same == 1 { format!("c_{}", f.name) } else { format!("c_{}'{k}", f.name) };
+        let same = funcs.iter().filter(|g| plain(g) == plain(f)).count();
+        let k = funcs[..=i].iter().filter(|g| plain(g) == plain(f)).count();
+        let dafny = if same == 1 { format!("c_{}", plain(f)) } else { format!("c_{}'{k}", plain(f)) };
         let key = names.id(&f.key);
         methods.insert(key, dafny);
         at.insert(key, names.place(&f.file, f.line));

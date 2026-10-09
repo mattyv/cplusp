@@ -3795,16 +3795,20 @@ public:
   // kind, and a caller sees a callee with no method. Its contract lines still count as claimed.
   // Upgrade: a core rule for these, and their real signature.
   llvm::json::Value function(const FunctionDecl *FD, const Contract &C) const {
-    const char *Opaque = FD->isTemplated()        ? "FunctionTemplateDecl"
-                         : isa<CXXMethodDecl>(FD) ? "CXXMethodDecl"
+    const CXXMethodDecl *Member = constMember(FD);
+    const char *Opaque = FD->isTemplated()                         ? "FunctionTemplateDecl"
+                         : isa<CXXMethodDecl>(FD) && !Member ? "CXXMethodDecl"
                          : !FD->getBody()         ? "FunctionDecl without body"
                                                   : nullptr;
     llvm::json::Array Params, Conds;
     Enclosing = FD;
     if (!Opaque) {
+      // A const member function takes its object as a parameter `this` by value, first, decision 0089. Its contract lines name it first too.
+      if (Member)
+        Params.push_back(llvm::json::Array{"this", thisType(Member->getParent())});
       for (const ParmVarDecl *P : FD->parameters())
         Params.push_back(llvm::json::Array{P->getNameAsString(), type(P->getType())});
-      Conds = conds(C);
+      Conds = conds(C, Member != nullptr);
     }
     return llvm::json::Object{{"name", FD->getNameAsString()},
                               {"key", key(FD)},
@@ -3828,15 +3832,20 @@ private:
   mutable const FunctionDecl *Enclosing = nullptr;  // the function that `function` is writing, the floor of a loop's walk upward
 
   // The contract lines as data. A line of a loop has no parameters.
-  llvm::json::Array conds(const Contract &C) const {
+  llvm::json::Array conds(const Contract &C, bool Member = false) const {
     llvm::json::Array Out;
     for (const Contract::Line &L : C.Lines) {
+      llvm::json::Array Names;
+      if (Member)
+        Names.push_back("this");
+      for (const std::string &N : L.Params)
+        Names.push_back(N);
       // The word ends at any white space.
       const StringRef Text = L.Text;
       const size_t Cut = Text.find_first_of(" \t\f\v\r");
       Out.push_back(llvm::json::Object{
           {"kind", Text.substr(0, Cut).str()}, {"file", file(SM.getLocForStartOfFile(L.Id))}, {"line", number(L.Number)}, {"text", Cut == StringRef::npos ? "" : Text.substr(Cut).trim().str()},
-          {"params", L.Params}});
+          {"params", std::move(Names)}});
     }
     return Out;
   }
@@ -3955,8 +3964,9 @@ private:
   }
 
   // The plain struct that a type is, decision 0073, or null. A const and a reference are looked through. Plain means a definition with
-  // a name, no bases, no virtual, no constructor and no member function of the user, and public fields that are each a scalar, a plain
-  // struct, an optional of a scalar (decision 0075) or a sequence (decision 0076), with no const, no reference and no bit field.
+  // a name, no bases, no virtual function, no constructor, no destructor and no member template, and fields that are each a scalar, a plain
+  // struct, an optional of a scalar (decision 0075) or a sequence (decision 0076), with no const, no reference and no bit field. Member
+  // functions, static members and access do not matter, decision 0089.
   const CXXRecordDecl *plainStruct(QualType T) const {
     if (T->isReferenceType())
       T = T->getPointeeType();
@@ -3967,8 +3977,9 @@ private:
     if (RD->isUnion() || RD->isLambda() || !RD->getIdentifier() || RD->isDependentContext() || isa<ClassTemplateSpecializationDecl>(RD) ||
         RD->getNumBases() || RD->isPolymorphic() || RD->hasUserDeclaredConstructor() || RD->hasUserDeclaredDestructor())
       return nullptr;
+    // A member function, a static member and a private field do not change the value of the struct, decision 0089. A member template still has no rule, decision 0089.
     for (const Decl *D : RD->decls())
-      if (isa<FunctionTemplateDecl>(D) || (isa<CXXMethodDecl>(D) && !D->isImplicit()))
+      if (isa<FunctionTemplateDecl>(D))
         return nullptr;
     // A struct that holds a sequence of itself is in its own fields: assume it is plain there, decision 0076.
     if (!Visiting.insert(RD).second)
@@ -3976,7 +3987,7 @@ private:
     bool Plain = true;
     for (const FieldDecl *F : RD->fields()) {
       const QualType FT = F->getType();
-      if (F->isBitField() || F->getAccess() != AS_public || FT->isReferenceType() || FT.hasQualifiers() ||
+      if (F->isBitField() || FT->isReferenceType() || FT.hasQualifiers() ||
           (!scalar(FT) && !plainStruct(FT) && !optElement(FT) && seqElement(FT, true).isNull())) {
         Plain = false;
         break;
@@ -3984,6 +3995,23 @@ private:
     }
     Visiting.erase(RD);
     return Plain ? RD : nullptr;
+  }
+
+  // A member function that is written as a function, decision 0089: not static, not virtual, `const`, no ref-qualifier, not an operator, a
+  // conversion, a constructor or a destructor, not a template, and a member of a plain struct. Null for any other function.
+  const CXXMethodDecl *constMember(const FunctionDecl *FD) const {
+    const auto *M = dyn_cast<CXXMethodDecl>(FD);
+    if (!M || M->isStatic() || M->isVirtual() || !M->isConst() || M->isVolatile() || M->getRefQualifier() != RQ_None || M->isOverloadedOperator() ||
+        isa<CXXConversionDecl>(M) || isa<CXXConstructorDecl>(M) || isa<CXXDestructorDecl>(M) || M->isTemplated() || M->getDescribedFunctionTemplate())
+      return nullptr;
+    return plainStruct(Context.getRecordType(M->getParent())) ? M : nullptr;
+  }
+
+  // The type of `this` in a const member function of a plain struct, by the key of the struct.
+  llvm::json::Value thisType(const CXXRecordDecl *Parent) const {
+    const CXXRecordDecl *RD = plainStruct(Context.getRecordType(Parent));
+    type(Context.getRecordType(Parent));  // writes the struct
+    return tag("This", structKey(RD));
   }
 
   // The key of a struct, as the key of a function that has no mangled name: the qualified name, `@` and the place of the definition.
@@ -4169,10 +4197,13 @@ private:
       type(List->getType());  // writes the struct
       return tag("Construct", llvm::json::Array{structKey(plainStruct(List->getType())), std::move(Args)});
     }
-    // A read of a field of a plain struct.
-    if (const auto *Member = dyn_cast<MemberExpr>(E); Member && !Member->isArrow())
+    // The object of a const member function, decision 0089.
+    if (const auto *This = dyn_cast<CXXThisExpr>(E); This && plainStruct(This->getType()->getPointeeType()))
+      return tag("Var", llvm::json::Array{"this", thisType(This->getType()->getPointeeType()->getAsCXXRecordDecl())});
+    // A read of a field of a plain struct, also through `this`.
+    if (const auto *Member = dyn_cast<MemberExpr>(E); Member && (!Member->isArrow() || isa<CXXThisExpr>(Member->getBase()->IgnoreParenImpCasts())))
       if (const auto *Field = dyn_cast<FieldDecl>(Member->getMemberDecl()); Field && plainStruct(Context.getRecordType(Field->getParent())))
-        return tag("Field", llvm::json::Array{expr(Member->getBase(), Near), Field->getNameAsString()});
+        return tag("Field", llvm::json::Array{expr(Member->getBase()->IgnoreParenImpCasts(), Near), Field->getNameAsString()});
     // `v.size()` and `v[i]` of a read-only sequence.
     if (const auto *Member = dyn_cast<CXXMemberCallExpr>(E); Member && Member->getNumArgs() == 0 && Member->getMethodDecl() && Member->getMethodDecl()->getNameAsString() == "size")
       if (const Expr *Object = Member->getImplicitObjectArgument(); Object && isSeq(Object->getType()))
@@ -4188,6 +4219,17 @@ private:
     if (const auto *Operator = dyn_cast<CXXOperatorCallExpr>(E); Operator && Operator->getOperator() == OO_Subscript && Operator->getNumArgs() == 2 &&
                                                                   isSeq(Operator->getArg(0)->getType()))
       return tag("Index", llvm::json::Array{expr(Operator->getArg(0), Near), expr(Operator->getArg(1), Near)});
+    // A call of a const member function, `o.f(a)` or `f(a)` in a method, is a call of `f` with the object first, decision 0089.
+    if (const auto *Call = dyn_cast<CXXMemberCallExpr>(E); Call && Call->getDirectCallee() && constMember(Call->getDirectCallee())) {
+      const Expr *Object = Call->getImplicitObjectArgument()->IgnoreParenImpCasts();
+      const auto *Callee = dyn_cast<MemberExpr>(Call->getCallee()->IgnoreParens());
+      if (Callee && (!Callee->isArrow() || isa<CXXThisExpr>(Object))) {
+        llvm::json::Array Args{expr(Object, line(E->getBeginLoc()))};
+        for (const Expr *Arg : Call->arguments())
+          Args.push_back(expr(Arg, line(E->getBeginLoc())));
+        return tag("Call", llvm::json::Array{key(Call->getDirectCallee()), name(Call->getDirectCallee()), std::move(Args), number(line(E->getBeginLoc()))});
+      }
+    }
     // Only a plain call by name. A member call, an operator call and the rest of the call classes stay unknown.
     if (E->getStmtClass() == Stmt::CallExprClass)
       if (const FunctionDecl *Callee = cast<CallExpr>(E)->getDirectCallee()) {
