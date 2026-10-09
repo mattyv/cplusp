@@ -9,7 +9,7 @@ Date: 2026-10-09. Status: decided. Step 4 of 0089. Amends 0073 on constructors.
 - In a contract of a constructor, a name that is no parameter and is a field of the struct is that field of `result`. A call of a pure member function, as in `valid()`, passes `result`, decision 0090.
 - A struct that holds a sequence still has no constructor in the subset, because its result would be such a struct, decision 0076.
 - In code, `S s(a)`, `S s{a}` and `return S(a)` call the constructor, under the rule that a call stands alone, decision 0058.
-- A struct with a constructor is still plain, decision 0089. These still have no rule: a field with a default value, a constructor with a body or one that leaves a field out, a delegating constructor, and a destructor.
+- A struct with a constructor is still plain, decision 0089. A field with a default value still has no rule. Neither has a constructor with a body, one that leaves a field out, a delegating constructor or a destructor.
 
 ## Why
 
