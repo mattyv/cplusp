@@ -1325,7 +1325,8 @@ const THIS: u32 = 130;
 const CN: u32 = 131;
 const COUNTER: u32 = 132;
 
-/// `struct Counter { int32_t n_; }` as the table of the file.
+/// `struct Counter { int32_t n_; }` as the table of the file. The names of a member function's declaration start with this, as its
+/// parameters do, so a contract reads each parameter by its place, decision 0060.
 fn counter_table() -> Structs {
     Structs::Cons(COUNTER, 4, Params::Cons(CN, Ty::I32, Box::new(Params::Nil)), Box::new(Structs::Nil))
 }
@@ -1342,7 +1343,7 @@ fn a_const_member_function_reads_its_object_as_the_parameter_this() {
         line: 9,
         params: this,
         ret: Ty::I32,
-        conds: Conds::Cons(CondKind::Requires, req, 7, names(&[]), Box::new(Conds::Cons(CondKind::Ensures, ens, 8, names(&[]), Box::new(Conds::Nil)))),
+        conds: Conds::Cons(CondKind::Requires, req, 7, names(&[THIS]), Box::new(Conds::Cons(CondKind::Ensures, ens, 8, names(&[THIS]), Box::new(Conds::Nil)))),
         body: one(Stmt::Return(Expr::Bin(BinOp::Add, b(field), b(Expr::Lit(1, Ty::I32))), 10)),
     };
     let Model::Full(m) = translate_function(&f, &Fns::Nil, &counter_table()) else { panic!("a full model") };
@@ -1367,7 +1368,7 @@ fn a_parameter_wins_over_a_field_and_a_name_that_is_neither_is_refused() {
         line: 9,
         params: ps,
         ret: Ty::I32,
-        conds: Conds::Cons(CondKind::Ensures, ens, 8, names(&[CN]), Box::new(Conds::Nil)),
+        conds: Conds::Cons(CondKind::Ensures, ens, 8, names(&[THIS, CN]), Box::new(Conds::Nil)),
         body: one(Stmt::Return(read(CN, Ty::I32), 10)),
     };
     let Model::Full(m) = translate_function(&f, &Fns::Nil, &counter_table()) else { panic!("a full model") };
@@ -1379,7 +1380,7 @@ fn a_parameter_wins_over_a_field_and_a_name_that_is_neither_is_refused() {
         line: 9,
         params: Params::Cons(THIS, Ty::This(COUNTER), Box::new(Params::Nil)),
         ret: Ty::I32,
-        conds: Conds::Cons(CondKind::Ensures, Expr::Bin(BinOp::Eq, b(Expr::Result), b(Expr::Name(99))), 8, names(&[]), Box::new(Conds::Nil)),
+        conds: Conds::Cons(CondKind::Ensures, Expr::Bin(BinOp::Eq, b(Expr::Result), b(Expr::Name(99))), 8, names(&[THIS]), Box::new(Conds::Nil)),
         body: one(Stmt::Return(Expr::Lit(0, Ty::I32), 10)),
     };
     assert_eq!(bare_refusal(translate_function(&f, &Fns::Nil, &counter_table())), Refusal::Name(99, 8));

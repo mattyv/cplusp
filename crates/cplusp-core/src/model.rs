@@ -39,8 +39,9 @@ pub enum Extent {
 }
 
 /// A type of the subset. `Seq` is a read-only sequence of a scalar with its extent, a parameter only, decisions 0064 and 0070.
-/// `Struct` is a struct of the file by its key, decision 0073. `Opt` is a `std::optional` of a scalar, decision 0075. `Other` is a
-/// type the translator has no rule for, by the id of its name.
+/// `Struct` is a struct of the file by its key, decision 0073. `Opt` is a `std::optional` of a scalar, decision 0075. `This` is the
+/// object of a `const` member function of the struct by its key, a parameter by value, decision 0089. `Other` is a type the
+/// translator has no rule for, by the id of its name.
 #[derive(Structural, PartialEq, Eq, Clone, Copy, Debug)]
 pub enum Ty {
     I32,
@@ -52,6 +53,7 @@ pub enum Ty {
     Seq(Scalar, Extent),
     Struct(u32),
     Opt(Scalar),
+    This(u32),
     Other(u32),
 }
 
@@ -396,6 +398,7 @@ pub open spec fn spec_ty(t: Ty, line: u32) -> Result<DTy, Refusal> {
         Ty::Struct(k) => Ok(DTy::Struct(k)),
         Ty::Opt(Scalar::Struct(_)) => Err(Refusal::Element(line)),
         Ty::Opt(s) => Ok(DTy::Opt(s)),
+        Ty::This(k) => Ok(DTy::Struct(k)),
         Ty::Other(k) => Err(Refusal::Construct(k, line)),
     }
 }
@@ -407,6 +410,7 @@ pub open spec fn spec_value_ty(t: Ty, line: u32, sd: Structs) -> Result<DTy, Ref
         Err(r) => Err(r),
         Ok(dt) => match t {
             Ty::Seq(_, _) => Err(Refusal::SeqParam(line)),
+            Ty::This(_) => Err(Refusal::Syntax(line)),
             Ty::Struct(k) => if spec_holds(sd, k) {
                 Err(Refusal::HoldsSeq(line))
             } else {
@@ -713,7 +717,10 @@ pub open spec fn spec_contract(e: Expr, decl: Names, ps: Params, ret: Option<Ty>
         } else {
             match spec_rebind(decl, ps, n) {
                 Some((p, t)) => spec_leaf(DExpr::Var(p), t, line),
-                None => spec_unnamed(n, ret, line),
+                None => match spec_this_field(ps, n, sd) {
+                    Some((d, ft)) => spec_leaf(d, ft, line),
+                    None => spec_unnamed(n, ret, line),
+                },
             }
         },
         Expr::Result => match ret {
@@ -868,9 +875,12 @@ pub open spec fn spec_path(e: Expr, decl: Names, ps: Params, ret: Option<Ty>, bo
         } else {
             match spec_rebind(decl, ps, n) {
                 Some((p, t)) => Ok((DExpr::Var(p), t)),
-                None => match ret {
-                    Some(_) => Err(Refusal::Name(n, line)),
-                    None => Err(Refusal::NoVar(n, line)),
+                None => match spec_this_field(ps, n, sd) {
+                    Some(x) => Ok(x),
+                    None => match ret {
+                        Some(_) => Err(Refusal::Name(n, line)),
+                        None => Err(Refusal::NoVar(n, line)),
+                    },
                 },
             }
         },
@@ -933,6 +943,30 @@ pub open spec fn spec_has(bound: Names, name: u32) -> bool
     match bound {
         Names::Nil => false,
         Names::Cons(n, rest) => n == name || spec_has(*rest, name),
+    }
+}
+
+/// The parameter `this` of a member function, with the key of its struct, decision 0089.
+pub open spec fn spec_this(ps: Params) -> Option<(u32, u32)>
+    decreases ps,
+{
+    match ps {
+        Params::Nil => None,
+        Params::Cons(p, t, rest) => match t {
+            Ty::This(k) => Some((p, k)),
+            _ => spec_this(*rest),
+        },
+    }
+}
+
+/// A name that is no parameter of a member function and is a field of its struct: that field of `this`, decision 0089.
+pub open spec fn spec_this_field(ps: Params, n: u32, sd: Structs) -> Option<(DExpr, Ty)> {
+    match spec_this(ps) {
+        Some((p, k)) => match spec_field_ty(sd, k, n) {
+            Some(ft) => Some((DExpr::Field(Box::new(DExpr::Var(p)), n), ft)),
+            None => None,
+        },
+        None => None,
     }
 }
 
@@ -1869,6 +1903,7 @@ pub fn translate_ty(t: Ty, line: u32) -> (r: Result<DTy, Refusal>)
         Ty::Struct(k) => Ok(DTy::Struct(k)),
         Ty::Opt(Scalar::Struct(_)) => Err(Refusal::Element(line)),
         Ty::Opt(s) => Ok(DTy::Opt(s)),
+        Ty::This(k) => Ok(DTy::Struct(k)),
         Ty::Other(k) => Err(Refusal::Construct(k, line)),
     }
 }
@@ -1881,6 +1916,7 @@ pub fn translate_value_ty(t: Ty, line: u32, sd: &Structs) -> (r: Result<DTy, Ref
         Err(r) => Err(r),
         Ok(dt) => match t {
             Ty::Seq(_, _) => Err(Refusal::SeqParam(line)),
+            Ty::This(_) => Err(Refusal::Syntax(line)),
             Ty::Struct(k) => if holds_seq(sd, k) {
                 Err(Refusal::HoldsSeq(line))
             } else {
@@ -2193,7 +2229,10 @@ pub fn translate_contract(e: &Expr, decl: &Names, ps: &Params, ret: Option<Ty>, 
         } else {
             match rebind(decl, ps, *n) {
                 Some((p, t)) => translate_leaf(DExpr::Var(p), t, line),
-                None => unnamed(*n, ret, line),
+                None => match this_field(ps, *n, sd) {
+                    Some((d, ft)) => translate_leaf(d, ft, line),
+                    None => unnamed(*n, ret, line),
+                },
             }
         },
         Expr::Result => match ret {
@@ -2342,9 +2381,12 @@ pub fn path(e: &Expr, decl: &Names, ps: &Params, ret: Option<Ty>, bound: &Names,
         } else {
             match rebind(decl, ps, *n) {
                 Some((p, t)) => Ok((DExpr::Var(p), t)),
-                None => match ret {
-                    Some(_) => Err(Refusal::Name(*n, line)),
-                    None => Err(Refusal::NoVar(*n, line)),
+                None => match this_field(ps, *n, sd) {
+                    Some(x) => Ok(x),
+                    None => match ret {
+                        Some(_) => Err(Refusal::Name(*n, line)),
+                        None => Err(Refusal::NoVar(*n, line)),
+                    },
                 },
             }
         },
@@ -2397,6 +2439,33 @@ pub fn path(e: &Expr, decl: &Names, ps: &Params, ret: Option<Ty>, bound: &Names,
             Err(r) => Err(r),
         },
         _ => Err(Refusal::Syntax(line)),
+    }
+}
+
+pub fn this_param(ps: &Params) -> (r: Option<(u32, u32)>)
+    ensures
+        r == spec_this(*ps),
+    decreases ps,
+{
+    match ps {
+        Params::Nil => None,
+        Params::Cons(p, t, rest) => match t {
+            Ty::This(k) => Some((*p, *k)),
+            _ => this_param(rest),
+        },
+    }
+}
+
+pub fn this_field(ps: &Params, n: u32, sd: &Structs) -> (r: Option<(DExpr, Ty)>)
+    ensures
+        r == spec_this_field(*ps, n, *sd),
+{
+    match this_param(ps) {
+        Some((p, k)) => match field_ty(sd, k, n) {
+            Some(ft) => Some((DExpr::Field(Box::new(DExpr::Var(p)), n), ft)),
+            None => None,
+        },
+        None => None,
     }
 }
 
