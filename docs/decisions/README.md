@@ -96,3 +96,6 @@ Status is `decided`, `proposed` (the default until someone objects or the thin s
 | [0088](0088-division-truncates-as-in-cpp.md) | Division truncates as in C++, through trunc_div and trunc_rem in code and contracts | decided |
 | [0089](0089-member-functions-in-steps.md) | Member functions in six steps. First const member functions with this by value, and private fields | decided |
 | [0090](0090-a-pure-const-member-function-is-also-a-dafny-function.md) | A pure const member function is also a Dafny function that contracts can call | decided |
+| [0091](0091-end-to-end-program-validation-ladder.md) | Validate C+P through increasingly complex programs | decided |
+| [0092](0092-test-application-scale-as-well-as-proof-complexity.md) | Test application scale as well as proof complexity | decided |
+| [0093](0093-test-the-skill-as-an-application-development-process.md) | Test the skill as an application development process | decided |
