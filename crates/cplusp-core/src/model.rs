@@ -1042,12 +1042,24 @@ pub open spec fn spec_contract(e: Expr, decl: Names, ps: Params, ret: Option<Ty>
             Some(t) => spec_leaf(DExpr::Result, t, line),
             None => Err(Refusal::Syntax(line)),
         },
-        Expr::Bin(op, a, b) => match spec_contract(*a, decl, ps, ret, bound, line, sd) {
-            Ok(da) => match spec_contract(*b, decl, ps, ret, bound, line, sd) {
-                Ok(db) => Ok(spec_binary(op, da, db)),
+        Expr::Bin(op, a, b) => if spec_ordered(op) && (spec_enum_operand(*a, decl, ps, ret, bound, line, sd) || spec_enum_operand(
+            *b,
+            decl,
+            ps,
+            ret,
+            bound,
+            line,
+            sd,
+        )) {
+            Err(Refusal::Syntax(line))
+        } else {
+            match spec_contract(*a, decl, ps, ret, bound, line, sd) {
+                Ok(da) => match spec_contract(*b, decl, ps, ret, bound, line, sd) {
+                    Ok(db) => Ok(spec_binary(op, da, db)),
+                    Err(r) => Err(r),
+                },
                 Err(r) => Err(r),
-            },
-            Err(r) => Err(r),
+            }
         },
         Expr::Not(a) => match spec_contract(*a, decl, ps, ret, bound, line, sd) {
             Ok(da) => Ok(DExpr::Not(Box::new(da))),
@@ -1169,7 +1181,15 @@ pub open spec fn spec_contract(e: Expr, decl: Names, ps: Params, ret: Option<Ty>
             },
             Err(r) => Err(r),
         },
-        Expr::Chain(o1, o2, a, b, c) => if chains(o1, o2) {
+        Expr::Chain(o1, o2, a, b, c) => if chains(o1, o2) && !(spec_enum_operand(*a, decl, ps, ret, bound, line, sd) || spec_enum_operand(
+            *b,
+            decl,
+            ps,
+            ret,
+            bound,
+            line,
+            sd,
+        ) || spec_enum_operand(*c, decl, ps, ret, bound, line, sd)) {
             match spec_contract(*a, decl, ps, ret, bound, line, sd) {
                 Ok(da) => match spec_contract(*b, decl, ps, ret, bound, line, sd) {
                     Ok(db) => match spec_contract(*c, decl, ps, ret, bound, line, sd) {
@@ -1237,6 +1257,32 @@ pub open spec fn spec_lookup(ps: Params, name: u32) -> Option<Ty>
 
 /// A path of a contract that a field reads: a parameter, `result` or a field of a path, with its Dafny form and its type, decision
 /// 0073. A bound name is an integer, so it has no field.
+/// An order: `<`, `<=`, `>` or `>=`.
+pub open spec fn spec_ordered(op: BinOp) -> bool {
+    op == BinOp::Lt || op == BinOp::Le || op == BinOp::Gt || op == BinOp::Ge
+}
+
+/// An operand of a contract whose type is an enum, decision 0114. Dafny reads an order of two datatype values as an order of terms,
+/// which is never true for two enumerators, so an order of enums has no rule.
+pub open spec fn spec_enum_operand(e: Expr, decl: Names, ps: Params, ret: Option<Ty>, bound: Names, line: u32, sd: Structs) -> bool
+    decreases e, 1nat,
+{
+    match e {
+        Expr::Enumerator(_, _) => true,
+        Expr::Paren(a) => spec_enum_operand(*a, decl, ps, ret, bound, line, sd),
+        Expr::Old(a) => spec_enum_operand(*a, decl, spec_before(ps), ret, bound, line, sd),
+        Expr::Cond(_, a, b) => spec_enum_operand(*a, decl, ps, ret, bound, line, sd) || spec_enum_operand(*b, decl, ps, ret, bound, line, sd),
+        Expr::Result => match ret {
+            Some(Ty::Enum(_)) => true,
+            _ => false,
+        },
+        _ => match spec_path(e, decl, ps, ret, bound, line, sd) {
+            Ok((_, Ty::Enum(_))) => true,
+            _ => false,
+        },
+    }
+}
+
 pub open spec fn spec_path(e: Expr, decl: Names, ps: Params, ret: Option<Ty>, bound: Names, line: u32, sd: Structs) -> Result<
     (DExpr, Ty),
     Refusal,
@@ -4238,12 +4284,16 @@ pub fn translate_contract(e: &Expr, decl: &Names, ps: &Params, ret: Option<Ty>, 
             Some(t) => translate_leaf(DExpr::Result, t, line),
             None => Err(Refusal::Syntax(line)),
         },
-        Expr::Bin(op, a, b) => match translate_contract(a, decl, ps, ret, bound, line, sd) {
-            Ok(da) => match translate_contract(b, decl, ps, ret, bound, line, sd) {
-                Ok(db) => Ok(binary(*op, da, db)),
+        Expr::Bin(op, a, b) => if ordered(*op) && (enum_operand(a, decl, ps, ret, bound, line, sd) || enum_operand(b, decl, ps, ret, bound, line, sd)) {
+            Err(Refusal::Syntax(line))
+        } else {
+            match translate_contract(a, decl, ps, ret, bound, line, sd) {
+                Ok(da) => match translate_contract(b, decl, ps, ret, bound, line, sd) {
+                    Ok(db) => Ok(binary(*op, da, db)),
+                    Err(r) => Err(r),
+                },
                 Err(r) => Err(r),
-            },
-            Err(r) => Err(r),
+            }
         },
         Expr::Not(a) => match translate_contract(a, decl, ps, ret, bound, line, sd) {
             Ok(da) => Ok(DExpr::Not(Box::new(da))),
@@ -4358,7 +4408,8 @@ pub fn translate_contract(e: &Expr, decl: &Names, ps: &Params, ret: Option<Ty>, 
             },
             Err(r) => Err(r),
         },
-        Expr::Chain(o1, o2, a, b, c) => if chain_ok(*o1, *o2) {
+        Expr::Chain(o1, o2, a, b, c) => if chain_ok(*o1, *o2) && !(enum_operand(a, decl, ps, ret, bound, line, sd) || enum_operand(b, decl, ps, ret, bound, line, sd)
+            || enum_operand(c, decl, ps, ret, bound, line, sd)) {
             match translate_contract(a, decl, ps, ret, bound, line, sd) {
                 Ok(da) => match translate_contract(b, decl, ps, ret, bound, line, sd) {
                     Ok(db) => match translate_contract(c, decl, ps, ret, bound, line, sd) {
@@ -4423,6 +4474,34 @@ pub fn lookup(ps: &Params, name: u32) -> (r: Option<Ty>)
             Some(*t)
         } else {
             lookup(rest, name)
+        },
+    }
+}
+
+pub fn ordered(op: BinOp) -> (r: bool)
+    ensures
+        r == spec_ordered(op),
+{
+    op == BinOp::Lt || op == BinOp::Le || op == BinOp::Gt || op == BinOp::Ge
+}
+
+pub fn enum_operand(e: &Expr, decl: &Names, ps: &Params, ret: Option<Ty>, bound: &Names, line: u32, sd: &Structs) -> (r: bool)
+    ensures
+        r == spec_enum_operand(*e, *decl, *ps, ret, *bound, line, *sd),
+    decreases e, 1nat,
+{
+    match e {
+        Expr::Enumerator(_, _) => true,
+        Expr::Paren(a) => enum_operand(a, decl, ps, ret, bound, line, sd),
+        Expr::Old(a) => enum_operand(a, decl, &before(ps), ret, bound, line, sd),
+        Expr::Cond(_, a, b) => enum_operand(a, decl, ps, ret, bound, line, sd) || enum_operand(b, decl, ps, ret, bound, line, sd),
+        Expr::Result => match ret {
+            Some(Ty::Enum(_)) => true,
+            _ => false,
+        },
+        _ => match path(e, decl, ps, ret, bound, line, sd) {
+            Ok((_, Ty::Enum(_))) => true,
+            _ => false,
         },
     }
 }
