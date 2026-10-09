@@ -1314,6 +1314,10 @@ private:
 // that the function has a contract, and a contract with no `modifies` line says that the function changes no global.
 struct Contract {
   std::vector<std::string> Modifies, Reads;
+  // The names of the reference parameters of the function that it may write, in all its declarations: a parameter of type `T&` with no const.
+  // A name on a modifies or reads line that is one of them is the parameter, not a global, decision 0111. A parameter by value is no
+  // name for a modifies line, so a global of the same name stays the global.
+  std::vector<std::string> Parameters;
   bool Any = false;  // a `//@` line of any kind is there
   // Every `//@` line in source order: its file, its line number and its text after the `//@`. The translator, cplusp-tree, reads these.
   // A line that a backslash spliced to the next one is here too, with the backslash at the end of its text. It is no `modifies` or `reads`.
@@ -1431,6 +1435,9 @@ Contract contractOf(const SourceManager &SM, const FunctionDecl *Function) {
     for (Contract::Line &L : One.Lines)
       for (const ParmVarDecl *P : Declaration->parameters())
         L.Params.push_back(P->getNameAsString());
+    for (const ParmVarDecl *P : Declaration->parameters())
+      if (P->getType()->isLValueReferenceType() && !P->getType()->getPointeeType().isConstQualified())
+        C.Parameters.push_back(P->getNameAsString());
     C.Modifies.insert(C.Modifies.end(), One.Modifies.begin(), One.Modifies.end());
     C.Reads.insert(C.Reads.end(), One.Reads.begin(), One.Reads.end());
     C.Any |= One.Any;
@@ -1495,11 +1502,12 @@ bool hasBody(const FunctionDecl *Function) {
   return Function->isDefined() || (Pattern && Pattern->isDefined());
 }
 
-// The state variables that a list of lines names. A name that no variable has is a parameter or a typo, and the prover has it.
-std::set<std::string> namedState(const std::vector<std::string> &Lines, const std::vector<std::string> &State) {
+// The state variables that a list of lines names. A name that no variable has is a parameter or a typo, and the prover has it. A name of a
+// parameter of the function is the parameter, even when a variable has the same name, decision 0111.
+std::set<std::string> namedState(const std::vector<std::string> &Lines, const std::vector<std::string> &State, const std::vector<std::string> &Parameters = {}) {
   std::set<std::string> Names;
   for (const std::string &Line : Lines)
-    if (const std::string *Var = resolve(Line, State))
+    if (const std::string *Var = std::find(Parameters.begin(), Parameters.end(), Line) == Parameters.end() ? resolve(Line, State) : nullptr)
       Names.insert(*Var);
   return Names;
 }
@@ -2097,8 +2105,8 @@ private:
   Effect linesOf(const FunctionDecl *FD) {
     const Contract C = contractOf(Ctx->getSourceManager(), FD);
     Effect E;
-    E.Writes = namedState(C.Modifies, state());
-    E.Reads = namedState(C.Reads, state());
+    E.Writes = namedState(C.Modifies, state(), C.Parameters);
+    E.Reads = namedState(C.Reads, state(), C.Parameters);
     return E;
   }
 
@@ -2968,12 +2976,12 @@ private:
     for (const CXXMethodDecl *Direct : Method->overridden_methods())
       for (const CXXMethodDecl *Base : lineHolders(Direct)) {
         const Contract Up = contractOf(SM, Base);
-        const std::set<std::string> UpWrites = namedState(Up.Modifies, State), UpReads = namedState(Up.Reads, State);
-        for (const std::string &Var : namedState(Own.Modifies, State))
+        const std::set<std::string> UpWrites = namedState(Up.Modifies, State, Up.Parameters), UpReads = namedState(Up.Reads, State, Up.Parameters);
+        for (const std::string &Var : namedState(Own.Modifies, State, Own.Parameters))
           if (!UpWrites.count(Var))
             diag(Method->getLocation(), "global_state: %0 changes %1, and the modifies line of %2 does not list it.")
                 << Method->getNameAsString() << StringRef(Var) << Base->getQualifiedNameAsString();
-        for (const std::string &Var : namedState(Own.Reads, State))
+        for (const std::string &Var : namedState(Own.Reads, State, Own.Parameters))
           if (!UpWrites.count(Var) && !UpReads.count(Var))
             diag(Method->getLocation(), "global_state: %0 reads %1, and no reads or modifies line of %2 lists it.")
                 << Method->getNameAsString() << StringRef(Var) << Base->getQualifiedNameAsString();
