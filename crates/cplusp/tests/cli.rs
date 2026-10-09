@@ -2364,7 +2364,7 @@ fn structs_with_no_rule_are_refused_at_their_lines() {
         let want = format!("model-struct-refuse.cpp:{line}: {expected}");
         assert!(refusals.iter().any(|l| l.ends_with(&want)), "{want}: {text}");
     }
-    assert_eq!(refusals.len(), 6, "{text}");
+    assert_eq!(refusals.len(), 5, "{text}");
 }
 
 /// A function with no method in the model is refused for what it is, not for its name, decision 0069. The check of names covers only
@@ -2785,7 +2785,7 @@ fn a_hex_literal_too_large_and_a_shift_in_a_contract_are_refused() {
     ] {
         assert!(refusals.iter().any(|l| l.ends_with(want)), "{want}: {text}");
     }
-    assert_eq!(refusals.len(), 6, "{text}");
+    assert_eq!(refusals.len(), 5, "{text}");
 }
 
 /// An error inside a function of the companion file prints in the words of Dafny, not as a return of a method, decision 0084.

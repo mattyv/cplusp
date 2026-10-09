@@ -3795,7 +3795,7 @@ public:
   // kind, and a caller sees a callee with no method. Its contract lines still count as claimed.
   // Upgrade: a core rule for these, and their real signature.
   llvm::json::Value function(const FunctionDecl *FD, const Contract &C) const {
-    const CXXMethodDecl *Member = constMember(FD);
+    const CXXMethodDecl *Member = member(FD);
     const CXXConstructorDecl *Constructor = valueConstructor(FD);
     const char *Opaque = FD->isTemplated()                         ? "FunctionTemplateDecl"
                          : isa<CXXConstructorDecl>(FD) && !Constructor ? "CXXConstructorDecl"
@@ -3805,9 +3805,10 @@ public:
     llvm::json::Array Params, Conds;
     Enclosing = FD;
     if (!Opaque) {
-      // A const member function takes its object as a parameter `this` by value, first, decision 0089. Its contract lines name it first too.
+      // A member function takes its object as a parameter `this` by value, first, decision 0089. Its contract lines name it first too.
+      // One that is not const writes its object and gives it back, decision 0096.
       if (Member)
-        Params.push_back(llvm::json::Array{"this", thisType(Member->getParent())});
+        Params.push_back(llvm::json::Array{"this", thisType(Member->getParent(), !Member->isConst())});
       for (const ParmVarDecl *P : FD->parameters())
         Params.push_back(llvm::json::Array{P->getNameAsString(), type(P->getType())});
       Conds = conds(C, Member != nullptr);
@@ -3827,7 +3828,7 @@ public:
                               {"file", file(FD->getLocation())},
                               {"line", number(line(FD->getLocation()))},
                               {"params", std::move(Params)},
-                              {"ret", Opaque ? tag("Other", Opaque) : type(FD->getReturnType())},
+                              {"ret", Opaque ? tag("Other", Opaque) : FD->getReturnType()->isVoidType() ? llvm::json::Value("Void") : type(FD->getReturnType())},
                               {"conds", std::move(Conds)},
                               {"body", Opaque ? llvm::json::Array{tag("Unknown", llvm::json::Array{Opaque, number(line(FD->getLocation()))})} : stmts(FD->getBody())}};
   }
@@ -4010,6 +4011,18 @@ private:
     return Plain ? RD : nullptr;
   }
 
+  // Whether an expression reads the object, through `this`, implicit or written. A field of another object does not.
+  static bool readsObject(const Stmt *S) {
+    if (!S)
+      return false;
+    if (isa<CXXThisExpr>(S))
+      return true;
+    for (const Stmt *Child : S->children())
+      if (readsObject(Child))
+        return true;
+    return false;
+  }
+
   // A constructor that is written as a function, decision 0094: a constructor of a plain struct that is no copy or move constructor,
   // delegates to none, has an empty body, and gives each field exactly one value in its member init list. A field that the list leaves out
   // would take its default, which has no rule. Null for any other function. A constructor that is only declared is looked up by its definition.
@@ -4026,7 +4039,7 @@ private:
       return nullptr;
     std::set<const FieldDecl *> Given;
     for (const CXXCtorInitializer *Init : C->inits())
-      if (!Init->isWritten() || !Init->isMemberInitializer() || !Given.insert(Init->getMember()).second)
+      if (!Init->isWritten() || !Init->isMemberInitializer() || !Given.insert(Init->getMember()).second || readsObject(Init->getInit()))
         return nullptr;
     return Given.size() == static_cast<size_t>(std::distance(C->getParent()->field_begin(), C->getParent()->field_end())) ? C : nullptr;
   }
@@ -4042,21 +4055,27 @@ private:
     return llvm::json::Array{tag("Return", llvm::json::Array{tag("Construct", llvm::json::Array{structKey(C->getParent()), std::move(Args)}), number(At)})};
   }
 
-  // A member function that is written as a function, decision 0089: not static, not virtual, `const`, no ref-qualifier, not an operator, a
+  // A member function that is written as a function, decision 0089: not static, not virtual, no ref-qualifier, not an operator, a
   // conversion, a constructor or a destructor, not a template, and a member of a plain struct. Null for any other function.
-  const CXXMethodDecl *constMember(const FunctionDecl *FD) const {
+  // One that is not `const` writes its object, decision 0096.
+  const CXXMethodDecl *member(const FunctionDecl *FD) const {
     const auto *M = dyn_cast<CXXMethodDecl>(FD);
-    if (!M || M->isStatic() || M->isVirtual() || !M->isConst() || M->isVolatile() || M->getRefQualifier() != RQ_None || M->isOverloadedOperator() ||
+    if (!M || M->isStatic() || M->isVirtual() || M->isVolatile() || M->getRefQualifier() != RQ_None || M->isOverloadedOperator() ||
         isa<CXXConversionDecl>(M) || isa<CXXConstructorDecl>(M) || isa<CXXDestructorDecl>(M) || M->isTemplated() || M->getDescribedFunctionTemplate())
       return nullptr;
     return plainStruct(Context.getRecordType(M->getParent())) ? M : nullptr;
   }
+  // A member function that is `const`: pure, so a contract may call it, decision 0090.
+  const CXXMethodDecl *constMember(const FunctionDecl *FD) const {
+    const CXXMethodDecl *M = member(FD);
+    return M && M->isConst() ? M : nullptr;
+  }
 
-  // The type of `this` in a const member function of a plain struct, by the key of the struct.
-  llvm::json::Value thisType(const CXXRecordDecl *Parent) const {
+  // The type of `this` in a member function of a plain struct, by the key of the struct. `ThisMut` when the function writes its object.
+  llvm::json::Value thisType(const CXXRecordDecl *Parent, bool Writes = false) const {
     const CXXRecordDecl *RD = plainStruct(Context.getRecordType(Parent));
     type(Context.getRecordType(Parent));  // writes the struct
-    return tag("This", structKey(RD));
+    return tag(Writes ? "ThisMut" : "This", structKey(RD));
   }
 
   // The key of a struct, as the key of a function that has no mangled name: the qualified name, `@` and the place of the definition.
@@ -4115,14 +4134,38 @@ private:
     if (const auto *If = dyn_cast<IfStmt>(S); If && !If->getInit() && !If->getConditionVariable() && !If->isConsteval())
       return tag("If", llvm::json::Array{expr(If->getCond(), line(S->getBeginLoc())), stmts(If->getThen()), If->getElse() ? stmts(If->getElse()) : llvm::json::Array{},
                                          number(line(S->getBeginLoc()))});
+    if (const auto *Return = dyn_cast<ReturnStmt>(S); Return && !Return->getRetValue())
+      return tag("Exit", number(line(S->getBeginLoc())));
+    // `return f();` of a void call has no rule: the return gives no value.
+    if (const auto *Return = dyn_cast<ReturnStmt>(S); Return && Return->getRetValue() && Return->getRetValue()->getType()->isVoidType())
+      return unknown(S, describe(S), line(S->getBeginLoc()));
     if (const auto *Return = dyn_cast<ReturnStmt>(S); Return && Return->getRetValue())
       return tag("Return", llvm::json::Array{expr(Return->getRetValue(), line(S->getBeginLoc())), number(line(S->getBeginLoc()))});
     if (const auto *Decl = dyn_cast<DeclStmt>(S); Decl && Decl->isSingleDecl())
       if (const auto *Var = dyn_cast<VarDecl>(Decl->getSingleDecl()); Var && Var->hasLocalStorage() && Var->getInit())
         return tag("Local", llvm::json::Array{Var->getNameAsString(), type(Var->getType()), expr(Var->getInit(), line(S->getBeginLoc())), number(line(S->getBeginLoc()))});
-    if (const auto *Assign = dyn_cast<BinaryOperator>(S); Assign && Assign->getOpcode() == BO_Assign)
+    if (const auto *Assign = dyn_cast<BinaryOperator>(S); Assign && Assign->getOpcode() == BO_Assign) {
       if (const auto *Target = dyn_cast<DeclRefExpr>(Assign->getLHS()); Target && isVariable(Target->getDecl()))
         return tag("Assign", llvm::json::Array{Target->getDecl()->getNameAsString(), expr(Assign->getRHS(), line(S->getBeginLoc())), number(line(S->getBeginLoc()))});
+      // A write of a field of the object, decision 0096.
+      if (const FieldDecl *Field = objectField(Assign->getLHS()))
+        return tag("SetField", llvm::json::Array{Field->getNameAsString(), expr(Assign->getRHS(), line(S->getBeginLoc())), number(line(S->getBeginLoc()))});
+    }
+    // `x op= e` for `+ - * / %` on an integer local or a field of the object is `x = x op e`, with the conversions that the compiler made,
+    // decision 0096.
+    if (const auto *Compound = dyn_cast<CompoundAssignOperator>(S)) {
+      if (llvm::json::Value Lowered = compound(Compound); !Lowered.getAsNull())
+        return Lowered;
+    }
+    // A call that is the whole statement, `f(a);` or `o.f(a);`. Its object is the first argument, decision 0096.
+    {
+      const Stmt *Inner = S;
+      if (const auto *Cleanups = dyn_cast<ExprWithCleanups>(Inner))
+        Inner = Cleanups->getSubExpr();
+      if (const auto *Call = dyn_cast<CallExpr>(Inner))
+        if (llvm::json::Value Written = expr(Call, line(S->getBeginLoc())); Written.getAsObject() && Written.getAsObject()->get("Call"))
+          return Written;
+    }
     if (const auto *Step = dyn_cast<UnaryOperator>(S); Step && Step->isIncrementDecrementOp())
       if (const auto *Target = dyn_cast<DeclRefExpr>(Step->getSubExpr()); Target && isVariable(Target->getDecl()))
         return tag("Step", llvm::json::Array{Target->getDecl()->getNameAsString(), type(Target->getDecl()->getType()), Step->isIncrementOp(),
@@ -4135,6 +4178,53 @@ private:
           return tag("For", llvm::json::Array{stmt(Init), expr(For->getCond(), line(S->getBeginLoc())), stmt(For->getInc()), loopConds(S),
                                               stmts(For->getBody()), number(line(S->getBeginLoc()))});
     return unknown(S, describe(S), line(S->getBeginLoc()));
+  }
+
+  // The field of a plain struct that an expression names on the object of a member function, `n_` or `this->n_`, or null.
+  const FieldDecl *objectField(const Expr *E) const {
+    if (const auto *Member = dyn_cast<MemberExpr>(E->IgnoreParens()); Member && isa<CXXThisExpr>(Member->getBase()->IgnoreParenImpCasts()))
+      if (const auto *Field = dyn_cast<FieldDecl>(Member->getMemberDecl()); Field && plainStruct(Context.getRecordType(Field->getParent())))
+        return Field;
+    return nullptr;
+  }
+
+  // `x op= e` as the write `x = x op e`, or null when it has no rule. The left side is read, converted to the computation type, operated on,
+  // and converted back, as the compiler does. The right side is already in the computation type.
+  llvm::json::Value compound(const CompoundAssignOperator *C) const {
+    const char *Op = nullptr;
+    switch (C->getOpcode()) {
+    case BO_AddAssign: Op = "Add"; break;
+    case BO_SubAssign: Op = "Sub"; break;
+    case BO_MulAssign: Op = "Mul"; break;
+    case BO_DivAssign: Op = "Div"; break;
+    case BO_RemAssign: Op = "Rem"; break;
+    default: return nullptr;
+    }
+    const unsigned At = line(C->getBeginLoc());
+    const Expr *Left = C->getLHS();
+    const char *Scalar = scalar(Left->getType());
+    if (!Scalar || StringRef(Scalar) == "Bool")
+      return nullptr;
+    const auto *Name = dyn_cast<DeclRefExpr>(Left);
+    const FieldDecl *Field = Name ? nullptr : objectField(Left);
+    if (!(Name && isVariable(Name->getDecl())) && !Field)
+      return nullptr;
+    const auto convert = [&](llvm::json::Value V, QualType From, QualType To) -> llvm::json::Value {
+      if (Context.hasSameType(From, To))
+        return V;
+      return tag("Cast", llvm::json::Array{tag("Integral", llvm::json::Array{type(From), type(To)}), std::move(V)});
+    };
+    llvm::json::Value Read = tag("Cast", llvm::json::Array{"Read", expr(Left, At)});
+    llvm::json::Value A = convert(std::move(Read), Left->getType(), C->getComputationLHSType());
+    llvm::json::Value B = expr(C->getRHS(), At);
+    llvm::json::Value Operated =
+        StringRef(Op) == "Div" || StringRef(Op) == "Rem"
+            ? tag("Divide", llvm::json::Array{Op, std::move(A), std::move(B), type(C->getComputationResultType())})
+            : tag("Bin", llvm::json::Array{Op, std::move(A), std::move(B)});
+    llvm::json::Value Value = convert(std::move(Operated), C->getComputationResultType(), Left->getType());
+    if (Field)
+      return tag("SetField", llvm::json::Array{Field->getNameAsString(), std::move(Value), number(At)});
+    return tag("Assign", llvm::json::Array{Name->getDecl()->getNameAsString(), std::move(Value), number(At)});
   }
 
   // A parameter or a local: the names the translator reads and writes.
@@ -4267,7 +4357,7 @@ private:
     }
     // The object of a const member function, decision 0089.
     if (const auto *This = dyn_cast<CXXThisExpr>(E); This && plainStruct(This->getType()->getPointeeType()))
-      return tag("Var", llvm::json::Array{"this", thisType(This->getType()->getPointeeType()->getAsCXXRecordDecl())});
+      return tag("Var", llvm::json::Array{"this", thisType(This->getType()->getPointeeType()->getAsCXXRecordDecl(), !This->getType()->getPointeeType().isConstQualified())});
     // A read of a field of a plain struct, also through `this`.
     if (const auto *Member = dyn_cast<MemberExpr>(E); Member && (!Member->isArrow() || isa<CXXThisExpr>(Member->getBase()->IgnoreParenImpCasts())))
       if (const auto *Field = dyn_cast<FieldDecl>(Member->getMemberDecl()); Field && plainStruct(Context.getRecordType(Field->getParent())))
@@ -4287,8 +4377,8 @@ private:
     if (const auto *Operator = dyn_cast<CXXOperatorCallExpr>(E); Operator && Operator->getOperator() == OO_Subscript && Operator->getNumArgs() == 2 &&
                                                                   isSeq(Operator->getArg(0)->getType()))
       return tag("Index", llvm::json::Array{expr(Operator->getArg(0), Near), expr(Operator->getArg(1), Near)});
-    // A call of a const member function, `o.f(a)` or `f(a)` in a method, is a call of `f` with the object first, decision 0089.
-    if (const auto *Call = dyn_cast<CXXMemberCallExpr>(E); Call && Call->getDirectCallee() && constMember(Call->getDirectCallee())) {
+    // A call of a member function, `o.f(a)` or `f(a)` in a method, is a call of `f` with the object first, decisions 0089 and 0096.
+    if (const auto *Call = dyn_cast<CXXMemberCallExpr>(E); Call && Call->getDirectCallee() && member(Call->getDirectCallee())) {
       const Expr *Object = Call->getImplicitObjectArgument()->IgnoreParenImpCasts();
       const auto *Callee = dyn_cast<MemberExpr>(Call->getCallee()->IgnoreParens());
       if (Callee && (!Callee->isArrow() || isa<CXXThisExpr>(Object))) {
