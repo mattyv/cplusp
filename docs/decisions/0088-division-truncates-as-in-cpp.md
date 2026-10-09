@@ -1,4 +1,4 @@
-# 0087: Division truncates as in C++
+# 0088: Division truncates as in C++
 
 Date: 2026-10-09. Status: decided. Follows the rule of the battery case `signed_division`.
 

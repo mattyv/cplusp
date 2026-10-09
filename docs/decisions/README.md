@@ -91,4 +91,6 @@ Status is `decided`, `proposed` (the default until someone objects or the thin s
 | [0083](0083-the-companion-file-is-plain-text-after-the-methods.md) | The companion file is plain ASCII after the methods, and declares no name of the model. A parse error in it is the author's | decided |
 | [0084](0084-true-and-false-in-a-contract-and-the-words-of-a-companion-error.md) | true and false in a contract. An error in the companion file prints as Dafny says | decided |
 | [0085](0085-slices-in-a-contract.md) | Slices of a sequence in a contract, as in Dafny | decided |
-| [0087](0087-division-truncates-as-in-cpp.md) | Division truncates as in C++, through trunc_div and trunc_rem in code and contracts | decided |
+| [0086](0086-generate-and-challenge-specifications.md) | Generate specifications in components and challenge fixed contracts with wrong bodies | decided |
+| [0087](0087-specify-existing-code-with-separate-intent-evidence.md) | Specify existing code with separate evidence of intent | decided |
+| [0088](0088-division-truncates-as-in-cpp.md) | Division truncates as in C++, through trunc_div and trunc_rem in code and contracts | decided |
