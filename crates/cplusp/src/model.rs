@@ -7,7 +7,7 @@ use std::fmt::Write;
 
 use anyhow::{Context, Result};
 use cplusp_core::model::{
-    parse_contract, translate_structs, translate_unit, Args, BinOp, CastKind, CondKind, Conds, DArgs, DConds, DExpr, DParams, DStmt, DStmts, DTy, Expr, Extent, Fns,
+    parse_contract, translate_structs, translate_unit, Args, BinOp, CastKind, CondKind, Conds, DArgs, DCalls, DConds, DExpr, DParams, DStmt, DStmts, DTy, Expr, Extent, Fns,
     Function, Members, Method, Model, Models, Names as CNames, Obj, Params, Refusal, Scalar, Stmt, Stmts, StructModels, Structs, Tok, Ty,
 };
 use serde::Deserialize;
@@ -182,6 +182,9 @@ struct Names {
     /// The Dafny name of each struct by the id of its key.
     datatypes: HashMap<u32, String>,
     file: String,
+    /// The number of the first temporary of the `Pre` that is being printed, decision 0104. `Temp(t)` prints as temporary `temp_base + t`.
+    /// `None` outside a `Pre`.
+    temp_base: std::cell::Cell<Option<u32>>,
     /// The functions that the companion file declares. Empty when there is no file or the scan refused it, decision 0079.
     declared: Vec<String>,
     /// The lemmas that the companion file declares, apart from the functions, decision 0099.
@@ -943,6 +946,9 @@ fn dexpr(e: &DExpr, names: &Names) -> String {
         }
         DExpr::Ite(c, a, b) => format!("(if {} then {} else {})", dexpr(c, names), dexpr(a, names), dexpr(b, names)),
         DExpr::Chain(o1, o2, a, b, c) => format!("({} {} {} {} {})", dexpr(a, names), dop(*o1), dexpr(b, names), dop(*o2), dexpr(c, names)),
+        // The prefix `v_'t` keeps a temporary apart from C++ names, companion names and the dropped values `v_'r`.
+        // A read outside a `Pre` prints a name that Dafny cannot resolve, so it fails loudly and never reads an older temporary.
+        DExpr::Temp(t) => names.temp_base.get().map_or("v_'unbound".to_string(), |base| format!("v_'t{}", base + t)),
     }
 }
 
@@ -998,6 +1004,8 @@ struct Printer<'a> {
     writes: bool,
     /// The count of the names that drop a value, `v_'rN`. C++ makes `v_'N` only, and a companion file cannot start a name with `v_`.
     fresh: u32,
+    /// The count of the temporaries of the method so far, `v_'tN`, decision 0104.
+    temps: u32,
 }
 
 impl Printer<'_> {
@@ -1094,6 +1102,21 @@ impl Printer<'_> {
                 self.put(depth, format!("{call};"), place);
             }
             DStmt::Exit => self.put(depth, "return;".to_string(), place),
+            // The calls run in order on the line of the statement. Each sets a temporary that the later calls and the statement read.
+            // ponytail: each call is placed on the line of its statement. Upgrade: carry the line of each call in `DCalls::Cons`.
+            DStmt::Pre(calls, inner) => {
+                let base = self.temps;
+                let outer = names.temp_base.replace(Some(base));
+                let mut rest = calls;
+                while let DCalls::Cons(t, ty, m, args, next) = rest {
+                    let call = self.call(*m, args);
+                    self.put(depth, format!("var v_'t{}: {} := {call};", base + t, dty(*ty, names)), place);
+                    self.temps = self.temps.max(base + t + 1);
+                    rest = next;
+                }
+                self.stmt(inner, place, depth);
+                names.temp_base.set(outer);
+            }
             DStmt::Assert(e) => self.put(depth, format!("assert {};", dexpr(e, names)), place),
             DStmt::Apply(l, args) => self.put(depth, format!("{}({});", names.text(*l), dargs(args, names).join(", ")), place),
             DStmt::Local(x, t, e) => self.put(depth, format!("var {}: {} := {};", mangle(names.text(*x)), dty(*t, names), dexpr(e, names)), place),
@@ -1182,6 +1205,7 @@ impl Printer<'_> {
             self.function(m, body, place);
         }
         self.header(m.name, &m.params, m.ret, (m.writes, m.trusted), place);
+        self.temps = 0;
         // A requires line has the requires lines before it in scope, and an ensures or decreases line and the body have all of them.
         for (word, list) in [("requires", &m.requires), ("ensures", &m.ensures), ("decreases", &m.decreases)] {
             let mut cs = list;
@@ -1222,9 +1246,10 @@ fn sentence(r: Refusal, names: &Names) -> (u32, String) {
         Refusal::Syntax(line) => (line, "the contract line has a form the translator cannot read.".to_string()),
         Refusal::Backslash(line) => (line, "a contract line that ends in a backslash.".to_string()),
         Refusal::Callee(n, line) => (line, format!("a call to {}, which has no model in view.", names.text(n))),
-        Refusal::Place(line) => {
-            (line, "a call out of place. The translator takes a call as the full value of a return or of a local, or alone when it writes its object or gives no value.".to_string())
-        }
+        Refusal::Place(line) => (
+            line,
+            "a call out of place. The translator takes a call where it always runs once, and a call that writes its object or gives no value only alone.".to_string(),
+        ),
         Refusal::Twice(n, line) => (line, format!("{} is declared twice in the function.", names.text(n))),
         Refusal::Convert(line) => (line, "a conversion between bool and a number.".to_string()),
         Refusal::WriteParam(n, line) => (line, format!("{} is a parameter. The translator writes only a local.", names.text(n))),
@@ -1360,7 +1385,7 @@ pub fn translate(lines: &str, companion: Option<(&str, &str)>) -> Result<Transla
         };
         seen = next;
     }
-    let mut p = Printer { names: &names, methods: &methods, rets: &rets, out: PRELUDE.to_string(), lines: Vec::new(), scope: Vec::new(), own: Vec::new(), writes: false, fresh: 0 };
+    let mut p = Printer { names: &names, methods: &methods, rets: &rets, out: PRELUDE.to_string(), lines: Vec::new(), scope: Vec::new(), own: Vec::new(), writes: false, fresh: 0, temps: 0 };
     p.lines.extend(PRELUDE.lines().map(|_| None));
     let mut refused_at = Vec::new();
     for (place, unreadable) in struct_places {
