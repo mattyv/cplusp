@@ -29,7 +29,7 @@ int32_t partial(int32_t a) {
   return q.x;
 }
 
-// A non-const reference to a struct can write, so it has no rule yet, decision 0074.
+// A non-const reference to a struct can write, so the modifies line must name it, decisions 0074 and 0108.
 int32_t by_ref(Point& p) {
   return p.x;
 }
