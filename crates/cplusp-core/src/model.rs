@@ -169,7 +169,7 @@ pub enum Args {
 /// adds one to a name of a type, or takes one away when its flag is false. `While` is a condition, the contract lines above the loop
 /// and the body. `For` is a start, a condition, a step, the contract lines and the body, decision 0061. `SetField` writes a field of
 /// the object of a member function, and `SetRefField` a field of a reference parameter, decision 0108. `Switch` is a switch over an
-/// enum, with its cases, decision 0109. `Call` is a call that stands alone as a statement, by the key of its callee, the id of its
+/// enum, by the key of the enum, with its cases, decision 0109. `Call` is a call that stands alone as a statement, by the key of its callee, the id of its
 /// name and its arguments. `Exit` is `return;`, decision 0096. `Assert` is a `//@ assert` line in the body, and `Apply` is a
 /// `//@ apply` line that calls a lemma of the companion file by the id of its name, decision 0099.
 #[derive(PartialEq, Eq, Debug)]
@@ -183,7 +183,7 @@ pub enum Stmt {
     For(Box<Stmt>, Expr, Box<Stmt>, Box<Conds>, Box<Stmts>, u32),
     SetField(u32, Expr, u32),
     SetRefField(u32, u32, Expr, u32),
-    Switch(Expr, Box<Cases>, u32),
+    Switch(Expr, u32, Box<Cases>, u32),
     Call(u32, u32, Box<Args>, u32),
     Exit(u32),
     Assert(Expr, u32),
@@ -374,7 +374,7 @@ pub enum DArgs {
 /// `x' := e;` and `SetOutField` is `x' := x'.(f := e);` of a reference parameter, decision 0108. `Update` calls a method that writes
 /// back, `o, x := m(o, x, args);`, and `LocalUpdate` also sets a new local to the value it gives, decisions 0096 and 0108. The
 /// arguments hold each argument of the call. `CallStmt` is `m(args);` of a method that gives no value, and `Exit` is `return;`, decision 0096. `Assert` is
-/// `assert e;` and `Apply` is `l(args);` of a lemma, decision 0099. `Match` is a match over an enum, decision 0109. `Pre` is a statement with the calls that run before it, decision
+/// `assert e;` and `Apply` is `l(args);` of a lemma, decision 0099. `Match` is a match over the enum with the key, decision 0109. `Pre` is a statement with the calls that run before it, decision
 /// 0104.
 #[derive(PartialEq, Eq, Debug)]
 pub enum DStmt {
@@ -396,7 +396,7 @@ pub enum DStmt {
     Exit,
     Assert(DExpr),
     Apply(u32, DArgs),
-    Match(DExpr, Box<DCases>),
+    Match(DExpr, u32, Box<DCases>),
     Pre(DCalls, Box<DStmt>),
 }
 
@@ -1692,7 +1692,7 @@ pub open spec fn spec_place(s: Stmt) -> u32 {
         Stmt::For(_, _, _, _, _, l) => l,
         Stmt::SetField(_, _, l) => l,
         Stmt::SetRefField(_, _, _, l) => l,
-        Stmt::Switch(_, _, l) => l,
+        Stmt::Switch(_, _, _, l) => l,
         Stmt::Call(_, _, _, l) => l,
         Stmt::Exit(l) => l,
         Stmt::Assert(_, l) => l,
@@ -2033,9 +2033,9 @@ pub open spec fn spec_stmt(s: Stmt, all: Fns, env: Params, ps: Params, sd: Struc
             Some(_) => Err(Refusal::WriteParam(p, l)),
             None => Err(Refusal::Syntax(l)),
         },
-        Stmt::Switch(e, cs, l) => match spec_lift(e, all, l, sd, 0, true) {
+        Stmt::Switch(e, k, cs, l) => match spec_lift(e, all, l, sd, 0, true) {
             Ok((c, d, _)) => match spec_cases(*cs, all, env, ps, sd) {
-                Ok(dc) => Ok(spec_pre(c, DStmt::Match(d, Box::new(dc)))),
+                Ok(dc) => Ok(spec_pre(c, DStmt::Match(d, k, Box::new(dc)))),
                 Err(r) => Err(r),
             },
             Err(r) => Err(r),
@@ -2186,7 +2186,7 @@ pub open spec fn spec_twice_stmt(seen: Seq<u32>, s: Stmt) -> (Option<(u32, u32)>
             }
         },
         Stmt::While(_, _, body, _) => spec_twice_stmts(seen, *body),
-        Stmt::Switch(_, cs, _) => spec_twice_cases(seen, *cs),
+        Stmt::Switch(_, _, cs, _) => spec_twice_cases(seen, *cs),
         Stmt::For(init, _, step, _, body, _) => {
             let (r, after) = spec_twice_stmt(seen, *init);
             if r.is_some() {
@@ -2291,7 +2291,7 @@ pub open spec fn spec_misreturn_stmt(s: Stmt, void: bool) -> Option<u32>
             None => spec_misreturn(*f, void),
         },
         Stmt::While(_, _, body, _) => spec_misreturn(*body, void),
-        Stmt::Switch(_, cs, _) => spec_misreturn_cases(*cs, void),
+        Stmt::Switch(_, _, cs, _) => spec_misreturn_cases(*cs, void),
         Stmt::For(init, _, step, _, body, _) => match spec_misreturn_stmt(*init, void) {
             Some(l) => Some(l),
             None => match spec_misreturn_stmt(*step, void) {
@@ -2702,7 +2702,7 @@ pub open spec fn unknown_stmt(s: Stmt) -> bool
         Stmt::For(init, c, step, _, body, _) => unknown_stmt(*init) || unknown_expr(c) || unknown_stmt(*step) || unknown_stmts(*body),
         Stmt::SetField(_, e, _) => unknown_expr(e),
         Stmt::SetRefField(_, _, e, _) => unknown_expr(e),
-        Stmt::Switch(e, cs, _) => unknown_expr(e) || unknown_cases(*cs),
+        Stmt::Switch(e, _, cs, _) => unknown_expr(e) || unknown_cases(*cs),
         Stmt::Call(_, _, args, _) => unknown_args(*args),
         Stmt::Exit(_) => false,
         Stmt::Assert(_, _) => false,
@@ -2823,7 +2823,7 @@ pub proof fn lemma_unknown_stmt_is_refused(s: Stmt, all: Fns, env: Params, ps: P
         },
         Stmt::SetField(_, e, l) => lemma_unknown_lift_is_refused(e, all, l, sd, 0, true),
         Stmt::SetRefField(_, _, e, l) => lemma_unknown_lift_is_refused(e, all, l, sd, 0, true),
-        Stmt::Switch(e, cs, l) => {
+        Stmt::Switch(e, _, cs, l) => {
             if unknown_expr(e) {
                 lemma_unknown_lift_is_refused(e, all, l, sd, 0, true);
             } else {
@@ -2919,7 +2919,7 @@ pub open spec fn count_stmt(s: Stmt) -> nat
     match s {
         Stmt::If(_, t, f, _) => 1 + count_stmts(*t) + count_stmts(*f),
         Stmt::While(_, _, body, _) => 1 + count_stmts(*body),
-        Stmt::Switch(_, cs, _) => 1 + count_cases(*cs),
+        Stmt::Switch(_, _, cs, _) => 1 + count_cases(*cs),
         Stmt::For(init, _, step, _, body, _) => 1 + count_stmt(*init) + count_stmt(*step) + count_stmts(*body),
         _ => 1,
     }
@@ -2958,7 +2958,7 @@ pub open spec fn count_dstmt(s: DStmt) -> nat
     match s {
         DStmt::If(_, t, f) => 1 + count_dstmts(*t) + count_dstmts(*f),
         DStmt::While(_, _, _, body) => 1 + count_dstmts(*body),
-        DStmt::Match(_, cs) => 1 + count_dcases(*cs),
+        DStmt::Match(_, _, cs) => 1 + count_dcases(*cs),
         DStmt::For(init, _, _, _, _, body, step, _) => 1 + count_dstmt(*init) + count_dstmt(*step) + count_dstmts(*body),
         DStmt::Pre(_, s) => count_dstmt(*s),
         _ => 1,
@@ -3036,10 +3036,10 @@ pub proof fn lemma_stmt_kept(s: Stmt, all: Fns, env: Params, ps: Params, sd: Str
         Stmt::Assign(_, _, _) => lemma_kept_assign(s, all, env, ps, sd),
         Stmt::SetField(_, _, _) => lemma_kept_set_field(s, all, env, ps, sd),
         Stmt::SetRefField(_, _, _, _) => lemma_kept_set_field(s, all, env, ps, sd),
-        Stmt::Switch(e, cs, l) => {
+        Stmt::Switch(e, k, cs, l) => {
             lemma_cases_kept(*cs, all, env, ps, sd);
             let ce = spec_lift(e, all, l, sd, 0, true).unwrap();
-            lemma_pre_count(ce.0, DStmt::Match(ce.1, Box::new(spec_cases(*cs, all, env, ps, sd).unwrap())));
+            lemma_pre_count(ce.0, DStmt::Match(ce.1, k, Box::new(spec_cases(*cs, all, env, ps, sd).unwrap())));
         },
         Stmt::Call(_, _, _, _) => lemma_kept_call(s, all, env, ps, sd),
         Stmt::If(c, t, f, l) => {
@@ -3132,7 +3132,7 @@ pub open spec fn calls_resolve_stmt(s: DStmt, all: Fns, sd: Structs) -> bool
 {
     match s {
         DStmt::If(_, t, f) => calls_resolve(*t, all, sd) && calls_resolve(*f, all, sd),
-        DStmt::Match(_, cs) => calls_resolve_cases(*cs, all, sd),
+        DStmt::Match(_, _, cs) => calls_resolve_cases(*cs, all, sd),
         DStmt::LocalCall(_, _, k, _) => spec_callable(all, k, sd),
         DStmt::ReturnCall(k, _) => spec_callable(all, k, sd),
         DStmt::AssignCall(_, k, _) => spec_callable(all, k, sd),
@@ -3586,11 +3586,11 @@ pub proof fn lemma_stmt_calls_resolve(s: Stmt, all: Fns, env: Params, ps: Params
         Stmt::Assign(_, _, _) => lemma_resolves_assign(s, all, env, ps, sd),
         Stmt::SetField(_, _, _) => lemma_resolves_set_field(s, all, env, ps, sd),
         Stmt::SetRefField(_, _, _, _) => lemma_resolves_set_ref_field(s, all, env, ps, sd),
-        Stmt::Switch(e, cs, l) => {
+        Stmt::Switch(e, k, cs, l) => {
             lemma_cases_calls_resolve(*cs, all, env, ps, sd);
             lemma_lift_resolves(e, all, l, sd, 0, true);
             let (ce, de, _) = spec_lift(e, all, l, sd, 0, true).unwrap();
-            lemma_pre_resolves(ce, DStmt::Match(de, Box::new(spec_cases(*cs, all, env, ps, sd).unwrap())), all, sd);
+            lemma_pre_resolves(ce, DStmt::Match(de, k, Box::new(spec_cases(*cs, all, env, ps, sd).unwrap())), all, sd);
         },
         Stmt::Local(_, _, _, _) => lemma_resolves_local(s, all, env, ps, sd),
         Stmt::Call(_, _, _, _) => lemma_resolves_call(s, all, env, ps, sd),
@@ -4941,7 +4941,7 @@ pub fn place(s: &Stmt) -> (r: u32)
         Stmt::For(_, _, _, _, _, l) => *l,
         Stmt::SetField(_, _, l) => *l,
         Stmt::SetRefField(_, _, _, l) => *l,
-        Stmt::Switch(_, _, l) => *l,
+        Stmt::Switch(_, _, _, l) => *l,
         Stmt::Call(_, _, _, l) => *l,
         Stmt::Exit(l) => *l,
         Stmt::Assert(_, l) => *l,
@@ -5293,9 +5293,9 @@ pub fn translate_stmt(s: &Stmt, all: &Fns, env: &Params, ps: &Params, sd: &Struc
             Some(_) => Err(Refusal::WriteParam(*p, *l)),
             None => Err(Refusal::Syntax(*l)),
         },
-        Stmt::Switch(e, cs, l) => match lift(e, all, *l, sd, 0, true) {
+        Stmt::Switch(e, k, cs, l) => match lift(e, all, *l, sd, 0, true) {
             Ok((c, d, _)) => match translate_cases(cs, all, env, ps, sd) {
-                Ok(dc) => Ok(pre(c, DStmt::Match(d, Box::new(dc)))),
+                Ok(dc) => Ok(pre(c, DStmt::Match(d, *k, Box::new(dc)))),
                 Err(r) => Err(r),
             },
             Err(r) => Err(r),
@@ -5478,7 +5478,7 @@ pub fn twice_stmt(seen: &mut Vec<u32>, s: &Stmt) -> (r: Option<(u32, u32)>)
             }
         },
         Stmt::While(_, _, body, _) => twice_stmts(seen, body),
-        Stmt::Switch(_, cs, _) => twice_cases(seen, cs),
+        Stmt::Switch(_, _, cs, _) => twice_cases(seen, cs),
         Stmt::For(init, _, step, _, body, _) => {
             let r = twice_stmt(seen, init);
             if r.is_some() {
@@ -5597,7 +5597,7 @@ pub fn misreturn_stmt(s: &Stmt, void: bool) -> (r: Option<u32>)
             None => misreturn(f, void),
         },
         Stmt::While(_, _, body, _) => misreturn(body, void),
-        Stmt::Switch(_, cs, _) => misreturn_cases(cs, void),
+        Stmt::Switch(_, _, cs, _) => misreturn_cases(cs, void),
         Stmt::For(init, _, step, _, body, _) => match misreturn_stmt(init, void) {
             Some(l) => Some(l),
             None => match misreturn_stmt(step, void) {

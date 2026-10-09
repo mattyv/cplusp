@@ -2383,7 +2383,7 @@ fn weight_fn() -> Function {
         trusted: false,
         conds: Conds::Cons(CondKind::Ensures, ens, 6, names(&[K]), Box::new(Conds::Nil)),
         body: Stmts::Cons(
-            Box::new(Stmt::Switch(read(K, kind()), Box::new(cases), 8)),
+            Box::new(Stmt::Switch(read(K, kind()), KIND, Box::new(cases), 8)),
             Box::new(one(Stmt::Return(Expr::Lit(0, Ty::I32), 14))),
         ),
     }
@@ -2402,7 +2402,7 @@ fn a_switch_over_an_enum_is_a_match_and_an_enumerator_is_a_constructor() {
     assert_eq!(
         m.body,
         DStmts::Cons(
-            Box::new(DStmt::Match(DExpr::Var(K), Box::new(cases))),
+            Box::new(DStmt::Match(DExpr::Var(K), KIND, Box::new(cases))),
             8,
             Box::new(DStmts::Cons(Box::new(DStmt::Return(lit32(0))), 14, Box::new(DStmts::Nil))),
         )
