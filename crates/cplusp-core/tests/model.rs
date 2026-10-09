@@ -2455,7 +2455,7 @@ fn a_contract_reads_an_enumerator_by_its_token() {
 
 #[test]
 fn an_order_of_enums_in_a_contract_is_refused() {
-    // bool below(Kind k) with ensures k < Kind::Large ==> result: Dafny would read `<` as an order of terms, decision 0114.
+    // bool below(Kind k) with ensures k < Kind::Large ==> result: Dafny would read `<` as an order of rank it does not know, decisions 0114, 0115.
     for op in [BinOp::Lt, BinOp::Le, BinOp::Gt, BinOp::Ge] {
         let line = Expr::Bin(BinOp::Implies, b(Expr::Bin(op, b(Expr::Name(K)), b(Expr::Enumerator(KIND, 1)))), b(Expr::Result));
         let f = Function {

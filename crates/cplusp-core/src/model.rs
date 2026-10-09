@@ -1262,8 +1262,8 @@ pub open spec fn spec_ordered(op: BinOp) -> bool {
     op == BinOp::Lt || op == BinOp::Le || op == BinOp::Gt || op == BinOp::Ge
 }
 
-/// An operand of a contract whose type is an enum, decision 0114. Dafny reads an order of two datatype values as an order of terms,
-/// which is never true for two enumerators, so an order of enums has no rule.
+/// An operand of a contract whose type is an enum, decision 0114. Dafny reads an order of two datatype values as an order of rank that
+/// it does not know, so it proves no C++ order of enums, decision 0115. An order of enums has no rule.
 pub open spec fn spec_enum_operand(e: Expr, decl: Names, ps: Params, ret: Option<Ty>, bound: Names, line: u32, sd: Structs) -> bool
     decreases e, 1nat,
 {

@@ -50,7 +50,7 @@ Still open: the contract grammar. The cases write their `//@` contracts in an in
 
 Open. A contract for `vector::push_back` is an axiom. If it is wrong, every proof that uses it is wrong. How a contract is reviewed, how it is tested against the real library, and how a contradiction between two contracts is caught.
 
-A trusted body can also break an assumption that no contract states. The model of an enum class holds only its enumerators, decision 0109. The gate row `enum_cast` refuses each cast to such an enum, also in trusted code, decision 0114. A trusted body that copies bytes into an object that holds such an enum can still make a value that is no enumerator. A reviewer of the trusted body checks it.
+A trusted body can also break an assumption that no contract states. The model of an enum class holds only its enumerators, decision 0109. The gate row `enum_cast` refuses each cast to such an enum, also in trusted code, decision 0114. A trusted body can still make a value that is no enumerator in three ways, decision 0115. It can copy bytes into an object that holds such an enum. It can `std::bit_cast` to a struct that holds one. It can call a template of a header in the system paths that casts, because the gate judges no system header. A reviewer of the trusted body checks each one.
 
 ## Gap 6: the prover
 

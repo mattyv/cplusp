@@ -119,3 +119,4 @@ Status is `decided`, `proposed` (the default until someone objects or the thin s
 | [0111](0111-a-parameter-on-a-modifies-line-is-no-global.md) | A name on a modifies or reads line that names a parameter is that parameter, not a global | decided |
 | [0112](0112-only-a-reference-parameter-hides-a-global.md) | Only a reference parameter hides a global on a modifies line | decided |
 | [0114](0114-the-gate-keeps-each-enum-value-an-enumerator.md) | A gate row bans each cast to an enum class with no values written. An order of enums in a contract is refused. A case body can be a block | decided |
+| [0115](0115-why-an-order-of-enums-has-no-rule.md) | The true reason that an order of enums has no rule. enum_cast also bans casts from enums, to pointers, and the address of bit_cast | decided |

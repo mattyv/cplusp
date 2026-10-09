@@ -56,7 +56,7 @@ bool smaller(Kind a, Kind b) {
   return a < b;
 }
 
-// An order of enums in a contract, decision 0114. Dafny would read `<` as an order of terms.
+// An order of enums in a contract, decisions 0114 and 0115. Dafny would read `<` as an order of rank it does not know.
 //@ ensures k < Kind::Large ==> result
 bool below(Kind k) {
   return k == Kind::Small;
@@ -80,4 +80,14 @@ enum class Odd : uint8_t { P$, Q };
 
 bool is_q(Odd o) {
   return o == Odd::Q;
+}
+
+// A struct with a field of that enum is dropped with it, and adds no refusal of its own, decision 0114.
+struct OddBox {
+  Odd o;
+  int32_t n;
+};
+
+int32_t box_n(OddBox b) {
+  return b.n;
 }
