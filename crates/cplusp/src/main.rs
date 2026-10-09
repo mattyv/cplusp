@@ -948,6 +948,10 @@ fn prove(common: &Common, plugin: Option<&Path>, time_limit: u32, file: &Path, c
         return Ok(code);
     }
     let (t, cwd) = read_model(plugin, file, clang_args)?;
+    // Each trusted function of the model comes first, so the proof is read with the contracts it rests on, decisions 0102 and 0103.
+    for (path, line, name, reason) in &t.trusted {
+        println!("Trusted: {}:{line}: {name}: {reason}", shown_from(&cwd, path));
+    }
     print_refusals(&t, &cwd);
     prove::run(&t, time_limit, !t.refusals.is_empty(), &shown_from(&cwd, &file.display().to_string()), &|path| shown_from(&cwd, path))
 }

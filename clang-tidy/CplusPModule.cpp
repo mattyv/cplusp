@@ -3300,12 +3300,40 @@ private:
 
 // ------------------------------------------------------------ markers, decisions 0039 and 0047
 
-// The reason of a marker is its first argument, a string literal with something in it.
-bool hasReason(const AnnotateAttr *Note) {
+// The reason of a marker is its first argument, a string literal with something in it. Empty when it has none.
+std::string reasonOf(const AnnotateAttr *Note) {
   if (Note->args_size() == 0)
-    return false;
+    return "";
   const auto *Text = dyn_cast<StringLiteral>((*Note->args_begin())->IgnoreImplicit()->IgnoreParens());
-  return Text && Text->getCharByteWidth() == 1 && !Text->getString().trim().empty();
+  return Text && Text->getCharByteWidth() == 1 ? Text->getString().trim().str() : "";
+}
+
+bool hasReason(const AnnotateAttr *Note) { return !reasonOf(Note).empty(); }
+
+// A reason is one line, decision 0103: it holds no byte below 0x20, so it cannot put a line of its own into the report.
+bool oneLine(const AnnotateAttr *Note) {
+  const std::string Reason = reasonOf(Note);
+  return std::none_of(Reason.begin(), Reason.end(), [](unsigned char C) { return C < 0x20; });
+}
+
+// The trusted marker of a function, decisions 0102 and 0103: its reason, and the declaration that wrote it. Nothing when the function is
+// not trusted. The reason is empty when the marker has none that can be read, which the markers check refuses.
+struct TrustedMark {
+  std::string Reason;
+  const FunctionDecl *At = nullptr;
+};
+std::optional<TrustedMark> trustedReason(const FunctionDecl *Function) {
+  if (declaredKind(Function) != MarkerKind::Trusted)
+    return std::nullopt;
+  TrustedMark Mark;
+  for (const FunctionDecl *D : declarationsOf(patternOf(Function)))
+    forEachMarker(D, [&](const AnnotateAttr *Note) {
+      if (markerKind(Note->getAnnotation()) != MarkerKind::Trusted || (Mark.At && !Mark.Reason.empty()))
+        return;
+      if (!Mark.At || !reasonOf(Note).empty())
+        Mark = {reasonOf(Note), D};
+    });
+  return Mark;
 }
 
 // The reader of the markers. It walks the tree of one translation unit, outside the system headers, and reports in two forms under the
@@ -3471,6 +3499,8 @@ private:
           return reportNoMarker(D, Note);
         if (Named != MarkerKind::Verified && !hasReason(Note))
           report(D, Name + " has a marker with no reason. A trusted or plain marker gives its reason.");
+        else if (Named != MarkerKind::Verified && !oneLine(Note))
+          report(D, Name + " has a reason with a line break. A reason is one line.");
         if (First == MarkerKind::None) {
           First = Named;
           Brings = D;
@@ -3800,12 +3830,18 @@ public:
   // kind, and a caller sees a callee with no method. Its contract lines still count as claimed.
   // Upgrade: a core rule for these, and their real signature.
   llvm::json::Value function(const FunctionDecl *FD, const Contract &C) const {
+    // A trusted function is written with its contract and no body, whatever body it has, decision 0102. `trusted` holds its reason.
+    // It is the reason, the file and the line of the declaration with the marker, for the report of prove.
+    const std::optional<TrustedMark> Trusted = trustedReason(FD);
+    const llvm::json::Value TrustedJson =
+        Trusted ? llvm::json::Value(llvm::json::Array{Trusted->Reason, file(Trusted->At->getLocation()), number(line(Trusted->At->getLocation()))})
+                : llvm::json::Value(nullptr);
     const CXXMethodDecl *Member = member(FD);
     const CXXConstructorDecl *Constructor = valueConstructor(FD);
     const char *Opaque = FD->isTemplated()                         ? "FunctionTemplateDecl"
                          : isa<CXXConstructorDecl>(FD) && !Constructor ? "CXXConstructorDecl"
                          : isa<CXXMethodDecl>(FD) && !Member && !Constructor ? "CXXMethodDecl"
-                         : !FD->getBody()         ? "FunctionDecl without body"
+                         : !FD->getBody() && !Trusted ? "FunctionDecl without body"
                                                   : nullptr;
     llvm::json::Array Params, Conds;
     Enclosing = FD;
@@ -3814,9 +3850,15 @@ public:
       // One that is not const writes its object and gives it back, decision 0096.
       if (Member)
         Params.push_back(llvm::json::Array{"this", thisType(Member->getParent(), !Member->isConst())});
+      // ponytail: a trusted function that takes `const S&` has the parameter as a value in the model. Decision 0103 promises that its body
+      // changes no such parameter, and the gate does not check it: a `const_cast` in a trusted body can break the promise. Upgrade: a gate
+      // check of `const_cast` on a parameter or on `this` in a trusted body.
       for (const ParmVarDecl *P : FD->parameters())
         Params.push_back(llvm::json::Array{P->getNameAsString(), type(P->getType())});
       Conds = conds(C, Member != nullptr);
+      // The `//@` lines in a trusted body belong to it, decision 0103. The walk claims them, and the result is dropped.
+      if (Trusted && FD->getBody())
+        (void)stmts(FD->getBody());
     }
     // A constructor gives the struct that it builds, decision 0094. Its result type is `This`, and its contract has no `this` parameter.
     if (Constructor)
@@ -3826,16 +3868,20 @@ public:
                                 {"line", number(line(FD->getLocation()))},
                                 {"params", std::move(Params)},
                                 {"ret", thisType(Constructor->getParent())},
+                                {"trusted", TrustedJson},
                                 {"conds", std::move(Conds)},
-                                {"body", constructorBody(Constructor)}};
+                                {"body", Trusted ? llvm::json::Array{} : constructorBody(Constructor)}};
     return llvm::json::Object{{"name", FD->getNameAsString()},
                               {"key", key(FD)},
                               {"file", file(FD->getLocation())},
                               {"line", number(line(FD->getLocation()))},
                               {"params", std::move(Params)},
                               {"ret", Opaque ? tag("Other", Opaque) : FD->getReturnType()->isVoidType() ? llvm::json::Value("Void") : type(FD->getReturnType())},
+                              {"trusted", TrustedJson},
                               {"conds", std::move(Conds)},
-                              {"body", Opaque ? llvm::json::Array{tag("Unknown", llvm::json::Array{Opaque, number(line(FD->getLocation()))})} : stmts(FD->getBody())}};
+                              {"body", Opaque ? llvm::json::Array{tag("Unknown", llvm::json::Array{Opaque, number(line(FD->getLocation()))})}
+                                       : Trusted ? llvm::json::Array{}
+                                                 : stmts(FD->getBody())}};
   }
 
   std::string file(SourceLocation At) const { return SM.getFilename(SM.getFileLoc(At)).str(); }
@@ -4482,7 +4528,11 @@ public:
     const Contract C = contractOf(Context->getSourceManager(), FD);
     for (const Contract::Line &L : C.Lines)
       Claimed.insert({L.File, L.Number});
-    if (FD->isThisDeclarationADefinition())
+    // A trusted function with no definition here is written once, at its first declaration. Its contract lines come from all of them.
+    // ponytail: a trusted template is not written. A trusted constructor with no body here is written and refused as CXXConstructorDecl, and
+    // one with a body is refused by valueConstructor unless its body is empty and it gives each field a value. Upgrade: their signatures.
+    if (FD->isThisDeclarationADefinition() ||
+        (!FD->getDefinition() && FD == FD->getCanonicalDecl() && !FD->isTemplated() && trustedReason(FD)))
       append(TreeWriter(*Context, Claimed, Structs).function(FD, C));
   }
   void onEndOfTranslationUnit() override {

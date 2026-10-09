@@ -159,6 +159,10 @@ struct JFunction {
     line: u32,
     params: Vec<(String, JTy)>,
     ret: JTy,
+    /// The reason of the marker `CPLUSP_TRUSTED`, and the file and line of the declaration that has it, when the function is trusted,
+    /// decisions 0102 and 0103.
+    #[serde(default)]
+    trusted: Option<(String, String, u32)>,
     conds: Vec<JCond>,
     body: Vec<JStmt>,
 }
@@ -794,7 +798,7 @@ fn function(f: JFunction, names: &mut Names) -> Function {
     let params = ps.into_iter().rev().fold(Params::Nil, |rest, (n, t)| Params::Cons(n, t, Box::new(rest)));
     let ret = ty(f.ret, names);
     let line = names.here(f.line);
-    Function { name, line, params, ret, conds: conds(f.conds, names), body: stmts(f.body, names) }
+    Function { name, line, params, ret, trusted: f.trusted.is_some(), conds: conds(f.conds, names), body: stmts(f.body, names) }
 }
 
 // ------------------------------------------------------------------ the Dafny text
@@ -972,6 +976,8 @@ pub struct Translation {
     pub dafny: String,
     /// The number of methods in the Dafny text, with a body or without, decision 0080.
     pub methods: usize,
+    /// Each trusted function that has a method, in the order of the file: its file, the line of its name, its name and its reason, decision 0102.
+    pub trusted: Vec<(String, u32, String, String)>,
     pub refusals: Vec<Refusing>,
     pub map: Map,
 }
@@ -1127,7 +1133,7 @@ impl Printer<'_> {
     /// The method header line, with no contract and no body.
     /// A method that gives no value has no `result`. One that writes its object also gives it back as `this'`, of the type of its first
     /// parameter, decision 0096.
-    fn header(&mut self, name: u32, params: &DParams, ret: DTy, writes: bool, place: u32) {
+    fn header(&mut self, name: u32, params: &DParams, ret: DTy, (writes, axiom): (bool, bool), place: u32) {
         let mut shown = Vec::new();
         let mut ps = params;
         while let DParams::Cons(n, t, next) = ps {
@@ -1144,7 +1150,8 @@ impl Printer<'_> {
         let returns = if gives.is_empty() { String::new() } else { format!(" returns ({})", gives.join(", ")) };
         self.out.push('\n');
         self.lines.push(None);
-        self.put(0, format!("method {}({}){returns}", self.methods[&name], shown.join(", ")), place);
+        let attribute = if axiom { "{:axiom} " } else { "" };
+        self.put(0, format!("method {attribute}{}({}){returns}", self.methods[&name], shown.join(", ")), place);
     }
 
     /// The Dafny function of a pure member function, right before its method, decision 0090. Its requires lines are those of the method.
@@ -1174,7 +1181,7 @@ impl Printer<'_> {
         if let Some(body) = &m.function {
             self.function(m, body, place);
         }
-        self.header(m.name, &m.params, m.ret, m.writes, place);
+        self.header(m.name, &m.params, m.ret, (m.writes, m.trusted), place);
         // A requires line has the requires lines before it in scope, and an ensures or decreases line and the body have all of them.
         for (word, list) in [("requires", &m.requires), ("ensures", &m.ensures), ("decreases", &m.decreases)] {
             let mut cs = list;
@@ -1185,6 +1192,11 @@ impl Printer<'_> {
                 }
                 cs = next;
             }
+        }
+        // A trusted method has no body, and Dafny takes its contract as given, decision 0102.
+        if m.trusted {
+            self.scope.clear();
+            return;
         }
         self.put(0, "{".to_string(), place);
         self.writes = m.writes;
@@ -1284,6 +1296,8 @@ pub fn translate(lines: &str, companion: Option<(&str, &str)>) -> Result<Transla
     let mut writing = std::collections::HashSet::new();
     // The place of each function, by the id of its key, for its method header.
     let mut at = HashMap::new();
+    // The file, line, name and reason of each trusted function, by the id of its key, for the report of prove.
+    let mut reasons = HashMap::new();
     // A member function is named by its struct too, `Struct'name`, decision 0089. So is a constructor, whose result is `This`, decision
     // 0094. C++ cannot write `'`, so it clashes with no name.
     let plain = |f: &JFunction| match (f.params.first(), &f.ret) {
@@ -1301,6 +1315,9 @@ pub fn translate(lines: &str, companion: Option<(&str, &str)>) -> Result<Transla
             writing.insert(key);
         }
         at.insert(key, names.place(&f.file, f.line));
+        if let Some((reason, file, line)) = &f.trusted {
+            reasons.insert(key, (file.clone(), *line, f.name.clone(), reason.clone()));
+        }
     }
     // The Dafny name of each struct: `S_{plain}`, or `S_{plain}'{k}` when two structs share a plain name.
     let mut table = Structs::Nil;
@@ -1365,16 +1382,18 @@ pub fn translate(lines: &str, companion: Option<(&str, &str)>) -> Result<Transla
         smodels = *rest;
     }
     let mut printed = 0;
+    let mut trusted = Vec::new();
     for _ in 0..count {
         let Models::Cons(model, rest) = models else { unreachable!("one model for each function") };
         let refused = match model {
             Model::Full(m) => {
                 p.method(&m, at[&m.name]);
                 printed += 1;
+                trusted.extend(reasons.remove(&m.name).filter(|_| m.trusted));
                 None
             }
             Model::Bare(key, params, ret, r) => {
-                p.header(key, &params, ret, writing.contains(&key), at[&key]);
+                p.header(key, &params, ret, (writing.contains(&key), false), at[&key]);
                 printed += 1;
                 Some(r)
             }
@@ -1397,5 +1416,5 @@ pub fn translate(lines: &str, companion: Option<(&str, &str)>) -> Result<Transla
     }
     refusals.sort();
     refusals.dedup();
-    Ok(Translation { dafny, methods: printed, refusals, map: Map { lines, companion: companion_lines, decls, places: names.places, contracts: names.contracts } })
+    Ok(Translation { dafny, methods: printed, trusted, refusals, map: Map { lines, companion: companion_lines, decls, places: names.places, contracts: names.contracts } })
 }
