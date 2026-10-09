@@ -2987,6 +2987,38 @@ fn prove_names_a_contract_call_outside_the_requires_of_a_member_function() {
     assert!(under(&text, head).iter().any(|l| l.ends_with("model-pure-args-wrong.cpp:7: requires n_ < 1000")), "{text}");
 }
 
+/// A constructor with only a member init list proves its contract, which names fields and valid() of the value it builds, and a
+/// caller that builds a value, in a local and in a return, knows it, decision 0094.
+#[test]
+fn a_constructor_gives_the_value_it_builds() {
+    let Some(dafny) = dafny() else { return };
+    if !clang_tidy_available() {
+        return;
+    }
+    let o = prove("model-ctor.cpp", &[], &dafny);
+    let text = stdout(&o);
+    assert_eq!(o.status.code(), Some(0), "stdout: {text} stderr: {}", stderr(&o));
+    assert_eq!(text.lines().last(), Some("ok: proved"), "{text}");
+}
+
+/// A constructor with a body, one that leaves a field out, and a delegating constructor are refused at their lines, decision 0094.
+#[test]
+fn constructors_with_no_rule_are_refused_at_their_lines() {
+    if !clang_tidy_available() {
+        return;
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let (o, _) = model("model-ctor-refuse.cpp", dir.path());
+    let text = stdout(&o);
+    assert_eq!(o.status.code(), Some(1), "stdout: {text} stderr: {}", stderr(&o));
+    let refusals: Vec<&str> = text.lines().filter(|l| l.starts_with("Not provable: ")).collect();
+    for line in [8, 12, 14] {
+        let want = format!("model-ctor-refuse.cpp:{line}: CXXConstructorDecl: the translator has no rule for it yet.");
+        assert!(refusals.iter().any(|l| l.ends_with(&want)), "{want}: {text}");
+    }
+    assert_eq!(refusals.len(), 3, "{text}");
+}
+
 /// Pull `"key":"value"` or `"key":123` out of one JSON line without a JSON library.
 fn field(line: &str, key: &str) -> String {
     let needle = format!("\"{key}\":");

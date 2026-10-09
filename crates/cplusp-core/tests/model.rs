@@ -1594,3 +1594,44 @@ fn a_member_function_whose_contract_is_refused_is_not_pure() {
     let Models::Cons(second, _) = *rest else { panic!("models") };
     assert_eq!(bare_refusal(second), Refusal::NotPure(VALUE, 19));
 }
+
+const CTOR: u32 = 150;
+
+#[test]
+fn a_constructor_gives_the_value_it_builds_and_its_contract_reads_that_value() {
+    // explicit Counter(int32_t n) : n_(n) {} with requires n < 1000 and ensures valid() && n_ == n
+    let table = members_table(Some(Ty::Bool), None);
+    let req = Expr::Bin(BinOp::Lt, b(Expr::Name(X)), b(Expr::Int(1000)));
+    let ens = Expr::Bin(BinOp::And, b(Expr::Apply(VALID, Box::new(Args::Nil))), b(Expr::Bin(BinOp::Eq, b(Expr::Name(CN)), b(Expr::Name(X)))));
+    let f = Function {
+        name: CTOR,
+        line: 9,
+        params: Params::Cons(X, Ty::I32, Box::new(Params::Nil)),
+        ret: Ty::This(COUNTER),
+        conds: Conds::Cons(CondKind::Requires, req, 7, names(&[X]), Box::new(Conds::Cons(CondKind::Ensures, ens, 8, names(&[X]), Box::new(Conds::Nil)))),
+        body: one(Stmt::Return(Expr::Construct(COUNTER, Box::new(Args::Cons(b(read(X, Ty::I32)), Box::new(Args::Nil)))), 9)),
+    };
+    let Model::Full(m) = translate_function(&f, &Fns::Nil, &table) else { panic!("a full model") };
+    // The result is a value of the datatype.
+    assert_eq!(m.ret, DTy::Struct(COUNTER));
+    // valid() passes result, and n_ is the field of result.
+    let valid = DExpr::FCall(VKEY, Box::new(DArgs::Cons(DExpr::Result, Box::new(DArgs::Nil))));
+    let n = DExpr::AsInt(Box::new(DExpr::Field(Box::new(DExpr::Result), CN)));
+    let want = DExpr::Bin(BinOp::And, Box::new(valid), Box::new(DExpr::Bin(BinOp::Eq, Box::new(n), Box::new(DExpr::AsInt(Box::new(DExpr::Var(X)))))));
+    assert_eq!(strip_conds(m.ensures), DConds::Cons(want, 0, Box::new(DConds::Nil)));
+    // A constructor has no this, so it is no pure member function.
+    assert_eq!(m.function, None);
+}
+
+#[test]
+fn a_constructor_of_a_struct_that_holds_a_sequence_is_refused() {
+    let f = Function {
+        name: CTOR,
+        line: 9,
+        params: Params::Nil,
+        ret: Ty::This(NODE),
+        conds: Conds::Nil,
+        body: one(Stmt::Return(Expr::Lit(0, Ty::I32), 9)),
+    };
+    assert_eq!(translate_function(&f, &Fns::Nil, &node_table()), Model::Refused(Refusal::HoldsSeq(9)));
+}
