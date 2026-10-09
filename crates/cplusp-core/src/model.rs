@@ -880,7 +880,11 @@ pub open spec fn spec_contract(e: Expr, decl: Names, ps: Params, ret: Option<Ty>
             Ok(_) => Err(Refusal::Syntax(line)),
             Err(r) => Err(r),
         },
-        Expr::Apply(f, args) => match spec_functor(f, decl, ps, ret, bound, sd) {
+        // A bound name is an integer, so it is no function, decision 0100.
+        Expr::Apply(f, args) => if spec_has(bound, f) {
+            Err(Refusal::Syntax(line))
+        } else {
+            match spec_functor(f, decl, ps, ret, bound, sd) {
             Some((d, k)) => match spec_member(sd, k, CALL_OP) {
                 Some((key, Some((rt, mps)))) => match spec_contract_args(*args, decl, ps, ret, bound, line, sd) {
                     Ok(da) => spec_leaf(DExpr::FCall(key, Box::new(DArgs::Cons(d, Box::new(spec_convert(da, spec_tail(mps)))))), rt, line),
@@ -909,6 +913,7 @@ pub open spec fn spec_contract(e: Expr, decl: Names, ps: Params, ret: Option<Ty>
                 }
             },
         },
+        }
         },
         Expr::Old(a) => if spec_has_after(ps) {
             spec_contract(*a, decl, spec_before(ps), ret, bound, line, sd)
@@ -3116,7 +3121,10 @@ pub fn translate_contract(e: &Expr, decl: &Names, ps: &Params, ret: Option<Ty>, 
             Ok(_) => Err(Refusal::Syntax(line)),
             Err(r) => Err(r),
         },
-        Expr::Apply(f, args) => match functor(*f, decl, ps, ret, bound, sd) {
+        Expr::Apply(f, args) => if has(bound, *f) {
+            Err(Refusal::Syntax(line))
+        } else {
+            match functor(*f, decl, ps, ret, bound, sd) {
             Some((d, k)) => match member(sd, k, CALL_OP) {
                 Some((key, Some((rt, mps)))) => match translate_contract_args(args, decl, ps, ret, bound, line, sd) {
                     Ok(da) => translate_leaf(DExpr::FCall(key, Box::new(DArgs::Cons(d, Box::new(convert(da, &tail(&mps)))))), rt, line),
@@ -3145,6 +3153,7 @@ pub fn translate_contract(e: &Expr, decl: &Names, ps: &Params, ret: Option<Ty>, 
                 }
             },
         },
+        }
         },
         Expr::Old(a) => if has_after(ps) {
             translate_contract(a, decl, &before(ps), ret, bound, line, sd)
