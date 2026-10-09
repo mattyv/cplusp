@@ -9,7 +9,7 @@ int32_t id(int32_t x) {
 }
 
 int32_t inside(int32_t x) {
-  return id(x) + 1;
+  return id(x) + 0;
 }
 
 int32_t nested(int32_t x) {
