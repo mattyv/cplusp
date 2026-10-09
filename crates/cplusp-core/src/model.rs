@@ -158,7 +158,8 @@ pub enum Args {
 /// adds one to a name of a type, or takes one away when its flag is false. `While` is a condition, the contract lines above the loop
 /// and the body. `For` is a start, a condition, a step, the contract lines and the body, decision 0061. `SetField` writes a field of
 /// the object of a member function. `Call` is a call that stands alone as a statement, by the key of its callee, the id of its
-/// name and its arguments. `Exit` is `return;`, decision 0096.
+/// name and its arguments. `Exit` is `return;`, decision 0096. `Assert` is a `//@ assert` line in the body, and `Apply` is a
+/// `//@ apply` line that calls a lemma of the companion file by the id of its name, decision 0099.
 #[derive(PartialEq, Eq, Debug)]
 pub enum Stmt {
     Return(Expr, u32),
@@ -171,6 +172,8 @@ pub enum Stmt {
     SetField(u32, Expr, u32),
     Call(u32, u32, Box<Args>, u32),
     Exit(u32),
+    Assert(Expr, u32),
+    Apply(u32, Box<Args>, u32),
     Unknown(u32, u32),
 }
 
@@ -325,7 +328,8 @@ pub enum DArgs {
 /// condition, the invariants, the decreases lines and the body. `For` prints as its start, then a `while` whose body ends with the
 /// step. The start and the step keep their own places, decision 0069. `SetField` is `this' := this'.(f := e);`. `Update` calls a
 /// method that writes its object and writes the object back, `o := m(o, args);`, and `LocalUpdate` also sets a new local to the
-/// value it gives. `CallStmt` is `m(args);` of a method that gives no value, and `Exit` is `return;`, decision 0096.
+/// value it gives. `CallStmt` is `m(args);` of a method that gives no value, and `Exit` is `return;`, decision 0096. `Assert` is
+/// `assert e;` and `Apply` is `l(args);` of a lemma, decision 0099.
 #[derive(PartialEq, Eq, Debug)]
 pub enum DStmt {
     Return(DExpr),
@@ -342,6 +346,8 @@ pub enum DStmt {
     LocalUpdate(u32, DTy, Obj, u32, DArgs),
     CallStmt(u32, DArgs),
     Exit,
+    Assert(DExpr),
+    Apply(u32, DArgs),
 }
 
 /// The object that a call writes back: a local by its name, or the object of the member function that makes the call.
@@ -1106,14 +1112,17 @@ pub open spec fn spec_this(ps: Params) -> Option<(u32, u32)>
     }
 }
 
-/// The parameter `this` of a member function, first in its parameters, with its type: `const`, writing, or after the call.
-pub open spec fn spec_self(ps: Params) -> Option<(u32, Ty)> {
+/// The parameter `this` of a member function, with its type: `const`, writing, or after the call. In the variables in scope in a
+/// body, the locals come before it, decision 0099.
+pub open spec fn spec_self(ps: Params) -> Option<(u32, Ty)>
+    decreases ps,
+{
     match ps {
-        Params::Cons(p, t, _) => match t {
+        Params::Cons(p, t, rest) => match t {
             Ty::This(_) => Some((p, t)),
             Ty::ThisMut(_) => Some((p, t)),
             Ty::ThisAfter(_) => Some((p, t)),
-            _ => None,
+            _ => spec_self(*rest),
         },
         Params::Nil => None,
     }
@@ -1339,6 +1348,8 @@ pub open spec fn spec_place(s: Stmt) -> u32 {
         Stmt::SetField(_, _, l) => l,
         Stmt::Call(_, _, _, l) => l,
         Stmt::Exit(l) => l,
+        Stmt::Assert(_, l) => l,
+        Stmt::Apply(_, _, l) => l,
         Stmt::Unknown(_, l) => l,
     }
 }
@@ -1373,7 +1384,7 @@ pub open spec fn spec_is_param(ps: Params, name: u32) -> bool
 }
 
 /// The lines of one kind of the contract of a loop, in their order, decisions 0061 and 0062. Each reads the variables `env` in scope
-/// at the loop, and has no
+/// at the loop, and the object as the body leaves it, decision 0099. It has no
 /// `result`. A `requires` or an `ensures` line has no place above a loop.
 pub open spec fn spec_loop_conds(cs: Conds, want: CondKind, env: Params, sd: Structs) -> Result<DConds, Refusal>
     decreases cs,
@@ -1387,7 +1398,7 @@ pub open spec fn spec_loop_conds(cs: Conds, want: CondKind, env: Params, sd: Str
             CondKind::Ensures => Err(Refusal::Misplaced(l)),
             _ => match spec_loop_conds(*rest, want, env, sd) {
                 Ok(dr) => if k == want {
-                    match spec_contract(e, spec_names_of(env), env, None, Names::Nil, l, sd) {
+                    match spec_contract(e, spec_names_of(env), spec_after(env), None, Names::Nil, l, sd) {
                         Ok(d) => Ok(DConds::Cons(d, l, Box::new(dr))),
                         Err(r) => Err(r),
                     }
@@ -1625,6 +1636,14 @@ pub open spec fn spec_stmt(s: Stmt, all: Fns, env: Params, ps: Params, sd: Struc
         },
         Stmt::Call(k, nm, args, l) => spec_call_stmt(k, nm, *args, l, all, ps, sd),
         Stmt::Exit(_) => Ok(DStmt::Exit),
+        Stmt::Assert(e, l) => match spec_contract(e, spec_names_of(env), spec_after(env), None, Names::Nil, l, sd) {
+            Ok(d) => Ok(DStmt::Assert(d)),
+            Err(r) => Err(r),
+        },
+        Stmt::Apply(f, args, l) => match spec_contract_args(*args, spec_names_of(env), spec_after(env), None, Names::Nil, l, sd) {
+            Ok(da) => Ok(DStmt::Apply(f, da)),
+            Err(r) => Err(r),
+        },
         Stmt::Unknown(k, l) => Err(Refusal::Construct(k, l)),
     }
 }
@@ -2213,6 +2232,8 @@ pub open spec fn unknown_stmt(s: Stmt) -> bool
         Stmt::SetField(_, e, _) => unknown_expr(e),
         Stmt::Call(_, _, args, _) => unknown_args(*args),
         Stmt::Exit(_) => false,
+        Stmt::Assert(_, _) => false,
+        Stmt::Apply(_, _, _) => false,
     }
 }
 
@@ -3340,13 +3361,14 @@ pub fn this_param(ps: &Params) -> (r: Option<(u32, u32)>)
 pub fn self_param(ps: &Params) -> (r: Option<(u32, Ty)>)
     ensures
         r == spec_self(*ps),
+    decreases ps,
 {
     match ps {
-        Params::Cons(p, t, _) => match t {
+        Params::Cons(p, t, rest) => match t {
             Ty::This(_) => Some((*p, *t)),
             Ty::ThisMut(_) => Some((*p, *t)),
             Ty::ThisAfter(_) => Some((*p, *t)),
-            _ => None,
+            _ => self_param(rest),
         },
         Params::Nil => None,
     }
@@ -3629,6 +3651,8 @@ pub fn place(s: &Stmt) -> (r: u32)
         Stmt::SetField(_, _, l) => *l,
         Stmt::Call(_, _, _, l) => *l,
         Stmt::Exit(l) => *l,
+        Stmt::Assert(_, l) => *l,
+        Stmt::Apply(_, _, l) => *l,
         Stmt::Unknown(_, l) => *l,
     }
 }
@@ -3679,7 +3703,7 @@ pub fn translate_loop_conds(cs: &Conds, want: CondKind, env: &Params, sd: &Struc
             CondKind::Ensures => Err(Refusal::Misplaced(*l)),
             _ => match translate_loop_conds(rest, want, env, sd) {
                 Ok(dr) => if *k == want {
-                    match translate_contract(e, &names_of(env), env, None, &Names::Nil, *l, sd) {
+                    match translate_contract(e, &names_of(env), &after(env), None, &Names::Nil, *l, sd) {
                         Ok(d) => Ok(DConds::Cons(d, *l, Box::new(dr))),
                         Err(r) => Err(r),
                     }
@@ -3917,6 +3941,14 @@ pub fn translate_stmt(s: &Stmt, all: &Fns, env: &Params, ps: &Params, sd: &Struc
         },
         Stmt::Call(k, nm, args, l) => call_stmt(*k, *nm, args, *l, all, ps, sd),
         Stmt::Exit(_) => Ok(DStmt::Exit),
+        Stmt::Assert(e, l) => match translate_contract(e, &names_of(env), &after(env), None, &Names::Nil, *l, sd) {
+            Ok(d) => Ok(DStmt::Assert(d)),
+            Err(r) => Err(r),
+        },
+        Stmt::Apply(f, args, l) => match translate_contract_args(args, &names_of(env), &after(env), None, &Names::Nil, *l, sd) {
+            Ok(da) => Ok(DStmt::Apply(*f, da)),
+            Err(r) => Err(r),
+        },
         Stmt::Unknown(k, l) => Err(Refusal::Construct(*k, *l)),
     }
 }
