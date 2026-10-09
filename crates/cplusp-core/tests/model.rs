@@ -674,7 +674,7 @@ const FY: u32 = 82;
 
 /// `struct Point { int32_t x; int32_t y; }` as the table of the file.
 fn point_table() -> Structs {
-    Structs::Cons(POINT, 4, Params::Cons(FX, Ty::I32, Box::new(Params::Cons(FY, Ty::I32, Box::new(Params::Nil)))), Box::new(Structs::Nil))
+    Structs::Cons(POINT, 4, Params::Cons(FX, Ty::I32, Box::new(Params::Cons(FY, Ty::I32, Box::new(Params::Nil)))), Members::Nil, Box::new(Structs::Nil))
 }
 
 #[test]
@@ -729,7 +729,7 @@ fn a_struct_has_a_model_when_each_field_is_a_type_of_the_subset() {
     let ok = translate_structs(&point_table());
     assert_eq!(ok, StructModels::Cons(Ok((POINT, DParams::Cons(FX, DTy::Int32, Box::new(DParams::Cons(FY, DTy::Int32, Box::new(DParams::Nil)))))), Box::new(StructModels::Nil)));
     // A field of a type with no rule refuses the struct. A sequence field is in the subset since decision 0076.
-    let other_field = Structs::Cons(POINT, 4, Params::Cons(FX, Ty::Other(OTHER_TYPE), Box::new(Params::Nil)), Box::new(Structs::Nil));
+    let other_field = Structs::Cons(POINT, 4, Params::Cons(FX, Ty::Other(OTHER_TYPE), Box::new(Params::Nil)), Members::Nil, Box::new(Structs::Nil));
     assert_eq!(translate_structs(&other_field), StructModels::Cons(Err(Refusal::Construct(OTHER_TYPE, 4)), Box::new(StructModels::Nil)));
 }
 
@@ -748,7 +748,7 @@ const FV: u32 = 91;
 
 /// `struct Slot { std::optional<int32_t> value; }` as the table of the file.
 fn slot_table() -> Structs {
-    Structs::Cons(SLOT, 4, Params::Cons(FV, Ty::Opt(Scalar::I32), Box::new(Params::Nil)), Box::new(Structs::Nil))
+    Structs::Cons(SLOT, 4, Params::Cons(FV, Ty::Opt(Scalar::I32), Box::new(Params::Nil)), Members::Nil, Box::new(Structs::Nil))
 }
 
 #[test]
@@ -869,7 +869,7 @@ fn node_table() -> Structs {
         Box::new(Params::Cons(VAL, Ty::Opt(Scalar::I32), Box::new(Params::Cons(CH, Ty::Seq(Scalar::Struct(NODE), Extent::Dynamic), Box::new(Params::Nil))))),
     );
     let wrap = Params::Cons(WN, Ty::Struct(NODE), Box::new(Params::Nil));
-    Structs::Cons(NODE, 7, node, Box::new(Structs::Cons(WRAP, 13, wrap, Box::new(Structs::Nil))))
+    Structs::Cons(NODE, 7, node, Members::Nil, Box::new(Structs::Cons(WRAP, 13, wrap, Members::Nil, Box::new(Structs::Nil))))
 }
 
 #[test]
@@ -1010,7 +1010,7 @@ fn the_core_refuses_an_optional_of_a_struct_and_a_sequence_of_bool_by_itself() {
         assert_eq!(translate_ty(t, 7), Err(Refusal::Element(7)));
         assert_eq!(translate_value_ty(t, 7, &node_table()), Err(Refusal::Element(7)));
     }
-    let field = Structs::Cons(POINT, 4, Params::Cons(FX, Ty::Opt(Scalar::Struct(POINT)), Box::new(Params::Nil)), Box::new(Structs::Nil));
+    let field = Structs::Cons(POINT, 4, Params::Cons(FX, Ty::Opt(Scalar::Struct(POINT)), Box::new(Params::Nil)), Members::Nil, Box::new(Structs::Nil));
     assert_eq!(translate_structs(&field), StructModels::Cons(Err(Refusal::Element(4)), Box::new(StructModels::Nil)));
 }
 
@@ -1328,7 +1328,7 @@ const COUNTER: u32 = 132;
 /// `struct Counter { int32_t n_; }` as the table of the file. The names of a member function's declaration start with this, as its
 /// parameters do, so a contract reads each parameter by its place, decision 0060.
 fn counter_table() -> Structs {
-    Structs::Cons(COUNTER, 4, Params::Cons(CN, Ty::I32, Box::new(Params::Nil)), Box::new(Structs::Nil))
+    Structs::Cons(COUNTER, 4, Params::Cons(CN, Ty::I32, Box::new(Params::Nil)), Members::Nil, Box::new(Structs::Nil))
 }
 
 #[test]
@@ -1400,4 +1400,145 @@ fn a_parameter_wins_over_a_field_and_a_name_that_is_neither_is_refused() {
 fn the_object_is_a_parameter_and_no_local_or_result() {
     assert_eq!(translate_ty(Ty::This(COUNTER), 3), Ok(DTy::Struct(COUNTER)));
     assert_eq!(translate_value_ty(Ty::This(COUNTER), 3, &counter_table()), Err(Refusal::Syntax(3)));
+}
+
+const VALID: u32 = 140;
+const VALUE: u32 = 141;
+const VKEY: u32 = 142;
+const NKEY: u32 = 143;
+
+/// Counter with its members valid and value. `Some(t)` marks a pure member that gives a `t`.
+fn members_table(valid: Option<Ty>, value: Option<Ty>) -> Structs {
+    let ms = Members::Cons(VALID, VKEY, valid, Box::new(Members::Cons(VALUE, NKEY, value, Box::new(Members::Nil))));
+    Structs::Cons(COUNTER, 4, Params::Cons(CN, Ty::I32, Box::new(Params::Nil)), ms, Box::new(Structs::Nil))
+}
+
+/// `int32_t Counter::value() const { return n_; }` with the key NKEY, or with another body.
+fn value_fn(body: Stmts) -> Function {
+    Function { name: NKEY, line: 9, params: Params::Cons(THIS, Ty::This(COUNTER), Box::new(Params::Nil)), ret: Ty::I32, conds: Conds::Nil, body }
+}
+
+#[test]
+fn a_pure_member_function_is_also_a_function_and_its_method_gives_its_value() {
+    let field = Expr::Cast(CastKind::Read, b(Expr::Field(b(Expr::Var(THIS, Ty::This(COUNTER))), CN)));
+    let Model::Full(m) = translate_function(&value_fn(one(Stmt::Return(field, 10))), &Fns::Nil, &members_table(None, None)) else { panic!("a full model") };
+    let dfield = DExpr::Field(Box::new(DExpr::Var(THIS)), CN);
+    assert_eq!(m.function, Some(dfield));
+    // The method gains ensures result == F(this), at the line of the function.
+    let link = DExpr::Bin(BinOp::Eq, Box::new(DExpr::Result), Box::new(DExpr::FCall(NKEY, Box::new(DArgs::Cons(DExpr::Var(THIS), Box::new(DArgs::Nil))))));
+    assert_eq!(m.ensures, DConds::Cons(link, 9, Box::new(DConds::Nil)));
+}
+
+#[test]
+fn a_member_function_with_a_local_or_a_call_is_not_pure_and_a_free_function_never_is() {
+    let field = || Expr::Cast(CastKind::Read, b(Expr::Field(b(Expr::Var(THIS, Ty::This(COUNTER))), CN)));
+    let body = Stmts::Cons(Box::new(Stmt::Local(A, Ty::I32, field(), 10)), Box::new(one(Stmt::Return(read(A, Ty::I32), 11))));
+    let Model::Full(m) = translate_function(&value_fn(body), &Fns::Nil, &members_table(None, None)) else { panic!("a full model") };
+    assert_eq!(m.function, None);
+    assert_eq!(m.ensures, DConds::Nil);
+    let free = Function { name: SAT, line: 3, params: Params::Cons(X, Ty::I32, Box::new(Params::Nil)), ret: Ty::I32, conds: Conds::Nil, body: one(Stmt::Return(read(X, Ty::I32), 4)) };
+    let Model::Full(m) = translate_function(&free, &Fns::Nil, &Structs::Nil) else { panic!("a full model") };
+    assert_eq!(m.function, None);
+}
+
+#[test]
+fn a_contract_calls_a_pure_member_function_on_this_or_on_a_path() {
+    // In a member function: requires valid(). In a free function of c: ensures result == c.value().
+    let table = members_table(Some(Ty::Bool), Some(Ty::I32));
+    let req = Expr::Apply(VALID, Box::new(Args::Nil));
+    let f = Function {
+        name: SAT,
+        line: 9,
+        params: Params::Cons(THIS, Ty::This(COUNTER), Box::new(Params::Nil)),
+        ret: Ty::Bool,
+        conds: Conds::Cons(CondKind::Requires, req, 8, names(&[THIS]), Box::new(Conds::Nil)),
+        body: one(Stmt::Return(Expr::Bool(true), 10)),
+    };
+    let Model::Full(m) = translate_function(&f, &Fns::Nil, &table) else { panic!("a full model") };
+    let on_this = DExpr::FCall(VKEY, Box::new(DArgs::Cons(DExpr::Var(THIS), Box::new(DArgs::Nil))));
+    assert_eq!(strip_conds(m.requires), DConds::Cons(on_this, 0, Box::new(DConds::Nil)));
+    let ens = Expr::Bin(BinOp::Eq, b(Expr::Result), b(Expr::MApply(b(Expr::Name(A)), VALUE, Box::new(Args::Nil))));
+    let g = Function {
+        name: SAT,
+        line: 20,
+        params: Params::Cons(A, Ty::Struct(COUNTER), Box::new(Params::Nil)),
+        ret: Ty::I32,
+        conds: Conds::Cons(CondKind::Ensures, ens, 19, names(&[A]), Box::new(Conds::Nil)),
+        body: one(Stmt::Return(Expr::Lit(0, Ty::I32), 21)),
+    };
+    let Model::Full(m) = translate_function(&g, &Fns::Nil, &table) else { panic!("a full model") };
+    // The value of an integer function reads as an exact integer.
+    let call = DExpr::AsInt(Box::new(DExpr::FCall(NKEY, Box::new(DArgs::Cons(DExpr::Var(A), Box::new(DArgs::Nil))))));
+    let want = DExpr::Bin(BinOp::Eq, Box::new(DExpr::AsInt(Box::new(DExpr::Result))), Box::new(call));
+    assert_eq!(strip_conds(m.ensures), DConds::Cons(want, 0, Box::new(DConds::Nil)));
+}
+
+#[test]
+fn a_contract_that_calls_a_member_function_that_is_not_pure_is_refused() {
+    // value is a member that is not pure, and three is no member.
+    let table = members_table(Some(Ty::Bool), None);
+    for name in [VALUE, 99] {
+        let ens = Expr::Bin(BinOp::Eq, b(Expr::Result), b(Expr::MApply(b(Expr::Name(A)), name, Box::new(Args::Nil))));
+        let g = Function {
+            name: SAT,
+            line: 20,
+            params: Params::Cons(A, Ty::Struct(COUNTER), Box::new(Params::Nil)),
+            ret: Ty::I32,
+            conds: Conds::Cons(CondKind::Ensures, ens, 19, names(&[A]), Box::new(Conds::Nil)),
+            body: one(Stmt::Return(Expr::Lit(0, Ty::I32), 21)),
+        };
+        assert_eq!(bare_refusal(translate_function(&g, &Fns::Nil, &table)), Refusal::NotPure(name, 19));
+    }
+}
+
+#[test]
+fn the_unit_marks_which_members_are_pure_whatever_the_table_says() {
+    // The table claims that value is pure and valid is not. The unit computes it: value is pure, and valid, here a member with a
+    // local, is not. So a contract that calls valid() is refused, and one that calls c.value() reads the function.
+    let field = || Expr::Cast(CastKind::Read, b(Expr::Field(b(Expr::Var(THIS, Ty::This(COUNTER))), CN)));
+    let value = value_fn(one(Stmt::Return(field(), 10)));
+    let valid = Function {
+        name: VKEY,
+        line: 12,
+        params: Params::Cons(THIS, Ty::This(COUNTER), Box::new(Params::Nil)),
+        ret: Ty::Bool,
+        conds: Conds::Nil,
+        body: Stmts::Cons(Box::new(Stmt::Local(B, Ty::Bool, Expr::Bool(true), 13)), Box::new(one(Stmt::Return(read(B, Ty::Bool), 14)))),
+    };
+    let ens = Expr::Bin(BinOp::Eq, b(Expr::Result), b(Expr::MApply(b(Expr::Name(A)), VALUE, Box::new(Args::Nil))));
+    let user = Function {
+        name: SAT,
+        line: 20,
+        params: Params::Cons(A, Ty::Struct(COUNTER), Box::new(Params::Nil)),
+        ret: Ty::I32,
+        conds: Conds::Cons(CondKind::Ensures, ens, 19, names(&[A]), Box::new(Conds::Nil)),
+        body: one(Stmt::Return(Expr::Lit(0, Ty::I32), 21)),
+    };
+    let bad = Function {
+        conds: Conds::Cons(CondKind::Ensures, Expr::MApply(b(Expr::Name(A)), VALID, Box::new(Args::Nil)), 23, names(&[A]), Box::new(Conds::Nil)),
+        line: 24,
+        ret: Ty::Bool,
+        body: one(Stmt::Return(Expr::Bool(true), 25)),
+        ..Function { name: SUCC, line: 24, params: Params::Cons(A, Ty::Struct(COUNTER), Box::new(Params::Nil)), ret: Ty::Bool, conds: Conds::Nil, body: Stmts::Nil }
+    };
+    let claimed = members_table(Some(Ty::Bool), None);
+    let Models::Cons(_, rest) = translate_unit(&fns(vec![value, valid, user, bad]), &claimed) else { panic!("models") };
+    let Models::Cons(_, rest) = *rest else { panic!("models") };
+    let Models::Cons(Model::Full(m), rest) = *rest else { panic!("a full model of user") };
+    let call = DExpr::AsInt(Box::new(DExpr::FCall(NKEY, Box::new(DArgs::Cons(DExpr::Var(A), Box::new(DArgs::Nil))))));
+    assert_eq!(strip_conds(m.ensures), DConds::Cons(DExpr::Bin(BinOp::Eq, Box::new(DExpr::AsInt(Box::new(DExpr::Result))), Box::new(call)), 0, Box::new(DConds::Nil)));
+    let Models::Cons(last, _) = *rest else { panic!("models") };
+    assert_eq!(bare_refusal(last), Refusal::NotPure(VALID, 23));
+}
+
+#[test]
+fn the_parser_reads_a_call_of_a_member_function_on_a_path() {
+    // c.value() and c.get(1, b)
+    let toks = vec![Tok::Ident(A), Tok::Field(VALUE), Tok::LParen, Tok::RParen];
+    assert_eq!(parse_contract(&toks, 3), Ok(Expr::MApply(b(Expr::Name(A)), VALUE, Box::new(Args::Nil))));
+    let toks = vec![Tok::Ident(A), Tok::Field(VALUE), Tok::LParen, Tok::Int(1), Tok::Comma, Tok::Ident(B), Tok::RParen];
+    let args = Args::Cons(b(Expr::Int(1)), Box::new(Args::Cons(b(Expr::Name(B)), Box::new(Args::Nil))));
+    assert_eq!(parse_contract(&toks, 3), Ok(Expr::MApply(b(Expr::Name(A)), VALUE, Box::new(args))));
+    // A field with no call stays a field.
+    assert_eq!(parse_contract(&vec![Tok::Ident(A), Tok::Field(VALUE)], 3), Ok(Expr::Field(b(Expr::Name(A)), VALUE)));
 }

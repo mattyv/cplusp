@@ -2920,6 +2920,41 @@ fn member_functions_with_no_rule_are_refused_at_their_lines() {
     assert_eq!(refusals.len(), 3, "{text}");
 }
 
+/// A pure const member function is also a Dafny function. A contract calls valid() inside its struct and c.valid() and c.next()
+/// outside it, and a caller of the method knows the value of the function, decision 0090.
+#[test]
+fn pure_member_functions_are_functions_that_contracts_call() {
+    let Some(dafny) = dafny() else { return };
+    if !clang_tidy_available() {
+        return;
+    }
+    let o = prove("model-pure.cpp", &[], &dafny);
+    let text = stdout(&o);
+    assert_eq!(o.status.code(), Some(0), "stdout: {text} stderr: {}", stderr(&o));
+    assert_eq!(text.lines().last(), Some("ok: proved"), "{text}");
+}
+
+/// A contract that calls a member function that is not pure, or a name that is no member function, is refused at its line,
+/// decision 0090.
+#[test]
+fn a_contract_that_calls_a_member_function_that_is_not_pure_is_refused() {
+    if !clang_tidy_available() {
+        return;
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let (o, _) = model("model-pure-refuse.cpp", dir.path());
+    let text = stdout(&o);
+    assert_eq!(o.status.code(), Some(1), "stdout: {text} stderr: {}", stderr(&o));
+    let refusals: Vec<&str> = text.lines().filter(|l| l.starts_with("Not provable: ")).collect();
+    for want in [
+        "model-pure-refuse.cpp:13: copy is no pure member function of its struct.",
+        "model-pure-refuse.cpp:18: three is no pure member function of its struct.",
+    ] {
+        assert!(refusals.iter().any(|l| l.ends_with(want)), "{want}: {text}");
+    }
+    assert_eq!(refusals.len(), 2, "{text}");
+}
+
 /// Pull `"key":"value"` or `"key":123` out of one JSON line without a JSON library.
 fn field(line: &str, key: &str) -> String {
     let needle = format!("\"{key}\":");
