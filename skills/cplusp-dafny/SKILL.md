@@ -1,6 +1,6 @@
 ---
 name: cplusp-dafny
-description: Develop and review C+P subsystem contracts, composition proofs and hand-written Dafny models. Use when planning verified C++ changes, reviewing proof scope, or modelling C++ behavior in Dafny.
+description: Develop and review C+P subsystem contracts, composition proofs and hand-written Dafny models. Use when planning verified C++ changes, generating or challenging formal specifications, reviewing proof scope, or modelling C++ behavior in Dafny. Use the specification-review workflow for Verus core contracts too.
 ---
 
 # Writing Dafny for C+P
@@ -8,6 +8,7 @@ description: Develop and review C+P subsystem contracts, composition proofs and 
 The divergence rules below come from cases in `divergence/dafny/cases/`. The case shows the naive model, the divergence, and the mitigation. Follow the rules. When a construct has no rule, stop and write the case first. For the right way under each row the policy allows, read `examples/<row>/`: the C++ with its contract, and the Dafny for it.
 
 ## Whole-program development
+Read [Generate and challenge specifications](references/specification-review.md) when generating or reviewing contracts, or repairing proofs. Apply its fixed-contract mutation checks, input-domain checks and outcome reporting. Keep the reviewer and coder roles. Use Verus syntax for the Rust core and the current C+P translation rules for C++.
 Read [the research report](../../docs/research/formal-verification-llm-coding-report.md) and [the FAQ](../../docs/formal-proof-faq.md) for proof scope and evidence.
 Start top-down with requirements and contracts. Build code and proofs together in small increments.
 1. Select one feature. Define its outputs, state changes, failure behavior and allowed inputs.

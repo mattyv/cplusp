@@ -164,53 +164,211 @@
     .display.math{display: block; text-align: center; margin: 0.5rem auto;}
   </style>
   <style>
-  :root { color-scheme: light; --ink: #17252e; --muted: #576873; --line: #d6dfe4; --accent: #145e75; }
-  * { box-sizing: border-box; }
-  html { background: #f2f5f6; }
-  body { margin: 28px auto; padding: 42px 54px; max-width: 1030px; background: white; color: var(--ink); font: 18px/1.62 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; box-shadow: 0 2px 14px #17252e0a; }
-  header { border-bottom: 3px solid var(--accent); padding-bottom: 22px; margin-bottom: 28px; }
-  h1 { font-size: 35px; line-height: 1.18; letter-spacing: -.7px; margin: 0 0 14px; }
-  header .subtitle { font-size: 19px; color: var(--muted); margin: 0 0 6px; }
-  header .date { font-size: 14px; color: var(--muted); margin: 0; }
-  h2 { font-size: 23px; line-height: 1.3; margin: 38px 0 16px; letter-spacing: -.25px; color: var(--accent); }
-  p { margin: 0 0 17px; }
-  strong { font-weight: 650; }
-  a { color: #125b77; text-decoration: underline; text-underline-offset: 3px; }
-  table { width: 100%; border-collapse: collapse; margin: 24px 0; font-size: 16px; line-height: 1.5; }
-  th { background: #eaf2f5; font-weight: 650; text-align: left; }
-  th, td { border-bottom: 1px solid var(--line); padding: 12px 14px; vertical-align: top; }
-  tbody tr:nth-child(even) { background: #f8fafb; }
-  table:first-of-type th:first-child { width: 73%; }
-  ul, ol { padding-left: 25px; margin: 0 0 20px; }
-  li { padding-left: 3px; margin-bottom: 12px; }
-  #sources { border-top: 1px solid var(--line); padding-top: 26px; }
-  #sources ~ ol, #sources ~ p { font-size: 15px; line-height: 1.6; color: var(--muted); }
-  @media (max-width: 700px) {
-    html { background: white; }
-    body { margin: 0; padding: 25px 20px; font-size: 17px; box-shadow: none; }
-    h1 { font-size: 29px; }
-    h2 { font-size: 21px; }
-    header .subtitle { font-size: 17px; }
-    table { font-size: 14px; }
-    th, td { padding: 9px 8px; overflow-wrap: anywhere; }
-  }
-  @media print {
-    html { background: white; }
-    body { max-width: none; margin: 0; padding: 0; font-size: 11pt; box-shadow: none; }
-    h1 { font-size: 24pt; }
-    h2 { font-size: 16pt; margin-top: 24px; break-after: avoid; }
-    p, li { orphans: 3; widows: 3; }
-    table { font-size: 10pt; break-inside: avoid; }
-    header { break-inside: avoid; }
-  }
-  </style>
+      html {
+        color: #1a1a1a;
+        background-color: #fdfdfd;
+      }
+      body {
+        margin: 0 auto;
+        max-width: 36em;
+        padding-left: 50px;
+        padding-right: 50px;
+        padding-top: 50px;
+        padding-bottom: 50px;
+        hyphens: auto;
+        overflow-wrap: break-word;
+        text-rendering: optimizeLegibility;
+        font-kerning: normal;
+      }
+      @media (max-width: 600px) {
+        body {
+          font-size: 0.9em;
+          padding: 12px;
+        }
+        h1 {
+          font-size: 1.8em;
+        }
+      }
+      @media print {
+        html {
+          background-color: white;
+        }
+        body {
+          background-color: transparent;
+          color: black;
+          font-size: 12pt;
+        }
+        p, h2, h3 {
+          orphans: 3;
+          widows: 3;
+        }
+        h2, h3, h4 {
+          page-break-after: avoid;
+        }
+      }
+      p {
+        margin: 1em 0;
+      }
+      a {
+        color: #1a1a1a;
+      }
+      a:visited {
+        color: #1a1a1a;
+      }
+      img {
+        max-width: 100%;
+      }
+      h1, h2, h3, h4, h5, h6 {
+        margin-top: 1.4em;
+      }
+      h5, h6 {
+        font-size: 1em;
+        font-style: italic;
+      }
+      h6 {
+        font-weight: normal;
+      }
+      ol, ul {
+        padding-left: 1.7em;
+        margin-top: 1em;
+      }
+      li > ol, li > ul {
+        margin-top: 0;
+      }
+      blockquote {
+        margin: 1em 0 1em 1.7em;
+        padding-left: 1em;
+        border-left: 2px solid #e6e6e6;
+        color: #606060;
+      }
+      code {
+        font-family: Menlo, Monaco, Consolas, 'Lucida Console', monospace;
+        font-size: 85%;
+        margin: 0;
+        hyphens: manual;
+      }
+      pre {
+        margin: 1em 0;
+        overflow: auto;
+      }
+      pre code {
+        padding: 0;
+        overflow: visible;
+        overflow-wrap: normal;
+      }
+      .sourceCode {
+       background-color: transparent;
+       overflow: visible;
+      }
+      hr {
+        background-color: #1a1a1a;
+        border: none;
+        height: 1px;
+        margin: 1em 0;
+      }
+      table {
+        margin: 1em 0;
+        border-collapse: collapse;
+        width: 100%;
+        overflow-x: auto;
+        display: block;
+        font-variant-numeric: lining-nums tabular-nums;
+      }
+      table caption {
+        margin-bottom: 0.75em;
+      }
+      tbody {
+        margin-top: 0.5em;
+        border-top: 1px solid #1a1a1a;
+        border-bottom: 1px solid #1a1a1a;
+      }
+      th {
+        border-top: 1px solid #1a1a1a;
+        padding: 0.25em 0.5em 0.25em 0.5em;
+      }
+      td {
+        padding: 0.125em 0.5em 0.25em 0.5em;
+      }
+      header {
+        margin-bottom: 4em;
+        text-align: center;
+      }
+      #TOC li {
+        list-style: none;
+      }
+      #TOC ul {
+        padding-left: 1.3em;
+      }
+      #TOC > ul {
+        padding-left: 0;
+      }
+      #TOC a:not(:hover) {
+        text-decoration: none;
+      }
+      code{white-space: pre-wrap;}
+      span.smallcaps{font-variant: small-caps;}
+      div.columns{display: flex; gap: min(4vw, 1.5em);}
+      div.column{flex: auto; overflow-x: auto;}
+      div.hanging-indent{margin-left: 1.5em; text-indent: -1.5em;}
+      /* The extra [class] is a hack that increases specificity enough to
+         override a similar rule in reveal.js */
+      ul.task-list[class]{list-style: none;}
+      ul.task-list li input[type="checkbox"] {
+        font-size: inherit;
+        width: 0.8em;
+        margin: 0 0.8em 0.2em -1.6em;
+        vertical-align: middle;
+      }
+      .display.math{display: block; text-align: center; margin: 0.5rem auto;}
+    </style>
+  <style>
+    :root { color-scheme: light; --ink: #17252e; --muted: #576873; --line: #d6dfe4; --accent: #145e75; }
+    * { box-sizing: border-box; }
+    html { background: #f2f5f6; }
+    body { margin: 28px auto; padding: 42px 54px; max-width: 1030px; background: white; color: var(--ink); font: 18px/1.62 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; box-shadow: 0 2px 14px #17252e0a; }
+    header { border-bottom: 3px solid var(--accent); padding-bottom: 22px; margin-bottom: 28px; }
+    h1 { font-size: 35px; line-height: 1.18; letter-spacing: -.7px; margin: 0 0 14px; }
+    header .subtitle { font-size: 19px; color: var(--muted); margin: 0 0 6px; }
+    header .date { font-size: 14px; color: var(--muted); margin: 0; }
+    h2 { font-size: 23px; line-height: 1.3; margin: 38px 0 16px; letter-spacing: -.25px; color: var(--accent); }
+    p { margin: 0 0 17px; }
+    strong { font-weight: 650; }
+    a { color: #125b77; text-decoration: underline; text-underline-offset: 3px; }
+    table { width: 100%; border-collapse: collapse; margin: 24px 0; font-size: 16px; line-height: 1.5; }
+    th { background: #eaf2f5; font-weight: 650; text-align: left; }
+    th, td { border-bottom: 1px solid var(--line); padding: 12px 14px; vertical-align: top; }
+    tbody tr:nth-child(even) { background: #f8fafb; }
+    table:first-of-type th:first-child { width: 73%; }
+    ul, ol { padding-left: 25px; margin: 0 0 20px; }
+    li { padding-left: 3px; margin-bottom: 12px; }
+    #sources { border-top: 1px solid var(--line); padding-top: 26px; }
+    #sources ~ ol, #sources ~ p { font-size: 15px; line-height: 1.6; color: var(--muted); }
+    @media (max-width: 700px) {
+      html { background: white; }
+      body { margin: 0; padding: 25px 20px; font-size: 17px; box-shadow: none; }
+      h1 { font-size: 29px; }
+      h2 { font-size: 21px; }
+      header .subtitle { font-size: 17px; }
+      table { font-size: 14px; }
+      th, td { padding: 9px 8px; overflow-wrap: anywhere; }
+    }
+    @media print {
+      html { background: white; }
+      body { max-width: none; margin: 0; padding: 0; font-size: 11pt; box-shadow: none; }
+      h1 { font-size: 24pt; }
+      h2 { font-size: 16pt; margin-top: 24px; break-after: avoid; }
+      p, li { orphans: 3; widows: 3; }
+      table { font-size: 10pt; break-inside: avoid; }
+      header { break-inside: avoid; }
+    }
+    </style>
 </head>
 <body>
 <header id="title-block-header">
 <h1 class="title">Does formal verification improve LLM coding?</h1>
-<p class="subtitle">Six conclusions, with the evidence beside each
+<p class="subtitle">Seven conclusions, with the evidence beside each
 claim</p>
-<p class="date">Evidence checked 8 October 2026</p>
+<p class="date">Evidence checked 9 October 2026</p>
 </header>
 <p><strong>Yes: reliable specifications and decomposed verification
 workflows have improved measured LLM results.</strong> Experiments
@@ -506,6 +664,86 @@ successful proof. Report a requirements conflict for review. Dafny
 requires all relevant implementations to verify for a complete program
 claim. <a
 href="https://dafny.org/latest/DafnyRef/DafnyRef.html">12</a></p>
+<h2
+id="reusable-skills-exist.-their-specification-impact-needs-careful-attribution.">7.
+Reusable skills exist. Their specification impact needs careful
+attribution.</h2>
+<p><strong>Use evaluated methods, then measure the local skill.</strong>
+KVerus provides installable Verus skills. SpecSyn and AutoSpec+ provide
+evaluated specification workflows. Their results measure different
+outcomes.</p>
+<table>
+<colgroup>
+<col style="width: 33%" />
+<col style="width: 33%" />
+<col style="width: 33%" />
+</colgroup>
+<thead>
+<tr class="header">
+<th>Candidate</th>
+<th>Evidence</th>
+<th>What it establishes</th>
+</tr>
+</thead>
+<tbody>
+<tr class="odd">
+<td><strong>KVerus</strong>: specification, repair, review and
+behavior-audit skills</td>
+<td>Earlier ASE 2026 workflow verified <strong>251/313 tasks
+(80.2%)</strong>, versus <strong>178/313 (56.9%)</strong> for AutoVerus.
+<a href="https://arxiv.org/html/2605.03822v1">13</a></td>
+<td>Better proof generation under the study conditions. The paper
+assumes correct specifications. It does <strong>not</strong> establish
+the current specification skill’s quality. The evaluated workflow is on
+the repository’s <code>ase-26</code> branch. <a
+href="https://github.com/asterinas/KVerus">14</a></td>
+</tr>
+<tr class="even">
+<td><strong>SpecSyn</strong>: decomposition and mutation refinement</td>
+<td>With GPT-5, adding mutation refinement raised average
+reference-specification coverage <strong>70.57% → 75.91%</strong>.
+Adding decomposition raised it <strong>63.25% → 75.91%</strong>. <a
+href="https://arxiv.org/html/2604.21570v1">7, Table 2</a></td>
+<td>Direct evidence of stronger generated supporting specifications on
+50 C source files. Verification targets are supplied. This is a preprint
+and does not establish recovery of all intended requirements.</td>
+</tr>
+<tr class="odd">
+<td><strong>AutoSpec+</strong>: generate, verify and repair ACSL
+annotations</td>
+<td>ACL 2026 evaluation reports <strong>91.05% pass@5</strong>, versus
+<strong>79.76% for AutoSpec</strong>, on the comparison suites. <a
+href="https://aclanthology.org/2026.acl-demo.66.pdf">15, Table
+3</a></td>
+<td>Improved verification success within five attempts. The system
+includes model ensembles. This is not an isolated measure of
+specification completeness.</td>
+</tr>
+</tbody>
+</table>
+<p><strong>Implication for C+P:</strong> adapt KVerus’s separate
+workflow stages and SpecSyn’s mutation checks. Use the existing project
+skill and reviewer roles. This adaptation has not yet been evaluated on
+C+P.</p>
+<p>The reviewer should freeze the contract, verify the baseline, and try
+small wrong implementations. For sorting, return an empty sequence or
+drop duplicates. For search, always return false. For an update, change
+an unrelated field. Give an allowed input that exposes the wrong result
+for each mutation. Record whether the proof rejects it, the wrong body
+verifies, or the check is inconclusive. A translation refusal, syntax
+failure or timeout does not show that the contract catches the bug.</p>
+<p>Also check that preconditions admit intended inputs. Compare
+executable behavior before and after annotations. Keep requirements
+review independent of implementation inspection. Code-derived contracts
+can accurately describe an existing bug. Neither successful verification
+nor rejection of a finite mutation set proves specification
+completeness.</p>
+<p>See <a
+href="../../skills/cplusp-dafny/references/specification-review.md">the
+skill’s specification-review workflow</a>. For the pilot in section 5,
+add missed requirements and wrong variants that still verify to the
+measurements. Keep evaluation mutations separate from the ones used to
+refine the specification.</p>
 <h2 id="sources">Sources</h2>
 <ol type="1">
 <li><p><strong>SWE-Proof</strong> (September 2026 preprint, v2). <a
@@ -550,6 +788,20 @@ href="https://dafny.org/dafny/OnlineTutorial/Modules">Modules and
 refinement</a>, <a
 href="https://dafny.org/latest/DafnyRef/DafnyRef.html">complete
 verification and assumptions</a>.</p></li>
+<li><p><strong>KVerus</strong> (ASE 2026, Industry Track). <a
+href="https://arxiv.org/html/2605.03822v1">Table 1 and Section 6.1:
+proof-generation results and assumed specification
+correctness</a>.</p></li>
+<li><p><strong>KVerus repository</strong>. <a
+href="https://github.com/asterinas/KVerus">Installable skills and the
+evaluated <code>ase-26</code> workflow</a>, <a
+href="https://github.com/asterinas/KVerus/blob/main/skills/kverus-spec/SKILL.md">specification
+skill</a>.</p></li>
+<li><p><strong>AutoSpec+</strong> (ACL 2026 System Demonstrations). <a
+href="https://aclanthology.org/2026.acl-demo.66.pdf">Tables 2–3 and
+Section 5: specification-generation evaluation</a>, <a
+href="https://github.com/Xidian-ICTT-GZ/AutoSpec">runnable
+tool</a>.</p></li>
 </ol>
 <p><em>This brief retains the earlier review’s strongest evidence.
 Results come from distinct benchmarks. This report gives no pooled

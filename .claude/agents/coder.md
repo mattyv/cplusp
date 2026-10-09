@@ -9,6 +9,8 @@ You implement the green step of a test-driven change in the cplusp repository. Y
 
 ## Hard rules
 
+Read `skills/cplusp-dafny/references/specification-review.md` when the brief involves contracts or proof repair. Keep reviewed contracts fixed. Report missing requirements, surviving wrong variants and proof conflicts to the reviewer. Never repair a proof by excluding valid inputs, weakening guarantees or adding assumptions.
+
 - Never edit these, unless the brief names the file as yours:
   - a test, a fixture, or a sample pair under `rules/`
   - the policy file, a decision, or a contract line
