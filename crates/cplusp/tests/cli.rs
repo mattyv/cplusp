@@ -1836,7 +1836,7 @@ fn loops_and_writes_with_no_rule_are_refused_at_their_lines() {
     let misplaced =
         "a contract line in the wrong place. A requires, an ensures or a decreases line goes above a function. An invariant or a decreases line goes above a loop.";
     for (line, expected) in [
-        (5, "x is a parameter. The translator writes only a local."),
+        (5, "x is a parameter. The translator writes only a local or a reference parameter."),
         (11, "BinaryOperator <<=: the translator has no rule for it yet."),
         (18, "BreakStmt: the translator has no rule for it yet."),
         (25, "z in the invariant line is no variable."),
@@ -3064,11 +3064,11 @@ fn writes_with_no_rule_are_refused_at_their_lines() {
     assert_eq!(o.status.code(), Some(1), "stdout: {text} stderr: {}", stderr(&o));
     let refusals: Vec<&str> = text.lines().filter(|l| l.starts_with("Not provable: ")).collect();
     for want in [
-        "model-mut-refuse.cpp:17: c is a parameter. The translator writes only a local.",
-        "model-mut-refuse.cpp:23: the call writes its object, and the translator writes back only a local.",
+        "model-mut-refuse.cpp:17: c is a parameter. The translator writes only a local or a reference parameter.",
+        "model-mut-refuse.cpp:23: the call writes a value back, and the translator writes back only to a local or a reference parameter.",
         "model-mut-refuse.cpp:27: the contract line has a form the translator cannot read.",
         "model-mut-refuse.cpp:37: ReturnStmt: the translator has no rule for it yet.",
-        "model-mut-refuse.cpp:45: a call out of place. The translator takes a call when C++ runs it once and the statement uses its value. It takes a call that writes its object or gives no value only alone.",
+        "model-mut-refuse.cpp:45: a call out of place. The translator takes a call when C++ runs it once and the statement uses its value. It takes a call that writes a value back or gives no value only alone.",
         "model-mut-refuse.cpp:53: CXXOperatorCallExpr: the translator has no rule for it yet.",
     ] {
         assert!(refusals.iter().any(|l| l.ends_with(want)), "{want}: {text}");
@@ -3133,7 +3133,7 @@ fn conditionals_and_functors_with_no_rule_are_refused_at_their_lines() {
     let refusals: Vec<&str> = text.lines().filter(|l| l.starts_with("Not provable: ")).collect();
     for want in [
         "model-cond-refuse.cpp:11: operator() is no pure member function of its struct.",
-        "model-cond-refuse.cpp:21: a call out of place. The translator takes a call when C++ runs it once and the statement uses its value. It takes a call that writes its object or gives no value only alone.",
+        "model-cond-refuse.cpp:21: a call out of place. The translator takes a call when C++ runs it once and the statement uses its value. It takes a call that writes a value back or gives no value only alone.",
         "model-cond-refuse.cpp:24: the contract line has a form the translator cannot read.",
     ] {
         assert!(refusals.iter().any(|l| l.ends_with(want)), "{want}: {text}");
@@ -3365,7 +3365,7 @@ fn a_call_that_cpp_may_not_run_once_is_refused_at_its_line() {
     let text = stdout(&o);
     assert_eq!(o.status.code(), Some(1), "stdout: {text} stderr: {}", stderr(&o));
     let refusals: Vec<&str> = text.lines().filter(|l| l.starts_with("Not provable: ")).collect();
-    let place = "a call out of place. The translator takes a call when C++ runs it once and the statement uses its value. It takes a call that writes its object or gives no value only alone.";
+    let place = "a call out of place. The translator takes a call when C++ runs it once and the statement uses its value. It takes a call that writes a value back or gives no value only alone.";
     for line in [9, 13, 18, 25, 30] {
         let want = format!("model-lift-refuse.cpp:{line}: {place}");
         assert!(refusals.iter().any(|l| l.ends_with(&want)), "{want}: {text}");
@@ -3451,4 +3451,63 @@ fn a_variable_in_a_contract_and_a_left_shift_are_refused() {
         assert!(refusals.iter().any(|l| l.ends_with(want)), "{want}: {text}");
     }
     assert_eq!(refusals.len(), 2, "{text}");
+}
+
+/// A reference parameter on the modifies line takes a value in and gives it back. A caller writes back a local or its own
+/// reference parameter, and a trusted function can write one, decision 0108.
+#[test]
+fn reference_parameters_prove() {
+    let Some(dafny) = dafny() else { return };
+    if !clang_tidy_available() {
+        return;
+    }
+    let o = prove("model-ref.cpp", &[], &dafny);
+    let text = stdout(&o);
+    assert_eq!(o.status.code(), Some(0), "stdout: {text} stderr: {}", stderr(&o));
+    assert_eq!(text.lines().last(), Some("ok: proved"), "{text}");
+}
+
+/// An ensures line about a reference parameter that the body does not meet, a call that does not meet a requires line, and a caller
+/// that reads a local as it was before a call that wrote it, are named at their lines, decision 0108.
+#[test]
+fn prove_names_a_reference_parameter_that_does_not_meet_its_contract() {
+    let Some(dafny) = dafny() else { return };
+    if !clang_tidy_available() {
+        return;
+    }
+    let o = prove("model-ref-wrong.cpp", &[], &dafny);
+    let text = stdout(&o);
+    assert_eq!(o.status.code(), Some(1), "stdout: {text} stderr: {}", stderr(&o));
+    let failed: Vec<&str> = text.lines().filter(|l| l.starts_with("Not proved: ")).collect();
+    for want in [
+        "model-ref-wrong.cpp:6: the ensures line may not hold on this return.",
+        "model-ref-wrong.cpp:19: a requires line of the callee may not hold.",
+        "model-ref-wrong.cpp:26: the ensures line may not hold on this return.",
+    ] {
+        assert!(failed.iter().any(|l| l.ends_with(want)), "{want}: {text}");
+    }
+    assert_eq!(failed.len(), 3, "{text}");
+}
+
+/// A name on the modifies line that is no reference parameter, a reference parameter that the line does not name, and a call that
+/// writes back to a parameter by value or to a field, are refused at their lines, decision 0108.
+#[test]
+fn a_modifies_line_and_a_write_back_with_no_rule_are_refused() {
+    if !clang_tidy_available() {
+        return;
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let (o, _) = model("model-ref-refuse.cpp", dir.path());
+    let text = stdout(&o);
+    assert_eq!(o.status.code(), Some(1), "stdout: {text} stderr: {}", stderr(&o));
+    let refusals: Vec<&str> = text.lines().filter(|l| l.starts_with("Not provable: ")).collect();
+    for want in [
+        "model-ref-refuse.cpp:10: n on the modifies line is no reference parameter.",
+        "model-ref-refuse.cpp:15: x is a reference parameter that the modifies line does not name.",
+        "model-ref-refuse.cpp:25: y is a parameter. The translator writes only a local or a reference parameter.",
+        "model-ref-refuse.cpp:30: the call writes a value back, and the translator writes back only to a local or a reference parameter.",
+    ] {
+        assert!(refusals.iter().any(|l| l.ends_with(want)), "{want}: {text}");
+    }
+    assert_eq!(refusals.len(), 4, "{text}");
 }

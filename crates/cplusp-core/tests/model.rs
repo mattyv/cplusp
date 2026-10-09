@@ -1759,9 +1759,9 @@ fn a_call_that_writes_its_object_writes_a_local_back() {
     let Model::Full(m) = translate_function(&user, &all, &counter_table()) else { panic!("a full model") };
     let DStmts::Cons(_, _, rest) = strip(m.body) else { panic!("a body") };
     let DStmts::Cons(update, _, rest) = *rest else { panic!("an update") };
-    assert_eq!(*update, DStmt::Update(Obj::Local(LOC), BUMP, DArgs::Nil));
+    assert_eq!(*update, DStmt::Update(objs(&[Obj::Local(LOC)]), BUMP, dargs(vec![DExpr::Var(LOC)])));
     let DStmts::Cons(local, _, _) = *rest else { panic!("a local") };
-    assert_eq!(*local, DStmt::LocalUpdate(A, DTy::Int32, Obj::Local(LOC), TAKE, DArgs::Nil));
+    assert_eq!(*local, DStmt::LocalUpdate(A, DTy::Int32, objs(&[Obj::Local(LOC)]), TAKE, dargs(vec![DExpr::Var(LOC)])));
 }
 
 #[test]
@@ -2117,4 +2117,241 @@ fn three_small_integer_types_and_a_right_shift() {
     assert_eq!(translate_code(&wide, 3), Ok(DExpr::ShrIn(int(X), int(B), DTy::Int64, 64)));
     // A shift of a bool has no rule.
     assert_eq!(translate_code(&Expr::Shr(b(Expr::Bool(true)), b(Expr::Bool(true)), Ty::Bool), 3), Err(Refusal::Convert(3)));
+}
+
+const DST: u32 = 190;
+const SRC: u32 = 191;
+const TAKE_REF: u32 = 192;
+const NEXT: u32 = 193;
+const FIRST: u32 = 194;
+const FA: u32 = 195;
+
+fn mut32() -> Ty {
+    Ty::Mut(Scalar::I32)
+}
+
+fn objs(v: &[Obj]) -> Objs {
+    v.iter().rev().fold(Objs::Nil, |rest, o| Objs::Cons(*o, Box::new(rest)))
+}
+
+fn dargs(v: Vec<DExpr>) -> DArgs {
+    v.into_iter().rev().fold(DArgs::Nil, |rest, d| DArgs::Cons(d, Box::new(rest)))
+}
+
+fn int_params(v: &[u32]) -> DParams {
+    v.iter().rev().fold(DParams::Nil, |rest, n| DParams::Cons(*n, DTy::Int32, Box::new(rest)))
+}
+
+/// `//@ modifies` lines that name each of `v`, at line 5 above a declaration with the parameters `ps`.
+fn modifies(v: &[u32], ps: &[u32], rest: Conds) -> Conds {
+    v.iter().rev().fold(rest, |r, n| Conds::Cons(CondKind::Modifies, Expr::Name(*n), 5, names(ps), Box::new(r)))
+}
+
+/// `void take(int32_t& dst, int32_t& src)` with modifies dst, src and ensures dst == old(src) && src == 0, and a body of
+/// dst = src; src = 0;
+fn take_ref() -> Function {
+    let ens = Expr::Bin(
+        BinOp::And,
+        b(Expr::Bin(BinOp::Eq, b(Expr::Name(DST)), b(Expr::Old(b(Expr::Name(SRC)))))),
+        b(Expr::Bin(BinOp::Eq, b(Expr::Name(SRC)), b(Expr::Int(0)))),
+    );
+    Function {
+        name: TAKE_REF,
+        line: 8,
+        params: Params::Cons(DST, mut32(), Box::new(Params::Cons(SRC, mut32(), Box::new(Params::Nil)))),
+        ret: Ty::Void,
+        trusted: false,
+        conds: modifies(&[DST, SRC], &[DST, SRC], Conds::Cons(CondKind::Ensures, ens, 7, names(&[DST, SRC]), Box::new(Conds::Nil))),
+        body: Stmts::Cons(
+            Box::new(Stmt::Assign(DST, read(SRC, mut32()), 9)),
+            Box::new(one(Stmt::Assign(SRC, Expr::Lit(0, Ty::I32), 10))),
+        ),
+    }
+}
+
+#[test]
+fn a_reference_parameter_on_the_modifies_line_takes_a_value_in_and_gives_it_back() {
+    let Model::Full(m) = translate_function(&take_ref(), &Fns::Nil, &Structs::Nil) else { panic!("a full model") };
+    assert_eq!(m.params, int_params(&[DST, SRC]));
+    assert_eq!(m.outs, int_params(&[DST, SRC]));
+    assert!(!m.writes);
+    // The body reads and writes the value after: dst' and src'.
+    assert_eq!(
+        strip(m.body),
+        DStmts::Cons(
+            Box::new(DStmt::SetOut(DST, DExpr::Out(SRC))),
+            0,
+            Box::new(DStmts::Cons(Box::new(DStmt::SetOut(SRC, lit32(0))), 0, Box::new(DStmts::Nil))),
+        )
+    );
+    // An ensures line reads the value after the call, and old() the value before.
+    let int = |d: DExpr| Box::new(DExpr::AsInt(Box::new(d)));
+    let want = DExpr::Bin(
+        BinOp::And,
+        Box::new(DExpr::Bin(BinOp::Eq, int(DExpr::Out(DST)), int(DExpr::Var(SRC)))),
+        Box::new(DExpr::Bin(BinOp::Eq, int(DExpr::Out(SRC)), Box::new(DExpr::Lit(0)))),
+    );
+    assert_eq!(strip_conds(m.ensures), DConds::Cons(want, 0, Box::new(DConds::Nil)));
+}
+
+#[test]
+fn a_requires_line_reads_a_reference_parameter_before_the_call_and_old_has_no_place_there() {
+    // //@ requires x < 1000 on void bump(int32_t& x) with modifies x
+    let req = Expr::Bin(BinOp::Lt, b(Expr::Name(X)), b(Expr::Int(1000)));
+    let f = Function {
+        name: TAKE_REF,
+        line: 8,
+        params: Params::Cons(X, mut32(), Box::new(Params::Nil)),
+        ret: Ty::Void,
+        trusted: false,
+        conds: modifies(&[X], &[X], Conds::Cons(CondKind::Requires, req, 6, names(&[X]), Box::new(Conds::Nil))),
+        body: one(Stmt::Step(X, Ty::I32, true, 9)),
+    };
+    let Model::Full(m) = translate_function(&f, &Fns::Nil, &Structs::Nil) else { panic!("a full model") };
+    let want = DExpr::Bin(BinOp::Lt, Box::new(DExpr::AsInt(Box::new(DExpr::Var(X)))), Box::new(DExpr::Lit(1000)));
+    assert_eq!(strip_conds(m.requires), DConds::Cons(want, 0, Box::new(DConds::Nil)));
+    // ++x writes the value after.
+    let step = DStmt::SetOut(X, DExpr::Bin(BinOp::Add, Box::new(DExpr::Out(X)), Box::new(lit32(1))));
+    assert_eq!(strip(m.body), DStmts::Cons(Box::new(step), 0, Box::new(DStmts::Nil)));
+    let old = Expr::Bin(BinOp::Lt, b(Expr::Old(b(Expr::Name(X)))), b(Expr::Int(1000)));
+    let g = Function { conds: modifies(&[X], &[X], Conds::Cons(CondKind::Requires, old, 6, names(&[X]), Box::new(Conds::Nil))), ..f };
+    assert_eq!(bare_refusal(translate_function(&g, &Fns::Nil, &Structs::Nil)), Refusal::Syntax(6));
+}
+
+#[test]
+fn the_modifies_line_names_each_reference_parameter_and_nothing_else() {
+    // A name on the modifies line that is a parameter by value.
+    let by_value = Function {
+        conds: modifies(&[X], &[X], Conds::Nil),
+        ..with_n(one(Stmt::Return(read(X, Ty::I32), 4)))
+    };
+    assert_eq!(translate_function(&by_value, &Fns::Nil, &Structs::Nil), Model::Refused(Refusal::NotRef(X, 5)));
+    // A reference parameter that the modifies line does not name.
+    let unlisted = Function { conds: modifies(&[DST], &[DST, SRC], Conds::Nil), ..take_ref() };
+    assert_eq!(translate_function(&unlisted, &Fns::Nil, &Structs::Nil), Model::Refused(Refusal::Unlisted(SRC, 8)));
+    // A reference parameter is a parameter only. It is no result type.
+    let ret = Function { ret: mut32(), conds: Conds::Nil, ..with_n(one(Stmt::Return(read(X, Ty::I32), 4))) };
+    assert!(matches!(translate_function(&ret, &Fns::Nil, &Structs::Nil), Model::Refused(_)));
+}
+
+#[test]
+fn a_call_writes_back_each_argument_of_a_reference_parameter() {
+    let all = fns(vec![take_ref()]);
+    // int32_t a = 1; int32_t b = 5; take(a, b); return a;
+    let user = Function {
+        name: SAT,
+        line: 20,
+        params: Params::Nil,
+        ret: Ty::I32,
+        trusted: false,
+        conds: Conds::Nil,
+        body: Stmts::Cons(
+            Box::new(Stmt::Local(A, Ty::I32, Expr::Lit(1, Ty::I32), 21)),
+            Box::new(Stmts::Cons(
+                Box::new(Stmt::Local(B, Ty::I32, Expr::Lit(5, Ty::I32), 22)),
+                Box::new(Stmts::Cons(
+                    Box::new(Stmt::Call(TAKE_REF, SAT_NAME, Box::new(Args::Cons(b(var(A)), Box::new(Args::Cons(b(var(B)), Box::new(Args::Nil)))))), 23)),
+                    Box::new(one(Stmt::Return(read(A, Ty::I32), 24))),
+                )),
+            )),
+        ),
+    };
+    let Model::Full(m) = translate_function(&user, &all, &Structs::Nil) else { panic!("a full model") };
+    let DStmts::Cons(_, _, rest) = strip(m.body) else { panic!("a body") };
+    let DStmts::Cons(_, _, rest) = *rest else { panic!("a local") };
+    let DStmts::Cons(update, _, _) = *rest else { panic!("an update") };
+    assert_eq!(*update, DStmt::Update(objs(&[Obj::Local(A), Obj::Local(B)]), TAKE_REF, dargs(vec![DExpr::Var(A), DExpr::Var(B)])));
+}
+
+/// `int32_t next(int32_t& x)` with modifies x, and a body of return 0.
+fn next_fn() -> Function {
+    Function {
+        name: NEXT,
+        line: 30,
+        params: Params::Cons(X, mut32(), Box::new(Params::Nil)),
+        ret: Ty::I32,
+        trusted: false,
+        conds: modifies(&[X], &[X], Conds::Nil),
+        body: one(Stmt::Return(Expr::Lit(0, Ty::I32), 31)),
+    }
+}
+
+#[test]
+fn a_reference_parameter_of_the_caller_is_written_back_and_a_call_that_gives_a_value_sets_a_local() {
+    let all = fns(vec![next_fn()]);
+    // int32_t two(int32_t& x) with modifies x: int32_t first = next(x); return first;
+    let user = Function {
+        name: SAT,
+        line: 40,
+        params: Params::Cons(X, mut32(), Box::new(Params::Nil)),
+        ret: Ty::I32,
+        trusted: false,
+        conds: modifies(&[X], &[X], Conds::Nil),
+        body: Stmts::Cons(
+            Box::new(Stmt::Local(FIRST, Ty::I32, call(NEXT, vec![Expr::Var(X, mut32())], 41), 41)),
+            Box::new(one(Stmt::Return(read(FIRST, Ty::I32), 42))),
+        ),
+    };
+    let Model::Full(m) = translate_function(&user, &all, &Structs::Nil) else { panic!("a full model") };
+    assert_eq!(m.outs, int_params(&[X]));
+    let DStmts::Cons(local, _, _) = strip(m.body) else { panic!("a body") };
+    assert_eq!(*local, DStmt::LocalUpdate(FIRST, DTy::Int32, objs(&[Obj::Out(X)]), NEXT, dargs(vec![DExpr::Out(X)])));
+    // The call writes x, so it has no place inside an expression: return next(x) + 1;
+    let inside = Expr::Bin(BinOp::Add, b(call(NEXT, vec![Expr::Var(X, mut32())], 43)), b(Expr::Lit(1, Ty::I32)));
+    let g = Function { body: one(Stmt::Return(inside, 43)), ..user };
+    assert_eq!(bare_refusal(translate_function(&g, &all, &Structs::Nil)), Refusal::Place(43));
+}
+
+#[test]
+fn a_call_that_writes_a_parameter_by_value_or_a_field_is_refused_at_its_line() {
+    let all = fns(vec![next_fn()]);
+    // void f(int32_t y) { next(y); }
+    let by_value = Function {
+        name: SAT,
+        line: 50,
+        params: Params::Cons(Q, Ty::I32, Box::new(Params::Nil)),
+        ret: Ty::Void,
+        trusted: false,
+        conds: Conds::Nil,
+        body: one(Stmt::Local(FIRST, Ty::I32, call(NEXT, vec![var(Q)], 51), 51)),
+    };
+    assert_eq!(bare_refusal(translate_function(&by_value, &all, &point_table())), Refusal::WriteParam(Q, 51));
+    // next(q.x) on a field of a local
+    let field = Expr::Field(b(Expr::Var(LOC, Ty::Struct(POINT))), FX);
+    let on_field = Function {
+        params: Params::Nil,
+        body: Stmts::Cons(
+            Box::new(Stmt::Local(LOC, Ty::Struct(POINT), Expr::Construct(POINT, Box::new(Args::Nil)), 52)),
+            Box::new(one(Stmt::Local(FIRST, Ty::I32, call(NEXT, vec![field], 53), 53))),
+        ),
+        ..by_value
+    };
+    assert_eq!(bare_refusal(translate_function(&on_field, &all, &point_table())), Refusal::NoTarget(53));
+}
+
+#[test]
+fn a_reference_to_a_struct_writes_the_whole_value_and_each_field() {
+    // void swapped(Point& out, const Point& p) with modifies out: out = p; out.x = 0;
+    let f = Function {
+        name: SAT,
+        line: 60,
+        params: Params::Cons(DST, Ty::Mut(Scalar::Struct(POINT)), Box::new(Params::Cons(P, Ty::Struct(POINT), Box::new(Params::Nil)))),
+        ret: Ty::Void,
+        trusted: false,
+        conds: modifies(&[DST], &[DST, P], Conds::Nil),
+        body: Stmts::Cons(
+            Box::new(Stmt::Assign(DST, read(P, Ty::Struct(POINT)), 61)),
+            Box::new(one(Stmt::SetRefField(DST, FX, Expr::Lit(0, Ty::I32), 62))),
+        ),
+    };
+    let Model::Full(m) = translate_function(&f, &Fns::Nil, &point_table()) else { panic!("a full model") };
+    assert_eq!(m.outs, DParams::Cons(DST, DTy::Struct(POINT), Box::new(DParams::Nil)));
+    assert_eq!(
+        strip(m.body),
+        DStmts::Cons(
+            Box::new(DStmt::SetOut(DST, DExpr::Var(P))),
+            0,
+            Box::new(DStmts::Cons(Box::new(DStmt::SetOutField(DST, FX, lit32(0))), 0, Box::new(DStmts::Nil))),
+        )
+    );
 }

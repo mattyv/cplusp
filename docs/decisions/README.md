@@ -113,3 +113,4 @@ Status is `decided`, `proposed` (the default until someone objects or the thin s
 | [0105](0105-a-constructor-call-in-an-expression.md) | A constructor call inside an expression runs before its statement. The sentence of a call out of place names a dropped value | decided |
 | [0106](0106-small-forms.md) | int8_t, int16_t and uint16_t, a right shift, named constexpr constants, and characters in contracts | decided |
 | [0107](0107-the-name-and-value-of-a-constant.md) | A constant reads as its true value. A field, a member or a namespace constant hides a constant of the file. The shift sentence names a negative amount | decided |
+| [0108](0108-a-reference-parameter-that-the-function-writes.md) | A T& parameter on the modifies line takes a value in and gives it back. Each T& must be on that line | decided |
