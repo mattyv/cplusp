@@ -8,7 +8,7 @@ use std::fmt::Write;
 use anyhow::{Context, Result};
 use cplusp_core::model::{
     parse_contract, translate_structs, translate_unit, Args, BinOp, CastKind, CondKind, Conds, DArgs, DCalls, DConds, DExpr, DParams, DStmt, DStmts, DTy, Expr, Extent, Fns,
-    Function, Members, Method, Model, Models, Names as CNames, Obj, Params, Refusal, Scalar, Stmt, Stmts, StructModels, Structs, Tok, Ty,
+    Function, Members, Method, Model, Models, Names as CNames, Obj, Objs, Params, Refusal, Scalar, Stmt, Stmts, StructModels, Structs, Tok, Ty,
 };
 use serde::Deserialize;
 
@@ -38,6 +38,8 @@ enum JTy {
     Bool,
     Seq(JScalar, Option<u64>),
     Struct(String),
+    /// A parameter of type `T&`, decision 0108.
+    Mut(JScalar),
     Opt(JScalar),
     This(String),
     ThisMut(String),
@@ -108,6 +110,8 @@ enum JStmt {
     Assign(String, JExpr, u32),
     Step(String, JTy, bool, u32),
     SetField(String, JExpr, u32),
+    /// `p.f = e` where `p` is a reference parameter, decision 0108.
+    SetRefField(String, String, JExpr, u32),
     Call(String, String, Vec<JExpr>, u32),
     Exit(u32),
     /// A `//@ assert` or `//@ apply` line in the body, decision 0099.
@@ -274,6 +278,7 @@ fn ty(t: JTy, names: &mut Names) -> Ty {
         JTy::Seq(s, extent) => Ty::Seq(scalar(s, names), extent.map_or(Extent::Dynamic, Extent::Fixed)),
         JTy::Opt(s) => Ty::Opt(scalar(s, names)),
         JTy::Struct(k) => Ty::Struct(names.id(&k)),
+        JTy::Mut(s) => Ty::Mut(scalar(s, names)),
         JTy::This(k) => Ty::This(names.id(&k)),
         JTy::ThisMut(k) => Ty::ThisMut(names.id(&k)),
         JTy::Void => Ty::Void,
@@ -354,6 +359,7 @@ fn stmt(s: JStmt, names: &mut Names) -> Stmt {
         JStmt::Assign(n, e, line) => Stmt::Assign(names.id(&n), expr(e, names), names.here(line)),
         JStmt::Step(n, t, up, line) => Stmt::Step(names.id(&n), ty(t, names), up, names.here(line)),
         JStmt::SetField(f, e, line) => Stmt::SetField(names.id(&f), expr(e, names), names.here(line)),
+        JStmt::SetRefField(p, f, e, line) => Stmt::SetRefField(names.id(&p), names.id(&f), expr(e, names), names.here(line)),
         JStmt::Call(key, name, args, line) => {
             let args: Vec<Expr> = args.into_iter().map(|a| expr(a, names)).collect();
             let args = args.into_iter().rev().fold(Args::Nil, |rest, a| Args::Cons(Box::new(a), Box::new(rest)));
@@ -616,10 +622,20 @@ fn conds(v: Vec<JCond>, names: &mut Names) -> Conds {
         let line = names.place(&c.file, c.line);
         names.contracts.insert(line, (c.kind.clone(), c.text.trim().to_string()));
         // A backslash at the end splices the next line into the comment. The line the author wrote is not the one the plugin read.
-        let (kind, e) = if c.text.ends_with('\\') || c.kind.ends_with('\\') {
-            (CondKind::Bad(Refusal::Backslash(line)), Expr::Int(0))
+        let entries: Vec<(CondKind, Expr)> = if c.text.ends_with('\\') || c.kind.ends_with('\\') {
+            vec![(CondKind::Bad(Refusal::Backslash(line)), Expr::Int(0))]
+        } else if c.kind == "modifies" {
+            // `//@ modifies a, b` is one line for each name, decision 0108. A name may have parts, `Tally::count_`, and the core refuses it as no reference
+            // parameter, decision 0110. A line of any other form is one that names no name, and the core refuses it as a form it cannot read.
+            let word = |w: &str| w.starts_with(|ch: char| ch.is_ascii_alphabetic() || ch == '_') && w.chars().all(|ch| ch.is_ascii_alphanumeric() || ch == '_');
+            let listed: Vec<&str> = c.text.split(',').map(str::trim).collect();
+            if listed.iter().all(|n| n.split("::").all(word)) {
+                listed.into_iter().map(|n| (CondKind::Modifies, Expr::Name(names.id(n)))).collect()
+            } else {
+                vec![(CondKind::Modifies, Expr::Int(0))]
+            }
         } else {
-            match c.kind.as_str() {
+            vec![match c.kind.as_str() {
                 "requires" | "ensures" | "invariant" | "decreases" => {
                     let want = match c.kind.as_str() {
                         "requires" => CondKind::Requires,
@@ -640,9 +656,11 @@ fn conds(v: Vec<JCond>, names: &mut Names) -> Conds {
                     }
                 }
                 word => (CondKind::Other(names.id(word)), Expr::Int(0)),
-            }
+            }]
         };
-        items.push((kind, e, line, param_names(c.params, names)));
+        for (kind, e) in entries {
+            items.push((kind, e, line, param_names(c.params.clone(), names)));
+        }
     }
     items.into_iter().rev().fold(Conds::Nil, |rest, (k, e, l, p)| Conds::Cons(k, e, l, p, Box::new(rest)))
 }
@@ -815,6 +833,10 @@ fn stmt_names<'a>(s: &'a JStmt, out: &mut Vec<&'a str>) {
         }
         JStmt::Step(n, ..) => out.push(n),
         JStmt::SetField(_, e, _) => expr_names(e, out),
+        JStmt::SetRefField(p, _, e, _) => {
+            out.push(p);
+            expr_names(e, out);
+        }
         JStmt::Call(_, _, args, _) => args.iter().for_each(|a| expr_names(a, out)),
         JStmt::Exit(_) | JStmt::Assert(_) | JStmt::Apply(_) => {}
         JStmt::While(c, _, body, _) => {
@@ -1040,6 +1062,7 @@ fn dexpr(e: &DExpr, names: &Names) -> String {
         DExpr::Bound(j) => format!("b_{}", names.text(*j)),
         DExpr::Apply(f, args) => format!("{}({})", names.text(*f), dargs(args, names).join(", ")),
         DExpr::After => "v_this'".to_string(),
+        DExpr::Out(x) => format!("{}'", mangle(names.text(*x))),
         DExpr::FCall(k, args) => format!("{}({})", names.functions[k], dargs(args, names).join(", ")),
         DExpr::TDiv(a, b) => format!("trunc_div({}, {})", dexpr(a, names), dexpr(b, names)),
         DExpr::TRem(a, b) => format!("trunc_rem({}, {})", dexpr(a, names), dexpr(b, names)),
@@ -1124,14 +1147,20 @@ impl Printer<'_> {
         format!("{}({})", self.methods[&m], dargs(args, self.names).join(", "))
     }
 
-    /// The Dafny name of the object that a call writes back, and the call `m(o, args)`.
-    fn update(&self, obj: Obj, m: u32, args: &DArgs) -> (String, String) {
-        let object = match obj {
-            Obj::Local(n) => mangle(self.names.text(n)),
-            Obj::Object => "v_this'".to_string(),
-        };
-        let shown = std::iter::once(object.clone()).chain(dargs(args, self.names)).collect::<Vec<_>>().join(", ");
-        (object, format!("{}({shown})", self.methods[&m]))
+    /// The Dafny names of the places that a call writes back, parted by commas, and the call `m(args)`. The arguments hold the object and
+    /// the reference parameters too, decision 0108.
+    fn update(&self, objs: &Objs, m: u32, args: &DArgs) -> (String, String) {
+        let mut places = Vec::new();
+        let mut rest = objs;
+        while let Objs::Cons(o, next) = rest {
+            places.push(match o {
+                Obj::Local(n) => mangle(self.names.text(*n)),
+                Obj::Object => "v_this'".to_string(),
+                Obj::Out(x) => format!("{}'", mangle(self.names.text(*x))),
+            });
+            rest = next;
+        }
+        (places.join(", "), self.call(m, args))
     }
 
     fn stmts(&mut self, ss: &DStmts, depth: usize) {
@@ -1186,8 +1215,13 @@ impl Printer<'_> {
             }
             DStmt::Return(e) => self.put(depth, format!("return {};", dexpr(e, names)), place),
             DStmt::SetField(f, e) => self.put(depth, format!("v_this' := v_this'.(f_{} := {});", names.text(*f), dexpr(e, names)), place),
-            DStmt::Update(obj, m, args) => {
-                let (object, call) = self.update(*obj, *m, args);
+            DStmt::SetOut(x, e) => self.put(depth, format!("{}' := {};", mangle(names.text(*x)), dexpr(e, names)), place),
+            DStmt::SetOutField(x, f, e) => {
+                let x = format!("{}'", mangle(names.text(*x)));
+                self.put(depth, format!("{x} := {x}.(f_{} := {});", names.text(*f), dexpr(e, names)), place);
+            }
+            DStmt::Update(objs, m, args) => {
+                let (object, call) = self.update(objs, *m, args);
                 match self.rets.get(m) {
                     Some(DTy::Void) | None => self.put(depth, format!("{object} := {call};"), place),
                     // The value is dropped into a fresh local.
@@ -1198,8 +1232,8 @@ impl Printer<'_> {
                     }
                 }
             }
-            DStmt::LocalUpdate(x, t, obj, m, args) => {
-                let (object, call) = self.update(*obj, *m, args);
+            DStmt::LocalUpdate(x, t, objs, m, args) => {
+                let (object, call) = self.update(objs, *m, args);
                 let x = mangle(names.text(*x));
                 self.put(depth, format!("var {x}: {}; {x}, {object} := {call};", dty(*t, names)), place);
             }
@@ -1262,7 +1296,7 @@ impl Printer<'_> {
     /// The method header line, with no contract and no body.
     /// A method that gives no value has no `result`. One that writes its object also gives it back as `this'`, of the type of its first
     /// parameter, decision 0096.
-    fn header(&mut self, name: u32, params: &DParams, ret: DTy, (writes, axiom): (bool, bool), place: u32) {
+    fn header(&mut self, name: u32, params: &DParams, ret: DTy, (writes, axiom): (bool, bool), outs: &[(u32, DTy)], place: u32) {
         let mut shown = Vec::new();
         let mut ps = params;
         while let DParams::Cons(n, t, next) = ps {
@@ -1276,6 +1310,8 @@ impl Printer<'_> {
         if let (true, DParams::Cons(_, t, _)) = (writes, params) {
             gives.push(format!("v_this': {}", dty(*t, self.names)));
         }
+        // The reference parameters that the method gives back follow, in the order of the parameters, decision 0108.
+        gives.extend(outs.iter().map(|(n, t)| format!("{}': {}", mangle(self.names.text(*n)), dty(*t, self.names))));
         let returns = if gives.is_empty() { String::new() } else { format!(" returns ({})", gives.join(", ")) };
         self.out.push('\n');
         self.lines.push(None);
@@ -1310,7 +1346,8 @@ impl Printer<'_> {
         if let Some(body) = &m.function {
             self.function(m, body, place);
         }
-        self.header(m.name, &m.params, m.ret, (m.writes, m.trusted), place);
+        let outs = dparams(&m.outs);
+        self.header(m.name, &m.params, m.ret, (m.writes, m.trusted), &outs, place);
         self.temps = 0;
         // A requires line has the requires lines before it in scope, and an ensures or decreases line and the body have all of them.
         for (word, list) in [("requires", &m.requires), ("ensures", &m.ensures), ("decreases", &m.decreases)] {
@@ -1329,9 +1366,14 @@ impl Printer<'_> {
             return;
         }
         self.put(0, "{".to_string(), place);
-        self.writes = m.writes;
+        // A method with more than one result returns a value as `result := e; return;`.
+        self.writes = m.writes || !outs.is_empty();
         if m.writes {
             self.put(1, "v_this' := v_this;".to_string(), place);
+        }
+        for (n, _) in &outs {
+            let x = mangle(self.names.text(*n));
+            self.put(1, format!("{x}' := {x};"), place);
         }
         self.stmts(&m.body, 1);
         self.writes = false;
@@ -1354,21 +1396,23 @@ fn sentence(r: Refusal, names: &Names) -> (u32, String) {
         Refusal::Callee(n, line) => (line, format!("a call to {}, which has no model in view.", names.text(n))),
         Refusal::Place(line) => (
             line,
-            "a call out of place. The translator takes a call when C++ runs it once and the statement uses its value. It takes a call that writes its object or gives no value only alone.".to_string(),
+            "a call out of place. The translator takes a call when C++ runs it once and the statement uses its value. It takes a call that writes a value back or gives no value only alone.".to_string(),
         ),
         Refusal::Twice(n, line) => (line, format!("{} is declared twice in the function.", names.text(n))),
         Refusal::Convert(line) => (line, "a conversion between bool and a number.".to_string()),
-        Refusal::WriteParam(n, line) => (line, format!("{} is a parameter. The translator writes only a local.", names.text(n))),
+        Refusal::WriteParam(n, line) => (line, format!("{} is a parameter. The translator writes only a local or a reference parameter.", names.text(n))),
+        Refusal::NotRef(n, line) => (line, format!("{} on the modifies line is no reference parameter.", names.text(n))),
+        Refusal::Unlisted(n, line) => (line, format!("{} is a reference parameter that the modifies line does not name.", names.text(n))),
         Refusal::NoVar(n, line) => (line, format!("{} in the {} line is no variable.", names.text(n), names.contracts.get(&line).map_or("contract", |c| c.0.as_str()))),
         Refusal::SeqParam(line) => (line, "a sequence is in the subset only as a parameter.".to_string()),
         Refusal::HoldsSeq(line) => (line, "a struct that holds a sequence is in the subset only as a parameter.".to_string()),
         Refusal::Element(line) => (line, "an optional of a struct or a sequence of bool has no rule yet.".to_string()),
         Refusal::Extent(line) => (line, "a sequence or an optional made from one of another type or length.".to_string()),
-        Refusal::NoTarget(line) => (line, "the call writes its object, and the translator writes back only a local.".to_string()),
+        Refusal::NoTarget(line) => (line, "the call writes a value back, and the translator writes back only to a local or a reference parameter.".to_string()),
         Refusal::NoObject(n, line) => (line, format!("{} is a member of the struct. A requires line of a constructor has no object yet.", names.text(n))),
         Refusal::Misplaced(line) => (
             line,
-            "a contract line in the wrong place. A requires, an ensures or a decreases line goes above a function. An invariant or a decreases line goes above a loop."
+            "a contract line in the wrong place. A requires, an ensures, a modifies or a decreases line goes above a function. An invariant or a decreases line goes above a loop."
                 .to_string(),
         ),
     }
@@ -1376,6 +1420,17 @@ fn sentence(r: Refusal, names: &Names) -> (u32, String) {
 
 /// A refusal: the file, the line and the sentence.
 pub type Refusing = (String, u32, String);
+
+/// The names and types of a list of parameters.
+fn dparams(ps: &DParams) -> Vec<(u32, DTy)> {
+    let mut out = Vec::new();
+    let mut rest = ps;
+    while let DParams::Cons(n, t, next) = rest {
+        out.push((*n, *t));
+        rest = next;
+    }
+    out
+}
 
 /// The Dafny file for the plugin's lines, the refusals in order each once, and the map from the lines of the file to C++. A function whose
 /// signature is refused is not in the file. A function whose contract or body is refused is a method with no contract and no body. A `//@`
@@ -1426,6 +1481,8 @@ pub fn translate(lines: &str, companion: Option<(&str, &str)>) -> Result<Transla
     let mut methods = Methods::new();
     // The functions that write their object, by the id of their keys, for the header of a method with no body.
     let mut writing = std::collections::HashSet::new();
+    // The names of the reference parameters of each function, by the id of its key, for the header of a method with no body, decision 0108.
+    let mut refs: HashMap<u32, Vec<u32>> = HashMap::new();
     // The place of each function, by the id of its key, for its method header.
     let mut at = HashMap::new();
     // The file, line, name and reason of each trusted function, by the id of its key, for the report of prove.
@@ -1446,6 +1503,8 @@ pub fn translate(lines: &str, companion: Option<(&str, &str)>) -> Result<Transla
         if matches!(f.params.first(), Some((_, JTy::ThisMut(_)))) {
             writing.insert(key);
         }
+        let mutable: Vec<u32> = f.params.iter().enumerate().filter(|(_, (_, t))| matches!(t, JTy::Mut(_))).map(|(i, (n, _))| names.id(&if n.is_empty() { format!("'{i}") } else { n.clone() })).collect();
+        refs.insert(key, mutable);
         at.insert(key, names.place(&f.file, f.line));
         if let Some((reason, file, line)) = &f.trusted {
             reasons.insert(key, (file.clone(), *line, f.name.clone(), reason.clone()));
@@ -1525,7 +1584,9 @@ pub fn translate(lines: &str, companion: Option<(&str, &str)>) -> Result<Transla
                 None
             }
             Model::Bare(key, params, ret, r) => {
-                p.header(key, &params, ret, (writing.contains(&key), false), at[&key]);
+                // The type of each reference parameter is its type in the header.
+                let outs: Vec<(u32, DTy)> = dparams(&params).into_iter().filter(|(n, _)| refs[&key].contains(n)).collect();
+                p.header(key, &params, ret, (writing.contains(&key), false), &outs, at[&key]);
                 printed += 1;
                 Some(r)
             }

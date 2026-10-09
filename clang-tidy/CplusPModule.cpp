@@ -3855,7 +3855,7 @@ public:
       // changes no such parameter, and the gate does not check it: a `const_cast` in a trusted body can break the promise. Upgrade: a gate
       // check of `const_cast` on a parameter or on `this` in a trusted body.
       for (const ParmVarDecl *P : FD->parameters())
-        Params.push_back(llvm::json::Array{P->getNameAsString(), type(P->getType())});
+        Params.push_back(llvm::json::Array{P->getNameAsString(), paramType(P->getType())});
       Conds = conds(C, Member != nullptr);
       // The `//@` lines in a trusted body belong to it, decision 0103. The walk claims them, and the result is dropped.
       if (Trusted && FD->getBody())
@@ -4278,6 +4278,27 @@ private:
     return RD->getQualifiedNameAsString() + "@" + file(Loc) + ":" + std::to_string(line(Loc)) + ":" + std::to_string(SM.getExpansionColumnNumber(Loc));
   }
 
+  // A parameter of type `T&` for a scalar or a struct of the file is `Mut(T)`, decision 0108, else null. A const reference is a value, and any other
+  // reference stays `Other`.
+  llvm::json::Value mutRef(QualType T) const {
+    if (!T->isLValueReferenceType())
+      return nullptr;
+    const QualType Pointee = T->getPointeeType();
+    if (Pointee.getCanonicalType().hasQualifiers())
+      return nullptr;
+    if (const char *S = scalar(Pointee))
+      return tag("Mut", S);
+    if (plainStruct(Pointee))
+      return tag("Mut", type(Pointee));
+    return nullptr;
+  }
+  // The type of a parameter, or of a name that reads one.
+  llvm::json::Value paramType(QualType T) const {
+    llvm::json::Value Written = mutRef(T);
+    return Written.getAsNull() ? type(T) : Written;
+  }
+  llvm::json::Value varType(const ValueDecl *D) const { return isa<ParmVarDecl>(D) ? paramType(D->getType()) : type(D->getType()); }
+
   llvm::json::Value type(QualType T, bool Field = false) const {
     if (const char *S = scalar(T))
       return S;
@@ -4347,10 +4368,18 @@ private:
     if (const auto *Assign = dyn_cast<BinaryOperator>(S); Assign && Assign->getOpcode() == BO_Assign) {
       if (const auto *Target = dyn_cast<DeclRefExpr>(Assign->getLHS()); Target && isVariable(Target->getDecl()))
         return tag("Assign", llvm::json::Array{Target->getDecl()->getNameAsString(), expr(Assign->getRHS(), line(S->getBeginLoc())), number(line(S->getBeginLoc()))});
+      // A write of a field of a reference parameter, decision 0108.
+      if (const auto [Param, Field] = refField(Assign->getLHS()); Param)
+        return tag("SetRefField", llvm::json::Array{Param->getNameAsString(), Field->getNameAsString(), expr(Assign->getRHS(), line(S->getBeginLoc())), number(line(S->getBeginLoc()))});
       // A write of a field of the object, decision 0096.
       if (const FieldDecl *Field = objectField(Assign->getLHS()))
         return tag("SetField", llvm::json::Array{Field->getNameAsString(), expr(Assign->getRHS(), line(S->getBeginLoc())), number(line(S->getBeginLoc()))});
     }
+    // `x = y` for a struct, with the copy assignment that the compiler makes, is the write of the variable, decision 0108.
+    if (const auto *Copy = dyn_cast<CXXOperatorCallExpr>(S); Copy && Copy->getOperator() == OO_Equal && Copy->getNumArgs() == 2 && plainStruct(Copy->getArg(0)->getType()) &&
+                                                             Copy->getDirectCallee() && Copy->getDirectCallee()->isTrivial())
+      if (const auto *Target = dyn_cast<DeclRefExpr>(Copy->getArg(0)->IgnoreParens()); Target && isVariable(Target->getDecl()))
+        return tag("Assign", llvm::json::Array{Target->getDecl()->getNameAsString(), expr(Copy->getArg(1), line(S->getBeginLoc())), number(line(S->getBeginLoc()))});
     // `x op= e` for `+ - * / %` on an integer local or a field of the object is `x = x op e`, with the conversions that the compiler made,
     // decision 0096.
     if (const auto *Compound = dyn_cast<CompoundAssignOperator>(S)) {
@@ -4368,7 +4397,7 @@ private:
     }
     if (const auto *Step = dyn_cast<UnaryOperator>(S); Step && Step->isIncrementDecrementOp())
       if (const auto *Target = dyn_cast<DeclRefExpr>(Step->getSubExpr()); Target && isVariable(Target->getDecl()))
-        return tag("Step", llvm::json::Array{Target->getDecl()->getNameAsString(), type(Target->getDecl()->getType()), Step->isIncrementOp(),
+        return tag("Step", llvm::json::Array{Target->getDecl()->getNameAsString(), varType(Target->getDecl()), Step->isIncrementOp(),
                                              number(line(S->getBeginLoc()))});
     if (const auto *While = dyn_cast<WhileStmt>(S); While && !While->getConditionVariable())
       return tag("While", llvm::json::Array{expr(While->getCond(), line(S->getBeginLoc())), loopConds(S), stmts(While->getBody()), number(line(S->getBeginLoc()))});
@@ -4378,6 +4407,16 @@ private:
           return tag("For", llvm::json::Array{stmt(Init), expr(For->getCond(), line(S->getBeginLoc())), stmt(For->getInc()), loopConds(S),
                                               stmts(For->getBody()), number(line(S->getBeginLoc()))});
     return unknown(S, describe(S), line(S->getBeginLoc()));
+  }
+
+  // A field of a struct reference parameter, `p.f`, as the parameter and the field, or two nulls, decision 0108.
+  std::pair<const ParmVarDecl *, const FieldDecl *> refField(const Expr *E) const {
+    if (const auto *Member = dyn_cast<MemberExpr>(E->IgnoreParens()); Member && !Member->isArrow())
+      if (const auto *Base = dyn_cast<DeclRefExpr>(Member->getBase()->IgnoreParenImpCasts()))
+        if (const auto *Param = dyn_cast<ParmVarDecl>(Base->getDecl()); Param && !mutRef(Param->getType()).getAsNull())
+          if (const auto *Field = dyn_cast<FieldDecl>(Member->getMemberDecl()); Field && plainStruct(Context.getRecordType(Field->getParent())))
+            return {Param, Field};
+    return {nullptr, nullptr};
   }
 
   // The field of a plain struct that an expression names on the object of a member function, `n_` or `this->n_`, or null.
@@ -4407,7 +4446,8 @@ private:
       return nullptr;
     const auto *Name = dyn_cast<DeclRefExpr>(Left);
     const FieldDecl *Field = Name ? nullptr : objectField(Left);
-    if (!(Name && isVariable(Name->getDecl())) && !Field)
+    const auto [Param, RefField] = Name ? std::pair<const ParmVarDecl *, const FieldDecl *>{} : refField(Left);
+    if (!(Name && isVariable(Name->getDecl())) && !Field && !Param)
       return nullptr;
     const auto convert = [&](llvm::json::Value V, QualType From, QualType To) -> llvm::json::Value {
       if (Context.hasSameType(From, To))
@@ -4422,6 +4462,8 @@ private:
             ? tag("Divide", llvm::json::Array{Op, std::move(A), std::move(B), type(C->getComputationResultType())})
             : tag("Bin", llvm::json::Array{Op, std::move(A), std::move(B)});
     llvm::json::Value Value = convert(std::move(Operated), C->getComputationResultType(), Left->getType());
+    if (Param)
+      return tag("SetRefField", llvm::json::Array{Param->getNameAsString(), RefField->getNameAsString(), std::move(Value), number(At)});
     if (Field)
       return tag("SetField", llvm::json::Array{Field->getNameAsString(), std::move(Value), number(At)});
     return tag("Assign", llvm::json::Array{Name->getDecl()->getNameAsString(), std::move(Value), number(At)});
@@ -4441,7 +4483,7 @@ private:
     if (const auto *Ref = dyn_cast<DeclRefExpr>(E)) {
       const ValueDecl *D = Ref->getDecl();
       if (isa<ParmVarDecl>(D) || (isa<VarDecl>(D) && cast<VarDecl>(D)->hasLocalStorage()))
-        return tag("Var", llvm::json::Array{D->getNameAsString(), type(D->getType())});
+        return tag("Var", llvm::json::Array{D->getNameAsString(), varType(D)});
       // A named constant is its value, decision 0106. A negative one is the negation of a literal, as `-5` is.
       if (const std::optional<llvm::APSInt> Value = constant(D)) {
         // The magnitude of a negative value, taken one bit wider so that the minimum of a type does not overflow.
