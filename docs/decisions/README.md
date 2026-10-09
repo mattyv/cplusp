@@ -95,3 +95,4 @@ Status is `decided`, `proposed` (the default until someone objects or the thin s
 | [0087](0087-specify-existing-code-with-separate-intent-evidence.md) | Specify existing code with separate evidence of intent | decided |
 | [0088](0088-division-truncates-as-in-cpp.md) | Division truncates as in C++, through trunc_div and trunc_rem in code and contracts | decided |
 | [0089](0089-member-functions-in-steps.md) | Member functions in six steps. First const member functions with this by value, and private fields | decided |
+| [0090](0090-a-pure-const-member-function-is-also-a-dafny-function.md) | A pure const member function is also a Dafny function that contracts can call | decided |
