@@ -110,3 +110,4 @@ Status is `decided`, `proposed` (the default until someone objects or the thin s
 | [0102](0102-a-trusted-function-in-the-model.md) | A trusted function is a method with its contract and no body. prove names each one with its reason | decided |
 | [0103](0103-what-a-trusted-function-promises.md) | A trusted function also promises to change no value or const parameter. A reason is one line. Trusted: lines come first | decided |
 | [0104](0104-a-call-inside-an-expression.md) | A call inside an expression runs before its statement, into a temporary. A call that C++ may not run once is refused | decided |
+| [0105](0105-a-constructor-call-in-an-expression.md) | A constructor call inside an expression runs before its statement. The sentence of a call out of place names a dropped value | decided |

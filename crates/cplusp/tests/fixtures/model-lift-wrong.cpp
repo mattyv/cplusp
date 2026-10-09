@@ -15,3 +15,15 @@ int32_t unguarded(int32_t x) {
 int32_t off(int32_t x) {
   return inc(inc(x));
 }
+
+struct Q {
+  int32_t v;
+
+  //@ requires a > 0
+  //@ ensures v == a
+  explicit Q(int32_t a) : v(a) {}
+};
+
+int32_t unbuilt(int32_t x) {
+  return Q(x).v + 0;
+}

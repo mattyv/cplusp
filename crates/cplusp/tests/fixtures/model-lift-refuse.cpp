@@ -20,3 +20,15 @@ int32_t loop(int32_t x) {
   }
   return i;
 }
+
+bool either(int32_t x) {
+  return x <= 0 || inc(x) > 1;
+}
+
+int32_t count_up(int32_t x) {
+  int32_t s = 0;
+  for (int32_t i = 0; inc(i) < x; i = i + 1) {
+    s = s + 1;
+  }
+  return s;
+}
