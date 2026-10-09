@@ -3410,8 +3410,8 @@ fn prove_names_a_narrowing_and_a_shift_that_may_fail() {
     assert_eq!(failed.len(), wants.len(), "{text}");
 }
 
-/// A static member and a namespace constant hide a constant of the file with the same name, so the name in the contract is no
-/// constant, decision 0107.
+/// A static member, a namespace constant, an unnamed namespace and a local constant of an enclosing function hide a constant of the
+/// file with the same name, and so does a name with two meanings. The name in the contract is no constant then, decision 0107.
 #[test]
 fn a_constant_that_cpp_does_not_find_from_the_function_is_no_constant() {
     if !clang_tidy_available() {
@@ -3422,10 +3422,17 @@ fn a_constant_that_cpp_does_not_find_from_the_function_is_no_constant() {
     let text = stdout(&o);
     assert_eq!(o.status.code(), Some(1), "stdout: {text} stderr: {}", stderr(&o));
     let refusals: Vec<&str> = text.lines().filter(|l| l.starts_with("Not provable: ")).collect();
-    for want in ["model-small-hidden.cpp:10: kScale in the contract is no parameter.", "model-small-hidden.cpp:18: k in the contract is no parameter."] {
+    let wants = [
+        "model-small-hidden.cpp:14: kScale in the contract is no parameter.",
+        "model-small-hidden.cpp:22: k in the contract is no parameter.",
+        "model-small-hidden.cpp:32: j in the contract is no parameter.",
+        "model-small-hidden.cpp:44: k in the contract is no parameter.",
+        "model-small-hidden.cpp:56: m in the contract is no parameter.",
+    ];
+    for want in wants {
         assert!(refusals.iter().any(|l| l.ends_with(want)), "{want}: {text}");
     }
-    assert_eq!(refusals.len(), 2, "{text}");
+    assert_eq!(refusals.len(), wants.len(), "{text}");
 }
 
 /// A variable that is not constexpr is no constant of a contract, and a left shift has no rule, decision 0106.
