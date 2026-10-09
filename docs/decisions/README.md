@@ -94,3 +94,4 @@ Status is `decided`, `proposed` (the default until someone objects or the thin s
 | [0086](0086-generate-and-challenge-specifications.md) | Generate specifications in components and challenge fixed contracts with wrong bodies | decided |
 | [0087](0087-specify-existing-code-with-separate-intent-evidence.md) | Specify existing code with separate evidence of intent | decided |
 | [0088](0088-division-truncates-as-in-cpp.md) | Division truncates as in C++, through trunc_div and trunc_rem in code and contracts | decided |
+| [0089](0089-member-functions-in-steps.md) | Member functions in six steps. First const member functions with this by value, and private fields | decided |
