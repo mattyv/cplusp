@@ -1248,7 +1248,7 @@ fn sentence(r: Refusal, names: &Names) -> (u32, String) {
         Refusal::Callee(n, line) => (line, format!("a call to {}, which has no model in view.", names.text(n))),
         Refusal::Place(line) => (
             line,
-            "a call out of place. The translator takes a call where it always runs once, and a call that writes its object or gives no value only alone.".to_string(),
+            "a call out of place. The translator takes a call when C++ runs it once and the statement uses its value. It takes a call that writes its object or gives no value only alone.".to_string(),
         ),
         Refusal::Twice(n, line) => (line, format!("{} is declared twice in the function.", names.text(n))),
         Refusal::Convert(line) => (line, "a conversion between bool and a number.".to_string()),
