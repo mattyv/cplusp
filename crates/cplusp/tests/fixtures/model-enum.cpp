@@ -65,6 +65,7 @@ State run_to_done() {
   return s;
 }
 
+//@ ensures result.ok == (result.error == Error::None)
 //@ ensures x < 0 ==> !result.ok && result.error == Error::Negative
 //@ ensures 0 <= x && x <= 46340 ==> result.ok && result.value == x * x
 Result checked_square(int32_t x) {
