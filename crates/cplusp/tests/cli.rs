@@ -2818,6 +2818,36 @@ fn a_literal_that_is_too_large_never_stands_for_another_token() {
     assert!(text.lines().any(|l| l.starts_with("Not provable: ") && l.ends_with(want)), "{want}: {text}");
 }
 
+/// Slices in a contract prove: examples/recursion with Count(v[i..], x), and the size, an element and empty of a part, decision 0085.
+#[test]
+fn slices_in_a_contract_prove() {
+    let Some(dafny) = dafny() else { return };
+    if !clang_tidy_available() {
+        return;
+    }
+    let o = prove("model-slice.cpp", &[], &dafny);
+    let text = stdout(&o);
+    assert_eq!(o.status.code(), Some(0), "stdout: {text} stderr: {}", stderr(&o));
+    assert_eq!(text.lines().last(), Some("ok: proved"), "{text}");
+}
+
+/// A slice that may start past the end is named at its contract line, decision 0085.
+#[test]
+fn prove_names_a_slice_that_may_start_past_the_end() {
+    let Some(dafny) = dafny() else { return };
+    if !clang_tidy_available() {
+        return;
+    }
+    let o = prove("model-slice-wrong.cpp", &[], &dafny);
+    let text = stdout(&o);
+    assert_eq!(o.status.code(), Some(1), "stdout: {text} stderr: {}", stderr(&o));
+    let failed: Vec<&str> = text.lines().filter(|l| l.starts_with("Not proved: ")).collect();
+    for want in ["model-slice-wrong.cpp:6: the offset may be past the end.", "model-slice-wrong.cpp:8: the ensures line may not hold on this return."] {
+        assert!(failed.iter().any(|l| l.ends_with(want)), "{want}: {text}");
+    }
+    assert_eq!(failed.len(), 2, "{text}");
+}
+
 /// Pull `"key":"value"` or `"key":123` out of one JSON line without a JSON library.
 fn field(line: &str, key: &str) -> String {
     let needle = format!("\"{key}\":");

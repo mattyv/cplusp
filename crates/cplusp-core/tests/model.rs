@@ -1206,3 +1206,64 @@ fn the_body_of_a_quantifier_reaches_to_the_end_of_the_line() {
     let want = Expr::Bin(BinOp::And, b(Expr::Forall(70, b(Expr::Bin(BinOp::Lt, b(Expr::Name(70)), b(Expr::Name(A)))))), b(Expr::Name(B)));
     assert_eq!(parse_contract(&toks, 3), Ok(want));
 }
+
+const COUNT: u32 = 120;
+
+#[test]
+fn the_parser_reads_the_three_slices() {
+    // v[i..], v[..j], v[i..j] and v[1..3][0]
+    let suffix = vec![Tok::Ident(X), Tok::LBracket, Tok::Ident(A), Tok::DotDot, Tok::RBracket];
+    assert_eq!(parse_contract(&suffix, 3), Ok(Expr::Suffix(b(Expr::Name(X)), b(Expr::Name(A)))));
+    let prefix = vec![Tok::Ident(X), Tok::LBracket, Tok::DotDot, Tok::Ident(B), Tok::RBracket];
+    assert_eq!(parse_contract(&prefix, 3), Ok(Expr::Prefix(b(Expr::Name(X)), b(Expr::Name(B)))));
+    let slice = vec![Tok::Ident(X), Tok::LBracket, Tok::Ident(A), Tok::DotDot, Tok::Ident(B), Tok::RBracket];
+    assert_eq!(parse_contract(&slice, 3), Ok(Expr::Slice(b(Expr::Name(X)), b(Expr::Name(A)), b(Expr::Name(B)))));
+    let element = vec![Tok::Ident(X), Tok::LBracket, Tok::Int(1), Tok::DotDot, Tok::Int(3), Tok::RBracket, Tok::LBracket, Tok::Int(0), Tok::RBracket];
+    assert_eq!(parse_contract(&element, 3), Ok(Expr::Index(b(Expr::Slice(b(Expr::Name(X)), b(Expr::Int(1)), b(Expr::Int(3)))), b(Expr::Int(0)))));
+    // [..] alone, and a slice with no closing bracket, are refused.
+    assert_eq!(parse_contract(&vec![Tok::Ident(X), Tok::LBracket, Tok::DotDot, Tok::RBracket], 3), Err(Refusal::Syntax(3)));
+    assert_eq!(parse_contract(&vec![Tok::Ident(X), Tok::LBracket, Tok::Ident(A), Tok::DotDot], 3), Err(Refusal::Syntax(3)));
+}
+
+#[test]
+fn a_contract_reads_a_part_of_a_sequence_and_passes_it_to_a_function() {
+    // ensures result == Count(v[i..], x), and v[..2][1] == 1 on a sequence parameter v
+    let call = Expr::Apply(COUNT, Box::new(Args::Cons(b(Expr::Suffix(b(Expr::Name(X)), b(Expr::Name(A)))), Box::new(Args::Cons(b(Expr::Name(B)), Box::new(Args::Nil))))));
+    let ens = Expr::Bin(BinOp::Eq, b(Expr::Result), b(call));
+    let req = Expr::Bin(BinOp::Eq, b(Expr::Index(b(Expr::Prefix(b(Expr::Name(X)), b(Expr::Int(2)))), b(Expr::Int(1)))), b(Expr::Int(1)));
+    let f = Function {
+        name: SAT,
+        line: 14,
+        params: Params::Cons(X, Ty::Seq(Scalar::I32, Extent::Dynamic), Box::new(Params::Cons(A, Ty::U64, Box::new(Params::Cons(B, Ty::I32, Box::new(Params::Nil)))))),
+        ret: Ty::U64,
+        conds: Conds::Cons(CondKind::Requires, req, 12, names(&[X, A, B]), Box::new(Conds::Cons(CondKind::Ensures, ens, 13, names(&[X, A, B]), Box::new(Conds::Nil)))),
+        body: one(Stmt::Return(Expr::Lit(0, Ty::U64), 15)),
+    };
+    let Model::Full(m) = translate_function(&f, &Fns::Nil, &Structs::Nil) else { panic!("a full model") };
+    let int = |d: DExpr| DExpr::AsInt(Box::new(d));
+    // A part is a sequence, so it passes as itself. Its bound reads as an exact integer.
+    let dargs = DArgs::Cons(DExpr::Drop(Box::new(DExpr::Var(X)), Box::new(int(DExpr::Var(A)))), Box::new(DArgs::Cons(int(DExpr::Var(B)), Box::new(DArgs::Nil))));
+    let want = DExpr::Bin(BinOp::Eq, Box::new(int(DExpr::Result)), Box::new(DExpr::Apply(COUNT, Box::new(dargs))));
+    assert_eq!(strip_conds(m.ensures), DConds::Cons(want, 0, Box::new(DConds::Nil)));
+    let want = DExpr::Bin(
+        BinOp::Eq,
+        Box::new(int(DExpr::Index(Box::new(DExpr::Take(Box::new(DExpr::Var(X)), Box::new(DExpr::Lit(2)))), Box::new(DExpr::Lit(1))))),
+        Box::new(DExpr::Lit(1)),
+    );
+    assert_eq!(strip_conds(m.requires), DConds::Cons(want, 0, Box::new(DConds::Nil)));
+}
+
+#[test]
+fn a_slice_of_a_name_that_is_no_sequence_and_a_slice_in_code_are_refused() {
+    let f = Function {
+        name: SAT,
+        line: 10,
+        params: Params::Cons(A, Ty::I32, Box::new(Params::Nil)),
+        ret: Ty::Bool,
+        conds: Conds::Cons(CondKind::Requires, Expr::Bin(BinOp::Eq, b(Expr::Size(b(Expr::Suffix(b(Expr::Name(A)), b(Expr::Int(1)))))), b(Expr::Int(0))), 9, names(&[A]), Box::new(Conds::Nil)),
+        body: one(Stmt::Return(Expr::Bool(true), 11)),
+    };
+    assert_eq!(bare_refusal(translate_function(&f, &Fns::Nil, &Structs::Nil)), Refusal::Syntax(9));
+    let seq = || b(Expr::Var(X, Ty::Seq(Scalar::I32, Extent::Dynamic)));
+    assert_eq!(translate_code(&Expr::Suffix(seq(), b(Expr::Lit(1, Ty::U64))), 3), Err(Refusal::Syntax(3)));
+}
