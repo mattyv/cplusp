@@ -91,6 +91,7 @@ enum JExpr {
     Wrap(Box<JExpr>),
     Construct(String, Vec<JExpr>),
     Index(Box<JExpr>, Box<JExpr>),
+    Cond(Box<JExpr>, Box<JExpr>, Box<JExpr>),
     Call(String, String, Vec<JExpr>, u32),
     Unknown(String, u32),
 }
@@ -178,6 +179,11 @@ struct Names {
     this_members: Vec<String>,
     /// The Dafny name of the function of each pure member function by the id of its key: the name of its method, and `'`.
     functions: HashMap<u32, String>,
+    /// The names of the parameters and of the fields of the object that are of a struct type, in the function that is being converted. A call of one in a
+    /// contract may be a call of its `operator()`, and the core decides, decision 0098.
+    functors: Vec<String>,
+    /// The names of the fields of a struct type, by the key of each struct.
+    struct_fields: HashMap<String, Vec<String>>,
 }
 
 impl Names {
@@ -290,6 +296,7 @@ fn expr(e: JExpr, names: &mut Names) -> Expr {
             Expr::Construct(names.id(&k), Box::new(args))
         }
         JExpr::Index(a, i) => Expr::Index(Box::new(expr(*a, names)), Box::new(expr(*i, names))),
+        JExpr::Cond(c, a, b) => Expr::Cond(Box::new(expr(*c, names)), Box::new(expr(*a, names)), Box::new(expr(*b, names))),
         JExpr::Call(key, name, args, line) => {
             let args: Vec<Expr> = args.into_iter().map(|a| expr(a, names)).collect();
             let args = args.into_iter().rev().fold(Args::Nil, |rest, a| Args::Cons(Box::new(a), Box::new(rest)));
@@ -368,7 +375,7 @@ fn lex(text: &str, line: u32, names: &mut Names) -> Vec<Tok> {
                 w => {
                     // A name followed by `(` is a call, and the companion file must declare it. A member name in a member function may be a call of
                     // the member, and the core decides, decision 0090.
-                    if rest[end..].trim_start().starts_with('(') && !names.declared.iter().any(|d| d == w) && !names.this_members.iter().any(|d| d == w) {
+                    if rest[end..].trim_start().starts_with('(') && !names.declared.iter().any(|d| d == w) && !names.this_members.iter().any(|d| d == w) && !names.functors.iter().any(|d| d == w) {
                         names.bad_calls.entry(line).or_insert_with(|| w.to_string());
                     }
                     Tok::Ident(names.id(w))
@@ -425,6 +432,8 @@ fn lex(text: &str, line: u32, names: &mut Names) -> Vec<Tok> {
                 '[' => Tok::LBracket,
                 ']' => Tok::RBracket,
                 ',' => Tok::Comma,
+                '?' => Tok::Question,
+                ':' => Tok::Colon,
                 _ => Tok::Unknown(names.id(&format!("'{c}' in a contract")), line),
             });
             rest = &rest[c.len_utf8()..];
@@ -614,6 +623,11 @@ fn expr_names<'a>(e: &'a JExpr, out: &mut Vec<&'a str>) {
             expr_names(a, out);
             expr_names(b, out);
         }
+        JExpr::Cond(c, a, b) => {
+            expr_names(c, out);
+            expr_names(a, out);
+            expr_names(b, out);
+        }
         JExpr::Not(a) | JExpr::Neg(a) | JExpr::Cast(_, a) | JExpr::Paren(a) | JExpr::Brace(a) | JExpr::Size(a) | JExpr::Empty(a) | JExpr::Copy(a, ..) | JExpr::Field(a, _) | JExpr::HasValue(a) | JExpr::Value(a) | JExpr::Wrap(a) => expr_names(a, out),
         JExpr::Call(_, _, args, _) | JExpr::Construct(_, args) => args.iter().for_each(|a| expr_names(a, out)),
         JExpr::Lit(..) | JExpr::Bool(_) | JExpr::Nullopt | JExpr::Unknown(..) => {}
@@ -656,10 +670,19 @@ fn unreadable_name(f: &JFunction) -> Option<&str> {
     if matches!(f.ret, JTy::Other(_)) || f.params.iter().any(|(_, t)| matches!(t, JTy::Other(_))) {
         return None;
     }
-    let mut names = vec![f.name.as_str()];
+    let mut names = vec![dafny_word(&f.name)];
     names.extend(f.params.iter().map(|(n, _)| n.as_str()));
     f.body.iter().for_each(|s| stmt_names(s, &mut names));
     names.into_iter().find(|n| !readable(n))
+}
+
+/// `operator()` is a name of C++ that the Dafny text prints as `call`, decision 0098. Every other name stays as it is.
+fn dafny_word(name: &str) -> &str {
+    if name == "operator()" {
+        "call"
+    } else {
+        name
+    }
 }
 
 fn readable(name: &str) -> bool {
@@ -674,6 +697,11 @@ fn unreadable_struct_name(st: &JStruct) -> Option<&str> {
 fn function(f: JFunction, names: &mut Names) -> Function {
     let name = names.id(&f.key);
     names.file = f.file;
+    // The names that a contract may call as a functor, decision 0098.
+    names.functors = f.params.iter().filter(|(_, t)| matches!(t, JTy::Struct(_))).map(|(n, _)| n.clone()).collect();
+    if let (Some((_, JTy::This(k) | JTy::ThisMut(k))), _) | (_, JTy::This(k)) = (f.params.first(), &f.ret) {
+        names.functors.extend(names.struct_fields.get(k).cloned().unwrap_or_default());
+    }
     // A constructor reads the members of the value it builds, decision 0094.
     names.this_members = match (f.params.first(), &f.ret) {
         (Some((_, JTy::This(k) | JTy::ThisMut(k))), _) | (_, JTy::This(k)) => names.members.get(k).cloned().unwrap_or_default(),
@@ -832,6 +860,7 @@ fn dexpr(e: &DExpr, names: &Names) -> String {
             let (a, b, t) = (dexpr(a, names), dexpr(b, names), dty(*t, names));
             format!("(var q' := (trunc_div({a}, {b}) as {t}); (trunc_rem({a}, {b}) as {t}))")
         }
+        DExpr::Ite(c, a, b) => format!("(if {} then {} else {})", dexpr(c, names), dexpr(a, names), dexpr(b, names)),
         DExpr::Chain(o1, o2, a, b, c) => format!("({} {} {} {} {})", dexpr(a, names), dop(*o1), dexpr(b, names), dop(*o2), dexpr(c, names)),
     }
 }
@@ -1127,7 +1156,8 @@ pub type Refusing = (String, u32, String);
 /// signature is refused is not in the file. A function whose contract or body is refused is a method with no contract and no body. A `//@`
 /// line that no function claimed is a refusal too.
 pub fn translate(lines: &str, companion: Option<(&str, &str)>) -> Result<Translation> {
-    let mut names = Names::default();
+    // The text `operator()` is the first word, so its id is `CALL_OP`, the id that the core uses, decision 0098.
+    let mut names = Names { words: vec!["operator()".to_string()], ..Default::default() };
     let mut refusals = Vec::new();
     let mut funcs = Vec::new();
     let mut structs = Vec::new();
@@ -1168,7 +1198,7 @@ pub fn translate(lines: &str, companion: Option<(&str, &str)>) -> Result<Transla
     // A member function is named by its struct too, `Struct'name`, decision 0089. So is a constructor, whose result is `This`, decision
     // 0094. C++ cannot write `'`, so it clashes with no name.
     let plain = |f: &JFunction| match (f.params.first(), &f.ret) {
-        (Some((_, JTy::This(k) | JTy::ThisMut(k))), _) | (_, JTy::This(k)) => format!("{}'{}", structs.iter().find(|s| s.key == *k).map_or("", |s| s.name.as_str()), f.name),
+        (Some((_, JTy::This(k) | JTy::ThisMut(k))), _) | (_, JTy::This(k)) => format!("{}'{}", structs.iter().find(|s| s.key == *k).map_or("", |s| s.name.as_str()), dafny_word(&f.name)),
         _ => f.name.clone(),
     };
     for (i, f) in funcs.iter().enumerate() {
@@ -1191,6 +1221,7 @@ pub fn translate(lines: &str, companion: Option<(&str, &str)>) -> Result<Transla
         let key = names.id(&st.key);
         names.datatypes.insert(key, if same == 1 { format!("S_{}", st.name) } else { format!("S_{}'{k}", st.name) });
         names.members.insert(st.key.clone(), st.members.iter().map(|(n, _)| n.clone()).collect());
+        names.struct_fields.insert(st.key.clone(), st.fields.iter().filter(|(_, t)| matches!(t, JTy::Struct(_))).map(|(n, _)| n.clone()).collect());
     }
     let struct_places: Vec<(u32, Option<String>)> = structs.iter().map(|st| (names.place(&st.file, st.line), unreadable_struct_name(st).map(String::from))).collect();
     for st in structs.into_iter().rev() {

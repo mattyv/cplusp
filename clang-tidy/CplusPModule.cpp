@@ -4055,12 +4055,12 @@ private:
     return llvm::json::Array{tag("Return", llvm::json::Array{tag("Construct", llvm::json::Array{structKey(C->getParent()), std::move(Args)}), number(At)})};
   }
 
-  // A member function that is written as a function, decision 0089: not static, not virtual, no ref-qualifier, not an operator, a
-  // conversion, a constructor or a destructor, not a template, and a member of a plain struct. Null for any other function.
+  // A member function that is written as a function, decision 0089: not static, not virtual, no ref-qualifier, not an operator other
+  // than `operator()`, decision 0098, a conversion, a constructor or a destructor, not a template, and a member of a plain struct. Null for any other function.
   // One that is not `const` writes its object, decision 0096.
   const CXXMethodDecl *member(const FunctionDecl *FD) const {
     const auto *M = dyn_cast<CXXMethodDecl>(FD);
-    if (!M || M->isStatic() || M->isVirtual() || M->isVolatile() || M->getRefQualifier() != RQ_None || M->isOverloadedOperator() ||
+    if (!M || M->isStatic() || M->isVirtual() || M->isVolatile() || M->isExplicitObjectMemberFunction() || M->getRefQualifier() != RQ_None || (M->isOverloadedOperator() && M->getOverloadedOperator() != OO_Call) ||
         isa<CXXConversionDecl>(M) || isa<CXXConstructorDecl>(M) || isa<CXXDestructorDecl>(M) || M->isTemplated() || M->getDescribedFunctionTemplate())
       return nullptr;
     return plainStruct(Context.getRecordType(M->getParent())) ? M : nullptr;
@@ -4297,6 +4297,9 @@ private:
     }
     if (const auto *Paren = dyn_cast<ParenExpr>(E))
       return tag("Paren", expr(Paren->getSubExpr(), Near));
+    // `c ? a : b`, decision 0098. The GNU form `c ?: b` stays unknown.
+    if (const auto *Choice = dyn_cast<ConditionalOperator>(E))
+      return tag("Cond", llvm::json::Array{expr(Choice->getCond(), Near), expr(Choice->getTrueExpr(), Near), expr(Choice->getFalseExpr(), Near)});
     // A sequence made from one sequence, decision 0070, or a struct made from one struct, decision 0073. The core judges the two types.
     if (const auto *Construct = dyn_cast<CXXConstructExpr>(E);
         Construct && Construct->getNumArgs() == 1 &&
@@ -4387,6 +4390,14 @@ private:
           Args.push_back(expr(Arg, line(E->getBeginLoc())));
         return tag("Call", llvm::json::Array{key(Call->getDirectCallee()), name(Call->getDirectCallee()), std::move(Args), number(line(E->getBeginLoc()))});
       }
+    }
+    // A call of an object, `c(x)`, is a call of its `operator()` with the object first, decision 0098.
+    if (const auto *Call = dyn_cast<CXXOperatorCallExpr>(E); Call && Call->getOperator() == OO_Call && Call->getNumArgs() >= 1 && Call->getDirectCallee() &&
+                                                             member(Call->getDirectCallee())) {
+      llvm::json::Array Args{expr(Call->getArg(0)->IgnoreParenImpCasts(), line(E->getBeginLoc()))};
+      for (unsigned I = 1; I < Call->getNumArgs(); ++I)
+        Args.push_back(expr(Call->getArg(I), line(E->getBeginLoc())));
+      return tag("Call", llvm::json::Array{key(Call->getDirectCallee()), name(Call->getDirectCallee()), std::move(Args), number(line(E->getBeginLoc()))});
     }
     // Only a plain call by name. A member call, an operator call and the rest of the call classes stay unknown.
     if (E->getStmtClass() == Stmt::CallExprClass)
