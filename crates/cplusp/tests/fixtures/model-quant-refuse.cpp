@@ -10,3 +10,19 @@ int32_t big(int32_t x) {
 int32_t half(int32_t x) {
   return x;
 }
+
+// An octal literal means another number in C++ than its digits say, so it is refused, from the review of 0082.
+//@ requires x < 010
+int32_t octal(int32_t x) {
+  return x;
+}
+
+//@ requires x < 1e3
+int32_t exponent(int32_t x) {
+  return x;
+}
+
+//@ requires x < 0x
+int32_t bare(int32_t x) {
+  return x;
+}

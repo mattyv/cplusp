@@ -2779,10 +2779,13 @@ fn a_hex_literal_too_large_and_a_division_in_a_contract_are_refused() {
     for want in [
         "model-quant-refuse.cpp:4: a number above 18446744073709551615: the translator has no rule for it yet.",
         "model-quant-refuse.cpp:9: '/' in a contract: the translator has no rule for it yet.",
+        "model-quant-refuse.cpp:15: an octal number: the translator has no rule for it yet.",
+        "model-quant-refuse.cpp:20: a number with the suffix e3: the translator has no rule for it yet.",
+        "model-quant-refuse.cpp:25: a number with no digits after 0x: the translator has no rule for it yet.",
     ] {
         assert!(refusals.iter().any(|l| l.ends_with(want)), "{want}: {text}");
     }
-    assert_eq!(refusals.len(), 2, "{text}");
+    assert_eq!(refusals.len(), 5, "{text}");
 }
 
 /// An error inside a function of the companion file prints in the words of Dafny, not as a return of a method, decision 0084.
