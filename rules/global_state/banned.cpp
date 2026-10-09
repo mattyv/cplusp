@@ -457,7 +457,7 @@ void stash() {
 
 // 15. A pointer kept in a global of the library is a pointer the gate cannot follow when this file reads it.
 void write_back() {
-  *static_cast<int32_t*>(std::__once_callable) = 5;  // BANNED
+  *static_cast<int32_t*>(std::__once_callable) = 5;  // BANNED also: type_punning
 }
 
 #include <variant>

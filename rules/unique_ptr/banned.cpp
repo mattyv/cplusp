@@ -98,13 +98,13 @@ void capture_out(const std::unique_ptr<int32_t>& p, const std::vector<int32_t>& 
 
 // A brace initializer stores into each member it names. A struct of a system header has a pointer member that no row reads, and the
 // pointer leaves the handle through it, decision 0038.
-void write_at(int32_t* q) {
-  *q = 1;
+void write_at(void* q) {
+  *static_cast<uint8_t*>(q) = 1;
 }
 
 void through_aggregate(const std::unique_ptr<int32_t>& p) {
   iovec v{p.get(), 4};  // BANNED
-  write_at(static_cast<int32_t*>(v.iov_base));
+  write_at(v.iov_base);
 }
 
 // A default member initializer stores as a constructor's member initializer does.
@@ -120,7 +120,7 @@ iovec made(const std::unique_ptr<int32_t>& p) {
 }
 
 void take_iov(iovec v) {
-  write_at(static_cast<int32_t*>(v.iov_base));
+  write_at(v.iov_base);
 }
 
 void reassigned(const std::unique_ptr<int32_t>& p, iovec& v) {

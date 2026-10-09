@@ -1,7 +1,7 @@
 #include <cstdint>
 
 double as_double(uint64_t bits) {
-  return *reinterpret_cast<double*>(&bits);  // BANNED
+  return *reinterpret_cast<double*>(&bits);  // BANNED also: type_punning
 }
 
 void drop_const(const int32_t& x) {

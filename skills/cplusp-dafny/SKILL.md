@@ -51,7 +51,7 @@ Treat SPARK guidance as an engineering method, not an LLM performance measuremen
 
 ## Contract lines that the translator reads
 
-This list is true at decision 0114. Read the later decisions before you rely on it.
+This list is true at decision 0116. Read the later decisions before you rely on it.
 `cplusp prove` translates the C++ and the `//@` lines to Dafny, and runs Dafny. It says `ok: proved`, or `Not proved: FILE:LINE: sentence` for a proof that fails, or `Not provable: FILE:LINE: sentence` for a form that has no rule.
 
 Where each line goes:
@@ -80,6 +80,7 @@ The companion file:
 
 Trusted code and calls:
 - `CPLUSP_TRUSTED("reason")` above a function makes its contract an axiom. `prove` names each one on a `Trusted:` line, decisions 0102 and 0103.
+- The gate bans a cast that changes the type a pointer or a reference points to, row `type_punning`, decision 0116. A cast to bytes stays allowed. The row holds in trusted code too. Read the bits of a value with `std::bit_cast`.
 - A call inside an expression runs before its statement, when C++ runs it once, decision 0104.
 - A call that writes back its object or a reference stands alone, or is the start value of a local, decisions 0096 and 0108.
 ## signed_overflow

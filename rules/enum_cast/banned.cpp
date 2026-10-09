@@ -34,13 +34,13 @@ Kind by_other(Wide w) {
 CPLUSP_TRUSTED("reads a byte as a Kind")
 //@ ensures true
 Kind by_pointer(const uint8_t& b) {
-  return *reinterpret_cast<const Kind*>(&b);  // BANNED
+  return *reinterpret_cast<const Kind*>(&b);  // BANNED also: type_punning
 }
 
 CPLUSP_TRUSTED("reads a byte as a Kind through void")
 //@ ensures true
 Kind by_void(const uint8_t& b) {
-  return *static_cast<const Kind*>(static_cast<const void*>(&b));  // BANNED
+  return *static_cast<const Kind*>(static_cast<const void*>(&b));  // BANNED also: type_punning
 }
 
 // std::bit_cast through a pointer to it.
