@@ -3374,7 +3374,7 @@ fn a_call_that_cpp_may_not_run_once_is_refused_at_its_line() {
 }
 
 /// int8_t, int16_t and uint16_t, a right shift of an unsigned and of a negative signed value, a named constexpr constant in code
-/// and in a contract, and a character in a contract, prove, decision 0106.
+/// and in a contract, and a character in a contract, prove, decision 0106. Each constant has its true value, decision 0107.
 #[test]
 fn small_forms_prove() {
     let Some(dafny) = dafny() else { return };
@@ -3387,8 +3387,8 @@ fn small_forms_prove() {
     assert_eq!(text.lines().last(), Some("ok: proved"), "{text}");
 }
 
-/// A narrowing to int8_t that may not fit, and a shift whose amount may not be below the width, are named at their lines,
-/// decision 0106.
+/// A narrowing to int8_t that may not fit, a shift whose amount may be negative or too wide, and a contract that a constant does
+/// not meet, are named at their lines, decisions 0106 and 0107.
 #[test]
 fn prove_names_a_narrowing_and_a_shift_that_may_fail() {
     let Some(dafny) = dafny() else { return };
@@ -3399,10 +3399,33 @@ fn prove_names_a_narrowing_and_a_shift_that_may_fail() {
     let text = stdout(&o);
     assert_eq!(o.status.code(), Some(1), "stdout: {text} stderr: {}", stderr(&o));
     let failed: Vec<&str> = text.lines().filter(|l| l.starts_with("Not proved: ")).collect();
-    for want in ["model-small-wrong.cpp:4: the value may not fit int8_t.", "model-small-wrong.cpp:8: the shift amount may not be below the width of the type."] {
-        assert!(failed.iter().any(|l| l.ends_with(want)), "{want}: {text}");
+    let shift = "the shift amount may be negative or not below the width of the type.";
+    let mut wants = vec!["model-small-wrong.cpp:4: the value may not fit int8_t.".to_string()];
+    wants.extend([8, 14].map(|line| format!("model-small-wrong.cpp:{line}: {shift}")));
+    // Each wrong value of a constant, and the field that hides a constant of the file, decision 0107.
+    wants.extend([25, 30, 35, 40, 50].map(|line| format!("model-small-wrong.cpp:{line}: the ensures line may not hold on this return.")));
+    for want in &wants {
+        assert!(failed.iter().any(|l| l.ends_with(want.as_str())), "{want}: {text}");
     }
-    assert_eq!(failed.len(), 2, "{text}");
+    assert_eq!(failed.len(), wants.len(), "{text}");
+}
+
+/// A static member and a namespace constant hide a constant of the file with the same name, so the name in the contract is no
+/// constant, decision 0107.
+#[test]
+fn a_constant_that_cpp_does_not_find_from_the_function_is_no_constant() {
+    if !clang_tidy_available() {
+        return;
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let (o, _) = model("model-small-hidden.cpp", dir.path());
+    let text = stdout(&o);
+    assert_eq!(o.status.code(), Some(1), "stdout: {text} stderr: {}", stderr(&o));
+    let refusals: Vec<&str> = text.lines().filter(|l| l.starts_with("Not provable: ")).collect();
+    for want in ["model-small-hidden.cpp:10: kScale in the contract is no parameter.", "model-small-hidden.cpp:18: k in the contract is no parameter."] {
+        assert!(refusals.iter().any(|l| l.ends_with(want)), "{want}: {text}");
+    }
+    assert_eq!(refusals.len(), 2, "{text}");
 }
 
 /// A variable that is not constexpr is no constant of a contract, and a left shift has no rule, decision 0106.

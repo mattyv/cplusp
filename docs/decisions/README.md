@@ -112,3 +112,4 @@ Status is `decided`, `proposed` (the default until someone objects or the thin s
 | [0104](0104-a-call-inside-an-expression.md) | A call inside an expression runs before its statement, into a temporary. A call that C++ may not run once is refused | decided |
 | [0105](0105-a-constructor-call-in-an-expression.md) | A constructor call inside an expression runs before its statement. The sentence of a call out of place names a dropped value | decided |
 | [0106](0106-small-forms.md) | int8_t, int16_t and uint16_t, a right shift, named constexpr constants, and characters in contracts | decided |
+| [0107](0107-the-name-and-value-of-a-constant.md) | A constant reads as its true value. A field, a member or a namespace constant hides a constant of the file. The shift sentence names a negative amount | decided |
