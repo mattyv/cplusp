@@ -272,7 +272,7 @@ rules:
     use_instead: std::copy, assignment, or std::bit_cast, or mark the function trusted with a reason.
     stage: gate
     detect:
-      - matcher: callExpr(callee(functionDecl(hasAnyName("memcpy", "memset", "memmove", "::std::memcpy", "::std::memset", "::std::memmove", "__builtin_memcpy", "__builtin_memset", "__builtin_memmove"))), unless(hasArgument(0, anyOf(hasType(pointsTo(anyOf(isAnyCharacter(), hasDeclaration(enumDecl(hasName("::std::byte")))))), hasType(arrayType(hasElementType(anyOf(isAnyCharacter(), hasDeclaration(enumDecl(hasName("::std::byte")))))))))))
+      - matcher: callExpr(callee(functionDecl(hasAnyName("memcpy", "memset", "memmove", "::std::memcpy", "::std::memset", "::std::memmove", "__builtin_memcpy", "__builtin_memset", "__builtin_memmove"))), unless(hasArgument(0, anyOf(hasType(pointsTo(anyOf(isAnyCharacter(), hasDeclaration(enumDecl(hasName("::std::byte"), isExpansionInSystemHeader()))))), hasType(arrayType(hasElementType(anyOf(isAnyCharacter(), hasDeclaration(enumDecl(hasName("::std::byte"), isExpansionInSystemHeader()))))))))))
 
   - id: launder_placement_new
     construct: "`std::launder`, placement `new`"
@@ -498,8 +498,22 @@ rules:
     stage: gate
     detect:
       - matcher: 'castExpr(anyOf(explicitCastExpr(), implicitCastExpr(hasParent(initListExpr()))), unless(hasParent(substNonTypeTemplateParmExpr())), hasType(hasCanonicalType(enumType(hasDeclaration(enumDecl(isScoped(), unless(isExpansionInSystemHeader()), has(enumConstantDecl()), unless(hasDescendant(enumConstantDecl(has(expr()))))))))), unless(anyOf(hasCastKind("CK_NoOp"), hasCastKind("CK_LValueToRValue"))))'
-      - matcher: 'explicitCastExpr(hasType(anyOf(hasCanonicalType(pointerType(pointee(hasCanonicalType(enumType(hasDeclaration(enumDecl(isScoped(), unless(isExpansionInSystemHeader()), has(enumConstantDecl()), unless(hasDescendant(enumConstantDecl(has(expr()))))))))))), hasCanonicalType(referenceType(pointee(hasCanonicalType(enumType(hasDeclaration(enumDecl(isScoped(), unless(isExpansionInSystemHeader()), has(enumConstantDecl()), unless(hasDescendant(enumConstantDecl(has(expr()))))))))))))), unless(hasCastKind("CK_NoOp")))'
+      - matcher: 'explicitCastExpr(hasDestinationType(hasCanonicalType(pointerType(pointee(hasCanonicalType(enumType(hasDeclaration(enumDecl(isScoped(), unless(isExpansionInSystemHeader()), has(enumConstantDecl()), unless(hasDescendant(enumConstantDecl(has(expr())))))))))))), unless(hasCastKind("CK_NoOp")))'
       - matcher: 'declRefExpr(to(functionDecl(hasName("::std::bit_cast"), returns(hasCanonicalType(enumType(hasDeclaration(enumDecl(isScoped(), unless(isExpansionInSystemHeader()), has(enumConstantDecl()), unless(hasDescendant(enumConstantDecl(has(expr()))))))))))))'
+
+  - id: type_punning
+    construct: A cast that changes the type that a pointer or a reference points to
+    area: casts
+    canonical: Undefined behavior, [basic.lval] paragraph 11 and [expr.ref] paragraph 10
+    decision: ban
+    why: A read of an object through a type that C++ does not list for it has no meaning. The prover sees the type of the object, and the program reads another one. The row holds in trusted code too, because a verified caller trusts the values that a trusted function reads. A cast to char, unsigned char or the std::byte of the library is allowed, and so is a cast to void* and a cast that only adds const or volatile.
+    use_instead: std::bit_cast for the bits of a value, or a pointer to bytes.
+    stage: gate
+    detect:
+      - matcher: 'explicitCastExpr(unless(isExpansionInSystemHeader()), anyOf(hasCastKind("CK_BitCast"), hasCastKind("CK_LValueBitCast"), hasCastKind("CK_IntegralToPointer")), hasDestinationType(anyOf(hasCanonicalType(pointerType(pointee(hasCanonicalType(qualType(unless(anyOf(qualType(voidType()), qualType(enumType(hasDeclaration(enumDecl(hasName("::std::byte"), isExpansionInSystemHeader())))), asString("char"), asString("const char"), asString("volatile char"), asString("const volatile char"), asString("unsigned char"), asString("const unsigned char"), asString("volatile unsigned char"), asString("const volatile unsigned char")))))))), hasCanonicalType(referenceType(pointee(hasCanonicalType(qualType(unless(anyOf(qualType(voidType()), qualType(enumType(hasDeclaration(enumDecl(hasName("::std::byte"), isExpansionInSystemHeader())))), asString("char"), asString("const char"), asString("volatile char"), asString("const volatile char"), asString("unsigned char"), asString("const unsigned char"), asString("volatile unsigned char"), asString("const volatile unsigned char")))))))))))'
+      - matcher: 'declRefExpr(unless(isExpansionInSystemHeader()), to(functionDecl(hasName("::std::bit_cast"), returns(hasCanonicalType(pointerType(pointee(hasCanonicalType(qualType(unless(anyOf(qualType(voidType()), qualType(enumType(hasDeclaration(enumDecl(hasName("::std::byte"), isExpansionInSystemHeader())))), asString("char"), asString("const char"), asString("volatile char"), asString("const volatile char"), asString("unsigned char"), asString("const unsigned char"), asString("volatile unsigned char"), asString("const volatile unsigned char"))))))))))))'
+      - matcher: 'declRefExpr(unless(isExpansionInSystemHeader()), to(functionDecl(hasName("::std::bit_cast"), anyOf(returns(hasCanonicalType(recordType())), hasParameter(0, hasType(hasCanonicalType(referenceType(pointee(hasCanonicalType(anyOf(pointerType(), recordType(), arrayType())))))))))))'
+      - matcher: 'declRefExpr(unless(isExpansionInSystemHeader()), to(functionDecl(hasAnyName("::std::reinterpret_pointer_cast", "::std::static_pointer_cast"))))'
 
   - id: reinterpret_const_cast
     construct: "`reinterpret_cast`, `const_cast`"
