@@ -4,6 +4,36 @@ Use this workflow for C++ contracts and Dafny models, or for the Verus core.
 Keep the repository's reviewer and coder roles. The coder implements reviewed contracts.
 The reviewer decides changes to requirements, contracts and tests.
 
+## Specify existing code
+
+Choose the task from the brief:
+
+- **Describe current behavior:** infer a candidate contract from the implementation. Label it descriptive until the reviewer accepts it as a requirement.
+- **Check intended behavior:** derive the contract from reviewed requirements, then assess whether the implementation satisfies it.
+
+A contract inferred from code can faithfully specify an existing bug.
+Do not claim intended correctness from a descriptive proof.
+If the brief does not distinguish these tasks, record the ambiguity and gather evidence for both.
+Do not invent intended behavior when evidence is missing.
+
+1. Recover intent from documentation, callers, tests and issue history, alongside the code. Record evidence locations, disagreements and unknowns.
+2. Map the boundary. List inputs, outputs, state changes, failure behavior and dependencies outside verification. Mark trusted assumptions and unsupported constructs.
+3. Snapshot the implementation and run available baseline tests. Record existing failures and tool versions. Preserve executable behavior during specification work.
+4. Draft public contracts first. Derive helper contracts and loop invariants in dependency order. Label code-derived clauses as candidates.
+5. Report suspected bugs separately with a concrete input and expected and actual outcomes. Do not silently change code or exclude valid inputs to obtain a proof.
+6. Challenge candidate contracts with the fixed-contract checks below. Include empty inputs, constants, missing updates, dropped duplicates and boundary errors where relevant.
+7. Resolve intent conflicts through the reviewer. Freeze the approved contracts. Give the coder the implementation work against those contracts.
+
+Attach this compact handoff. Add one row per requirement, with extra rows when several clauses cover it.
+
+| Requirement | Evidence for intent | Contract clause | Proof status | Remaining gap |
+|---|---|---|---|---|
+| State the required behavior | Cite a document, caller, test or issue. Mark implementation-only inference. | Identify the clause and file | Record the actual outcome or not run | List unresolved intent, assumptions or missing coverage |
+
+Distinguish proof scope from full behavior coverage.
+Report unproved paths and dependencies even when selected contracts verify.
+Use the workflow below for annotation, proof repair and mutation checks.
+
 ## Establish intent
 
 1. Read the requirement, public interface, callers, tests and current implementation.
