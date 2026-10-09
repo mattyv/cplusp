@@ -1353,7 +1353,9 @@ fn a_const_member_function_reads_its_object_as_the_parameter_this() {
     let n = || Box::new(DExpr::AsInt(Box::new(DExpr::Field(Box::new(DExpr::Var(THIS)), CN))));
     assert_eq!(strip_conds(m.requires), DConds::Cons(DExpr::Bin(BinOp::Lt, n(), Box::new(DExpr::Lit(1000))), 0, Box::new(DConds::Nil)));
     let want = DExpr::Bin(BinOp::Eq, Box::new(DExpr::AsInt(Box::new(DExpr::Result))), Box::new(DExpr::Bin(BinOp::Add, n(), Box::new(DExpr::Lit(1)))));
-    assert_eq!(strip_conds(m.ensures), DConds::Cons(want, 0, Box::new(DConds::Nil)));
+    // The body is one return with no call, so the function is pure and its method also gives the value of its function, decision 0090.
+    let link = DExpr::Bin(BinOp::Eq, Box::new(DExpr::Result), Box::new(DExpr::FCall(SAT, Box::new(DArgs::Cons(DExpr::Var(THIS), Box::new(DArgs::Nil))))));
+    assert_eq!(strip_conds(m.ensures), DConds::Cons(want, 0, Box::new(DConds::Cons(link, 0, Box::new(DConds::Nil)))));
     let body = DExpr::Bin(BinOp::Add, Box::new(DExpr::Field(Box::new(DExpr::Var(THIS)), CN)), Box::new(lit32(1)));
     assert_eq!(strip(m.body), DStmts::Cons(Box::new(DStmt::Return(body)), 0, Box::new(DStmts::Nil)));
 }
@@ -1373,7 +1375,9 @@ fn a_parameter_wins_over_a_field_and_a_name_that_is_neither_is_refused() {
     };
     let Model::Full(m) = translate_function(&f, &Fns::Nil, &counter_table()) else { panic!("a full model") };
     let want = DExpr::Bin(BinOp::Eq, Box::new(DExpr::AsInt(Box::new(DExpr::Result))), Box::new(DExpr::AsInt(Box::new(DExpr::Var(CN)))));
-    assert_eq!(strip_conds(m.ensures), DConds::Cons(want, 0, Box::new(DConds::Nil)));
+    let args = DArgs::Cons(DExpr::Var(THIS), Box::new(DArgs::Cons(DExpr::Var(CN), Box::new(DArgs::Nil))));
+    let link = DExpr::Bin(BinOp::Eq, Box::new(DExpr::Result), Box::new(DExpr::FCall(SAT, Box::new(args))));
+    assert_eq!(strip_conds(m.ensures), DConds::Cons(want, 0, Box::new(DConds::Cons(link, 0, Box::new(DConds::Nil)))));
     // ensures result == m_, where m_ is no parameter and no field of Counter
     let f = Function {
         name: SAT,
