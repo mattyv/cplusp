@@ -16,8 +16,10 @@ uint8_t checksum(std::span<const uint8_t> bytes) {
   //@ invariant 0 <= i <= bytes.size()
   //@ invariant acc == Sum(bytes[..i]) % 256
   for (size_t i = 0; i < bytes.size(); ++i) {
+    //@ assert bytes[..i + 1][..i] == bytes[..i]
     acc = (acc + bytes[i]) % 256;
   }
+  //@ assert bytes[..bytes.size()] == bytes
   return static_cast<uint8_t>(acc);
 }
 
