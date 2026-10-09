@@ -3593,3 +3593,19 @@ fn switches_and_enums_with_no_rule_are_refused() {
     }
     assert_eq!(refusals.len(), wants.len(), "{text}");
 }
+
+/// A std::byte that the file declares itself is no view as bytes, so a read through it is a pun, decision 0117. Only the std::byte of
+/// the system header is exempt from the row type_punning.
+#[test]
+fn a_byte_that_the_file_declares_is_no_view_as_bytes() {
+    if !clang_tidy_available() {
+        return;
+    }
+    let f = fixture("punning-own-byte.cpp");
+    let plugin = plugin();
+    let o = cplusp(&["gate", "--json", "--plugin", plugin.to_str().unwrap(), f.to_str().unwrap(), "--", "-std=c++23", "-ffp-contract=off"]);
+    let out = stdout(&o);
+    let reported: BTreeSet<(String, usize)> = out.lines().map(|l| (field(l, "rule"), field(l, "line").parse::<usize>().unwrap())).collect();
+    let expected: BTreeSet<(String, usize)> = [("type_punning".to_string(), 12)].into_iter().collect();
+    assert_eq!(reported, expected, "{out}");
+}
