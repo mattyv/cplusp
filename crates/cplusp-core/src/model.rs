@@ -40,7 +40,10 @@ pub enum Extent {
 
 /// A type of the subset. `Seq` is a read-only sequence of a scalar with its extent, a parameter only, decisions 0064 and 0070.
 /// `Struct` is a struct of the file by its key, decision 0073. `Opt` is a `std::optional` of a scalar, decision 0075. `This` is the
-/// object of a `const` member function of the struct by its key, a parameter by value, decision 0089. `Other` is a type the
+/// object of a `const` member function of the struct by its key, a parameter by value, decision 0089. `ThisMut` is the object of a
+/// member function that writes it, which takes it in and gives it back, decision 0096. `ThisAfter` is that object after the call,
+/// as an ensures line reads it, and `Fresh` is the result of a constructor before it exists, as its requires line reads it. The
+/// translator makes these two views itself. `Void` is the result type of a function that gives no value. `Other` is a type the
 /// translator has no rule for, by the id of its name.
 #[derive(Structural, PartialEq, Eq, Clone, Copy, Debug)]
 pub enum Ty {
@@ -54,6 +57,10 @@ pub enum Ty {
     Struct(u32),
     Opt(Scalar),
     This(u32),
+    ThisMut(u32),
+    ThisAfter(u32),
+    Fresh(u32),
+    Void,
     Other(u32),
 }
 
@@ -98,7 +105,7 @@ pub enum CastKind {
 /// is `v.empty()` and `Subspan` is `s.subspan(k)`, decision 0078. `Apply` is a call in a contract of a function of the companion
 /// file, by the id of its name, decision 0079. `Suffix`, `Prefix` and `Slice` are `v[i..]`, `v[..j]` and `v[i..j]` in a contract,
 /// decision 0085. `Divide` is `/` or `%` in code, with the type of its result, decision 0088. `MApply` is `o.f(args)` in a contract,
-/// a call of a member function by the id of its name, decision 0090. `Unknown` is a construct with no
+/// a call of a member function by the id of its name, decision 0090. `Old` is `old(e)` in an ensures line, decision 0096. `Unknown` is a construct with no
 /// rule, by the id of its kind and its line.
 #[derive(PartialEq, Eq, Debug)]
 pub enum Expr {
@@ -135,6 +142,7 @@ pub enum Expr {
     Slice(Box<Expr>, Box<Expr>, Box<Expr>),
     Divide(BinOp, Box<Expr>, Box<Expr>, Ty),
     MApply(Box<Expr>, u32, Box<Args>),
+    Old(Box<Expr>),
     Unknown(u32, u32),
 }
 
@@ -146,7 +154,9 @@ pub enum Args {
 
 /// A statement of the body, with its line. `Local` declares a name of a type with a start value. `Assign` writes a name. `Step`
 /// adds one to a name of a type, or takes one away when its flag is false. `While` is a condition, the contract lines above the loop
-/// and the body. `For` is a start, a condition, a step, the contract lines and the body, decision 0061.
+/// and the body. `For` is a start, a condition, a step, the contract lines and the body, decision 0061. `SetField` writes a field of
+/// the object of a member function. `Call` is a call that stands alone as a statement, by the key of its callee, the id of its
+/// name and its arguments. `Exit` is `return;`, decision 0096.
 #[derive(PartialEq, Eq, Debug)]
 pub enum Stmt {
     Return(Expr, u32),
@@ -156,6 +166,9 @@ pub enum Stmt {
     Step(u32, Ty, bool, u32),
     While(Expr, Box<Conds>, Box<Stmts>, u32),
     For(Box<Stmt>, Expr, Box<Stmt>, Box<Conds>, Box<Stmts>, u32),
+    SetField(u32, Expr, u32),
+    Call(u32, u32, Box<Args>, u32),
+    Exit(u32),
     Unknown(u32, u32),
 }
 
@@ -252,6 +265,7 @@ pub enum DTy {
     Seq(Scalar),
     Struct(u32),
     Opt(Scalar),
+    Void,
 }
 
 /// A Dafny expression. `AsInt` is `(e as int)`, the exact value of a machine integer. `Conv` is `(e as T)`, which Dafny proves
@@ -259,8 +273,8 @@ pub enum DTy {
 /// `Some(e)`. `Drop` is `s[k..]`, which Dafny proves is in range, decision 0078. `Apply` calls a function of the companion file,
 /// decision 0079. `Take` is `s[..j]` and `Slice` is `s[i..j]`, decision 0085. `TDiv` and `TRem` are `trunc_div` and `trunc_rem`
 /// on the exact integers. `DivIn` is `(trunc_div(a, b) as T)`, and `RemIn` is the remainder of `T`, which also needs the quotient to
-/// fit `T`, decision 0088. `FCall` calls the function of a pure member function by its key, decision 0090. A Dafny expression calls
-/// no method.
+/// fit `T`, decision 0088. `FCall` calls the function of a pure member function by its key, decision 0090. `After` is `this'`, the
+/// object of a member function that writes it, as the body leaves it, decision 0096. A Dafny expression calls no method.
 #[derive(PartialEq, Eq, Debug)]
 pub enum DExpr {
     Lit(u64),
@@ -293,6 +307,7 @@ pub enum DExpr {
     DivIn(Box<DExpr>, Box<DExpr>, DTy),
     RemIn(Box<DExpr>, Box<DExpr>, DTy),
     FCall(u32, Box<DArgs>),
+    After,
 }
 
 #[derive(PartialEq, Eq, Debug)]
@@ -304,7 +319,9 @@ pub enum DArgs {
 /// A Dafny statement. `Local` is `var x: T := e;`. `LocalCall` is `var x: T := m(args);`. `ReturnCall` is `result := m(args);
 /// return;`, since Dafny takes no call in a `return`. `Assign` is `x := e;` and `AssignCall` is `x := m(args);`. `While` is the
 /// condition, the invariants, the decreases lines and the body. `For` prints as its start, then a `while` whose body ends with the
-/// step. The start and the step keep their own places, decision 0069.
+/// step. The start and the step keep their own places, decision 0069. `SetField` is `this' := this'.(f := e);`. `Update` calls a
+/// method that writes its object and writes the object back, `o := m(o, args);`, and `LocalUpdate` also sets a new local to the
+/// value it gives. `CallStmt` is `m(args);` of a method that gives no value, and `Exit` is `return;`, decision 0096.
 #[derive(PartialEq, Eq, Debug)]
 pub enum DStmt {
     Return(DExpr),
@@ -316,6 +333,18 @@ pub enum DStmt {
     AssignCall(u32, u32, DArgs),
     While(DExpr, DConds, DConds, Box<DStmts>),
     For(Box<DStmt>, u32, DExpr, DConds, DConds, Box<DStmts>, Box<DStmt>, u32),
+    SetField(u32, DExpr),
+    Update(Obj, u32, DArgs),
+    LocalUpdate(u32, DTy, Obj, u32, DArgs),
+    CallStmt(u32, DArgs),
+    Exit,
+}
+
+/// The object that a call writes back: a local by its name, or the object of the member function that makes the call.
+#[derive(Structural, PartialEq, Eq, Clone, Copy, Debug)]
+pub enum Obj {
+    Local(u32),
+    Object,
 }
 
 /// The statements of a Dafny body. Each keeps the place of the C++ statement it comes from, decision 0068.
@@ -338,7 +367,8 @@ pub enum DConds {
     Cons(DExpr, u32, Box<DConds>),
 }
 
-/// A Dafny method. `function` is the body of the Dafny function of a pure member function, decision 0090.
+/// A Dafny method. `function` is the body of the Dafny function of a pure member function, decision 0090. `writes` holds when the
+/// method takes its object in and gives it back as `this'`, decision 0096.
 #[derive(PartialEq, Eq, Debug)]
 pub struct Method {
     pub name: u32,
@@ -349,6 +379,7 @@ pub struct Method {
     pub decreases: DConds,
     pub body: DStmts,
     pub function: Option<DExpr>,
+    pub writes: bool,
 }
 
 /// The model of one function, decision 0058. `Full` is the method with its contract and body. `Bare` is a function whose signature
@@ -376,7 +407,8 @@ pub enum Models {
 /// `NoField` is a field of a contract that its struct does not have. `HoldsSeq` is a local or a result of a struct that holds a
 /// sequence, decision 0076. `Element` is an optional of a struct or a sequence of `bool`, which have no rule, decisions 0064 and 0076.
 /// `NotPure` is a contract that calls a member function that is not pure, or no member function, by the id of the name, decision
-/// 0090.
+/// 0090. `NoTarget` is a call that writes its object, on an object that is no local, by the line. `NoObject` is a field or a member
+/// function in a requires line of a constructor, before the object exists, by the id of the name, decision 0096.
 #[derive(Structural, PartialEq, Eq, Clone, Copy, Debug)]
 pub enum Refusal {
     Construct(u32, u32),
@@ -396,6 +428,8 @@ pub enum Refusal {
     HoldsSeq(u32),
     Element(u32),
     NotPure(u32, u32),
+    NoTarget(u32),
+    NoObject(u32, u32),
 }
 
 // ------------------------------------------------------------------ the rules
@@ -415,6 +449,10 @@ pub open spec fn spec_ty(t: Ty, line: u32) -> Result<DTy, Refusal> {
         Ty::Opt(Scalar::Struct(_)) => Err(Refusal::Element(line)),
         Ty::Opt(s) => Ok(DTy::Opt(s)),
         Ty::This(k) => Ok(DTy::Struct(k)),
+        Ty::ThisMut(k) => Ok(DTy::Struct(k)),
+        Ty::ThisAfter(k) => Ok(DTy::Struct(k)),
+        Ty::Fresh(_) => Err(Refusal::Syntax(line)),
+        Ty::Void => Err(Refusal::Syntax(line)),
         Ty::Other(k) => Err(Refusal::Construct(k, line)),
     }
 }
@@ -427,6 +465,8 @@ pub open spec fn spec_value_ty(t: Ty, line: u32, sd: Structs) -> Result<DTy, Ref
         Ok(dt) => match t {
             Ty::Seq(_, _) => Err(Refusal::SeqParam(line)),
             Ty::This(_) => Err(Refusal::Syntax(line)),
+            Ty::ThisMut(_) => Err(Refusal::Syntax(line)),
+            Ty::ThisAfter(_) => Err(Refusal::Syntax(line)),
             Ty::Struct(k) => if spec_holds(sd, k) {
                 Err(Refusal::HoldsSeq(line))
             } else {
@@ -548,7 +588,7 @@ pub open spec fn spec_code(e: Expr, line: u32) -> Result<DExpr, Refusal>
         },
         Expr::Bool(b) => Ok(DExpr::Bool(b)),
         Expr::Var(v, t) => match spec_ty(t, line) {
-            Ok(_) => Ok(DExpr::Var(v)),
+            Ok(_) => Ok(spec_code_var(v, t)),
             Err(r) => Err(r),
         },
         Expr::Bin(op, a, b) => if op == BinOp::Div || op == BinOp::Rem {
@@ -646,6 +686,22 @@ pub open spec fn spec_code(e: Expr, line: u32) -> Result<DExpr, Refusal>
     }
 }
 
+/// A variable of code. The object of a member function that writes it is `this'` in the body, decision 0096.
+pub open spec fn spec_code_var(v: u32, t: Ty) -> DExpr {
+    match t {
+        Ty::ThisMut(_) => DExpr::After,
+        _ => DExpr::Var(v),
+    }
+}
+
+/// A variable of a contract. The object after the call is `this'`, decision 0096.
+pub open spec fn spec_var(v: u32, t: Ty) -> DExpr {
+    match t {
+        Ty::ThisAfter(_) => DExpr::After,
+        _ => DExpr::Var(v),
+    }
+}
+
 /// The arguments of a call, each an expression of code. So an argument holds no call.
 pub open spec fn spec_args(args: Args, line: u32) -> Result<DArgs, Refusal>
     decreases args,
@@ -732,10 +788,10 @@ pub open spec fn spec_contract(e: Expr, decl: Names, ps: Params, ret: Option<Ty>
             Ok(DExpr::Bound(n))
         } else {
             match spec_rebind(decl, ps, n) {
-                Some((p, t)) => spec_leaf(DExpr::Var(p), t, line),
+                Some((p, t)) => spec_leaf(spec_var(p, t), t, line),
                 None => match spec_this_field(ps, ret, n, sd) {
                     Some((d, ft)) => spec_leaf(d, ft, line),
-                    None => spec_unnamed(n, ret, line),
+                    None => Err(spec_no_name(n, ret, line, sd)),
                 },
             }
         },
@@ -819,10 +875,19 @@ pub open spec fn spec_contract(e: Expr, decl: Names, ps: Params, ret: Option<Ty>
                     Err(r) => Err(r),
                 },
             },
-            None => match spec_contract_args(*args, decl, ps, ret, bound, line, sd) {
-                Ok(da) => Ok(DExpr::Apply(f, Box::new(da))),
-                Err(r) => Err(r),
+            None => if spec_fresh_member(ret, sd, f) {
+                Err(Refusal::NoObject(f, line))
+            } else {
+                match spec_contract_args(*args, decl, ps, ret, bound, line, sd) {
+                    Ok(da) => Ok(DExpr::Apply(f, Box::new(da))),
+                    Err(r) => Err(r),
+                }
             },
+        },
+        Expr::Old(a) => if spec_has_after(ps) {
+            spec_contract(*a, decl, spec_before(ps), ret, bound, line, sd)
+        } else {
+            Err(Refusal::Syntax(line))
         },
         Expr::MApply(o, f, args) => match spec_path(*o, decl, ps, ret, bound, line, sd) {
             Ok((d, t)) => match spec_struct_key(t) {
@@ -916,13 +981,10 @@ pub open spec fn spec_path(e: Expr, decl: Names, ps: Params, ret: Option<Ty>, bo
             Err(Refusal::Syntax(line))
         } else {
             match spec_rebind(decl, ps, n) {
-                Some((p, t)) => Ok((DExpr::Var(p), t)),
+                Some((p, t)) => Ok((spec_var(p, t), t)),
                 None => match spec_this_field(ps, ret, n, sd) {
                     Some(x) => Ok(x),
-                    None => match ret {
-                        Some(_) => Err(Refusal::Name(n, line)),
-                        None => Err(Refusal::NoVar(n, line)),
-                    },
+                    None => Err(spec_no_name(n, ret, line, sd)),
                 },
             }
         },
@@ -1003,15 +1065,113 @@ pub open spec fn spec_this(ps: Params) -> Option<(u32, u32)>
     }
 }
 
-/// The object of a contract and the key of its struct: `this` of a member function, decision 0089, or `result` of a constructor,
-/// whose result type is `This`, decision 0094.
+/// The parameter `this` of a member function, first in its parameters, with its type: `const`, writing, or after the call.
+pub open spec fn spec_self(ps: Params) -> Option<(u32, Ty)> {
+    match ps {
+        Params::Cons(p, t, _) => match t {
+            Ty::This(_) => Some((p, t)),
+            Ty::ThisMut(_) => Some((p, t)),
+            Ty::ThisAfter(_) => Some((p, t)),
+            _ => None,
+        },
+        Params::Nil => None,
+    }
+}
+
+/// The function writes its object, decision 0096.
+pub open spec fn spec_writes(ps: Params) -> bool {
+    match spec_self(ps) {
+        Some((_, Ty::ThisMut(_))) => true,
+        _ => false,
+    }
+}
+
+/// The parameters as an ensures line reads them: the object that the function writes is the object after the call, decision 0096.
+pub open spec fn spec_after(ps: Params) -> Params
+    decreases ps,
+{
+    match ps {
+        Params::Nil => Params::Nil,
+        Params::Cons(p, t, rest) => Params::Cons(
+            p,
+            match t {
+                Ty::ThisMut(k) => Ty::ThisAfter(k),
+                _ => t,
+            },
+            Box::new(spec_after(*rest)),
+        ),
+    }
+}
+
+/// The parameters as `old()` reads them: the object before the call.
+pub open spec fn spec_before(ps: Params) -> Params
+    decreases ps,
+{
+    match ps {
+        Params::Nil => Params::Nil,
+        Params::Cons(p, t, rest) => Params::Cons(
+            p,
+            match t {
+                Ty::ThisAfter(k) => Ty::ThisMut(k),
+                _ => t,
+            },
+            Box::new(spec_before(*rest)),
+        ),
+    }
+}
+
+/// The contract reads the object after the call, so `old()` has a meaning: an ensures line of a function that writes its object.
+pub open spec fn spec_has_after(ps: Params) -> bool {
+    match spec_self(ps) {
+        Some((_, Ty::ThisAfter(_))) => true,
+        _ => false,
+    }
+}
+
+/// The object of a contract and the key of its struct: `this` of a member function, decision 0089, `this'` after a call that
+/// writes it, decision 0096, or `result` of a constructor, whose result type is `This`, decision 0094.
 pub open spec fn spec_object(ps: Params, ret: Option<Ty>) -> Option<(DExpr, u32)> {
-    match spec_this(ps) {
-        Some((p, k)) => Some((DExpr::Var(p), k)),
+    match spec_self(ps) {
+        Some((p, t)) => match t {
+            Ty::ThisAfter(k) => Some((DExpr::After, k)),
+            Ty::This(k) => Some((DExpr::Var(p), k)),
+            Ty::ThisMut(k) => Some((DExpr::Var(p), k)),
+            _ => None,
+        },
         None => match ret {
             Some(Ty::This(k)) => Some((DExpr::Result, k)),
             _ => None,
         },
+    }
+}
+
+/// A requires line of a constructor reads its result before it exists. The name `n` is a member of that struct.
+pub open spec fn spec_fresh_member(ret: Option<Ty>, sd: Structs, n: u32) -> bool {
+    match ret {
+        Some(Ty::Fresh(k)) => spec_member(sd, k, n).is_some(),
+        _ => false,
+    }
+}
+
+/// The view of the result type that a contract line of the kind `k` reads: a requires or a decreases line of a constructor reads
+/// no object yet, decision 0096.
+pub open spec fn spec_view_ret(ret: Ty, k: CondKind) -> Ty {
+    match ret {
+        Ty::This(s) => if k == CondKind::Ensures {
+            ret
+        } else {
+            Ty::Fresh(s)
+        },
+        _ => ret,
+    }
+}
+
+/// The view of the parameters that a contract line of the kind `k` reads.
+pub open spec fn spec_view_ps(ps: Params, k: CondKind) -> Params {
+    if k == CondKind::Ensures {
+        spec_after(ps)
+    } else {
+        ps
     }
 }
 
@@ -1026,7 +1186,8 @@ pub open spec fn spec_this_field(ps: Params, ret: Option<Ty>, n: u32, sd: Struct
     }
 }
 
-/// The type of the result of a function: a value type, or `This` of a constructor, which must not hold a sequence, decision 0094.
+/// The type of the result of a function: a value type, `This` of a constructor, which must not hold a sequence, decision 0094, or
+/// `void`, decision 0096.
 pub open spec fn spec_ret_ty(t: Ty, line: u32, sd: Structs) -> Result<DTy, Refusal> {
     match t {
         Ty::This(k) => if spec_holds(sd, k) {
@@ -1034,15 +1195,30 @@ pub open spec fn spec_ret_ty(t: Ty, line: u32, sd: Structs) -> Result<DTy, Refus
         } else {
             Ok(DTy::Struct(k))
         },
+        Ty::Void => Ok(DTy::Void),
         _ => spec_value_ty(t, line, sd),
     }
 }
 
-/// A name that is no parameter: of the contract of a function, or no variable of a loop contract.
-pub open spec fn spec_unnamed(n: u32, ret: Option<Ty>, line: u32) -> Result<DExpr, Refusal> {
+/// A name that is no parameter: of the contract of a function, no variable of a loop contract, or a field of a constructor's
+/// result before it exists.
+pub open spec fn spec_no_name(n: u32, ret: Option<Ty>, line: u32, sd: Structs) -> Refusal {
     match ret {
-        Some(_) => Err(Refusal::Name(n, line)),
-        None => Err(Refusal::NoVar(n, line)),
+        Some(Ty::Fresh(k)) => if spec_field_ty(sd, k, n).is_some() {
+            Refusal::NoObject(n, line)
+        } else {
+            Refusal::Name(n, line)
+        },
+        Some(_) => Refusal::Name(n, line),
+        None => Refusal::NoVar(n, line),
+    }
+}
+
+/// The type of a parameter. The object after a call is a view of the contract, never a parameter.
+pub open spec fn spec_param_ty(t: Ty, line: u32) -> Result<DTy, Refusal> {
+    match t {
+        Ty::ThisAfter(_) => Err(Refusal::Syntax(line)),
+        _ => spec_ty(t, line),
     }
 }
 
@@ -1052,7 +1228,7 @@ pub open spec fn spec_params(ps: Params, line: u32) -> Result<DParams, Refusal>
 {
     match ps {
         Params::Nil => Ok(DParams::Nil),
-        Params::Cons(n, t, rest) => match spec_ty(t, line) {
+        Params::Cons(n, t, rest) => match spec_param_ty(t, line) {
             Ok(dt) => match spec_params(*rest, line) {
                 Ok(dr) => Ok(DParams::Cons(n, dt, Box::new(dr))),
                 Err(r) => Err(r),
@@ -1097,6 +1273,9 @@ pub open spec fn spec_place(s: Stmt) -> u32 {
         Stmt::Step(_, _, _, l) => l,
         Stmt::While(_, _, _, l) => l,
         Stmt::For(_, _, _, _, _, l) => l,
+        Stmt::SetField(_, _, l) => l,
+        Stmt::Call(_, _, _, l) => l,
+        Stmt::Exit(l) => l,
         Stmt::Unknown(_, l) => l,
     }
 }
@@ -1158,17 +1337,118 @@ pub open spec fn spec_loop_conds(cs: Conds, want: CondKind, env: Params, sd: Str
     }
 }
 
+/// The callee with the key `key` writes its object, decision 0096.
+pub open spec fn spec_callee_writes(all: Fns, key: u32) -> bool {
+    match spec_find(all, key) {
+        Some(f) => spec_writes(f.params),
+        None => false,
+    }
+}
+
+/// The object of a call that writes it, decision 0096: a local, or the object of a member function that writes it. A parameter is
+/// never written, and any other object has no rule yet.
+pub open spec fn spec_target(o: Expr, ps: Params, line: u32) -> Result<Obj, Refusal>
+    decreases o,
+{
+    match o {
+        Expr::Var(v, t) => match t {
+            Ty::ThisMut(_) => if spec_writes(ps) {
+                Ok(Obj::Object)
+            } else {
+                Err(Refusal::Syntax(line))
+            },
+            _ => if spec_is_param(ps, v) {
+                Err(Refusal::WriteParam(v, line))
+            } else {
+                Ok(Obj::Local(v))
+            },
+        },
+        Expr::Cast(c, a) => if c == CastKind::Read || c == CastKind::NoOp {
+            spec_target(*a, ps, line)
+        } else {
+            Err(Refusal::NoTarget(line))
+        },
+        Expr::Paren(a) => spec_target(*a, ps, line),
+        _ => Err(Refusal::NoTarget(line)),
+    }
+}
+
+/// A call that stands alone as a statement, decision 0096. A call of a function that writes its object writes the object back. A
+/// call of any other function must give no value.
+pub open spec fn spec_call_stmt(key: u32, name: u32, args: Args, line: u32, all: Fns, ps: Params, sd: Structs) -> Result<DStmt, Refusal> {
+    if spec_callee_writes(all, key) {
+        match args {
+            Args::Cons(o, rest) => match spec_target(*o, ps, line) {
+                Ok(obj) => match spec_call(key, name, *rest, line, all, line, sd) {
+                    Ok(da) => Ok(DStmt::Update(obj, key, da)),
+                    Err(r) => Err(r),
+                },
+                Err(r) => Err(r),
+            },
+            Args::Nil => Err(Refusal::Syntax(line)),
+        }
+    } else {
+        match spec_call(key, name, args, line, all, line, sd) {
+            Ok(da) => if spec_callee_void(all, key) {
+                Ok(DStmt::CallStmt(key, da))
+            } else {
+                Err(Refusal::Place(line))
+            },
+            Err(r) => Err(r),
+        }
+    }
+}
+
+/// The callee with the key `key` gives no value.
+pub open spec fn spec_callee_void(all: Fns, key: u32) -> bool {
+    match spec_find(all, key) {
+        Some(f) => f.ret == Ty::Void,
+        None => false,
+    }
+}
+
+/// A local whose start value is a call. A call of a function that writes its object also writes the object back, decision 0096.
+pub open spec fn spec_local_call(n: u32, dt: DTy, key: u32, name: u32, args: Args, at: u32, all: Fns, line: u32, ps: Params, sd: Structs) -> Result<
+    DStmt,
+    Refusal,
+> {
+    if spec_callee_writes(all, key) {
+        match args {
+            Args::Cons(o, rest) => match spec_target(*o, ps, line) {
+                Ok(obj) => match spec_call(key, name, *rest, at, all, line, sd) {
+                    Ok(da) => Ok(DStmt::LocalUpdate(n, dt, obj, key, da)),
+                    Err(r) => Err(r),
+                },
+                Err(r) => Err(r),
+            },
+            Args::Nil => Err(Refusal::Syntax(line)),
+        }
+    } else {
+        match spec_call(key, name, args, at, all, line, sd) {
+            Ok(da) => Ok(DStmt::LocalCall(n, dt, key, da)),
+            Err(r) => Err(r),
+        }
+    }
+}
+
 /// A statement of the body, and a list of them. `env` is the variables in scope, and `ps` the parameters. A call is in a
-/// statement only as the full value of a `return`, of a local or of a write. A write is to a local, never to a parameter.
+/// statement only as the full value of a `return`, of a local or of a write, or alone. A write is to a local, never to a
+/// parameter, or to a field of the object of a member function that writes it, decision 0096.
+// ponytail: `return o.f();` and `x = o.f();` of a function that writes its object are refused as a call out of place. Upgrade: an
+// update to a fresh local, then the return or the write.
 // ponytail: `return (f(x));` is refused as a call inside an expression. Upgrade: look through parentheses.
 pub open spec fn spec_stmt(s: Stmt, all: Fns, env: Params, ps: Params, sd: Structs) -> Result<DStmt, Refusal>
     decreases s,
 {
     match s {
         Stmt::Return(e, l) => match e {
-            Expr::Call(k, n, args, at) => match spec_call(k, n, *args, at, all, l, sd) {
-                Ok(da) => Ok(DStmt::ReturnCall(k, da)),
-                Err(r) => Err(r),
+            Expr::Call(k, n, args, at) => if spec_callee_writes(all, k) {
+                Err(Refusal::Place(at))
+            } else {
+                match spec_call(k, n, *args, at, all, l, sd) {
+                    Ok(da) => Ok(DStmt::ReturnCall(k, da)),
+                    Err(r) => Err(r),
+                }
             },
             _ => match spec_code(e, l) {
                 Ok(d) => Ok(DStmt::Return(d)),
@@ -1188,10 +1468,7 @@ pub open spec fn spec_stmt(s: Stmt, all: Fns, env: Params, ps: Params, sd: Struc
         Stmt::Local(n, t, e, l) => match spec_value_ty(t, l, sd) {
             Err(r) => Err(r),
             Ok(dt) => match e {
-                Expr::Call(k, nm, args, at) => match spec_call(k, nm, *args, at, all, l, sd) {
-                    Ok(da) => Ok(DStmt::LocalCall(n, dt, k, da)),
-                    Err(r) => Err(r),
-                },
+                Expr::Call(k, nm, args, at) => spec_local_call(n, dt, k, nm, *args, at, all, l, ps, sd),
                 _ => match spec_code(e, l) {
                     Ok(d) => Ok(DStmt::Local(n, dt, d)),
                     Err(r) => Err(r),
@@ -1202,9 +1479,13 @@ pub open spec fn spec_stmt(s: Stmt, all: Fns, env: Params, ps: Params, sd: Struc
             Err(Refusal::WriteParam(n, l))
         } else {
             match e {
-                Expr::Call(k, nm, args, at) => match spec_call(k, nm, *args, at, all, l, sd) {
-                    Ok(da) => Ok(DStmt::AssignCall(n, k, da)),
-                    Err(r) => Err(r),
+                Expr::Call(k, nm, args, at) => if spec_callee_writes(all, k) {
+                    Err(Refusal::Place(at))
+                } else {
+                    match spec_call(k, nm, *args, at, all, l, sd) {
+                        Ok(da) => Ok(DStmt::AssignCall(n, k, da)),
+                        Err(r) => Err(r),
+                    }
                 },
                 _ => match spec_code(e, l) {
                     Ok(d) => Ok(DStmt::Assign(n, d)),
@@ -1265,6 +1546,22 @@ pub open spec fn spec_stmt(s: Stmt, all: Fns, env: Params, ps: Params, sd: Struc
                 },
             },
         },
+        Stmt::SetField(f, e, l) => match spec_self(ps) {
+            Some((p, t)) => match t {
+                Ty::ThisMut(k) => match spec_field_ty(sd, k, f) {
+                    Some(Ty::Seq(_, _)) => Err(Refusal::SeqParam(l)),
+                    Some(_) => match spec_code(e, l) {
+                        Ok(d) => Ok(DStmt::SetField(f, d)),
+                        Err(r) => Err(r),
+                    },
+                    None => Err(Refusal::NoField(f, l)),
+                },
+                _ => Err(Refusal::WriteParam(p, l)),
+            },
+            None => Err(Refusal::Syntax(l)),
+        },
+        Stmt::Call(k, nm, args, l) => spec_call_stmt(k, nm, *args, l, all, ps, sd),
+        Stmt::Exit(_) => Ok(DStmt::Exit),
         Stmt::Unknown(k, l) => Err(Refusal::Construct(k, l)),
     }
 }
@@ -1308,6 +1605,7 @@ pub open spec fn spec_has_result(e: Expr) -> bool
         Expr::HasValue(a) => spec_has_result(*a),
         Expr::Value(a) => spec_has_result(*a),
         Expr::Chain(_, _, a, b, c) => spec_has_result(*a) || spec_has_result(*b) || spec_has_result(*c),
+        Expr::Old(a) => spec_has_result(*a),
         _ => false,
     }
 }
@@ -1322,7 +1620,8 @@ pub open spec fn spec_has_result_args(args: Args) -> bool
 }
 
 /// The lines of one kind of the contract of a function, in their order. A word with no rule, or a line the shell could not read,
-/// is refused. A `decreases` line is the measure of a recursion, and it names no `result`, decision 0072.
+/// is refused. A `decreases` line is the measure of a recursion, and it names no `result`, decision 0072. Each kind reads its view
+/// of the object, decision 0096.
 pub open spec fn spec_conds(cs: Conds, want: CondKind, ps: Params, ret: Ty, sd: Structs) -> Result<DConds, Refusal>
     decreases cs,
 {
@@ -1336,7 +1635,7 @@ pub open spec fn spec_conds(cs: Conds, want: CondKind, ps: Params, ret: Ty, sd: 
                 Ok(dr) => if k == want && k == CondKind::Decreases && spec_has_result(e) {
                     Err(Refusal::Syntax(l))
                 } else if k == want {
-                    match spec_contract(e, decl, ps, Some(ret), Names::Nil, l, sd) {
+                    match spec_contract(e, decl, spec_view_ps(ps, k), Some(spec_view_ret(ret, k)), Names::Nil, l, sd) {
                         Ok(d) => Ok(DConds::Cons(d, l, Box::new(dr))),
                         Err(r) => Err(r),
                     }
@@ -1425,6 +1724,50 @@ pub open spec fn spec_twice(f: Function) -> Option<(u32, u32)> {
     }
 }
 
+/// The first `return` that does not fit the result type: `return;` in a function that gives a value, or a `return` of a value in a
+/// `void` function, decision 0096.
+pub open spec fn spec_misreturn(ss: Stmts, void: bool) -> Option<u32>
+    decreases ss,
+{
+    match ss {
+        Stmts::Nil => None,
+        Stmts::Cons(s, rest) => match spec_misreturn_stmt(*s, void) {
+            Some(l) => Some(l),
+            None => spec_misreturn(*rest, void),
+        },
+    }
+}
+
+pub open spec fn spec_misreturn_stmt(s: Stmt, void: bool) -> Option<u32>
+    decreases s,
+{
+    match s {
+        Stmt::Exit(l) => if void {
+            None
+        } else {
+            Some(l)
+        },
+        Stmt::Return(_, l) => if void {
+            Some(l)
+        } else {
+            None
+        },
+        Stmt::If(_, t, f, _) => match spec_misreturn(*t, void) {
+            Some(l) => Some(l),
+            None => spec_misreturn(*f, void),
+        },
+        Stmt::While(_, _, body, _) => spec_misreturn(*body, void),
+        Stmt::For(init, _, step, _, body, _) => match spec_misreturn_stmt(*init, void) {
+            Some(l) => Some(l),
+            None => match spec_misreturn_stmt(*step, void) {
+                Some(l) => Some(l),
+                None => spec_misreturn(*body, void),
+            },
+        },
+        _ => None,
+    }
+}
+
 /// The contract and the body of a function whose signature is in the subset: the requires lines, the ensures lines, the decreases
 /// lines and the body.
 pub open spec fn spec_inside(f: Function, all: Fns, sd: Structs) -> Result<(DConds, DConds, DConds, DStmts), Refusal> {
@@ -1436,9 +1779,12 @@ pub open spec fn spec_inside(f: Function, all: Fns, sd: Structs) -> Result<(DCon
                 Err(r) => Err(r),
                 Ok(dec) => match spec_twice(f) {
                     Some((n, l)) => Err(Refusal::Twice(n, l)),
-                    None => match spec_stmts(f.body, all, f.params, f.params, sd) {
-                        Err(r) => Err(r),
-                        Ok(body) => Ok((req, ens, dec, body)),
+                    None => match spec_misreturn(f.body, f.ret == Ty::Void) {
+                        Some(l) => Err(Refusal::Syntax(l)),
+                        None => match spec_stmts(f.body, all, f.params, f.params, sd) {
+                            Err(r) => Err(r),
+                            Ok(body) => Ok((req, ens, dec, body)),
+                        },
                     },
                 },
             },
@@ -1550,6 +1896,8 @@ pub open spec fn spec_struct_key(t: Ty) -> Option<u32> {
     match t {
         Ty::Struct(k) => Some(k),
         Ty::This(k) => Some(k),
+        Ty::ThisMut(k) => Some(k),
+        Ty::ThisAfter(k) => Some(k),
         _ => None,
     }
 }
@@ -1689,6 +2037,7 @@ pub open spec fn spec_function(f: Function, all: Fns, sd: Structs) -> Model {
                         decreases: dec,
                         body,
                         function: spec_pure_body(f.params, body),
+                        writes: spec_writes(f.params),
                     },
                 ),
             },
@@ -1770,6 +2119,7 @@ pub open spec fn unknown_expr(e: Expr) -> bool
         Expr::Prefix(a, j) => unknown_expr(*a) || unknown_expr(*j),
         Expr::Slice(a, i, j) => unknown_expr(*a) || unknown_expr(*i) || unknown_expr(*j),
         Expr::Divide(_, a, b, _) => unknown_expr(*a) || unknown_expr(*b),
+        Expr::Old(a) => unknown_expr(*a),
         _ => false,
     }
 }
@@ -1795,6 +2145,9 @@ pub open spec fn unknown_stmt(s: Stmt) -> bool
         Stmt::Step(_, _, _, _) => false,
         Stmt::While(c, _, body, _) => unknown_expr(c) || unknown_stmts(*body),
         Stmt::For(init, c, step, _, body, _) => unknown_stmt(*init) || unknown_expr(c) || unknown_stmt(*step) || unknown_stmts(*body),
+        Stmt::SetField(_, e, _) => unknown_expr(e),
+        Stmt::Call(_, _, args, _) => unknown_args(*args),
+        Stmt::Exit(_) => false,
     }
 }
 
@@ -1891,6 +2244,74 @@ pub proof fn lemma_unknown_call_is_refused(e: Expr, all: Fns, line: u32, sd: Str
     }
 }
 
+/// An object that holds a node with no rule is no target.
+pub proof fn lemma_unknown_target_is_refused(o: Expr, ps: Params, line: u32)
+    requires
+        unknown_expr(o),
+    ensures
+        spec_target(o, ps, line).is_err(),
+    decreases o,
+{
+    match o {
+        Expr::Cast(c, a) => {
+            if c == CastKind::Read || c == CastKind::NoOp {
+                lemma_unknown_target_is_refused(*a, ps, line);
+            }
+        },
+        Expr::Paren(a) => lemma_unknown_target_is_refused(*a, ps, line),
+        _ => {},
+    }
+}
+
+pub proof fn lemma_unknown_local_call_is_refused(
+    n: u32,
+    dt: DTy,
+    key: u32,
+    name: u32,
+    args: Args,
+    at: u32,
+    all: Fns,
+    line: u32,
+    ps: Params,
+    sd: Structs,
+)
+    requires
+        unknown_args(args),
+    ensures
+        spec_local_call(n, dt, key, name, args, at, all, line, ps, sd).is_err(),
+{
+    if spec_callee_writes(all, key) {
+        if let Args::Cons(o, rest) = args {
+            if unknown_expr(*o) {
+                lemma_unknown_target_is_refused(*o, ps, line);
+            } else if spec_callable(all, key, sd) {
+                lemma_unknown_args_is_refused(*rest, line);
+            }
+        }
+    } else if spec_callable(all, key, sd) {
+        lemma_unknown_args_is_refused(args, line);
+    }
+}
+
+pub proof fn lemma_unknown_call_stmt_is_refused(key: u32, name: u32, args: Args, line: u32, all: Fns, ps: Params, sd: Structs)
+    requires
+        unknown_args(args),
+    ensures
+        spec_call_stmt(key, name, args, line, all, ps, sd).is_err(),
+{
+    if spec_callee_writes(all, key) {
+        if let Args::Cons(o, rest) = args {
+            if unknown_expr(*o) {
+                lemma_unknown_target_is_refused(*o, ps, line);
+            } else if spec_callable(all, key, sd) {
+                lemma_unknown_args_is_refused(*rest, line);
+            }
+        }
+    } else if spec_callable(all, key, sd) {
+        lemma_unknown_args_is_refused(args, line);
+    }
+}
+
 pub proof fn lemma_unknown_stmt_is_refused(s: Stmt, all: Fns, env: Params, ps: Params, sd: Structs)
     requires
         unknown_stmt(s),
@@ -1915,13 +2336,17 @@ pub proof fn lemma_unknown_stmt_is_refused(s: Stmt, all: Fns, env: Params, ps: P
                 lemma_unknown_stmts_is_refused(*f, all, env, ps, sd);
             }
         },
-        Stmt::Local(_, _, e, l) => {
+        Stmt::Local(n, t, e, l) => {
             if e is Call {
-                lemma_unknown_call_is_refused(e, all, l, sd);
+                if let Ok(dt) = spec_value_ty(t, l, sd) {
+                    lemma_unknown_local_call_is_refused(n, dt, e->Call_0, e->Call_1, *e->Call_2, e->Call_3, all, l, ps, sd);
+                }
             } else {
                 lemma_unknown_code_is_refused(e, l);
             }
         },
+        Stmt::SetField(_, e, l) => lemma_unknown_code_is_refused(e, l),
+        Stmt::Call(k, nm, args, l) => lemma_unknown_call_stmt_is_refused(k, nm, *args, l, all, ps, sd),
         Stmt::Assign(_, e, l) => {
             if e is Call {
                 lemma_unknown_call_is_refused(e, all, l, sd);
@@ -2093,6 +2518,9 @@ pub open spec fn calls_resolve_stmt(s: DStmt, all: Fns, sd: Structs) -> bool
         DStmt::LocalCall(_, _, k, _) => spec_callable(all, k, sd),
         DStmt::ReturnCall(k, _) => spec_callable(all, k, sd),
         DStmt::AssignCall(_, k, _) => spec_callable(all, k, sd),
+        DStmt::Update(_, k, _) => spec_callable(all, k, sd),
+        DStmt::LocalUpdate(_, _, _, k, _) => spec_callable(all, k, sd),
+        DStmt::CallStmt(k, _) => spec_callable(all, k, sd),
         DStmt::While(_, _, _, body) => calls_resolve(*body, all, sd),
         DStmt::For(init, _, _, _, _, body, step, _) => calls_resolve_stmt(*init, all, sd) && calls_resolve(*body, all, sd) && calls_resolve_stmt(*step, all, sd),
         _ => true,
@@ -2190,6 +2618,10 @@ pub fn translate_ty(t: Ty, line: u32) -> (r: Result<DTy, Refusal>)
         Ty::Opt(Scalar::Struct(_)) => Err(Refusal::Element(line)),
         Ty::Opt(s) => Ok(DTy::Opt(s)),
         Ty::This(k) => Ok(DTy::Struct(k)),
+        Ty::ThisMut(k) => Ok(DTy::Struct(k)),
+        Ty::ThisAfter(k) => Ok(DTy::Struct(k)),
+        Ty::Fresh(_) => Err(Refusal::Syntax(line)),
+        Ty::Void => Err(Refusal::Syntax(line)),
         Ty::Other(k) => Err(Refusal::Construct(k, line)),
     }
 }
@@ -2203,6 +2635,8 @@ pub fn translate_value_ty(t: Ty, line: u32, sd: &Structs) -> (r: Result<DTy, Ref
         Ok(dt) => match t {
             Ty::Seq(_, _) => Err(Refusal::SeqParam(line)),
             Ty::This(_) => Err(Refusal::Syntax(line)),
+            Ty::ThisMut(_) => Err(Refusal::Syntax(line)),
+            Ty::ThisAfter(_) => Err(Refusal::Syntax(line)),
             Ty::Struct(k) => if holds_seq(sd, k) {
                 Err(Refusal::HoldsSeq(line))
             } else {
@@ -2326,7 +2760,7 @@ pub fn translate_code(e: &Expr, line: u32) -> (r: Result<DExpr, Refusal>)
         },
         Expr::Bool(b) => Ok(DExpr::Bool(*b)),
         Expr::Var(v, t) => match translate_ty(*t, line) {
-            Ok(_) => Ok(DExpr::Var(*v)),
+            Ok(_) => Ok(code_var(*v, *t)),
             Err(r) => Err(r),
         },
         Expr::Bin(op, a, b) => if *op == BinOp::Div || *op == BinOp::Rem {
@@ -2424,6 +2858,26 @@ pub fn translate_code(e: &Expr, line: u32) -> (r: Result<DExpr, Refusal>)
     }
 }
 
+pub fn code_var(v: u32, t: Ty) -> (r: DExpr)
+    ensures
+        r == spec_code_var(v, t),
+{
+    match t {
+        Ty::ThisMut(_) => DExpr::After,
+        _ => DExpr::Var(v),
+    }
+}
+
+pub fn contract_var(v: u32, t: Ty) -> (r: DExpr)
+    ensures
+        r == spec_var(v, t),
+{
+    match t {
+        Ty::ThisAfter(_) => DExpr::After,
+        _ => DExpr::Var(v),
+    }
+}
+
 pub fn translate_args(args: &Args, line: u32) -> (r: Result<DArgs, Refusal>)
     ensures
         r == spec_args(*args, line),
@@ -2514,10 +2968,10 @@ pub fn translate_contract(e: &Expr, decl: &Names, ps: &Params, ret: Option<Ty>, 
             Ok(DExpr::Bound(*n))
         } else {
             match rebind(decl, ps, *n) {
-                Some((p, t)) => translate_leaf(DExpr::Var(p), t, line),
+                Some((p, t)) => translate_leaf(contract_var(p, t), t, line),
                 None => match this_field(ps, ret, *n, sd) {
                     Some((d, ft)) => translate_leaf(d, ft, line),
-                    None => unnamed(*n, ret, line),
+                    None => Err(no_name(*n, ret, line, sd)),
                 },
             }
         },
@@ -2595,10 +3049,19 @@ pub fn translate_contract(e: &Expr, decl: &Names, ps: &Params, ret: Option<Ty>, 
                     Err(r) => Err(r),
                 },
             },
-            None => match translate_contract_args(args, decl, ps, ret, bound, line, sd) {
-                Ok(da) => Ok(DExpr::Apply(*f, Box::new(da))),
-                Err(r) => Err(r),
+            None => if fresh_member(ret, sd, *f) {
+                Err(Refusal::NoObject(*f, line))
+            } else {
+                match translate_contract_args(args, decl, ps, ret, bound, line, sd) {
+                    Ok(da) => Ok(DExpr::Apply(*f, Box::new(da))),
+                    Err(r) => Err(r),
+                }
             },
+        },
+        Expr::Old(a) => if has_after(ps) {
+            translate_contract(a, decl, &before(ps), ret, bound, line, sd)
+        } else {
+            Err(Refusal::Syntax(line))
         },
         Expr::MApply(o, f, args) => match path(o, decl, ps, ret, bound, line, sd) {
             Ok((d, t)) => match struct_key(t) {
@@ -2692,13 +3155,10 @@ pub fn path(e: &Expr, decl: &Names, ps: &Params, ret: Option<Ty>, bound: &Names,
             Err(Refusal::Syntax(line))
         } else {
             match rebind(decl, ps, *n) {
-                Some((p, t)) => Ok((DExpr::Var(p), t)),
+                Some((p, t)) => Ok((contract_var(p, t), t)),
                 None => match this_field(ps, ret, *n, sd) {
                     Some(x) => Ok(x),
-                    None => match ret {
-                        Some(_) => Err(Refusal::Name(*n, line)),
-                        None => Err(Refusal::NoVar(*n, line)),
-                    },
+                    None => Err(no_name(*n, ret, line, sd)),
                 },
             }
         },
@@ -2770,16 +3230,125 @@ pub fn this_param(ps: &Params) -> (r: Option<(u32, u32)>)
     }
 }
 
+pub fn self_param(ps: &Params) -> (r: Option<(u32, Ty)>)
+    ensures
+        r == spec_self(*ps),
+{
+    match ps {
+        Params::Cons(p, t, _) => match t {
+            Ty::This(_) => Some((*p, *t)),
+            Ty::ThisMut(_) => Some((*p, *t)),
+            Ty::ThisAfter(_) => Some((*p, *t)),
+            _ => None,
+        },
+        Params::Nil => None,
+    }
+}
+
+pub fn writes(ps: &Params) -> (r: bool)
+    ensures
+        r == spec_writes(*ps),
+{
+    match self_param(ps) {
+        Some((_, Ty::ThisMut(_))) => true,
+        _ => false,
+    }
+}
+
+pub fn after(ps: &Params) -> (r: Params)
+    ensures
+        r == spec_after(*ps),
+    decreases ps,
+{
+    match ps {
+        Params::Nil => Params::Nil,
+        Params::Cons(p, t, rest) => {
+            let v = match t {
+                Ty::ThisMut(k) => Ty::ThisAfter(*k),
+                _ => *t,
+            };
+            Params::Cons(*p, v, Box::new(after(rest)))
+        },
+    }
+}
+
+pub fn before(ps: &Params) -> (r: Params)
+    ensures
+        r == spec_before(*ps),
+    decreases ps,
+{
+    match ps {
+        Params::Nil => Params::Nil,
+        Params::Cons(p, t, rest) => {
+            let v = match t {
+                Ty::ThisAfter(k) => Ty::ThisMut(*k),
+                _ => *t,
+            };
+            Params::Cons(*p, v, Box::new(before(rest)))
+        },
+    }
+}
+
+pub fn has_after(ps: &Params) -> (r: bool)
+    ensures
+        r == spec_has_after(*ps),
+{
+    match self_param(ps) {
+        Some((_, Ty::ThisAfter(_))) => true,
+        _ => false,
+    }
+}
+
 pub fn object(ps: &Params, ret: Option<Ty>) -> (r: Option<(DExpr, u32)>)
     ensures
         r == spec_object(*ps, ret),
 {
-    match this_param(ps) {
-        Some((p, k)) => Some((DExpr::Var(p), k)),
+    match self_param(ps) {
+        Some((p, t)) => match t {
+            Ty::ThisAfter(k) => Some((DExpr::After, k)),
+            Ty::This(k) => Some((DExpr::Var(p), k)),
+            Ty::ThisMut(k) => Some((DExpr::Var(p), k)),
+            _ => None,
+        },
         None => match ret {
             Some(Ty::This(k)) => Some((DExpr::Result, k)),
             _ => None,
         },
+    }
+}
+
+pub fn fresh_member(ret: Option<Ty>, sd: &Structs, n: u32) -> (r: bool)
+    ensures
+        r == spec_fresh_member(ret, *sd, n),
+{
+    match ret {
+        Some(Ty::Fresh(k)) => member(sd, k, n).is_some(),
+        _ => false,
+    }
+}
+
+pub fn view_ret(ret: Ty, k: CondKind) -> (r: Ty)
+    ensures
+        r == spec_view_ret(ret, k),
+{
+    match ret {
+        Ty::This(s) => if k == CondKind::Ensures {
+            ret
+        } else {
+            Ty::Fresh(s)
+        },
+        _ => ret,
+    }
+}
+
+pub fn view_ps(ps: &Params, k: CondKind) -> (r: Params)
+    ensures
+        r == spec_view_ps(*ps, k),
+{
+    if k == CondKind::Ensures {
+        after(ps)
+    } else {
+        copy_params(ps)
     }
 }
 
@@ -2806,6 +3375,7 @@ pub fn ret_ty(t: Ty, line: u32, sd: &Structs) -> (r: Result<DTy, Refusal>)
         } else {
             Ok(DTy::Struct(k))
         },
+        Ty::Void => Ok(DTy::Void),
         _ => translate_value_ty(t, line, sd),
     }
 }
@@ -2832,13 +3402,28 @@ pub fn copy_names(ns: &Names) -> (r: Names)
     }
 }
 
-pub fn unnamed(n: u32, ret: Option<Ty>, line: u32) -> (r: Result<DExpr, Refusal>)
+pub fn no_name(n: u32, ret: Option<Ty>, line: u32, sd: &Structs) -> (r: Refusal)
     ensures
-        r == spec_unnamed(n, ret, line),
+        r == spec_no_name(n, ret, line, *sd),
 {
     match ret {
-        Some(_) => Err(Refusal::Name(n, line)),
-        None => Err(Refusal::NoVar(n, line)),
+        Some(Ty::Fresh(k)) => if field_ty(sd, k, n).is_some() {
+            Refusal::NoObject(n, line)
+        } else {
+            Refusal::Name(n, line)
+        },
+        Some(_) => Refusal::Name(n, line),
+        None => Refusal::NoVar(n, line),
+    }
+}
+
+pub fn param_ty(t: Ty, line: u32) -> (r: Result<DTy, Refusal>)
+    ensures
+        r == spec_param_ty(t, line),
+{
+    match t {
+        Ty::ThisAfter(_) => Err(Refusal::Syntax(line)),
+        _ => translate_ty(t, line),
     }
 }
 
@@ -2849,7 +3434,7 @@ pub fn translate_params(ps: &Params, line: u32) -> (r: Result<DParams, Refusal>)
 {
     match ps {
         Params::Nil => Ok(DParams::Nil),
-        Params::Cons(n, t, rest) => match translate_ty(*t, line) {
+        Params::Cons(n, t, rest) => match param_ty(*t, line) {
             Ok(dt) => match translate_params(rest, line) {
                 Ok(dr) => Ok(DParams::Cons(*n, dt, Box::new(dr))),
                 Err(r) => Err(r),
@@ -2911,6 +3496,9 @@ pub fn place(s: &Stmt) -> (r: u32)
         Stmt::Step(_, _, _, l) => *l,
         Stmt::While(_, _, _, l) => *l,
         Stmt::For(_, _, _, _, _, l) => *l,
+        Stmt::SetField(_, _, l) => *l,
+        Stmt::Call(_, _, _, l) => *l,
+        Stmt::Exit(l) => *l,
         Stmt::Unknown(_, l) => *l,
     }
 }
@@ -2974,6 +3562,107 @@ pub fn translate_loop_conds(cs: &Conds, want: CondKind, env: &Params, sd: &Struc
     }
 }
 
+pub fn callee_writes(all: &Fns, key: u32) -> (r: bool)
+    ensures
+        r == spec_callee_writes(*all, key),
+{
+    match find(all, key) {
+        Some(f) => writes(&f.params),
+        None => false,
+    }
+}
+
+pub fn callee_void(all: &Fns, key: u32) -> (r: bool)
+    ensures
+        r == spec_callee_void(*all, key),
+{
+    match find(all, key) {
+        Some(f) => f.ret == Ty::Void,
+        None => false,
+    }
+}
+
+pub fn target(o: &Expr, ps: &Params, line: u32) -> (r: Result<Obj, Refusal>)
+    ensures
+        r == spec_target(*o, *ps, line),
+    decreases o,
+{
+    match o {
+        Expr::Var(v, t) => match t {
+            Ty::ThisMut(_) => if writes(ps) {
+                Ok(Obj::Object)
+            } else {
+                Err(Refusal::Syntax(line))
+            },
+            _ => if is_param(ps, *v) {
+                Err(Refusal::WriteParam(*v, line))
+            } else {
+                Ok(Obj::Local(*v))
+            },
+        },
+        Expr::Cast(c, a) => if *c == CastKind::Read || *c == CastKind::NoOp {
+            target(a, ps, line)
+        } else {
+            Err(Refusal::NoTarget(line))
+        },
+        Expr::Paren(a) => target(a, ps, line),
+        _ => Err(Refusal::NoTarget(line)),
+    }
+}
+
+pub fn call_stmt(key: u32, name: u32, args: &Args, line: u32, all: &Fns, ps: &Params, sd: &Structs) -> (r: Result<DStmt, Refusal>)
+    ensures
+        r == spec_call_stmt(key, name, *args, line, *all, *ps, *sd),
+{
+    if callee_writes(all, key) {
+        match args {
+            Args::Cons(o, rest) => match target(o, ps, line) {
+                Ok(obj) => match translate_call(key, name, rest, line, all, line, sd) {
+                    Ok(da) => Ok(DStmt::Update(obj, key, da)),
+                    Err(r) => Err(r),
+                },
+                Err(r) => Err(r),
+            },
+            Args::Nil => Err(Refusal::Syntax(line)),
+        }
+    } else {
+        match translate_call(key, name, args, line, all, line, sd) {
+            Ok(da) => if callee_void(all, key) {
+                Ok(DStmt::CallStmt(key, da))
+            } else {
+                Err(Refusal::Place(line))
+            },
+            Err(r) => Err(r),
+        }
+    }
+}
+
+pub fn local_call(n: u32, dt: DTy, key: u32, name: u32, args: &Args, at: u32, all: &Fns, line: u32, ps: &Params, sd: &Structs) -> (r: Result<
+    DStmt,
+    Refusal,
+>)
+    ensures
+        r == spec_local_call(n, dt, key, name, *args, at, *all, line, *ps, *sd),
+{
+    if callee_writes(all, key) {
+        match args {
+            Args::Cons(o, rest) => match target(o, ps, line) {
+                Ok(obj) => match translate_call(key, name, rest, at, all, line, sd) {
+                    Ok(da) => Ok(DStmt::LocalUpdate(n, dt, obj, key, da)),
+                    Err(r) => Err(r),
+                },
+                Err(r) => Err(r),
+            },
+            Args::Nil => Err(Refusal::Syntax(line)),
+        }
+    } else {
+        match translate_call(key, name, args, at, all, line, sd) {
+            Ok(da) => Ok(DStmt::LocalCall(n, dt, key, da)),
+            Err(r) => Err(r),
+        }
+    }
+}
+
 pub fn translate_stmt(s: &Stmt, all: &Fns, env: &Params, ps: &Params, sd: &Structs) -> (r: Result<DStmt, Refusal>)
     ensures
         r == spec_stmt(*s, *all, *env, *ps, *sd),
@@ -2981,9 +3670,13 @@ pub fn translate_stmt(s: &Stmt, all: &Fns, env: &Params, ps: &Params, sd: &Struc
 {
     match s {
         Stmt::Return(e, l) => match e {
-            Expr::Call(k, n, args, at) => match translate_call(*k, *n, args, *at, all, *l, sd) {
-                Ok(da) => Ok(DStmt::ReturnCall(*k, da)),
-                Err(r) => Err(r),
+            Expr::Call(k, n, args, at) => if callee_writes(all, *k) {
+                Err(Refusal::Place(*at))
+            } else {
+                match translate_call(*k, *n, args, *at, all, *l, sd) {
+                    Ok(da) => Ok(DStmt::ReturnCall(*k, da)),
+                    Err(r) => Err(r),
+                }
             },
             _ => match translate_code(e, *l) {
                 Ok(d) => Ok(DStmt::Return(d)),
@@ -3003,10 +3696,7 @@ pub fn translate_stmt(s: &Stmt, all: &Fns, env: &Params, ps: &Params, sd: &Struc
         Stmt::Local(n, t, e, l) => match translate_value_ty(*t, *l, sd) {
             Err(r) => Err(r),
             Ok(dt) => match e {
-                Expr::Call(k, nm, args, at) => match translate_call(*k, *nm, args, *at, all, *l, sd) {
-                    Ok(da) => Ok(DStmt::LocalCall(*n, dt, *k, da)),
-                    Err(r) => Err(r),
-                },
+                Expr::Call(k, nm, args, at) => local_call(*n, dt, *k, *nm, args, *at, all, *l, ps, sd),
                 _ => match translate_code(e, *l) {
                     Ok(d) => Ok(DStmt::Local(*n, dt, d)),
                     Err(r) => Err(r),
@@ -3017,9 +3707,13 @@ pub fn translate_stmt(s: &Stmt, all: &Fns, env: &Params, ps: &Params, sd: &Struc
             Err(Refusal::WriteParam(*n, *l))
         } else {
             match e {
-                Expr::Call(k, nm, args, at) => match translate_call(*k, *nm, args, *at, all, *l, sd) {
-                    Ok(da) => Ok(DStmt::AssignCall(*n, *k, da)),
-                    Err(r) => Err(r),
+                Expr::Call(k, nm, args, at) => if callee_writes(all, *k) {
+                    Err(Refusal::Place(*at))
+                } else {
+                    match translate_call(*k, *nm, args, *at, all, *l, sd) {
+                        Ok(da) => Ok(DStmt::AssignCall(*n, *k, da)),
+                        Err(r) => Err(r),
+                    }
                 },
                 _ => match translate_code(e, *l) {
                     Ok(d) => Ok(DStmt::Assign(*n, d)),
@@ -3077,6 +3771,22 @@ pub fn translate_stmt(s: &Stmt, all: &Fns, env: &Params, ps: &Params, sd: &Struc
                 },
             }
         },
+        Stmt::SetField(f, e, l) => match self_param(ps) {
+            Some((p, t)) => match t {
+                Ty::ThisMut(k) => match field_ty(sd, k, *f) {
+                    Some(Ty::Seq(_, _)) => Err(Refusal::SeqParam(*l)),
+                    Some(_) => match translate_code(e, *l) {
+                        Ok(d) => Ok(DStmt::SetField(*f, d)),
+                        Err(r) => Err(r),
+                    },
+                    None => Err(Refusal::NoField(*f, *l)),
+                },
+                _ => Err(Refusal::WriteParam(p, *l)),
+            },
+            None => Err(Refusal::Syntax(*l)),
+        },
+        Stmt::Call(k, nm, args, l) => call_stmt(*k, *nm, args, *l, all, ps, sd),
+        Stmt::Exit(_) => Ok(DStmt::Exit),
         Stmt::Unknown(k, l) => Err(Refusal::Construct(*k, *l)),
     }
 }
@@ -3123,6 +3833,7 @@ pub fn has_result(e: &Expr) -> (r: bool)
         Expr::HasValue(a) => has_result(a),
         Expr::Value(a) => has_result(a),
         Expr::Chain(_, _, a, b, c) => has_result(a) || has_result(b) || has_result(c),
+        Expr::Old(a) => has_result(a),
         _ => false,
     }
 }
@@ -3153,7 +3864,7 @@ pub fn translate_conds(cs: &Conds, want: CondKind, ps: &Params, ret: Ty, sd: &St
                 Ok(dr) => if *k == want && *k == CondKind::Decreases && has_result(e) {
                     Err(Refusal::Syntax(*l))
                 } else if *k == want {
-                    match translate_contract(e, decl, ps, Some(ret), &Names::Nil, *l, sd) {
+                    match translate_contract(e, decl, &view_ps(ps, *k), Some(view_ret(ret, *k)), &Names::Nil, *l, sd) {
                         Ok(d) => Ok(DConds::Cons(d, *l, Box::new(dr))),
                         Err(r) => Err(r),
                     }
@@ -3276,6 +3987,52 @@ pub fn twice(f: &Function) -> (r: Option<(u32, u32)>)
     }
 }
 
+pub fn misreturn(ss: &Stmts, void: bool) -> (r: Option<u32>)
+    ensures
+        r == spec_misreturn(*ss, void),
+    decreases ss,
+{
+    match ss {
+        Stmts::Nil => None,
+        Stmts::Cons(s, rest) => match misreturn_stmt(s, void) {
+            Some(l) => Some(l),
+            None => misreturn(rest, void),
+        },
+    }
+}
+
+pub fn misreturn_stmt(s: &Stmt, void: bool) -> (r: Option<u32>)
+    ensures
+        r == spec_misreturn_stmt(*s, void),
+    decreases s,
+{
+    match s {
+        Stmt::Exit(l) => if void {
+            None
+        } else {
+            Some(*l)
+        },
+        Stmt::Return(_, l) => if void {
+            Some(*l)
+        } else {
+            None
+        },
+        Stmt::If(_, t, f, _) => match misreturn(t, void) {
+            Some(l) => Some(l),
+            None => misreturn(f, void),
+        },
+        Stmt::While(_, _, body, _) => misreturn(body, void),
+        Stmt::For(init, _, step, _, body, _) => match misreturn_stmt(init, void) {
+            Some(l) => Some(l),
+            None => match misreturn_stmt(step, void) {
+                Some(l) => Some(l),
+                None => misreturn(body, void),
+            },
+        },
+        _ => None,
+    }
+}
+
 pub fn translate_inside(f: &Function, all: &Fns, sd: &Structs) -> (r: Result<(DConds, DConds, DConds, DStmts), Refusal>)
     ensures
         r == spec_inside(*f, *all, *sd),
@@ -3288,9 +4045,12 @@ pub fn translate_inside(f: &Function, all: &Fns, sd: &Structs) -> (r: Result<(DC
                 Err(r) => Err(r),
                 Ok(dec) => match twice(f) {
                     Some((n, l)) => Err(Refusal::Twice(n, l)),
-                    None => match translate_stmts(&f.body, all, &f.params, &f.params, sd) {
-                        Err(r) => Err(r),
-                        Ok(body) => Ok((req, ens, dec, body)),
+                    None => match misreturn(&f.body, f.ret == Ty::Void) {
+                        Some(l) => Err(Refusal::Syntax(l)),
+                        None => match translate_stmts(&f.body, all, &f.params, &f.params, sd) {
+                            Err(r) => Err(r),
+                            Ok(body) => Ok((req, ens, dec, body)),
+                        },
                     },
                 },
             },
@@ -3354,6 +4114,7 @@ pub fn copy_dexpr(d: &DExpr) -> (r: DExpr)
         DExpr::DivIn(x0, x1, x2) => DExpr::DivIn(Box::new(copy_dexpr(x0)), Box::new(copy_dexpr(x1)), *x2),
         DExpr::RemIn(x0, x1, x2) => DExpr::RemIn(Box::new(copy_dexpr(x0)), Box::new(copy_dexpr(x1)), *x2),
         DExpr::FCall(x0, x1) => DExpr::FCall(*x0, Box::new(copy_dargs(x1))),
+        DExpr::After => DExpr::After,
     }
 }
 
@@ -3466,6 +4227,8 @@ pub fn struct_key(t: Ty) -> (r: Option<u32>)
     match t {
         Ty::Struct(k) => Some(k),
         Ty::This(k) => Some(k),
+        Ty::ThisMut(k) => Some(k),
+        Ty::ThisAfter(k) => Some(k),
         _ => None,
     }
 }
@@ -3602,7 +4365,17 @@ pub fn translate_function(f: &Function, all: &Fns, sd: &Structs) -> (r: Model)
                     let pure = pure_body(&f.params, &body);
                     let ensures = linked(f, ens, &pure);
                     Model::Full(
-                        Method { name: f.name, params: ps, ret, requires: bounds(&f.params, f.line, req), ensures, decreases: dec, body, function: pure },
+                        Method {
+                            name: f.name,
+                            params: ps,
+                            ret,
+                            requires: bounds(&f.params, f.line, req),
+                            ensures,
+                            decreases: dec,
+                            body,
+                            function: pure,
+                            writes: writes(&f.params),
+                        },
                     )
                 },
             },
@@ -3672,7 +4445,7 @@ pub fn translate_unit(all: &Fns, sd: &Structs) -> (r: Models)
 /// negation where no operand is before it. `Size` is the text `.size()`, decision 0064. `Field` is `.name`, decision 0073.
 /// `HasValue` and `Value` are the texts `.has_value()` and `.value()`, decision 0075. `Empty` is `.empty()`, decision 0078. `Comma`
 /// parts the arguments of a call, decision 0079. `Bool` is `true`
-/// or `false`, decision 0084. `Unknown` is text with no token, by the id of
+/// or `false`, decision 0084. `Old` is the word `old`, decision 0096. `Unknown` is text with no token, by the id of
 /// its kind and its line.
 #[derive(Structural, PartialEq, Eq, Clone, Copy, Debug)]
 pub enum Tok {
@@ -3696,6 +4469,7 @@ pub enum Tok {
     Forall,
     Exists,
     ColonColon,
+    Old,
     Unknown(u32, u32),
 }
 
@@ -4117,6 +4891,18 @@ fn parse_atom(toks: &Vec<Tok>, pos: usize, line: u32) -> (r: Result<(Expr, usize
                 Err(Refusal::Syntax(line))
             },
             Err(e) => Err(e),
+        },
+        Tok::Old => if toks.len() - pos > 1 && toks[pos + 1] == Tok::LParen {
+            match parse_implies(toks, pos + 2, line) {
+                Ok((e, p)) => if p < toks.len() && toks[p] == Tok::RParen {
+                    Ok((Expr::Old(Box::new(e)), p + 1))
+                } else {
+                    Err(Refusal::Syntax(line))
+                },
+                Err(e) => Err(e),
+            }
+        } else {
+            Err(Refusal::Syntax(line))
         },
         Tok::Forall => parse_binders(toks, pos + 1, true, line),
         Tok::Exists => parse_binders(toks, pos + 1, false, line),
