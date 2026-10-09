@@ -19,6 +19,20 @@ void bump_any(int32_t& x) {
   bump(x);
 }
 
+// A copy of a struct writes the whole local, decision 0108.
+struct Pair {
+  int32_t a = 0;
+  int32_t b = 0;
+};
+
+//@ ensures result == 1
+int32_t stale_copy() {
+  Pair x{1, 2};
+  Pair y{3, 4};
+  x = y;
+  return x.a;
+}
+
 //@ ensures result == 1
 int32_t stale() {
   int32_t a = 1;

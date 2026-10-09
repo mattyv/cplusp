@@ -57,6 +57,13 @@ int32_t two_steps(int32_t& x) {
   return first + second;
 }
 
+//@ requires out.a < 1000
+//@ modifies out
+//@ ensures out.a == old(out.a) + 1 && out.b == old(out.b)
+void bump_field(Pair& out) {
+  out.a += 1;
+}
+
 //@ modifies out
 //@ ensures out.a == p.b && out.b == p.a
 void swapped(Pair& out, const Pair& p) {

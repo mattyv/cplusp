@@ -1834,7 +1834,7 @@ fn loops_and_writes_with_no_rule_are_refused_at_their_lines() {
     assert_eq!(o.status.code(), Some(1), "stdout: {text} stderr: {}", stderr(&o));
     let refusals: Vec<&str> = text.lines().filter(|l| l.starts_with("Not provable: ")).collect();
     let misplaced =
-        "a contract line in the wrong place. A requires, an ensures or a decreases line goes above a function. An invariant or a decreases line goes above a loop.";
+        "a contract line in the wrong place. A requires, an ensures, a modifies or a decreases line goes above a function. An invariant or a decreases line goes above a loop.";
     for (line, expected) in [
         (5, "x is a parameter. The translator writes only a local or a reference parameter."),
         (11, "BinaryOperator <<=: the translator has no rule for it yet."),
@@ -3482,15 +3482,17 @@ fn prove_names_a_reference_parameter_that_does_not_meet_its_contract() {
     for want in [
         "model-ref-wrong.cpp:6: the ensures line may not hold on this return.",
         "model-ref-wrong.cpp:19: a requires line of the callee may not hold.",
-        "model-ref-wrong.cpp:26: the ensures line may not hold on this return.",
+        "model-ref-wrong.cpp:33: the ensures line may not hold on this return.",
+        "model-ref-wrong.cpp:40: the ensures line may not hold on this return.",
     ] {
         assert!(failed.iter().any(|l| l.ends_with(want)), "{want}: {text}");
     }
-    assert_eq!(failed.len(), 3, "{text}");
+    assert_eq!(failed.len(), 4, "{text}");
 }
 
 /// A name on the modifies line that is no reference parameter, a reference parameter that the line does not name, and a call that
-/// writes back to a parameter by value or to a field, are refused at their lines, decision 0108.
+/// writes back to a parameter by value or to a field, are refused at their lines, decision 0108. A modifies line of another form is
+/// refused first, and a name with parts is a name, decision 0110.
 #[test]
 fn a_modifies_line_and_a_write_back_with_no_rule_are_refused() {
     if !clang_tidy_available() {
@@ -3506,8 +3508,25 @@ fn a_modifies_line_and_a_write_back_with_no_rule_are_refused() {
         "model-ref-refuse.cpp:15: x is a reference parameter that the modifies line does not name.",
         "model-ref-refuse.cpp:25: y is a parameter. The translator writes only a local or a reference parameter.",
         "model-ref-refuse.cpp:30: the call writes a value back, and the translator writes back only to a local or a reference parameter.",
+        "model-ref-refuse.cpp:35: the contract line has a form the translator cannot read.",
+        "model-ref-refuse.cpp:40: Tally::count_ on the modifies line is no reference parameter.",
+        "model-ref-refuse.cpp:48: BinaryOperator <<=: the translator has no rule for it yet.",
     ] {
         assert!(refusals.iter().any(|l| l.ends_with(want)), "{want}: {text}");
     }
-    assert_eq!(refusals.len(), 4, "{text}");
+    assert_eq!(refusals.len(), 7, "{text}");
+}
+
+/// A function whose body is refused keeps a header with the values it gives back, so Dafny resolves each call of it, decision 0108.
+#[test]
+fn a_caller_of_a_refused_function_that_writes_a_reference_resolves() {
+    let Some(dafny) = dafny() else { return };
+    if !clang_tidy_available() {
+        return;
+    }
+    let o = prove("model-ref-refuse.cpp", &[], &dafny);
+    let text = stdout(&o);
+    assert_eq!(o.status.code(), Some(1), "stdout: {text} stderr: {}", stderr(&o));
+    assert!(!text.contains("Dafny says"), "{text}");
+    assert!(!text.lines().any(|l| l.starts_with("Not proved: ")), "{text}");
 }
