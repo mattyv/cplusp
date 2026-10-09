@@ -134,7 +134,7 @@ fn clamp_translates_to_a_method_whose_contract_reads_exact_integers() {
         )),
         Box::new(Stmts::Cons(Box::new(Stmt::Return(var(X), 30)), Box::new(Stmts::Nil))),
     );
-    let f = Function { name: CLAMP, line: 26, params: params(), ret: Ty::I32, conds, body };
+    let f = Function { name: CLAMP, line: 26, params: params(), ret: Ty::I32, trusted: false, conds, body };
     let Model::Full(m) = translate_function(&f, &Fns::Nil, &Structs::Nil) else { panic!("clamp has a full model") };
     let as_int = |n: u32| DExpr::AsInt(Box::new(DExpr::Var(n)));
     assert_eq!(strip_conds(m.requires), DConds::Cons(DExpr::Bin(BinOp::Le, Box::new(as_int(LO)), Box::new(as_int(HI))), 0, Box::new(DConds::Nil)));
@@ -315,7 +315,7 @@ fn a_node_with_no_rule_is_refused_with_its_kind_and_line() {
 #[test]
 fn a_contract_name_that_is_no_parameter_is_refused() {
     let conds = Conds::Cons(CondKind::Ensures, Expr::Bin(BinOp::Eq, b(Expr::Result), b(Expr::Name(99))), 5, names(&[X, LO, HI]), Box::new(Conds::Nil));
-    let f = Function { name: CLAMP, line: 6, params: params(), ret: Ty::I32, conds, body: Stmts::Nil };
+    let f = Function { name: CLAMP, line: 6, params: params(), ret: Ty::I32, trusted: false, conds, body: Stmts::Nil };
     assert_eq!(bare_refusal(translate_function(&f, &Fns::Nil, &Structs::Nil)), Refusal::Name(99, 5));
 }
 
@@ -518,6 +518,7 @@ fn a_contract_reads_a_sequence_by_size_index_forall_and_chain() {
         line: 4,
         params: Params::Cons(v, Ty::Seq(Scalar::I32, Extent::Dynamic), Box::new(Params::Nil)),
         ret: Ty::Bool,
+        trusted: false,
         conds,
         body: one(Stmt::Return(Expr::Bool(true), 5)),
     };
@@ -607,7 +608,7 @@ fn each_statement_and_contract_line_keeps_the_place_it_comes_from() {
         Box::new(Stmt::If(Expr::Bin(BinOp::Lt, b(var(X)), b(var(LO))), Box::new(one(Stmt::Return(var(LO), 28))), Box::new(Stmts::Nil), 27)),
         Box::new(one(Stmt::Return(var(X), 30))),
     );
-    let f = Function { name: CLAMP, line: 26, params: params(), ret: Ty::I32, conds, body };
+    let f = Function { name: CLAMP, line: 26, params: params(), ret: Ty::I32, trusted: false, conds, body };
     let Model::Full(m) = translate_function(&f, &Fns::Nil, &Structs::Nil) else { panic!("a full model") };
     let DConds::Cons(_, req, _) = m.requires else { panic!("a requires line") };
     assert_eq!(req, 21);

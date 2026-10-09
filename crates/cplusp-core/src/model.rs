@@ -217,13 +217,15 @@ pub enum Conds {
 }
 
 /// One function: its key, its parameters, its return type, its contract and its body. The key names the function apart from every
-/// other, overloads included. `line` is the line of its name.
+/// other, overloads included. `line` is the line of its name. `trusted` holds when the function has the marker `CPLUSP_TRUSTED`, so
+/// its contract stands with no proof and its body is not read, decision 0102.
 #[derive(PartialEq, Eq, Debug)]
 pub struct Function {
     pub name: u32,
     pub line: u32,
     pub params: Params,
     pub ret: Ty,
+    pub trusted: bool,
     pub conds: Conds,
     pub body: Stmts,
 }
@@ -378,7 +380,8 @@ pub enum DConds {
 }
 
 /// A Dafny method. `function` is the body of the Dafny function of a pure member function, decision 0090. `writes` holds when the
-/// method takes its object in and gives it back as `this'`, decision 0096.
+/// method takes its object in and gives it back as `this'`, decision 0096. `trusted` holds for the method of a trusted function: it has
+/// no body, and Dafny takes its contract as given, decision 0102.
 #[derive(PartialEq, Eq, Debug)]
 pub struct Method {
     pub name: u32,
@@ -390,6 +393,7 @@ pub struct Method {
     pub body: DStmts,
     pub function: Option<DExpr>,
     pub writes: bool,
+    pub trusted: bool,
 }
 
 /// The model of one function, decision 0058. `Full` is the method with its contract and body. `Bare` is a function whose signature
@@ -1852,7 +1856,7 @@ pub open spec fn spec_misreturn_stmt(s: Stmt, void: bool) -> Option<u32>
 }
 
 /// The contract and the body of a function whose signature is in the subset: the requires lines, the ensures lines, the decreases
-/// lines and the body.
+/// lines and the body. A trusted function has no body, decision 0102.
 pub open spec fn spec_inside(f: Function, all: Fns, sd: Structs) -> Result<(DConds, DConds, DConds, DStmts), Refusal> {
     match spec_conds(f.conds, CondKind::Requires, f.params, f.ret, sd) {
         Err(r) => Err(r),
@@ -1860,7 +1864,10 @@ pub open spec fn spec_inside(f: Function, all: Fns, sd: Structs) -> Result<(DCon
             Err(r) => Err(r),
             Ok(ens) => match spec_conds(f.conds, CondKind::Decreases, f.params, f.ret, sd) {
                 Err(r) => Err(r),
-                Ok(dec) => match spec_twice(f) {
+                Ok(dec) => if f.trusted {
+                    Ok((req, ens, dec, DStmts::Nil))
+                } else {
+                    match spec_twice(f) {
                     Some((n, l)) => Err(Refusal::Twice(n, l)),
                     None => match spec_misreturn(f.body, f.ret == Ty::Void) {
                         Some(l) => Err(Refusal::Syntax(l)),
@@ -1869,6 +1876,7 @@ pub open spec fn spec_inside(f: Function, all: Fns, sd: Structs) -> Result<(DCon
                             Ok(body) => Ok((req, ens, dec, body)),
                         },
                     },
+                    }
                 },
             },
         },
@@ -2000,10 +2008,11 @@ pub open spec fn spec_find(fs: Fns, key: u32) -> Option<Function>
 }
 
 /// The return type and parameters of the function with the key `key`, when it is a pure member function with a signature of the
-/// subset. When `strict` holds, its contract must also have a model under the table `sd`, decision 0095.
+/// subset. When `strict` holds, its contract must also have a model under the table `sd`, decision 0095. A trusted member is never
+/// pure, decision 0102.
 pub open spec fn spec_pure_ret(all: Fns, key: u32, sd: Structs, strict: bool) -> Option<(Ty, Params)> {
     match spec_find(all, key) {
-        Some(f) => if !has_signature(f, sd) {
+        Some(f) => if !has_signature(f, sd) || f.trusted {
             None
         } else if strict {
             match spec_inside(f, all, sd) {
@@ -2121,6 +2130,7 @@ pub open spec fn spec_function(f: Function, all: Fns, sd: Structs) -> Model {
                         body,
                         function: spec_pure_body(f.params, body),
                         writes: spec_writes(f.params),
+                        trusted: f.trusted,
                     },
                 ),
             },
@@ -2490,10 +2500,12 @@ pub proof fn lemma_unknown_stmts_is_refused(ss: Stmts, all: Fns, env: Params, ps
     }
 }
 
-/// A body that holds a node with no rule never gives a full model. The translator never skips one.
+/// A body that holds a node with no rule never gives a full model of a verified function. The translator never skips one. Only a
+/// trusted function, whose body the translator does not read, has a full model then, decision 0102.
 pub proof fn lemma_unknown_is_refused(f: Function, all: Fns, sd: Structs)
     requires
         unknown_stmts(f.body),
+        !f.trusted,
     ensures
         !(spec_function(f, all, sd) is Full),
 {
@@ -2688,7 +2700,9 @@ pub proof fn lemma_calls_resolve(f: Function, all: Fns, sd: Structs)
         calls_resolve(spec_function(f, all, sd)->Full_0.body, all, sd),
         forall|k: u32| spec_callable(all, k, sd) ==> #[trigger] has_method(spec_unit(all, all, sd), k),
 {
-    lemma_stmts_calls_resolve(f.body, all, f.params, f.params, sd);
+    if !f.trusted {
+        lemma_stmts_calls_resolve(f.body, all, f.params, f.params, sd);
+    }
     assert forall|k: u32| spec_callable(all, k, sd) implies #[trigger] has_method(spec_unit(all, all, sd), k) by {
         lemma_callable_has_method(all, all, k, sd);
     }
@@ -4206,7 +4220,10 @@ pub fn translate_inside(f: &Function, all: &Fns, sd: &Structs) -> (r: Result<(DC
             Err(r) => Err(r),
             Ok(ens) => match translate_conds(&f.conds, CondKind::Decreases, &f.params, f.ret, sd) {
                 Err(r) => Err(r),
-                Ok(dec) => match twice(f) {
+                Ok(dec) => if f.trusted {
+                    Ok((req, ens, dec, DStmts::Nil))
+                } else {
+                    match twice(f) {
                     Some((n, l)) => Err(Refusal::Twice(n, l)),
                     None => match misreturn(&f.body, f.ret == Ty::Void) {
                         Some(l) => Err(Refusal::Syntax(l)),
@@ -4215,6 +4232,7 @@ pub fn translate_inside(f: &Function, all: &Fns, sd: &Structs) -> (r: Result<(DC
                             Ok(body) => Ok((req, ens, dec, body)),
                         },
                     },
+                    }
                 },
             },
         },
@@ -4420,7 +4438,7 @@ pub fn pure_ret(all: &Fns, key: u32, sd: &Structs, strict: bool) -> (r: Option<(
         r == spec_pure_ret(*all, key, *sd, strict),
 {
     match find(all, key) {
-        Some(f) => if !signature(f, sd) {
+        Some(f) => if !signature(f, sd) || f.trusted {
             None
         } else if strict {
             match translate_inside(f, all, sd) {
@@ -4539,6 +4557,7 @@ pub fn translate_function(f: &Function, all: &Fns, sd: &Structs) -> (r: Model)
                             body,
                             function: pure,
                             writes: writes(&f.params),
+                            trusted: f.trusted,
                         },
                     )
                 },
