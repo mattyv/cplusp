@@ -1841,13 +1841,13 @@ fn loops_and_writes_with_no_rule_are_refused_at_their_lines() {
         (5, "x is a parameter. The translator writes only a local."),
         (11, "BinaryOperator <<=: the translator has no rule for it yet."),
         (18, "BreakStmt: the translator has no rule for it yet."),
-        (25, "z in the loop contract is no variable."),
+        (25, "z in the invariant line is no variable."),
         (32, misplaced),
         (39, misplaced),
         (48, "the contract line has a form the translator cannot read."),
         (56, "ForStmt: the translator has no rule for it yet."),
-        (64, "t in the loop contract is no variable."),
-        (74, "z in the loop contract is no variable."),
+        (64, "t in the invariant line is no variable."),
+        (74, "z in the invariant line is no variable."),
     ] {
         let want = format!("model-loops-refuse.cpp:{line}: {expected}");
         assert!(refusals.iter().any(|l| l.ends_with(&want)), "{want}: {text}");
@@ -3175,8 +3175,9 @@ fn prove_names_an_assert_line_and_an_apply_line_that_may_not_hold() {
     assert_eq!(failed.len(), 2, "{text}");
 }
 
-/// An assert line that names result, an apply line of a name that is no lemma of the companion file, and an assert line below
-/// the last statement of its block, are refused at their lines, decision 0099.
+/// An assert line that names result, an apply line of a name that is no lemma of the companion file, an assert line below the
+/// last statement of its block (also where `} else if` follows), and a name that is not yet in scope, are refused at their
+/// lines, decisions 0099 and 0101.
 #[test]
 fn assert_and_apply_lines_with_no_rule_are_refused_at_their_lines() {
     if !clang_tidy_available() {
@@ -3192,10 +3193,12 @@ fn assert_and_apply_lines_with_no_rule_are_refused_at_their_lines() {
         "model-assert-refuse.cpp:10: Missing is no lemma of the companion file.",
         "model-assert-refuse.cpp:17: an assert or apply line needs a statement below it in its block.",
         "model-assert-refuse.cpp:21: Double is no lemma of the companion file.",
+        "model-assert-refuse.cpp:29: an assert or apply line needs a statement below it in its block.",
+        "model-assert-refuse.cpp:37: y in the assert line is no variable.",
     ] {
         assert!(refusals.iter().any(|l| l.ends_with(want)), "{want}: {text}");
     }
-    assert_eq!(refusals.len(), 4, "{text}");
+    assert_eq!(refusals.len(), 6, "{text}");
 }
 
 /// A lemma with no body in the companion file is an axiom, so prove refuses the file and never says proved, decision 0099.
@@ -3209,6 +3212,22 @@ fn prove_refuses_a_lemma_with_no_body_in_the_companion_file() {
     let text = stdout(&o);
     assert_eq!(o.status.code(), Some(1), "stdout: {text} stderr: {}", stderr(&o));
     let want = "model-spec-lemma.spec.dfy:2: a lemma with no body is an axiom.";
+    assert!(text.lines().any(|l| l.starts_with("Not provable: ") && l.ends_with(want)), "{want}: {text}");
+    assert!(!text.contains("ok: proved"), "{text}");
+}
+
+/// A forall statement with no body in a lemma of the companion file is an axiom, so prove refuses it at its line and never says
+/// proved, decision 0101.
+#[test]
+fn prove_refuses_a_forall_statement_with_no_body_in_the_companion_file() {
+    let Some(dafny) = dafny() else { return };
+    if !clang_tidy_available() {
+        return;
+    }
+    let o = prove("model-spec-forall.cpp", &[], &dafny);
+    let text = stdout(&o);
+    assert_eq!(o.status.code(), Some(1), "stdout: {text} stderr: {}", stderr(&o));
+    let want = "model-spec-forall.spec.dfy:11: a forall statement with no body is an axiom.";
     assert!(text.lines().any(|l| l.starts_with("Not provable: ") && l.ends_with(want)), "{want}: {text}");
     assert!(!text.contains("ok: proved"), "{text}");
 }

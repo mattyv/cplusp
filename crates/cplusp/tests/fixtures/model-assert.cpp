@@ -10,6 +10,7 @@ uint8_t checksum(std::span<const uint8_t> bytes) {
   //@ invariant acc == Sum(bytes[..i]) % 256
   for (size_t i = 0; i < bytes.size(); ++i) {
     //@ assert bytes[..i + 1][..i] == bytes[..i]
+    // A plain comment may stand between an assert line and its statement.
     acc = (acc + bytes[i]) % 256;
   }
   //@ assert bytes[..bytes.size()] == bytes
