@@ -1189,3 +1189,20 @@ fn a_contract_reads_true_and_false() {
     );
     assert_eq!(strip_conds(m.ensures), DConds::Cons(dwant, 0, Box::new(DConds::Nil)));
 }
+
+#[test]
+fn the_body_of_a_quantifier_reaches_to_the_end_of_the_line() {
+    // forall i :: 0 <= i < j < n stops after three operands. The rest would fall outside the forall, so the line is refused.
+    let toks = vec![
+        Tok::Forall, Tok::Ident(70), Tok::ColonColon, Tok::Int(0), Tok::Op(BinOp::Le), Tok::Ident(70), Tok::Op(BinOp::Lt), Tok::Ident(A),
+        Tok::Op(BinOp::Lt), Tok::Ident(B),
+    ];
+    assert_eq!(parse_contract(&toks, 3), Err(Refusal::Syntax(3)));
+    // In parentheses, the body ends at the bracket, and the line goes on.
+    let toks = vec![
+        Tok::LParen, Tok::Forall, Tok::Ident(70), Tok::ColonColon, Tok::Ident(70), Tok::Op(BinOp::Lt), Tok::Ident(A), Tok::RParen,
+        Tok::Op(BinOp::And), Tok::Ident(B),
+    ];
+    let want = Expr::Bin(BinOp::And, b(Expr::Forall(70, b(Expr::Bin(BinOp::Lt, b(Expr::Name(70)), b(Expr::Name(A)))))), b(Expr::Name(B)));
+    assert_eq!(parse_contract(&toks, 3), Ok(want));
+}

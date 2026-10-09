@@ -3122,7 +3122,11 @@ fn parse_binders(toks: &Vec<Tok>, pos: usize, all: bool, line: u32) -> (r: Resul
         Err(Refusal::Syntax(line))
     };
     match inner {
-        Ok((body, p)) => if all {
+        // The body of a quantifier reaches to the end of the line, or to the bracket or comma that closes what holds it. A body
+        // that stops before them would leave the rest of the line outside the quantifier, so the line is refused.
+        Ok((body, p)) => if p < toks.len() && !(toks[p] == Tok::RParen || toks[p] == Tok::RBracket || toks[p] == Tok::Comma) {
+            Err(Refusal::Syntax(line))
+        } else if all {
             Ok((Expr::Forall(j, Box::new(body)), p))
         } else {
             Ok((Expr::Exists(j, Box::new(body)), p))

@@ -4,7 +4,7 @@
 
 // Hex literals, exists, and several bound names, decision 0082.
 //@ requires v.size() <= 0x7FFF'FFFFull
-//@ requires forall i, j :: 0 <= i < j < v.size() ==> v[i] <= v[j]
+//@ requires forall i, j :: 0 <= i && i < j < v.size() ==> v[i] <= v[j]
 //@ requires exists k :: 0 <= k < v.size() && v[k] == target
 //@ ensures result < v.size() && v[result] == target
 size_t find(const std::vector<int32_t>& v, int32_t target) {
