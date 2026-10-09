@@ -3001,7 +3001,8 @@ fn a_constructor_gives_the_value_it_builds() {
     assert_eq!(text.lines().last(), Some("ok: proved"), "{text}");
 }
 
-/// A constructor with a body, one that leaves a field out, and a delegating constructor are refused at their lines, decision 0094.
+/// A constructor with a body, one that leaves a field out, a delegating constructor, and one whose init list reads a field are
+/// refused at their lines, decision 0094.
 #[test]
 fn constructors_with_no_rule_are_refused_at_their_lines() {
     if !clang_tidy_available() {
@@ -3012,9 +3013,63 @@ fn constructors_with_no_rule_are_refused_at_their_lines() {
     let text = stdout(&o);
     assert_eq!(o.status.code(), Some(1), "stdout: {text} stderr: {}", stderr(&o));
     let refusals: Vec<&str> = text.lines().filter(|l| l.starts_with("Not provable: ")).collect();
-    for line in [8, 12, 14] {
+    for line in [8, 12, 14, 22] {
         let want = format!("model-ctor-refuse.cpp:{line}: CXXConstructorDecl: the translator has no rule for it yet.");
         assert!(refusals.iter().any(|l| l.ends_with(&want)), "{want}: {text}");
+    }
+    assert_eq!(refusals.len(), 4, "{text}");
+}
+
+/// A member function that writes its object proves: a field write, compound assignment, a setter that also gives a value, old() in
+/// an ensures line, calls on a local that write it back, compound assignment of a local, and a void free function, decision 0096.
+#[test]
+fn member_functions_that_write_their_object_prove() {
+    let Some(dafny) = dafny() else { return };
+    if !clang_tidy_available() {
+        return;
+    }
+    let o = prove("model-mut.cpp", &[], &dafny);
+    let text = stdout(&o);
+    assert_eq!(o.status.code(), Some(0), "stdout: {text} stderr: {}", stderr(&o));
+    assert_eq!(text.lines().last(), Some("ok: proved"), "{text}");
+}
+
+/// A field write that may overflow, and an ensures line that does not hold when a void function ends, are named at their lines.
+/// The end of a void function is named at the line of the function, decision 0096.
+#[test]
+fn prove_names_a_write_that_may_overflow_and_an_ensures_line_of_a_void_function() {
+    let Some(dafny) = dafny() else { return };
+    if !clang_tidy_available() {
+        return;
+    }
+    let o = prove("model-mut-wrong.cpp", &[], &dafny);
+    let text = stdout(&o);
+    assert_eq!(o.status.code(), Some(1), "stdout: {text} stderr: {}", stderr(&o));
+    let failed: Vec<&str> = text.lines().filter(|l| l.starts_with("Not proved: ")).collect();
+    for want in ["model-mut-wrong.cpp:8: the value may not fit int32_t.", "model-mut-wrong.cpp:12: the ensures line may not hold on this return."] {
+        assert!(failed.iter().any(|l| l.ends_with(want)), "{want}: {text}");
+    }
+    assert_eq!(failed.len(), 2, "{text}");
+}
+
+/// A call that writes a parameter, a call that writes a field of a local, and old() outside the ensures lines of a function that
+/// writes its object, are refused at their lines, decision 0096.
+#[test]
+fn writes_with_no_rule_are_refused_at_their_lines() {
+    if !clang_tidy_available() {
+        return;
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let (o, _) = model("model-mut-refuse.cpp", dir.path());
+    let text = stdout(&o);
+    assert_eq!(o.status.code(), Some(1), "stdout: {text} stderr: {}", stderr(&o));
+    let refusals: Vec<&str> = text.lines().filter(|l| l.starts_with("Not provable: ")).collect();
+    for want in [
+        "model-mut-refuse.cpp:17: c is a parameter. The translator writes only a local.",
+        "model-mut-refuse.cpp:23: the call writes its object, and the translator writes back only a local.",
+        "model-mut-refuse.cpp:27: the contract line has a form the translator cannot read.",
+    ] {
+        assert!(refusals.iter().any(|l| l.ends_with(want)), "{want}: {text}");
     }
     assert_eq!(refusals.len(), 3, "{text}");
 }

@@ -13,3 +13,11 @@ struct Pair {
 
   Pair() : Pair(0) {}
 };
+
+// An init list that reads a field has no rule yet, from the review of 0094.
+struct Two {
+  int32_t a_;
+  int32_t b_;
+
+  explicit Two(int32_t x) : a_(x), b_(a_ + 1) {}
+};

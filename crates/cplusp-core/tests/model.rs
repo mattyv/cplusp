@@ -1635,3 +1635,173 @@ fn a_constructor_of_a_struct_that_holds_a_sequence_is_refused() {
     };
     assert_eq!(translate_function(&f, &Fns::Nil, &node_table()), Model::Refused(Refusal::HoldsSeq(9)));
 }
+
+const BUMP: u32 = 170;
+const TAKE: u32 = 171;
+const LOC: u32 = 172;
+
+/// `void Counter::bump()` with requires n_ < 1000 and ensures n_ == old(n_) + 1, and a body of n_ = n_ + 1.
+fn bump_fn() -> Function {
+    let this = Params::Cons(THIS, Ty::ThisMut(COUNTER), Box::new(Params::Nil));
+    let req = Expr::Bin(BinOp::Lt, b(Expr::Name(CN)), b(Expr::Int(1000)));
+    let ens = Expr::Bin(BinOp::Eq, b(Expr::Name(CN)), b(Expr::Bin(BinOp::Add, b(Expr::Old(b(Expr::Name(CN)))), b(Expr::Int(1)))));
+    let field = Expr::Cast(CastKind::Read, b(Expr::Field(b(Expr::Var(THIS, Ty::ThisMut(COUNTER))), CN)));
+    Function {
+        name: BUMP,
+        line: 9,
+        params: this,
+        ret: Ty::Void,
+        conds: Conds::Cons(CondKind::Requires, req, 7, names(&[THIS]), Box::new(Conds::Cons(CondKind::Ensures, ens, 8, names(&[THIS]), Box::new(Conds::Nil)))),
+        body: one(Stmt::SetField(CN, Expr::Bin(BinOp::Add, b(field), b(Expr::Lit(1, Ty::I32))), 10)),
+    }
+}
+
+#[test]
+fn a_member_function_that_writes_its_object_gives_it_back() {
+    let Model::Full(m) = translate_function(&bump_fn(), &Fns::Nil, &counter_table()) else { panic!("a full model") };
+    assert_eq!(m.ret, DTy::Void);
+    assert!(m.writes);
+    // The body reads and writes the object after: this'.
+    let after = || Box::new(DExpr::Field(Box::new(DExpr::After), CN));
+    assert_eq!(strip(m.body), DStmts::Cons(Box::new(DStmt::SetField(CN, DExpr::Bin(BinOp::Add, after(), Box::new(lit32(1))))), 0, Box::new(DStmts::Nil)));
+    // A requires line reads the object before the call. An ensures line reads it after, and old() before.
+    let before = || Box::new(DExpr::AsInt(Box::new(DExpr::Field(Box::new(DExpr::Var(THIS)), CN))));
+    assert_eq!(strip_conds(m.requires), DConds::Cons(DExpr::Bin(BinOp::Lt, before(), Box::new(DExpr::Lit(1000))), 0, Box::new(DConds::Nil)));
+    let want = DExpr::Bin(
+        BinOp::Eq,
+        Box::new(DExpr::AsInt(Box::new(DExpr::Field(Box::new(DExpr::After), CN)))),
+        Box::new(DExpr::Bin(BinOp::Add, before(), Box::new(DExpr::Lit(1)))),
+    );
+    assert_eq!(strip_conds(m.ensures), DConds::Cons(want, 0, Box::new(DConds::Nil)));
+}
+
+#[test]
+fn a_const_member_function_writes_no_field_and_old_reads_only_in_an_ensures_line() {
+    // A field write in a const member function writes a parameter.
+    let f = Function { params: Params::Cons(THIS, Ty::This(COUNTER), Box::new(Params::Nil)), conds: Conds::Nil, ..bump_fn() };
+    assert_eq!(bare_refusal(translate_function(&f, &Fns::Nil, &counter_table())), Refusal::WriteParam(THIS, 10));
+    // old() in a requires line of a function that writes its object, and in a free function.
+    let old = Expr::Bin(BinOp::Lt, b(Expr::Old(b(Expr::Name(CN)))), b(Expr::Int(1000)));
+    let f = Function { conds: Conds::Cons(CondKind::Requires, old, 7, names(&[THIS]), Box::new(Conds::Nil)), ..bump_fn() };
+    assert_eq!(bare_refusal(translate_function(&f, &Fns::Nil, &counter_table())), Refusal::Syntax(7));
+    let free = Function {
+        conds: Conds::Cons(CondKind::Ensures, Expr::Bin(BinOp::Eq, b(Expr::Result), b(Expr::Old(b(Expr::Name(X))))), 2, names(&[X]), Box::new(Conds::Nil)),
+        ..with_n(one(Stmt::Return(read(X, Ty::I32), 4)))
+    };
+    assert_eq!(bare_refusal(translate_function(&free, &Fns::Nil, &counter_table())), Refusal::Syntax(2));
+}
+
+#[test]
+fn a_call_that_writes_its_object_writes_a_local_back() {
+    // Counter c{5}; c.bump(); int32_t r = c.take(); return r;
+    let take = Function {
+        name: TAKE,
+        line: 20,
+        params: Params::Cons(THIS, Ty::ThisMut(COUNTER), Box::new(Params::Nil)),
+        ret: Ty::I32,
+        conds: Conds::Nil,
+        body: one(Stmt::Return(Expr::Lit(0, Ty::I32), 21)),
+    };
+    let obj = || Box::new(Args::Cons(b(read(LOC, Ty::Struct(COUNTER))), Box::new(Args::Nil)));
+    let all = fns(vec![bump_fn(), take]);
+    let user = Function {
+        name: SAT,
+        line: 29,
+        params: Params::Nil,
+        ret: Ty::I32,
+        conds: Conds::Nil,
+        body: Stmts::Cons(
+            Box::new(Stmt::Local(LOC, Ty::Struct(COUNTER), Expr::Construct(COUNTER, Box::new(Args::Cons(b(Expr::Lit(5, Ty::I32)), Box::new(Args::Nil)))), 30)),
+            Box::new(Stmts::Cons(
+                Box::new(Stmt::Call(BUMP, SAT_NAME, obj(), 31)),
+                Box::new(Stmts::Cons(
+                    Box::new(Stmt::Local(A, Ty::I32, Expr::Call(TAKE, SAT_NAME, obj(), 32), 32)),
+                    Box::new(one(Stmt::Return(read(A, Ty::I32), 33))),
+                )),
+            )),
+        ),
+    };
+    let Model::Full(m) = translate_function(&user, &all, &counter_table()) else { panic!("a full model") };
+    let DStmts::Cons(_, _, rest) = strip(m.body) else { panic!("a body") };
+    let DStmts::Cons(update, _, rest) = *rest else { panic!("an update") };
+    assert_eq!(*update, DStmt::Update(Obj::Local(LOC), BUMP, DArgs::Nil));
+    let DStmts::Cons(local, _, _) = *rest else { panic!("a local") };
+    assert_eq!(*local, DStmt::LocalUpdate(A, DTy::Int32, Obj::Local(LOC), TAKE, DArgs::Nil));
+}
+
+#[test]
+fn a_call_that_writes_a_parameter_or_a_field_is_refused() {
+    let all = fns(vec![bump_fn()]);
+    // void f(Counter c) { c.bump(); }
+    let on_param = Function {
+        name: SAT,
+        line: 16,
+        params: Params::Cons(LOC, Ty::Struct(COUNTER), Box::new(Params::Nil)),
+        ret: Ty::Void,
+        conds: Conds::Nil,
+        body: one(Stmt::Call(BUMP, SAT_NAME, Box::new(Args::Cons(b(read(LOC, Ty::Struct(COUNTER))), Box::new(Args::Nil))), 17)),
+    };
+    assert_eq!(bare_refusal(translate_function(&on_param, &all, &counter_table())), Refusal::WriteParam(LOC, 17));
+    // q.c_.bump() on a field of a local
+    let field = Expr::Field(b(Expr::Var(LOC, Ty::Struct(POINT))), FX);
+    let on_field = Function {
+        params: Params::Nil,
+        body: Stmts::Cons(
+            Box::new(Stmt::Local(LOC, Ty::Struct(POINT), Expr::Construct(POINT, Box::new(Args::Nil)), 22)),
+            Box::new(one(Stmt::Call(BUMP, SAT_NAME, Box::new(Args::Cons(b(field), Box::new(Args::Nil))), 23))),
+        ),
+        ..Function { name: SAT, line: 21, params: Params::Nil, ret: Ty::Void, conds: Conds::Nil, body: Stmts::Nil }
+    };
+    assert_eq!(bare_refusal(translate_function(&on_field, &all, &counter_table())), Refusal::NoTarget(23));
+}
+
+#[test]
+fn a_void_function_ends_with_return_and_is_called_as_a_statement() {
+    // void nothing() { return; }, and nothing(); in another function
+    let nothing = Function { name: BUMP, line: 40, params: Params::Nil, ret: Ty::Void, conds: Conds::Nil, body: one(Stmt::Exit(41)) };
+    let Model::Full(m) = translate_function(&nothing, &Fns::Nil, &Structs::Nil) else { panic!("a full model") };
+    assert_eq!(m.ret, DTy::Void);
+    assert!(!m.writes);
+    assert_eq!(strip(m.body), DStmts::Cons(Box::new(DStmt::Exit), 0, Box::new(DStmts::Nil)));
+    let caller = Function {
+        name: SAT,
+        line: 44,
+        params: Params::Nil,
+        ret: Ty::I32,
+        conds: Conds::Nil,
+        body: Stmts::Cons(Box::new(Stmt::Call(BUMP, SAT_NAME, Box::new(Args::Nil), 45)), Box::new(one(Stmt::Return(Expr::Lit(3, Ty::I32), 46)))),
+    };
+    let Model::Full(m) = translate_function(&caller, &fns(vec![nothing]), &Structs::Nil) else { panic!("a full model") };
+    let DStmts::Cons(call, _, _) = strip(m.body) else { panic!("a call") };
+    assert_eq!(*call, DStmt::CallStmt(BUMP, DArgs::Nil));
+    // return; in a function that gives a value, and a local of void, are refused.
+    assert_eq!(bare_refusal(translate_function(&with_n(one(Stmt::Exit(4))), &Fns::Nil, &Structs::Nil)), Refusal::Syntax(4));
+    assert_eq!(translate_value_ty(Ty::Void, 3, &Structs::Nil), Err(Refusal::Syntax(3)));
+}
+
+#[test]
+fn the_parser_reads_old() {
+    // n_ == old(n_) + 1
+    let toks = vec![Tok::Ident(CN), Tok::Op(BinOp::Eq), Tok::Old, Tok::LParen, Tok::Ident(CN), Tok::RParen, Tok::Op(BinOp::Add), Tok::Int(1)];
+    let want = Expr::Bin(BinOp::Eq, b(Expr::Name(CN)), b(Expr::Bin(BinOp::Add, b(Expr::Old(b(Expr::Name(CN)))), b(Expr::Int(1)))));
+    assert_eq!(parse_contract(&toks, 3), Ok(want));
+    assert_eq!(parse_contract(&vec![Tok::Old, Tok::Ident(CN)], 3), Err(Refusal::Syntax(3)));
+}
+
+#[test]
+fn a_requires_line_of_a_constructor_has_no_object_yet() {
+    // explicit Counter(int32_t n) with requires n_ < 1000, or requires valid(): the object is built only by the constructor.
+    let table = members_table(Some(Ty::Bool), None);
+    let ctor = |req: Expr| Function {
+        name: CTOR,
+        line: 9,
+        params: Params::Cons(X, Ty::I32, Box::new(Params::Nil)),
+        ret: Ty::This(COUNTER),
+        conds: Conds::Cons(CondKind::Requires, req, 7, names(&[X]), Box::new(Conds::Nil)),
+        body: one(Stmt::Return(Expr::Construct(COUNTER, Box::new(Args::Cons(b(read(X, Ty::I32)), Box::new(Args::Nil)))), 9)),
+    };
+    let field = ctor(Expr::Bin(BinOp::Lt, b(Expr::Name(CN)), b(Expr::Int(1000))));
+    assert_eq!(bare_refusal(translate_function(&field, &Fns::Nil, &table)), Refusal::NoObject(CN, 7));
+    let valid = ctor(Expr::Apply(VALID, Box::new(Args::Nil)));
+    assert_eq!(bare_refusal(translate_function(&valid, &Fns::Nil, &table)), Refusal::NoObject(VALID, 7));
+}
