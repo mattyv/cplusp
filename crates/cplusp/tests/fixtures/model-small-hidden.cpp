@@ -57,3 +57,13 @@ constexpr int32_t m = 3;
 int32_t both() {
   return 10;
 }
+
+// An inline namespace also gives n two meanings here.
+constexpr int32_t n = 10;
+inline namespace v1 {
+constexpr int32_t n = 3;
+}
+//@ ensures result == n
+int32_t inline_both() {
+  return 10;
+}

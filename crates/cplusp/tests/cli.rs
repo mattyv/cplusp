@@ -3428,6 +3428,7 @@ fn a_constant_that_cpp_does_not_find_from_the_function_is_no_constant() {
         "model-small-hidden.cpp:32: j in the contract is no parameter.",
         "model-small-hidden.cpp:44: k in the contract is no parameter.",
         "model-small-hidden.cpp:56: m in the contract is no parameter.",
+        "model-small-hidden.cpp:66: n in the contract is no parameter.",
     ];
     for want in wants {
         assert!(refusals.iter().any(|l| l.ends_with(want)), "{want}: {text}");
