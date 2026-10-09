@@ -3532,7 +3532,8 @@ fn a_caller_of_a_refused_function_that_writes_a_reference_resolves() {
 }
 
 /// An enum class is a datatype, and a switch over it is a match: a case that returns, a case that ends with a break, a nested switch,
-/// an enum in a struct and in a contract, decision 0109.
+/// an enum in a struct and in a contract, decision 0109. An enum named only by its enumerators, a switch through a const reference,
+/// and case bodies in braces, decision 0114.
 #[test]
 fn enums_and_switches_prove() {
     let Some(dafny) = dafny() else { return };
@@ -3564,7 +3565,8 @@ fn prove_names_a_switch_that_does_not_meet_its_contract() {
 }
 
 /// A marked fall, a default, a break in another place, an enum with values written, a cast of an enum and an order of enums are
-/// refused at their lines, decision 0109.
+/// refused at their lines, decision 0109. So are an order of enums in a contract, an enumerator of two enums with one plain name,
+/// and an enumerator whose name Dafny cannot read, decision 0114.
 #[test]
 fn switches_and_enums_with_no_rule_are_refused() {
     if !clang_tidy_available() {
@@ -3582,6 +3584,9 @@ fn switches_and_enums_with_no_rule_are_refused() {
         "model-enum-refuse.cpp:47: Flag: the translator has no rule for it yet.",
         "model-enum-refuse.cpp:52: CXXStaticCastExpr IntegralCast: the translator has no rule for it yet.",
         "model-enum-refuse.cpp:56: BinaryOperator <: the translator has no rule for it yet.",
+        "model-enum-refuse.cpp:60: the contract line has a form the translator cannot read.",
+        "model-enum-refuse.cpp:73: the contract line has a form the translator cannot read.",
+        "model-enum-refuse.cpp:79: P$: a name with a character Dafny cannot read.",
     ];
     for want in wants {
         assert!(refusals.iter().any(|l| l.ends_with(want)), "{want}: {text}");

@@ -55,3 +55,29 @@ uint8_t code(Kind k) {
 bool smaller(Kind a, Kind b) {
   return a < b;
 }
+
+// An order of enums in a contract, decision 0114. Dafny would read `<` as an order of terms.
+//@ ensures k < Kind::Large ==> result
+bool below(Kind k) {
+  return k == Kind::Small;
+}
+
+// Two enums with one plain name: a contract cannot name an enumerator of either yet, decision 0114.
+namespace na {
+enum class Mode : uint8_t { Off, On };
+}
+namespace nb {
+enum class Mode : uint8_t { On, Off };
+}
+
+//@ ensures result == Mode::On
+na::Mode on() {
+  return na::Mode::On;
+}
+
+// An enumerator whose name Dafny cannot read is refused at the line of its enum, decision 0109.
+enum class Odd : uint8_t { P$, Q };
+
+bool is_q(Odd o) {
+  return o == Odd::Q;
+}

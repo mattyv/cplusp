@@ -96,3 +96,49 @@ int32_t square_or_code(int32_t x) {
   }
   return code;
 }
+
+// An enum that the code names only by its enumerators still has its datatype, decision 0114.
+enum class Mode : uint8_t { Off, On };
+
+//@ ensures result == 2
+int32_t no_value() {
+  if (Mode::Off == Mode::On) {
+    return 1;
+  }
+  return 2;
+}
+
+// A switch on an enum field read through a const reference, decision 0109.
+struct Holder {
+  Kind k;
+  int32_t n;
+};
+
+//@ ensures result == (h.k == Kind::Small ? 1 : 2)
+int32_t through_const(const Holder& h) {
+  switch (h.k) {
+    case Kind::Small:
+      return 1;
+    case Kind::Large:
+      return 2;
+  }
+  return 0;
+}
+
+// A case body in braces, with the break after the braces or inside them, decision 0114.
+//@ ensures result == (k == Kind::Small ? 3 : 4)
+int32_t braced(Kind k) {
+  int32_t r = 0;
+  switch (k) {
+    case Kind::Small: {
+      int32_t t = 3;
+      r = t;
+    } break;
+    case Kind::Large: {
+      int32_t u = 4;
+      r = u;
+      break;
+    }
+  }
+  return r;
+}

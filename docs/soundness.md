@@ -50,6 +50,8 @@ Still open: the contract grammar. The cases write their `//@` contracts in an in
 
 Open. A contract for `vector::push_back` is an axiom. If it is wrong, every proof that uses it is wrong. How a contract is reviewed, how it is tested against the real library, and how a contradiction between two contracts is caught.
 
+A trusted body can also break an assumption that no contract states. The model of an enum class holds only its enumerators, decision 0109. The gate row `enum_cast` refuses each cast to such an enum, also in trusted code, decision 0114. A trusted body that copies bytes into an object that holds such an enum can still make a value that is no enumerator. A reviewer of the trusted body checks it.
+
 ## Gap 6: the prover
 
 Partly open. Solver bugs. Timeouts. Axioms and `assume` in trusted contracts. A precondition that can never be true makes every proof of that function trivial: a vacuous proof. The battery's `unlisted_modifies` case shows the other vacuity. A trusted contract with an `ensures` on a variable it does not list in `modifies` contradicts Dafny's frame. The caller then proves anything. How we detect vacuity is still open. Dafny is pinned at 4.11.0.

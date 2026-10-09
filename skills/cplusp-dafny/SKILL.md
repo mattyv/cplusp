@@ -51,7 +51,7 @@ Treat SPARK guidance as an engineering method, not an LLM performance measuremen
 
 ## Contract lines that the translator reads
 
-This list is true at decision 0112. Read the later decisions before you rely on it.
+This list is true at decision 0114. Read the later decisions before you rely on it.
 `cplusp prove` translates the C++ and the `//@` lines to Dafny, and runs Dafny. It says `ok: proved`, or `Not proved: FILE:LINE: sentence` for a proof that fails, or `Not provable: FILE:LINE: sentence` for a form that has no rule.
 
 Where each line goes:
@@ -268,9 +268,9 @@ Write `if b then 1 else 0`.
 ## enum_cast
 
 Model an `enum class` as a datatype of its enumerators.
-A cast from an integer needs a `requires` that the value is an enumerator, in the C++ contract and in the model.
+The gate bans each cast to an `enum class` whose enumerators have no values written, also in trusted code, row `enum_cast`, decision 0114. To make one from a number, switch on the number and return an enumerator for each case.
 A flags type, where `|` makes values no enumerator names, is a `bv32` in the model, and a cast to it needs no enumerator precondition.
-The translator takes an `enum class` whose enumerators have no values written, decision 0109. It refuses a cast of an enum and every operator except `==` and `!=`.
+The translator takes an `enum class` whose enumerators have no values written, decision 0109. It refuses a cast of an enum and every operator except `==` and `!=`, in code and in contracts.
 A `switch` over such an enum is a match. The translator refuses a `default`, a `[[fallthrough]]`, several labels on one body, and a `break` that does not end a case.
 
 ## size_minus_one

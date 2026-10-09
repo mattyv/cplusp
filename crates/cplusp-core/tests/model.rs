@@ -2452,3 +2452,32 @@ fn a_contract_reads_an_enumerator_by_its_token() {
     let toks = vec![Tok::Ident(K), Tok::Op(BinOp::Eq), Tok::Enumerator(KIND, 1)];
     assert_eq!(parse_contract(&toks, 3), Ok(Expr::Bin(BinOp::Eq, b(Expr::Name(K)), b(Expr::Enumerator(KIND, 1)))));
 }
+
+#[test]
+fn an_order_of_enums_in_a_contract_is_refused() {
+    // bool below(Kind k) with ensures k < Kind::Large ==> result: Dafny would read `<` as an order of terms, decision 0114.
+    for op in [BinOp::Lt, BinOp::Le, BinOp::Gt, BinOp::Ge] {
+        let line = Expr::Bin(BinOp::Implies, b(Expr::Bin(op, b(Expr::Name(K)), b(Expr::Enumerator(KIND, 1)))), b(Expr::Result));
+        let f = Function {
+            name: WEIGHT,
+            line: 31,
+            params: Params::Cons(K, kind(), Box::new(Params::Nil)),
+            ret: Ty::Bool,
+            trusted: false,
+            conds: Conds::Cons(CondKind::Ensures, line, 30, names(&[K]), Box::new(Conds::Nil)),
+            body: one(Stmt::Return(Expr::Bool(true), 32)),
+        };
+        assert_eq!(bare_refusal(translate_function(&f, &Fns::Nil, &Structs::Nil)), Refusal::Syntax(30), "{op:?}");
+    }
+    // An order of two enumerators, with no name, is refused too.
+    let f = Function {
+        name: WEIGHT,
+        line: 31,
+        params: Params::Cons(K, kind(), Box::new(Params::Nil)),
+        ret: Ty::Bool,
+        trusted: false,
+        conds: Conds::Cons(CondKind::Ensures, Expr::Bin(BinOp::Lt, b(Expr::Enumerator(KIND, 0)), b(Expr::Enumerator(KIND, 1))), 30, names(&[K]), Box::new(Conds::Nil)),
+        body: one(Stmt::Return(Expr::Bool(true), 32)),
+    };
+    assert_eq!(bare_refusal(translate_function(&f, &Fns::Nil, &Structs::Nil)), Refusal::Syntax(30));
+}
