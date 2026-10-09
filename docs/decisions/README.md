@@ -90,3 +90,4 @@ Status is `decided`, `proposed` (the default until someone objects or the thin s
 | [0082](0082-hex-literals-exists-and-several-bound-names.md) | Hex literals, exists, and several bound names in a contract. / and % still wait | decided |
 | [0083](0083-the-companion-file-is-plain-text-after-the-methods.md) | The companion file is plain ASCII after the methods, and declares no name of the model. A parse error in it is the author's | decided |
 | [0084](0084-true-and-false-in-a-contract-and-the-words-of-a-companion-error.md) | true and false in a contract. An error in the companion file prints as Dafny says | decided |
+| [0085](0085-slices-in-a-contract.md) | Slices of a sequence in a contract, as in Dafny | decided |
