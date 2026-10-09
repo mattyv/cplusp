@@ -44,7 +44,8 @@ pub enum Extent {
 /// member function that writes it, which takes it in and gives it back, decision 0096. `ThisAfter` is that object after the call,
 /// as an ensures line reads it, and `Fresh` is the result of a constructor before it exists, as its requires line reads it. The
 /// translator makes these two views itself. `Mut` is a reference parameter that the function writes, which takes a value in and
-/// gives it back, and `MutAfter` is its value after the call, as an ensures line reads it, decision 0108. `Void` is the result type
+/// gives it back, and `MutAfter` is its value after the call, as an ensures line reads it, decision 0108. `Enum` is an enum class of
+/// the file by its key, decision 0109. `Void` is the result type
 /// of a function that gives no value. `Other` is a type the translator has no rule for, by the id of its name.
 #[derive(Structural, PartialEq, Eq, Clone, Copy, Debug)]
 pub enum Ty {
@@ -65,6 +66,7 @@ pub enum Ty {
     ThisAfter(u32),
     Mut(Scalar),
     MutAfter(Scalar),
+    Enum(u32),
     Fresh(u32),
     Void,
     Other(u32),
@@ -112,8 +114,9 @@ pub enum CastKind {
 /// file, by the id of its name, decision 0079. `Suffix`, `Prefix` and `Slice` are `v[i..]`, `v[..j]` and `v[i..j]` in a contract,
 /// decision 0085. `Divide` is `/` or `%` in code, with the type of its result, decision 0088. `MApply` is `o.f(args)` in a contract,
 /// a call of a member function by the id of its name, decision 0090. `Old` is `old(e)` in an ensures line, decision 0096. `Cond` is
-/// `c ? a : b`, decision 0098. `Shr` is `a >> n` in code, with the type of its result, decision 0106. `Unknown` is a construct with no
-/// rule, by the id of its kind and its line.
+/// `c ? a : b`, decision 0098. `Shr` is `a >> n` in code, with the type of its result, decision 0106. `Enumerator` is an enumerator,
+/// by the key of its enum and its place among the enumerators, decision 0109. `Unknown` is a construct with no rule, by the id of its
+/// kind and its line.
 #[derive(PartialEq, Eq, Debug)]
 pub enum Expr {
     Int(u64),
@@ -152,6 +155,7 @@ pub enum Expr {
     Old(Box<Expr>),
     Cond(Box<Expr>, Box<Expr>, Box<Expr>),
     Shr(Box<Expr>, Box<Expr>, Ty),
+    Enumerator(u32, u32),
     Unknown(u32, u32),
 }
 
@@ -164,7 +168,8 @@ pub enum Args {
 /// A statement of the body, with its line. `Local` declares a name of a type with a start value. `Assign` writes a name. `Step`
 /// adds one to a name of a type, or takes one away when its flag is false. `While` is a condition, the contract lines above the loop
 /// and the body. `For` is a start, a condition, a step, the contract lines and the body, decision 0061. `SetField` writes a field of
-/// the object of a member function, and `SetRefField` a field of a reference parameter, decision 0108. `Call` is a call that stands alone as a statement, by the key of its callee, the id of its
+/// the object of a member function, and `SetRefField` a field of a reference parameter, decision 0108. `Switch` is a switch over an
+/// enum, with its cases, decision 0109. `Call` is a call that stands alone as a statement, by the key of its callee, the id of its
 /// name and its arguments. `Exit` is `return;`, decision 0096. `Assert` is a `//@ assert` line in the body, and `Apply` is a
 /// `//@ apply` line that calls a lemma of the companion file by the id of its name, decision 0099.
 #[derive(PartialEq, Eq, Debug)]
@@ -178,6 +183,7 @@ pub enum Stmt {
     For(Box<Stmt>, Expr, Box<Stmt>, Box<Conds>, Box<Stmts>, u32),
     SetField(u32, Expr, u32),
     SetRefField(u32, u32, Expr, u32),
+    Switch(Expr, Box<Cases>, u32),
     Call(u32, u32, Box<Args>, u32),
     Exit(u32),
     Assert(Expr, u32),
@@ -189,6 +195,14 @@ pub enum Stmt {
 pub enum Stmts {
     Nil,
     Cons(Box<Stmt>, Box<Stmts>),
+}
+
+/// The cases of a switch, each by the place of its enumerator among the enumerators, with its body, decision 0109. The plugin drops a
+/// `break` that ends a case.
+#[derive(PartialEq, Eq, Debug)]
+pub enum Cases {
+    Nil,
+    Cons(u32, Box<Stmts>, Box<Cases>),
 }
 
 #[derive(PartialEq, Eq, Debug)]
@@ -285,6 +299,7 @@ pub enum DTy {
     Seq(Scalar),
     Struct(u32),
     Opt(Scalar),
+    Enum(u32),
     Void,
 }
 
@@ -295,7 +310,7 @@ pub enum DTy {
 /// on the exact integers. `DivIn` is `(trunc_div(a, b) as T)`, and `RemIn` is the remainder of `T`, which also needs the quotient to
 /// fit `T`, decision 0088. `FCall` calls the function of a pure member function by its key, decision 0090. `After` is `this'`, the
 /// object of a member function that writes it, as the body leaves it, decision 0096. `Out` is `x'`, a reference parameter as the body
-/// leaves it, decision 0108. `Ite` is `if c then a else b`, decision 0098.
+/// leaves it, decision 0108. `Enumerator` is the constructor of an enumerator, decision 0109. `Ite` is `if c then a else b`, decision 0098.
 /// `Temp` reads a temporary that a call before the statement set, decision 0104. `ShrIn` is `(shr(a, n, W) as T)`, a right shift
 /// of the width `W`, decision 0106. A Dafny expression calls no method.
 #[derive(PartialEq, Eq, Debug)]
@@ -332,6 +347,7 @@ pub enum DExpr {
     FCall(u32, Box<DArgs>),
     After,
     Out(u32),
+    Enumerator(u32, u32),
     Ite(Box<DExpr>, Box<DExpr>, Box<DExpr>),
     Temp(u32),
     ShrIn(Box<DExpr>, Box<DExpr>, DTy, u32),
@@ -358,7 +374,7 @@ pub enum DArgs {
 /// `x' := e;` and `SetOutField` is `x' := x'.(f := e);` of a reference parameter, decision 0108. `Update` calls a method that writes
 /// back, `o, x := m(o, x, args);`, and `LocalUpdate` also sets a new local to the value it gives, decisions 0096 and 0108. The
 /// arguments hold each argument of the call. `CallStmt` is `m(args);` of a method that gives no value, and `Exit` is `return;`, decision 0096. `Assert` is
-/// `assert e;` and `Apply` is `l(args);` of a lemma, decision 0099. `Pre` is a statement with the calls that run before it, decision
+/// `assert e;` and `Apply` is `l(args);` of a lemma, decision 0099. `Match` is a match over an enum, decision 0109. `Pre` is a statement with the calls that run before it, decision
 /// 0104.
 #[derive(PartialEq, Eq, Debug)]
 pub enum DStmt {
@@ -380,6 +396,7 @@ pub enum DStmt {
     Exit,
     Assert(DExpr),
     Apply(u32, DArgs),
+    Match(DExpr, Box<DCases>),
     Pre(DCalls, Box<DStmt>),
 }
 
@@ -405,6 +422,13 @@ pub enum Objs {
 pub enum DStmts {
     Nil,
     Cons(Box<DStmt>, u32, Box<DStmts>),
+}
+
+/// The cases of a match, each by the place of its constructor, with its body, decision 0109.
+#[derive(PartialEq, Eq, Debug)]
+pub enum DCases {
+    Nil,
+    Cons(u32, Box<DStmts>, Box<DCases>),
 }
 
 #[derive(PartialEq, Eq, Debug)]
@@ -534,6 +558,7 @@ pub open spec fn spec_ty(t: Ty, line: u32) -> Result<DTy, Refusal> {
         Ty::ThisAfter(k) => Ok(DTy::Struct(k)),
         Ty::Mut(s) => Ok(spec_scalar_dty(s)),
         Ty::MutAfter(s) => Ok(spec_scalar_dty(s)),
+        Ty::Enum(k) => Ok(DTy::Enum(k)),
         Ty::Fresh(_) => Err(Refusal::Syntax(line)),
         Ty::Void => Err(Refusal::Syntax(line)),
         Ty::Other(k) => Err(Refusal::Construct(k, line)),
@@ -736,6 +761,7 @@ pub open spec fn spec_lift(e: Expr, all: Fns, line: u32, sd: Structs, n: u32, op
             Err(r) => Err(r),
         },
         Expr::Bool(v) => Ok((DCalls::Nil, DExpr::Bool(v), n)),
+        Expr::Enumerator(k, i) => Ok((DCalls::Nil, DExpr::Enumerator(k, i), n)),
         Expr::Var(v, t) => match spec_ty(t, line) {
             Ok(_) => Ok((DCalls::Nil, spec_code_var(v, t), n)),
             Err(r) => Err(r),
@@ -1000,6 +1026,7 @@ pub open spec fn spec_contract(e: Expr, decl: Names, ps: Params, ret: Option<Ty>
     match e {
         Expr::Int(n) => Ok(DExpr::Lit(n)),
         Expr::Bool(b) => Ok(DExpr::Bool(b)),
+        Expr::Enumerator(k, i) => Ok(DExpr::Enumerator(k, i)),
         Expr::Name(n) => if spec_has(bound, n) {
             Ok(DExpr::Bound(n))
         } else {
@@ -1665,6 +1692,7 @@ pub open spec fn spec_place(s: Stmt) -> u32 {
         Stmt::For(_, _, _, _, _, l) => l,
         Stmt::SetField(_, _, l) => l,
         Stmt::SetRefField(_, _, _, l) => l,
+        Stmt::Switch(_, _, l) => l,
         Stmt::Call(_, _, _, l) => l,
         Stmt::Exit(l) => l,
         Stmt::Assert(_, l) => l,
@@ -2005,6 +2033,13 @@ pub open spec fn spec_stmt(s: Stmt, all: Fns, env: Params, ps: Params, sd: Struc
             Some(_) => Err(Refusal::WriteParam(p, l)),
             None => Err(Refusal::Syntax(l)),
         },
+        Stmt::Switch(e, cs, l) => match spec_lift(e, all, l, sd, 0, true) {
+            Ok((c, d, _)) => match spec_cases(*cs, all, env, ps, sd) {
+                Ok(dc) => Ok(spec_pre(c, DStmt::Match(d, Box::new(dc)))),
+                Err(r) => Err(r),
+            },
+            Err(r) => Err(r),
+        },
         Stmt::Call(k, nm, args, l) => spec_call_stmt(k, nm, *args, l, all, ps, sd),
         Stmt::Exit(_) => Ok(DStmt::Exit),
         Stmt::Assert(e, l) => match spec_contract(e, spec_names_of(env), spec_after(env), None, Names::Nil, l, sd) {
@@ -2016,6 +2051,22 @@ pub open spec fn spec_stmt(s: Stmt, all: Fns, env: Params, ps: Params, sd: Struc
             Err(r) => Err(r),
         },
         Stmt::Unknown(k, l) => Err(Refusal::Construct(k, l)),
+    }
+}
+
+/// The cases of a switch, each body over the variables in scope at the switch, decision 0109.
+pub open spec fn spec_cases(cs: Cases, all: Fns, env: Params, ps: Params, sd: Structs) -> Result<DCases, Refusal>
+    decreases cs,
+{
+    match cs {
+        Cases::Nil => Ok(DCases::Nil),
+        Cases::Cons(i, body, rest) => match spec_stmts(*body, all, env, ps, sd) {
+            Ok(db) => match spec_cases(*rest, all, env, ps, sd) {
+                Ok(dr) => Ok(DCases::Cons(i, Box::new(db), Box::new(dr))),
+                Err(r) => Err(r),
+            },
+            Err(r) => Err(r),
+        },
     }
 }
 
@@ -2135,6 +2186,7 @@ pub open spec fn spec_twice_stmt(seen: Seq<u32>, s: Stmt) -> (Option<(u32, u32)>
             }
         },
         Stmt::While(_, _, body, _) => spec_twice_stmts(seen, *body),
+        Stmt::Switch(_, cs, _) => spec_twice_cases(seen, *cs),
         Stmt::For(init, _, step, _, body, _) => {
             let (r, after) = spec_twice_stmt(seen, *init);
             if r.is_some() {
@@ -2168,6 +2220,22 @@ pub open spec fn spec_twice_stmts(seen: Seq<u32>, ss: Stmts) -> (Option<(u32, u3
     }
 }
 
+pub open spec fn spec_twice_cases(seen: Seq<u32>, cs: Cases) -> (Option<(u32, u32)>, Seq<u32>)
+    decreases cs,
+{
+    match cs {
+        Cases::Nil => (None, seen),
+        Cases::Cons(_, body, rest) => {
+            let (r, after) = spec_twice_stmts(seen, *body);
+            if r.is_some() {
+                (r, after)
+            } else {
+                spec_twice_cases(after, *rest)
+            }
+        },
+    }
+}
+
 /// The first name of a function declared twice: among the parameters, then among the parameters and the locals.
 pub open spec fn spec_twice(f: Function) -> Option<(u32, u32)> {
     let (r, after) = spec_twice_params(Seq::empty(), f.params, f.line);
@@ -2192,6 +2260,18 @@ pub open spec fn spec_misreturn(ss: Stmts, void: bool) -> Option<u32>
     }
 }
 
+pub open spec fn spec_misreturn_cases(cs: Cases, void: bool) -> Option<u32>
+    decreases cs,
+{
+    match cs {
+        Cases::Nil => None,
+        Cases::Cons(_, body, rest) => match spec_misreturn(*body, void) {
+            Some(l) => Some(l),
+            None => spec_misreturn_cases(*rest, void),
+        },
+    }
+}
+
 pub open spec fn spec_misreturn_stmt(s: Stmt, void: bool) -> Option<u32>
     decreases s,
 {
@@ -2211,6 +2291,7 @@ pub open spec fn spec_misreturn_stmt(s: Stmt, void: bool) -> Option<u32>
             None => spec_misreturn(*f, void),
         },
         Stmt::While(_, _, body, _) => spec_misreturn(*body, void),
+        Stmt::Switch(_, cs, _) => spec_misreturn_cases(*cs, void),
         Stmt::For(init, _, step, _, body, _) => match spec_misreturn_stmt(*init, void) {
             Some(l) => Some(l),
             None => match spec_misreturn_stmt(*step, void) {
@@ -2621,10 +2702,20 @@ pub open spec fn unknown_stmt(s: Stmt) -> bool
         Stmt::For(init, c, step, _, body, _) => unknown_stmt(*init) || unknown_expr(c) || unknown_stmt(*step) || unknown_stmts(*body),
         Stmt::SetField(_, e, _) => unknown_expr(e),
         Stmt::SetRefField(_, _, e, _) => unknown_expr(e),
+        Stmt::Switch(e, cs, _) => unknown_expr(e) || unknown_cases(*cs),
         Stmt::Call(_, _, args, _) => unknown_args(*args),
         Stmt::Exit(_) => false,
         Stmt::Assert(_, _) => false,
         Stmt::Apply(_, _, _) => false,
+    }
+}
+
+pub open spec fn unknown_cases(cs: Cases) -> bool
+    decreases cs,
+{
+    match cs {
+        Cases::Nil => false,
+        Cases::Cons(_, body, rest) => unknown_stmts(*body) || unknown_cases(*rest),
     }
 }
 
@@ -2732,6 +2823,13 @@ pub proof fn lemma_unknown_stmt_is_refused(s: Stmt, all: Fns, env: Params, ps: P
         },
         Stmt::SetField(_, e, l) => lemma_unknown_lift_is_refused(e, all, l, sd, 0, true),
         Stmt::SetRefField(_, _, e, l) => lemma_unknown_lift_is_refused(e, all, l, sd, 0, true),
+        Stmt::Switch(e, cs, l) => {
+            if unknown_expr(e) {
+                lemma_unknown_lift_is_refused(e, all, l, sd, 0, true);
+            } else {
+                lemma_unknown_cases_is_refused(*cs, all, env, ps, sd);
+            }
+        },
         Stmt::Call(k, nm, args, l) => lemma_unknown_call_stmt_is_refused(k, nm, *args, l, all, ps, sd),
         Stmt::Assign(_, e, l) => lemma_unknown_value_is_refused(e, all, l, sd),
         Stmt::While(c, _, body, l) => {
@@ -2753,6 +2851,25 @@ pub proof fn lemma_unknown_stmt_is_refused(s: Stmt, all: Fns, env: Params, ps: P
             }
         },
         _ => {},
+    }
+}
+
+pub proof fn lemma_unknown_cases_is_refused(cs: Cases, all: Fns, env: Params, ps: Params, sd: Structs)
+    requires
+        unknown_cases(cs),
+    ensures
+        spec_cases(cs, all, env, ps, sd).is_err(),
+    decreases cs,
+{
+    match cs {
+        Cases::Cons(_, body, rest) => {
+            if unknown_stmts(*body) {
+                lemma_unknown_stmts_is_refused(*body, all, env, ps, sd);
+            } else {
+                lemma_unknown_cases_is_refused(*rest, all, env, ps, sd);
+            }
+        },
+        Cases::Nil => {},
     }
 }
 
@@ -2802,8 +2919,27 @@ pub open spec fn count_stmt(s: Stmt) -> nat
     match s {
         Stmt::If(_, t, f, _) => 1 + count_stmts(*t) + count_stmts(*f),
         Stmt::While(_, _, body, _) => 1 + count_stmts(*body),
+        Stmt::Switch(_, cs, _) => 1 + count_cases(*cs),
         Stmt::For(init, _, step, _, body, _) => 1 + count_stmt(*init) + count_stmt(*step) + count_stmts(*body),
         _ => 1,
+    }
+}
+
+pub open spec fn count_cases(cs: Cases) -> nat
+    decreases cs,
+{
+    match cs {
+        Cases::Nil => 0,
+        Cases::Cons(_, body, rest) => count_stmts(*body) + count_cases(*rest),
+    }
+}
+
+pub open spec fn count_dcases(cs: DCases) -> nat
+    decreases cs,
+{
+    match cs {
+        DCases::Nil => 0,
+        DCases::Cons(_, body, rest) => count_dstmts(*body) + count_dcases(*rest),
     }
 }
 
@@ -2822,6 +2958,7 @@ pub open spec fn count_dstmt(s: DStmt) -> nat
     match s {
         DStmt::If(_, t, f) => 1 + count_dstmts(*t) + count_dstmts(*f),
         DStmt::While(_, _, _, body) => 1 + count_dstmts(*body),
+        DStmt::Match(_, cs) => 1 + count_dcases(*cs),
         DStmt::For(init, _, _, _, _, body, step, _) => 1 + count_dstmt(*init) + count_dstmt(*step) + count_dstmts(*body),
         DStmt::Pre(_, s) => count_dstmt(*s),
         _ => 1,
@@ -2899,6 +3036,11 @@ pub proof fn lemma_stmt_kept(s: Stmt, all: Fns, env: Params, ps: Params, sd: Str
         Stmt::Assign(_, _, _) => lemma_kept_assign(s, all, env, ps, sd),
         Stmt::SetField(_, _, _) => lemma_kept_set_field(s, all, env, ps, sd),
         Stmt::SetRefField(_, _, _, _) => lemma_kept_set_field(s, all, env, ps, sd),
+        Stmt::Switch(e, cs, l) => {
+            lemma_cases_kept(*cs, all, env, ps, sd);
+            let ce = spec_lift(e, all, l, sd, 0, true).unwrap();
+            lemma_pre_count(ce.0, DStmt::Match(ce.1, Box::new(spec_cases(*cs, all, env, ps, sd).unwrap())));
+        },
         Stmt::Call(_, _, _, _) => lemma_kept_call(s, all, env, ps, sd),
         Stmt::If(c, t, f, l) => {
             lemma_statements_kept(*t, all, env, ps, sd);
@@ -2920,6 +3062,22 @@ pub proof fn lemma_stmt_kept(s: Stmt, all: Fns, env: Params, ps: Params, sd: Str
 }
 
 /// A translated body has one Dafny statement for each C++ statement, branches and loops included.
+pub proof fn lemma_cases_kept(cs: Cases, all: Fns, env: Params, ps: Params, sd: Structs)
+    requires
+        spec_cases(cs, all, env, ps, sd).is_ok(),
+    ensures
+        count_dcases(spec_cases(cs, all, env, ps, sd).unwrap()) == count_cases(cs),
+    decreases cs,
+{
+    match cs {
+        Cases::Cons(_, body, rest) => {
+            lemma_statements_kept(*body, all, env, ps, sd);
+            lemma_cases_kept(*rest, all, env, ps, sd);
+        },
+        Cases::Nil => {},
+    }
+}
+
 pub proof fn lemma_statements_kept(ss: Stmts, all: Fns, env: Params, ps: Params, sd: Structs)
     requires
         spec_stmts(ss, all, env, ps, sd).is_ok(),
@@ -2951,6 +3109,15 @@ pub open spec fn has_method(ms: Models, key: u32) -> bool
 }
 
 /// Each call of the statements names a key of `all` that has a method.
+pub open spec fn calls_resolve_cases(cs: DCases, all: Fns, sd: Structs) -> bool
+    decreases cs,
+{
+    match cs {
+        DCases::Nil => true,
+        DCases::Cons(_, body, rest) => calls_resolve(*body, all, sd) && calls_resolve_cases(*rest, all, sd),
+    }
+}
+
 pub open spec fn calls_resolve(ss: DStmts, all: Fns, sd: Structs) -> bool
     decreases ss,
 {
@@ -2965,6 +3132,7 @@ pub open spec fn calls_resolve_stmt(s: DStmt, all: Fns, sd: Structs) -> bool
 {
     match s {
         DStmt::If(_, t, f) => calls_resolve(*t, all, sd) && calls_resolve(*f, all, sd),
+        DStmt::Match(_, cs) => calls_resolve_cases(*cs, all, sd),
         DStmt::LocalCall(_, _, k, _) => spec_callable(all, k, sd),
         DStmt::ReturnCall(k, _) => spec_callable(all, k, sd),
         DStmt::AssignCall(_, k, _) => spec_callable(all, k, sd),
@@ -3418,6 +3586,12 @@ pub proof fn lemma_stmt_calls_resolve(s: Stmt, all: Fns, env: Params, ps: Params
         Stmt::Assign(_, _, _) => lemma_resolves_assign(s, all, env, ps, sd),
         Stmt::SetField(_, _, _) => lemma_resolves_set_field(s, all, env, ps, sd),
         Stmt::SetRefField(_, _, _, _) => lemma_resolves_set_ref_field(s, all, env, ps, sd),
+        Stmt::Switch(e, cs, l) => {
+            lemma_cases_calls_resolve(*cs, all, env, ps, sd);
+            lemma_lift_resolves(e, all, l, sd, 0, true);
+            let (ce, de, _) = spec_lift(e, all, l, sd, 0, true).unwrap();
+            lemma_pre_resolves(ce, DStmt::Match(de, Box::new(spec_cases(*cs, all, env, ps, sd).unwrap())), all, sd);
+        },
         Stmt::Local(_, _, _, _) => lemma_resolves_local(s, all, env, ps, sd),
         Stmt::Call(_, _, _, _) => lemma_resolves_call(s, all, env, ps, sd),
         Stmt::Step(_, _, _, _) => lemma_resolves_plain(s, all, env, ps, sd),
@@ -3441,6 +3615,22 @@ pub proof fn lemma_stmt_calls_resolve(s: Stmt, all: Fns, env: Params, ps: Params
             lemma_stmt_calls_resolve(*step, all, spec_scope(*init, env), ps, sd);
             lemma_stmts_calls_resolve(*body, all, spec_scope(*init, env), ps, sd);
         },
+    }
+}
+
+pub proof fn lemma_cases_calls_resolve(cs: Cases, all: Fns, env: Params, ps: Params, sd: Structs)
+    requires
+        spec_cases(cs, all, env, ps, sd).is_ok(),
+    ensures
+        calls_resolve_cases(spec_cases(cs, all, env, ps, sd).unwrap(), all, sd),
+    decreases cs,
+{
+    match cs {
+        Cases::Cons(_, body, rest) => {
+            lemma_stmts_calls_resolve(*body, all, env, ps, sd);
+            lemma_cases_calls_resolve(*rest, all, env, ps, sd);
+        },
+        Cases::Nil => {},
     }
 }
 
@@ -3535,6 +3725,7 @@ pub fn translate_ty(t: Ty, line: u32) -> (r: Result<DTy, Refusal>)
         Ty::ThisAfter(k) => Ok(DTy::Struct(k)),
         Ty::Mut(s) => Ok(scalar_dty(s)),
         Ty::MutAfter(s) => Ok(scalar_dty(s)),
+        Ty::Enum(k) => Ok(DTy::Enum(k)),
         Ty::Fresh(_) => Err(Refusal::Syntax(line)),
         Ty::Void => Err(Refusal::Syntax(line)),
         Ty::Other(k) => Err(Refusal::Construct(k, line)),
@@ -3720,6 +3911,7 @@ pub fn lift(e: &Expr, all: &Fns, line: u32, sd: &Structs, n: u32, open: bool) ->
             Err(r) => Err(r),
         },
         Expr::Bool(v) => Ok((DCalls::Nil, DExpr::Bool(*v), n)),
+        Expr::Enumerator(k, i) => Ok((DCalls::Nil, DExpr::Enumerator(*k, *i), n)),
         Expr::Var(v, t) => match translate_ty(*t, line) {
             Ok(_) => Ok((DCalls::Nil, code_var(*v, *t), n)),
             Err(r) => Err(r),
@@ -4029,6 +4221,7 @@ pub fn translate_contract(e: &Expr, decl: &Names, ps: &Params, ret: Option<Ty>, 
 {
     match e {
         Expr::Int(n) => Ok(DExpr::Lit(*n)),
+        Expr::Enumerator(k, i) => Ok(DExpr::Enumerator(*k, *i)),
         Expr::Bool(b) => Ok(DExpr::Bool(*b)),
         Expr::Name(n) => if has(bound, *n) {
             Ok(DExpr::Bound(*n))
@@ -4748,6 +4941,7 @@ pub fn place(s: &Stmt) -> (r: u32)
         Stmt::For(_, _, _, _, _, l) => *l,
         Stmt::SetField(_, _, l) => *l,
         Stmt::SetRefField(_, _, _, l) => *l,
+        Stmt::Switch(_, _, l) => *l,
         Stmt::Call(_, _, _, l) => *l,
         Stmt::Exit(l) => *l,
         Stmt::Assert(_, l) => *l,
@@ -5099,6 +5293,13 @@ pub fn translate_stmt(s: &Stmt, all: &Fns, env: &Params, ps: &Params, sd: &Struc
             Some(_) => Err(Refusal::WriteParam(*p, *l)),
             None => Err(Refusal::Syntax(*l)),
         },
+        Stmt::Switch(e, cs, l) => match lift(e, all, *l, sd, 0, true) {
+            Ok((c, d, _)) => match translate_cases(cs, all, env, ps, sd) {
+                Ok(dc) => Ok(pre(c, DStmt::Match(d, Box::new(dc)))),
+                Err(r) => Err(r),
+            },
+            Err(r) => Err(r),
+        },
         Stmt::Call(k, nm, args, l) => call_stmt(*k, *nm, args, *l, all, ps, sd),
         Stmt::Exit(_) => Ok(DStmt::Exit),
         Stmt::Assert(e, l) => match translate_contract(e, &names_of(env), &after(env), None, &Names::Nil, *l, sd) {
@@ -5110,6 +5311,23 @@ pub fn translate_stmt(s: &Stmt, all: &Fns, env: &Params, ps: &Params, sd: &Struc
             Err(r) => Err(r),
         },
         Stmt::Unknown(k, l) => Err(Refusal::Construct(*k, *l)),
+    }
+}
+
+pub fn translate_cases(cs: &Cases, all: &Fns, env: &Params, ps: &Params, sd: &Structs) -> (r: Result<DCases, Refusal>)
+    ensures
+        r == spec_cases(*cs, *all, *env, *ps, *sd),
+    decreases cs,
+{
+    match cs {
+        Cases::Nil => Ok(DCases::Nil),
+        Cases::Cons(i, body, rest) => match translate_stmts(body, all, env, ps, sd) {
+            Ok(db) => match translate_cases(rest, all, env, ps, sd) {
+                Ok(dr) => Ok(DCases::Cons(*i, Box::new(db), Box::new(dr))),
+                Err(r) => Err(r),
+            },
+            Err(r) => Err(r),
+        },
     }
 }
 
@@ -5260,6 +5478,7 @@ pub fn twice_stmt(seen: &mut Vec<u32>, s: &Stmt) -> (r: Option<(u32, u32)>)
             }
         },
         Stmt::While(_, _, body, _) => twice_stmts(seen, body),
+        Stmt::Switch(_, cs, _) => twice_cases(seen, cs),
         Stmt::For(init, _, step, _, body, _) => {
             let r = twice_stmt(seen, init);
             if r.is_some() {
@@ -5274,6 +5493,25 @@ pub fn twice_stmt(seen: &mut Vec<u32>, s: &Stmt) -> (r: Option<(u32, u32)>)
             }
         },
         _ => None,
+    }
+}
+
+pub fn twice_cases(seen: &mut Vec<u32>, cs: &Cases) -> (r: Option<(u32, u32)>)
+    ensures
+        r == spec_twice_cases(old(seen)@, *cs).0,
+        final(seen)@ == spec_twice_cases(old(seen)@, *cs).1,
+    decreases cs,
+{
+    match cs {
+        Cases::Nil => None,
+        Cases::Cons(_, body, rest) => {
+            let r = twice_stmts(seen, body);
+            if r.is_some() {
+                r
+            } else {
+                twice_cases(seen, rest)
+            }
+        },
     }
 }
 
@@ -5324,6 +5562,20 @@ pub fn misreturn(ss: &Stmts, void: bool) -> (r: Option<u32>)
     }
 }
 
+pub fn misreturn_cases(cs: &Cases, void: bool) -> (r: Option<u32>)
+    ensures
+        r == spec_misreturn_cases(*cs, void),
+    decreases cs,
+{
+    match cs {
+        Cases::Nil => None,
+        Cases::Cons(_, body, rest) => match misreturn(body, void) {
+            Some(l) => Some(l),
+            None => misreturn_cases(rest, void),
+        },
+    }
+}
+
 pub fn misreturn_stmt(s: &Stmt, void: bool) -> (r: Option<u32>)
     ensures
         r == spec_misreturn_stmt(*s, void),
@@ -5345,6 +5597,7 @@ pub fn misreturn_stmt(s: &Stmt, void: bool) -> (r: Option<u32>)
             None => misreturn(f, void),
         },
         Stmt::While(_, _, body, _) => misreturn(body, void),
+        Stmt::Switch(_, cs, _) => misreturn_cases(cs, void),
         Stmt::For(init, _, step, _, body, _) => match misreturn_stmt(init, void) {
             Some(l) => Some(l),
             None => match misreturn_stmt(step, void) {
@@ -5443,6 +5696,7 @@ pub fn copy_dexpr(d: &DExpr) -> (r: DExpr)
         DExpr::FCall(x0, x1) => DExpr::FCall(*x0, Box::new(copy_dargs(x1))),
         DExpr::After => DExpr::After,
         DExpr::Out(x0) => DExpr::Out(*x0),
+        DExpr::Enumerator(k, i) => DExpr::Enumerator(*k, *i),
         DExpr::Ite(x0, x1, x2) => DExpr::Ite(Box::new(copy_dexpr(x0)), Box::new(copy_dexpr(x1)), Box::new(copy_dexpr(x2))),
         DExpr::Temp(x0) => DExpr::Temp(*x0),
         DExpr::ShrIn(x0, x1, x2, x3) => DExpr::ShrIn(Box::new(copy_dexpr(x0)), Box::new(copy_dexpr(x1)), *x2, *x3),
@@ -5813,6 +6067,7 @@ pub enum Tok {
     Forall,
     Exists,
     ColonColon,
+    Enumerator(u32, u32),
     Old,
     Question,
     Colon,
@@ -6261,6 +6516,7 @@ fn parse_atom(toks: &Vec<Tok>, pos: usize, line: u32) -> (r: Result<(Expr, usize
             Ok((Expr::Name(n), pos + 1))
         },
         Tok::Result => Ok((Expr::Result, pos + 1)),
+        Tok::Enumerator(k, i) => Ok((Expr::Enumerator(k, i), pos + 1)),
         Tok::LParen => match parse_implies(toks, pos + 1, line) {
             Ok((e, p)) => if p < toks.len() && toks[p] == Tok::RParen {
                 Ok((e, p + 1))
