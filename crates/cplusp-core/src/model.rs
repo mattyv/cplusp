@@ -114,6 +114,7 @@ pub enum Expr {
     Field(Box<Expr>, u32),
     Construct(u32, Box<Args>),
     Forall(u32, Box<Expr>),
+    Exists(u32, Box<Expr>),
     Chain(BinOp, BinOp, Box<Expr>, Box<Expr>, Box<Expr>),
     HasValue(Box<Expr>),
     Value(Box<Expr>),
@@ -251,6 +252,7 @@ pub enum DExpr {
     Len(Box<DExpr>),
     Index(Box<DExpr>, Box<DExpr>),
     Forall(u32, Box<DExpr>),
+    Exists(u32, Box<DExpr>),
     Bound(u32),
     Chain(BinOp, BinOp, Box<DExpr>, Box<DExpr>, Box<DExpr>),
     Field(Box<DExpr>, u32),
@@ -649,6 +651,7 @@ pub open spec fn spec_contract(e: Expr, decl: Names, ps: Params, ret: Option<Ty>
 {
     match e {
         Expr::Int(n) => Ok(DExpr::Lit(n)),
+        Expr::Bool(b) => Ok(DExpr::Bool(b)),
         Expr::Name(n) => if spec_has(bound, n) {
             Ok(DExpr::Bound(n))
         } else {
@@ -693,6 +696,10 @@ pub open spec fn spec_contract(e: Expr, decl: Names, ps: Params, ret: Option<Ty>
         },
         Expr::Forall(j, body) => match spec_contract(*body, decl, ps, ret, Names::Cons(j, Box::new(bound)), line, sd) {
             Ok(db) => Ok(DExpr::Forall(j, Box::new(db))),
+            Err(r) => Err(r),
+        },
+        Expr::Exists(j, body) => match spec_contract(*body, decl, ps, ret, Names::Cons(j, Box::new(bound)), line, sd) {
+            Ok(db) => Ok(DExpr::Exists(j, Box::new(db))),
             Err(r) => Err(r),
         },
         Expr::Field(o, f) => match spec_path(Expr::Field(o, f), decl, ps, ret, bound, line, sd) {
@@ -1095,6 +1102,7 @@ pub open spec fn spec_has_result(e: Expr) -> bool
         Expr::Apply(_, args) => spec_has_result_args(*args),
         Expr::Index(a, i) => spec_has_result(*a) || spec_has_result(*i),
         Expr::Forall(_, a) => spec_has_result(*a),
+        Expr::Exists(_, a) => spec_has_result(*a),
         Expr::Field(a, _) => spec_has_result(*a),
         Expr::HasValue(a) => spec_has_result(*a),
         Expr::Value(a) => spec_has_result(*a),
@@ -1332,6 +1340,7 @@ pub open spec fn unknown_expr(e: Expr) -> bool
         Expr::Field(a, _) => unknown_expr(*a),
         Expr::Construct(_, args) => unknown_args(*args),
         Expr::Forall(_, a) => unknown_expr(*a),
+        Expr::Exists(_, a) => unknown_expr(*a),
         Expr::Chain(_, _, a, b, c) => unknown_expr(*a) || unknown_expr(*b) || unknown_expr(*c),
         Expr::HasValue(a) => unknown_expr(*a),
         Expr::Value(a) => unknown_expr(*a),
@@ -2025,6 +2034,7 @@ pub fn translate_contract(e: &Expr, decl: &Names, ps: &Params, ret: Option<Ty>, 
 {
     match e {
         Expr::Int(n) => Ok(DExpr::Lit(*n)),
+        Expr::Bool(b) => Ok(DExpr::Bool(*b)),
         Expr::Name(n) => if has(bound, *n) {
             Ok(DExpr::Bound(*n))
         } else {
@@ -2071,6 +2081,13 @@ pub fn translate_contract(e: &Expr, decl: &Names, ps: &Params, ret: Option<Ty>, 
             let inner = Names::Cons(*j, Box::new(copy_names(bound)));
             match translate_contract(body, decl, ps, ret, &inner, line, sd) {
                 Ok(db) => Ok(DExpr::Forall(*j, Box::new(db))),
+                Err(r) => Err(r),
+            }
+        },
+        Expr::Exists(j, body) => {
+            let inner = Names::Cons(*j, Box::new(copy_names(bound)));
+            match translate_contract(body, decl, ps, ret, &inner, line, sd) {
+                Ok(db) => Ok(DExpr::Exists(*j, Box::new(db))),
                 Err(r) => Err(r),
             }
         },
@@ -2507,6 +2524,7 @@ pub fn has_result(e: &Expr) -> (r: bool)
         Expr::Apply(_, args) => has_result_args(args),
         Expr::Index(a, i) => has_result(a) || has_result(i),
         Expr::Forall(_, a) => has_result(a),
+        Expr::Exists(_, a) => has_result(a),
         Expr::Field(a, _) => has_result(a),
         Expr::HasValue(a) => has_result(a),
         Expr::Value(a) => has_result(a),
@@ -2782,12 +2800,14 @@ pub fn translate_unit(all: &Fns, sd: &Structs) -> (r: Models)
 /// A token of a contract line. The shell cuts the text into tokens. `Op` holds `- ` as `Sub`, and the parser reads it as a
 /// negation where no operand is before it. `Size` is the text `.size()`, decision 0064. `Field` is `.name`, decision 0073.
 /// `HasValue` and `Value` are the texts `.has_value()` and `.value()`, decision 0075. `Empty` is `.empty()`, decision 0078. `Comma`
-/// parts the arguments of a call, decision 0079. `Unknown` is text with no token, by the id of
+/// parts the arguments of a call, decision 0079. `Bool` is `true`
+/// or `false`, decision 0084. `Unknown` is text with no token, by the id of
 /// its kind and its line.
 #[derive(Structural, PartialEq, Eq, Clone, Copy, Debug)]
 pub enum Tok {
     Ident(u32),
     Int(u64),
+    Bool(bool),
     Result,
     Op(BinOp),
     Bang,
@@ -2802,6 +2822,7 @@ pub enum Tok {
     Empty,
     Comma,
     Forall,
+    Exists,
     ColonColon,
     Unknown(u32, u32),
 }
@@ -3077,6 +3098,39 @@ fn parse_postfix(toks: &Vec<Tok>, pos: usize, line: u32) -> (r: Result<(Expr, us
     Ok((a, p))
 }
 
+/// The bound names of a `forall` or an `exists`, each parted by a comma, then `::` and the body, decision 0082. `forall i, j :: P`
+/// is `forall i :: forall j :: P`.
+fn parse_binders(toks: &Vec<Tok>, pos: usize, all: bool, line: u32) -> (r: Result<(Expr, usize), Refusal>)
+    requires
+        pos <= toks.len(),
+    ensures
+        parsed(r, toks@, pos),
+    decreases toks.len() - pos, 9usize,
+{
+    if toks.len() - pos < 2 {
+        return Err(Refusal::Syntax(line));
+    }
+    let j = match toks[pos] {
+        Tok::Ident(j) => j,
+        _ => return Err(Refusal::Syntax(line)),
+    };
+    let inner = if toks[pos + 1] == Tok::ColonColon {
+        parse_implies(toks, pos + 2, line)
+    } else if toks[pos + 1] == Tok::Comma {
+        parse_binders(toks, pos + 2, all, line)
+    } else {
+        Err(Refusal::Syntax(line))
+    };
+    match inner {
+        Ok((body, p)) => if all {
+            Ok((Expr::Forall(j, Box::new(body)), p))
+        } else {
+            Ok((Expr::Exists(j, Box::new(body)), p))
+        },
+        Err(e) => Err(e),
+    }
+}
+
 /// What a parse of arguments gives: the arguments, and the place after the `)`. No unknown node is in them.
 pub open spec fn parsed_args(r: Result<(Args, usize), Refusal>, toks: Seq<Tok>, pos: usize) -> bool {
     match r {
@@ -3121,6 +3175,7 @@ fn parse_atom(toks: &Vec<Tok>, pos: usize, line: u32) -> (r: Result<(Expr, usize
     }
     match toks[pos] {
         Tok::Int(n) => Ok((Expr::Int(n), pos + 1)),
+        Tok::Bool(b) => Ok((Expr::Bool(b), pos + 1)),
         Tok::Ident(n) => if toks.len() - pos > 2 && toks[pos + 1] == Tok::LParen && toks[pos + 2] == Tok::RParen {
             assert(!unknown_args(Args::Nil));
             Ok((Expr::Apply(n, Box::new(Args::Nil)), pos + 3))
@@ -3141,17 +3196,8 @@ fn parse_atom(toks: &Vec<Tok>, pos: usize, line: u32) -> (r: Result<(Expr, usize
             },
             Err(e) => Err(e),
         },
-        Tok::Forall => if toks.len() - pos > 2 && toks[pos + 2] == Tok::ColonColon {
-            match toks[pos + 1] {
-                Tok::Ident(j) => match parse_implies(toks, pos + 3, line) {
-                    Ok((body, p)) => Ok((Expr::Forall(j, Box::new(body)), p)),
-                    Err(e) => Err(e),
-                },
-                _ => Err(Refusal::Syntax(line)),
-            }
-        } else {
-            Err(Refusal::Syntax(line))
-        },
+        Tok::Forall => parse_binders(toks, pos + 1, true, line),
+        Tok::Exists => parse_binders(toks, pos + 1, false, line),
         Tok::Unknown(k, l) => Err(Refusal::Construct(k, l)),
         _ => Err(Refusal::Syntax(line)),
     }
