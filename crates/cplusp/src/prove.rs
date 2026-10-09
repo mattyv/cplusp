@@ -179,6 +179,12 @@ pub fn run(t: &Translation, limit: u32, refused: bool, source: &str, shown: &dyn
             println!("Not provable: {}:{line}: Dafny says: {}.", shown(&path), message.trim_end_matches('.'));
             continue;
         }
+        // An error on a line of the companion file has no return, call or loop of a method, so it keeps the words of Dafny, decision 0084.
+        if let Some(at) = in_companion(e.line) {
+            let (path, line) = here(at).map_or_else(|| ("model.dfy".to_string(), at as u32), |l| map.places[l.place as usize].clone());
+            println!("Not proved: {}:{line}: Dafny says: {}.", shown(&path), message.trim_end_matches('.'));
+            continue;
+        }
         let Some(Line { place, scope, own }) = here(e.line) else {
             // ponytail: an error on a line with no C++ place, such as a resolution error, is named by its Dafny line. Upgrade: map it to the function.
             println!("Not proved: model.dfy:{}: {}", e.line, sentence(message));

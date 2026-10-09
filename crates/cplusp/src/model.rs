@@ -328,6 +328,9 @@ fn lex(text: &str, line: u32, names: &mut Names) -> Vec<Tok> {
             toks.push(match &rest[..end] {
                 "result" => Tok::Result,
                 "forall" => Tok::Forall,
+                "exists" => Tok::Exists,
+                "true" => Tok::Bool(true),
+                "false" => Tok::Bool(false),
                 w => {
                     // A name followed by `(` is a call, and the companion file must declare it.
                     if rest[end..].trim_start().starts_with('(') && !names.declared.iter().any(|d| d == w) {
@@ -338,8 +341,36 @@ fn lex(text: &str, line: u32, names: &mut Names) -> Vec<Tok> {
             });
             rest = &rest[end..];
         } else if c.is_ascii_digit() {
-            let end = word_end(|ch| ch.is_ascii_digit());
-            toks.push(rest[..end].parse().map_or_else(|_| Tok::Unknown(names.id("a number above 18446744073709551615"), line), Tok::Int));
+            // A C++ integer, decision 0082: decimal or hex, digit separators `'`, and a suffix of u and l. The value is exact. A literal that cannot be read
+            // or does not fit u64 is `Tok::Unknown`, never a token of the grammar.
+            let bytes = rest.as_bytes();
+            let mut end = 0;
+            while end < bytes.len() && (bytes[end].is_ascii_alphanumeric() || (bytes[end] == b'\'' && bytes.get(end + 1).is_some_and(u8::is_ascii_alphanumeric))) {
+                end += 1;
+            }
+            let word: String = rest[..end].chars().filter(|&ch| ch != '\'').collect();
+            let (prefix, digits, radix) = match word.strip_prefix("0x").or_else(|| word.strip_prefix("0X")) {
+                Some(h) => (&word[..2], h, 16),
+                None => ("", word.as_str(), 10),
+            };
+            let n = &digits[..digits.find(|ch: char| !ch.is_digit(radix)).unwrap_or(digits.len())];
+            let suffix = &digits[n.len()..];
+            let bad_suffix = !["", "u", "l", "ul", "lu", "ll", "ull", "llu"].contains(&suffix.to_ascii_lowercase().as_str());
+            // A leading 0 with more digits is octal in C++, and its digits say another number.
+            let refused = if n.is_empty() {
+                Some(format!("a number with no digits after {prefix}"))
+            } else if radix == 10 && n.len() > 1 && n.starts_with('0') {
+                Some("an octal number".to_string())
+            } else if bad_suffix {
+                Some(format!("a number with the suffix {suffix}"))
+            } else {
+                None
+            };
+            let value = match refused {
+                Some(kind) => Err(kind),
+                None => u64::from_str_radix(n, radix).map_err(|_| "a number above 18446744073709551615".to_string()),
+            };
+            toks.push(value.map_or_else(|kind| Tok::Unknown(names.id(&kind), line), Tok::Int));
             rest = &rest[end..];
         } else if let Some(t) = [(".size()", Tok::Size), (".empty()", Tok::Empty), (".has_value()", Tok::HasValue), (".value()", Tok::Value), ("::", Tok::ColonColon)].into_iter().find(|(s, _)| rest.starts_with(s)) {
             rest = &rest[t.0.len()..];
@@ -712,6 +743,7 @@ fn dexpr(e: &DExpr, names: &Names) -> String {
         DExpr::Drop(a, k) => format!("{}[{}..]", dexpr(a, names), dexpr(k, names)),
         // The prefix `b_` keeps a bound name apart from `v_` and `c_` names.
         DExpr::Forall(j, b) => format!("(forall b_{}: int :: {})", names.text(*j), dexpr(b, names)),
+        DExpr::Exists(j, b) => format!("(exists b_{}: int :: {})", names.text(*j), dexpr(b, names)),
         DExpr::Bound(j) => format!("b_{}", names.text(*j)),
         DExpr::Apply(f, args) => format!("{}({})", names.text(*f), dargs(args, names).join(", ")),
         DExpr::Chain(o1, o2, a, b, c) => format!("({} {} {} {} {})", dexpr(a, names), dop(*o1), dexpr(b, names), dop(*o2), dexpr(c, names)),
