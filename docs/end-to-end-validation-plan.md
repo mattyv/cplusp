@@ -1,6 +1,6 @@
 # C+P end-to-end validation plan
 
-Date: 2026-10-09. Status: planned. Revised to test whole applications at increasing source sizes, as in decision 0092.
+Date: 2026-10-09. Status: planned. Tests application scale and the skill's complete development process, as in decisions 0092 and 0093.
 It does not record completed program runs.
 Capability review: commit `7bbdc9201eebc9eb23b43900f1f1a7b8361a5aea`.
 
@@ -8,7 +8,8 @@ Capability review: commit `7bbdc9201eebc9eb23b43900f1f1a7b8361a5aea`.
 
 Test the complete path from a program requirement to a working executable:
 
-1. Review the requirement and formal contracts.
+1. Start with an application brief. Use the skill to derive requirements, module boundaries, state invariants and candidate formal contracts.
+   Review them before implementation. Do not supply a finished specification for this process test.
 2. Have the coding agent implement the C++.
 3. Run the public `cplusp prove` command on the source.
 4. Check the gate, automatic translation, proof result and C++ diagnostic locations.
@@ -21,6 +22,49 @@ A hand-written Dafny model that verifies does not count as an end-to-end pass.
 A successful `cplusp model` command does not count as a proof.
 Use companion specification definitions where the current translator permits them.
 Keep the generated model unchanged during acceptance runs.
+
+## Test the skill as a development process
+
+Test whether the [project skill](../skills/cplusp-dafny/SKILL.md) works as a repeatable method for building and maintaining applications.
+Successful verifier runs alone do not establish that the method works.
+The agent must produce the required application, follow the process and expose unfinished obligations accurately.
+
+Start each application with a reviewed plain-language brief, normal repository context and a fixed resource budget.
+Let the agents generate the specifications and decomposition using the skill and the repository's coder/reviewer roles.
+Keep independent acceptance tests and evaluation mutations separate from development feedback.
+Record the skill revision with the source and tool revisions.
+
+| Process step | Required output | What to assess |
+|---|---|---|
+| Recover requirements | Requirement list, input domain, failures and evidence of intent | Missing behavior, invented requirements, unresolved ambiguity and excluded valid inputs |
+| Decompose and specify | Module boundaries, state invariants, component contracts and early composition checks | Whether contracts suffice for the application requirement and whether the chosen boundaries make proofs manageable |
+| Review specifications and write tests | Reviewed contracts, admissible-input checks, independent examples and failing development tests | Whether review catches weak or conflicting contracts before implementation relies on them |
+| Implement and prove incrementally | Working increments, verifier logs and an explicit list of open helper obligations | Proof-repair loops, premature dependence on unproved helpers, contract weakening and human assistance |
+| Integrate the application | Initialization proofs, checked callers, closed core obligations and a complete executable | Local proofs that fail to establish a system guarantee, missing bodies and unexpected trusted dependencies |
+| Challenge and review | Fixed-contract mutations, concrete witnesses, classified outcomes and a requirement coverage check | Wrong implementations that still verify, missed requirements and inaccurate claims of completeness |
+| Maintain and hand off | A feature change, a contract change, a regression fix and a saved record of obligations | Whether the process remains usable after changes and whether another agent can continue from ordinary repository artifacts |
+
+Run the complete process at every application size.
+Do not hand the agent a ready-made module decomposition and then claim the skill produced it.
+Where a stage reuses earlier components, give comparison runs the same starting snapshot and record the inherited contracts.
+Use the existing-code workflow when the task changes or extends an earlier application.
+
+Record where the method breaks: specification, decomposition, tool support, proof repair, integration, review or maintenance.
+An appropriate report of an unsupported construct is correct process behavior, but the application remains blocked.
+Separate that result from an agent ignoring the skill or falsely claiming completion.
+
+Count all specification work, reviewer effort, failed attempts and interventions in the total cost.
+Record every requirement or contract correction and its effect on implementation and proofs.
+Distinguish the ordinary planned review from extra assistance needed to finish the task.
+If a person supplies a missing invariant, specification or design, record that assistance.
+
+For a successful process run, the application must meet independent acceptance checks within the recorded budget.
+The required core proofs must close, and the report must state the actual scope and assumptions.
+An assisted success, blocked run or exhausted budget is a separate result.
+Record conformance to the skill and application success separately. Following the steps does not guarantee the right result.
+
+Pin the skill during a measured batch. Improve it between batches using the recorded failures.
+Re-run held-out tasks with the revised skill. Do not evaluate an improvement only on the example that prompted it.
 
 ## Programs and order
 
@@ -183,10 +227,15 @@ Measure a full run, a body-only edit, a contract edit and a shared type change.
 Record which callers were rechecked, total resources used and whether previously established guarantees still hold.
 Record the ordinary executable build and run cost separately from verification cost.
 
-First establish that the full path works. Then test whether proof feedback improves coding results.
-For that comparison, use paired tasks with the same model, requirements, reviewed contracts and total budget.
-One arm uses tests. The other also receives C+P feedback.
-Judge both with the same hidden executable tests and review.
+First establish that the full process works. Then compare two different questions:
+
+- **Does the whole skill process improve app development?** Give both arms the same application brief, starting code, model, reviewer availability and total budget.
+  One uses the ordinary coding-and-testing process. The other uses the full skill and C+P process, including specification generation and review.
+  Count all authoring, review and proof costs. This comparison measures the whole process and does not isolate the prover's effect.
+- **Does proof feedback add value once contracts exist?** Give both arms the same reviewed requirements, contracts and budget.
+  One uses tests. The other also receives C+P feedback. This holds specification information constant.
+
+Judge both comparisons with the same independent executable tests and requirement review.
 Repeat with independent attempts. A few initial runs are a pilot, not a reliable effect estimate.
 
 ## First execution batch
