@@ -1,6 +1,6 @@
 # C+P end-to-end validation plan
 
-Date: 2026-10-09. Status: planned. This document defines the programs and their execution order.
+Date: 2026-10-09. Status: planned. Revised to test whole applications at increasing source sizes, as in decision 0092.
 It does not record completed program runs.
 Capability review: commit `7bbdc9201eebc9eb23b43900f1f1a7b8361a5aea`.
 
@@ -24,55 +24,74 @@ Keep the generated model unchanged during acceptance runs.
 
 ## Programs and order
 
-Use one small executable driver for each program. The driver supplies inputs and checks outputs.
+Build executable applications, with several modules from stage 2 onward.
+Increase source size, module count and the amount of behavior that must compose.
 Keep file and console I/O outside the verified core and name that boundary.
-The line ranges below are planning estimates for executable core code, excluding contracts and tests.
-They are not acceptance targets.
 
-| Order | Program | Approximate size | Required functional guarantee | New difficulty |
+The size bands estimate executable C++ for the complete application, excluding comments, specifications, tests and generated code.
+Record the verified core's size separately. A large trusted shell does not exercise proof scalability.
+These are planning estimates. Use useful behavior to create scale. Do not pad the source to meet a number.
+If an application is substantially smaller, report the smaller scale actually tested.
+
+| Order | Application | Planned source scale | Concrete scope | What the stage tests |
 |---|---|---:|---|---|
-| 1 | **Clamp and checked arithmetic** | 20–60 lines | Clamp returns the specified bound or original value. Checked addition reports overflow exactly and returns the sum otherwise. | Branches, integer bounds, success and failure results |
-| 2 | **Sequence statistics** | 50–100 | Count matches the input length. Sum is exact for the declared domain. Minimum exists exactly when the input is nonempty and is an input element no larger than any other. | Loops, invariants, empty inputs, helper composition |
-| 3 | **Decimal integer parser** | 60–140 | Accept exactly nonempty ASCII digit sequences whose numeric value fits `uint32_t`. Return that value. Reject invalid bytes and overflow. Permit leading zeros. | Byte spans, optional scalar, prefix invariants, rejection behavior |
-| 4 | **Sorted lookup library** | 80–160 | Lower bound returns the first position with value at least the key. Membership is true exactly when the key occurs. Input satisfies the sorted precondition. | Quantifiers, duplicates, loop termination, caller proofs |
-| 5 | **Binary command-frame decoder** | 120–240 | Validate a fixed version/kind/length header. Decode fields exactly. Consume one complete frame and report its length. Distinguish invalid input from incomplete input. | Slices, returned records, byte arithmetic, composition of parsers |
-| 6 | **Recursive radix-tree lookup** | 100–220 | Lookup returns a value exactly when the well-formed tree stores the full key. Establish termination under the stated tree and depth conditions. | Recursive data, recursive specifications, nested sequences |
-| 7 | **Bounded FIFO queue** | 120–260 | Push and pop preserve logical order through wraparound. Full or empty operations report failure and leave state unchanged. | Sequence writes, object initialization, state invariants, operation histories |
-| 8 | **Account ledger** | 200–450 | Transfers preserve total funds, keep balances in range, and change only the named accounts. A rejected transfer changes nothing. Define self-transfer as a successful no-op. | Multiple state updates, conservation, failure atomicity, input validation |
-| 9 | **Single-instrument limit order book** | 400–1,000 | Add, cancel and match obey price/time priority. Partial fills conserve quantity. Invalid commands leave state unchanged. | Interacting invariants, nested loops, ordered mutable collections, several modules |
-| 10 | **Order-command replay application** | 600–1,500 total | Decode a command stream, queue commands and apply them in order. Final book and trade output match the specified sequential execution. | Complete application composition, module boundaries, evolving code, trusted I/O |
+| 1 | **Toy arithmetic program** | 50–100 lines | Clamp, checked addition and a tiny executable driver | Confirm the complete source, proof, diagnostic and repair path |
+| 2 | **CLI telemetry analyzer** | 500–1,000 | Read numeric records, validate fields, filter by time and ID, calculate count/sum/min/max, and answer range queries | Several cooperating parsers and algorithms, complete CLI behavior, many caller proofs |
+| 3 | **Inventory and order-management application** | 2,000–4,000 | Products, stock receipts, reservations, order placement, cancellation, fulfilment, reports and command replay | Mutable collections, several linked state machines, atomic rejection and cross-module invariants |
+| 4 | **Persistent indexed key-value store** | 5,000–10,000 | Byte keys, put/get/delete, prefix scans, a radix index, append-only journal, reload and compaction | Recursive mutation, indexing, logical persistence and preservation of observable contents across maintenance |
+| 5 | **Matching-engine application** | 10,000–20,000 | Single-instrument limit orders, cancel, amend, partial fills, price/time priority, trades, depth queries, snapshots and replay | Large interacting invariants, ordered state, rich command behavior and maintained proofs across changes |
+| 6 | **Single-process exchange simulator** | 20,000–40,000 | Multiple instruments and accounts, risk checks, funds/position reservations, matching, settlement, journal replay and queries | System-scale composition, independent subsystem proofs, consistency across subsystems and incremental verification |
 
-This order adds one main proof burden at a time.
-Stages 1–4 establish the basic coding loop.
-Stages 5–6 add structured input and recursive reasoning.
-Stages 7–8 establish mutable state and atomic failure behavior.
-Stages 9–10 combine the earlier results into a useful program.
+Stages 1 and 2 establish that the end-to-end workflow is usable.
+Stages 3 and 4 test applications with thousands of lines and meaningful state.
+Stages 5 and 6 test larger systems with many contracts and dependencies.
+Each stage gets a runnable application and a recorded proof scope.
+
+Reuse parsers, checked arithmetic, byte-frame decoding, queue operations and lookup algorithms as components of these applications.
+The small programs from the original ladder remain feature probes and regression cases.
+They no longer constitute the application-scale milestones.
+Reuse useful verified components between stages and measure the cost of adapting their contracts.
+
+### Required guarantees by application
+
+| Application | Requirements the composed proof must establish |
+|---|---|
+| Telemetry analyzer | Accept and reject records according to the declared grammar and numeric limits. Return statistics for exactly the selected records. Handle empty selections explicitly. |
+| Inventory and orders | Reservations never exceed available stock. Placement, cancellation and fulfilment preserve the stock accounting identities. Rejected operations change nothing. Order and inventory views agree. |
+| Key-value store | Reads reflect the last successful write or deletion. Prefix scans return exactly the matching live keys. Replay reconstructs the logical contents. Compaction preserves every observable key/value result. |
+| Matching engine | Matches obey price/time priority. Trades and resting quantities account for accepted quantity. Cancellation and amendment affect the named live order only. Snapshot plus replay matches uninterrupted execution. |
+| Exchange simulator | Accepted commands meet the risk policy. Reservations cover obligations under the stated model. Trades produce the defined debits, credits and position changes. Journal replay reproduces the composed state. |
+
+For persistence, prove the logical encode/decode, replay and compaction behavior over bytes and records.
+Specify the assumptions about successful file reads and writes separately.
+Do not claim crash durability or operating-system correctness from those logical proofs.
+Report proof coverage of the application's core separately from executable tests of its I/O.
 
 ### Scope choices before implementation
 
-- Use fixed-width integer prices and quantities. Do not use floating point in the first order book.
-- Keep all ten programs single-threaded. Concurrency needs a separate campaign and proof scope.
-- Give mutable collections explicit capacities. Define capacity exhaustion as an observable result.
-- For the order book, support limit orders, cancellation and partial fills first. Defer amend, market orders and multiple instruments.
-- Use arrival sequence numbers for time priority. Define what happens when the sequence number cannot advance.
-- Require unique live order IDs. State explicitly whether a completed or cancelled ID may be reused.
-- Decide how a full book treats an incoming order that would match before leaving a remainder. Freeze this rule before coding.
-- For replay, specify the first-error behavior, trailing incomplete frame behavior and exact command-consumption rule.
-- Give the decoder a distinct incomplete result. Invalid bytes must not become a precondition that excludes external input.
+- Keep the first campaign single-threaded. Concurrency needs a separate campaign and proof scope.
+- Use fixed-width integer prices, quantities and balances. Avoid floating point in the first financial applications.
+- Give collections explicit capacity rules. Make capacity exhaustion an observable result.
+- Review all ID reuse, duplicate input, cancellation, amendment and partial-failure rules before coding.
+- State whether amendment preserves or loses time priority.
+- Define arrival sequence exhaustion and a full book's treatment of a partially matched incoming order.
+- For replay, define the first-error policy, trailing incomplete record behavior and exact command-consumption rule.
+- Do not turn invalid external input into a precondition that the program never checks.
 
 ## Use the current slice honestly
 
+This is a target scale ladder, not a claim that the present translator supports all six applications.
 Existing examples often pair C++ with hand-written Dafny.
 Reuse their requirements and fixtures, but qualify them through automatic translation.
-Run one small feature probe before investing in each program's full implementation.
+Run small feature probes before building each application.
 
-| Stages | Starting evidence at the reviewed commit | Check before committing to the stage |
-|---|---|---|
-| 1–4 | Translator fixtures cover branches, loops, read-only sequences, scalar optionals, calls and quantified contracts. | Prove the exact result types, arithmetic and companion definitions the program needs. These complete programs are not yet confirmed. |
-| 5 | Subspan, scalar structs and contract slices have rules. | Check the tagged result record and every field. Optional-of-struct support is not established by the reviewed slice. Use an explicit status record if it preserves the reviewed API semantics. |
-| 6 | The existing `radix_find` slice is reported as proved end to end. | Reproduce it from source, then add unseen keys, a changed helper and new wrong variants. Reuse the existing slice. |
-| 7–9 | Member support is being added in steps. Read-only sequences do not establish sequence mutation support. | Require proved translation rules for each constructor, mutation and state effect used. Also check collection specifications and framing. |
-| 10 | The public CLI proves one source file per invocation. | Prove every relevant body across the chosen files. Demonstrate caller coverage when a header or contract changes. Do not assume a repository-wide proof command exists. |
+| Checkpoint | Current evidence and required next check |
+|---|---|
+| Arithmetic and read-only processing | Fixtures cover branches, loops, scalar optionals, read-only sequences, calls and quantified contracts. Prove the exact parser/result types used in stages 1 and 2. |
+| Mutation and initialization | Member support is arriving in steps. Read-only sequences do not establish sequence-write support. Prove translation rules for the constructors, collection writes and state effects needed from stage 3 onward. |
+| Recursive indexing | The radix lookup slice is reported as proved end to end. Reproduce it and then qualify insertion, deletion and index invariants before building the store. |
+| Multiple files and changed contracts | The current CLI proves one source file per invocation. Track every relevant body, dependency contract and affected caller. Establish a reproducible whole-application run. |
+| Application scale | Measure full verification and verification after edits at every stage. Track wall time, memory, solver timeouts, diagnostic usability and missing coverage. |
 
 Relevant sources: [examples](../examples/README.md), decisions
 [0074](decisions/0074-a-mutable-reference-to-a-struct-has-no-rule-yet.md),
@@ -83,8 +102,8 @@ the [CLI](../crates/cplusp/src/main.rs), and the [radix trial](trial-flashradixt
 Recheck the latest decisions before each stage because the slice is changing.
 
 A required construct that lacks a rule blocks that stage.
-Record the smallest source that exposes the missing rule and implement that capability as a separate change.
-Retain the original program requirement. Do not mark its central algorithm trusted just to obtain a pass.
+Record the smallest source that exposes it and implement that capability as a separate change.
+Retain the application requirement. Do not mark its central algorithms trusted to obtain a pass.
 Refactoring is acceptable when the reviewed behavior stays the same. Record its cost.
 
 ## The experiment for every program
@@ -159,6 +178,9 @@ Keep one row per attempt:
 
 Report support coverage, false successes, false refusals, repair success and total cost separately.
 Track functional requirement coverage. A count of proved functions alone is insufficient.
+Also report total and verified executable lines, modules, functions, dependency edges and remaining trusted code.
+Measure a full run, a body-only edit, a contract edit and a shared type change.
+Record which callers were rechecked, total resources used and whether previously established guarantees still hold.
 Record the ordinary executable build and run cost separately from verification cost.
 
 First establish that the full path works. Then test whether proof feedback improves coding results.
@@ -171,11 +193,11 @@ Repeat with independent attempts. A few initial runs are a pilot, not a reliable
 
 1. Build the campaign around stage 1 and one intentional arithmetic error.
 2. Confirm the entire source-to-diagnostic-to-repair-to-executable path.
-3. Run stages 2 and 3 under the same harness.
-4. Fix workflow defects before adding larger programs.
-5. Continue in table order, adding only the capabilities each next program requires.
+3. Build stage 2 as the first application with several cooperating modules.
+4. Fix workflow defects and qualify mutation support before starting stage 3.
+5. Continue through the application size bands, adding only the capabilities each next application requires.
 
 Reuse the existing Rust test infrastructure for the runner.
-When implementation starts, place campaign programs under `tests/end_to_end/` with one directory per stage.
+When implementation starts, place campaign applications under `tests/end_to_end/` with one directory per stage and ordinary source modules inside.
 Keep requirements, C++ source, permitted companion specs, independent tests and mutation definitions together.
 Record results only after actual runs. This plan creates no benchmark score.
