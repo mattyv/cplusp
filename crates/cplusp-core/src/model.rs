@@ -217,12 +217,12 @@ pub enum Structs {
     Cons(u32, u32, Params, Members, Box<Structs>),
 }
 
-/// The member functions of a struct: the id of each name, the key of its function, and its return type when it is pure, decision
-/// 0090. The unit computes which are pure from the functions themselves, `spec_mark`.
+/// The member functions of a struct: the id of each name, the key of its function, and its return type and parameters when it is
+/// pure, decisions 0090 and 0095. The unit computes which are pure from the functions themselves, `spec_mark`.
 #[derive(PartialEq, Eq, Debug)]
 pub enum Members {
     Nil,
-    Cons(u32, u32, Option<Ty>, Box<Members>),
+    Cons(u32, u32, Option<(Ty, Params)>, Box<Members>),
 }
 
 /// The model of each struct of a file: its key and Dafny fields, or the refusal.
@@ -809,8 +809,8 @@ pub open spec fn spec_contract(e: Expr, decl: Names, ps: Params, ret: Option<Ty>
         },
         Expr::Apply(f, args) => match spec_this(ps) {
             Some((p, k)) => match spec_member(sd, k, f) {
-                Some((key, Some(t))) => match spec_contract_args(*args, decl, ps, ret, bound, line, sd) {
-                    Ok(da) => spec_leaf(DExpr::FCall(key, Box::new(DArgs::Cons(DExpr::Var(p), Box::new(da)))), t, line),
+                Some((key, Some((t, mps)))) => match spec_contract_args(*args, decl, ps, ret, bound, line, sd) {
+                    Ok(da) => spec_leaf(DExpr::FCall(key, Box::new(DArgs::Cons(DExpr::Var(p), Box::new(spec_convert(da, spec_tail(mps)))))), t, line),
                     Err(r) => Err(r),
                 },
                 Some((_, None)) => Err(Refusal::NotPure(f, line)),
@@ -827,8 +827,8 @@ pub open spec fn spec_contract(e: Expr, decl: Names, ps: Params, ret: Option<Ty>
         Expr::MApply(o, f, args) => match spec_path(*o, decl, ps, ret, bound, line, sd) {
             Ok((d, t)) => match spec_struct_key(t) {
                 Some(k) => match spec_member(sd, k, f) {
-                    Some((key, Some(rt))) => match spec_contract_args(*args, decl, ps, ret, bound, line, sd) {
-                        Ok(da) => spec_leaf(DExpr::FCall(key, Box::new(DArgs::Cons(d, Box::new(da)))), rt, line),
+                    Some((key, Some((rt, mps)))) => match spec_contract_args(*args, decl, ps, ret, bound, line, sd) {
+                        Ok(da) => spec_leaf(DExpr::FCall(key, Box::new(DArgs::Cons(d, Box::new(spec_convert(da, spec_tail(mps)))))), rt, line),
                         Err(r) => Err(r),
                     },
                     _ => Err(Refusal::NotPure(f, line)),
@@ -1493,7 +1493,7 @@ pub open spec fn spec_linked(f: Function, ens: DConds, pure: Option<DExpr>) -> D
 }
 
 /// The member `name` of the struct `k`: the key of its function, and its return type when it is pure.
-pub open spec fn spec_member(sd: Structs, k: u32, name: u32) -> Option<(u32, Option<Ty>)>
+pub open spec fn spec_member(sd: Structs, k: u32, name: u32) -> Option<(u32, Option<(Ty, Params)>)>
     decreases sd,
 {
     match sd {
@@ -1506,7 +1506,7 @@ pub open spec fn spec_member(sd: Structs, k: u32, name: u32) -> Option<(u32, Opt
     }
 }
 
-pub open spec fn spec_member_of(ms: Members, name: u32) -> Option<(u32, Option<Ty>)>
+pub open spec fn spec_member_of(ms: Members, name: u32) -> Option<(u32, Option<(Ty, Params)>)>
     decreases ms,
 {
     match ms {
@@ -1542,41 +1542,106 @@ pub open spec fn spec_find(fs: Fns, key: u32) -> Option<Function>
     }
 }
 
-/// The return type of the function with the key `key`, when it is a pure member function with a signature of the subset.
-pub open spec fn spec_pure_ret(all: Fns, key: u32, sd: Structs) -> Option<Ty> {
+/// The return type and parameters of the function with the key `key`, when it is a pure member function with a signature of the
+/// subset. When `strict` holds, its contract must also have a model under the table `sd`, decision 0095.
+pub open spec fn spec_pure_ret(all: Fns, key: u32, sd: Structs, strict: bool) -> Option<(Ty, Params)> {
     match spec_find(all, key) {
-        Some(f) => if has_signature(f, sd) {
-            match spec_stmts(f.body, all, f.params, f.params, sd) {
-                Ok(body) => match spec_pure_body(f.params, body) {
-                    Some(_) => Some(f.ret),
+        Some(f) => if !has_signature(f, sd) {
+            None
+        } else if strict {
+            match spec_inside(f, all, sd) {
+                Ok((_, _, _, body)) => match spec_pure_body(f.params, body) {
+                    Some(_) => Some((f.ret, f.params)),
                     None => None,
                 },
                 Err(_) => None,
             }
         } else {
-            None
+            match spec_stmts(f.body, all, f.params, f.params, sd) {
+                Ok(body) => match spec_pure_body(f.params, body) {
+                    Some(_) => Some((f.ret, f.params)),
+                    None => None,
+                },
+                Err(_) => None,
+            }
         },
         None => None,
     }
 }
 
-pub open spec fn spec_mark_members(ms: Members, all: Fns, sd: Structs) -> Members
+pub open spec fn spec_mark_members(ms: Members, all: Fns, sd: Structs, strict: bool) -> Members
     decreases ms,
 {
     match ms {
         Members::Nil => Members::Nil,
-        Members::Cons(n, key, _, rest) => Members::Cons(n, key, spec_pure_ret(all, key, sd), Box::new(spec_mark_members(*rest, all, sd))),
+        Members::Cons(n, key, _, rest) => Members::Cons(
+            n,
+            key,
+            spec_pure_ret(all, key, sd, strict),
+            Box::new(spec_mark_members(*rest, all, sd, strict)),
+        ),
     }
 }
 
 /// The table `t` with each member marked pure or not from the functions of the file, whatever the table said, decision 0090.
 /// `sd` is the table that the marks read.
-pub open spec fn spec_mark(t: Structs, all: Fns, sd: Structs) -> Structs
+pub open spec fn spec_mark(t: Structs, all: Fns, sd: Structs, strict: bool) -> Structs
     decreases t,
 {
     match t {
         Structs::Nil => Structs::Nil,
-        Structs::Cons(k, l, fields, ms, rest) => Structs::Cons(k, l, fields, spec_mark_members(ms, all, sd), Box::new(spec_mark(*rest, all, sd))),
+        Structs::Cons(k, l, fields, ms, rest) => Structs::Cons(
+            k,
+            l,
+            fields,
+            spec_mark_members(ms, all, sd, strict),
+            Box::new(spec_mark(*rest, all, sd, strict)),
+        ),
+    }
+}
+
+/// The table of the unit: first the members whose body is pure, then of those the members whose contract also has a model under
+/// that first table, decision 0095. A contract that calls a member reads the second table.
+pub open spec fn spec_marked(sd: Structs, all: Fns) -> Structs {
+    spec_mark(sd, all, spec_mark(sd, all, sd, false), true)
+}
+
+/// The type of Dafny of an integer type of C++.
+pub open spec fn spec_int_dty(t: Ty) -> Option<DTy> {
+    match t {
+        Ty::I32 => Some(DTy::Int32),
+        Ty::I64 => Some(DTy::Int64),
+        Ty::U8 => Some(DTy::UInt8),
+        Ty::U32 => Some(DTy::UInt32),
+        Ty::U64 => Some(DTy::UInt64),
+        _ => None,
+    }
+}
+
+/// The parameters after `this`.
+pub open spec fn spec_tail(ps: Params) -> Params {
+    match ps {
+        Params::Cons(_, _, rest) => *rest,
+        Params::Nil => Params::Nil,
+    }
+}
+
+/// The arguments of a contract call, each exact integer as `(e as T)` for its parameter of type `T`, decision 0095.
+pub open spec fn spec_convert(da: DArgs, ps: Params) -> DArgs
+    decreases da,
+{
+    match da {
+        DArgs::Nil => DArgs::Nil,
+        DArgs::Cons(d, rest) => match ps {
+            Params::Cons(_, t, prest) => DArgs::Cons(
+                match spec_int_dty(t) {
+                    Some(dt) => DExpr::Conv(dt, Box::new(d)),
+                    None => d,
+                },
+                Box::new(spec_convert(*rest, *prest)),
+            ),
+            Params::Nil => DArgs::Cons(d, Box::new(spec_convert(*rest, Params::Nil))),
+        },
     }
 }
 
@@ -2494,8 +2559,8 @@ pub fn translate_contract(e: &Expr, decl: &Names, ps: &Params, ret: Option<Ty>, 
         },
         Expr::Apply(f, args) => match this_param(ps) {
             Some((p, k)) => match member(sd, k, *f) {
-                Some((key, Some(t))) => match translate_contract_args(args, decl, ps, ret, bound, line, sd) {
-                    Ok(da) => translate_leaf(DExpr::FCall(key, Box::new(DArgs::Cons(DExpr::Var(p), Box::new(da)))), t, line),
+                Some((key, Some((t, mps)))) => match translate_contract_args(args, decl, ps, ret, bound, line, sd) {
+                    Ok(da) => translate_leaf(DExpr::FCall(key, Box::new(DArgs::Cons(DExpr::Var(p), Box::new(convert(da, &tail(&mps)))))), t, line),
                     Err(r) => Err(r),
                 },
                 Some((_, None)) => Err(Refusal::NotPure(*f, line)),
@@ -2512,8 +2577,8 @@ pub fn translate_contract(e: &Expr, decl: &Names, ps: &Params, ret: Option<Ty>, 
         Expr::MApply(o, f, args) => match path(o, decl, ps, ret, bound, line, sd) {
             Ok((d, t)) => match struct_key(t) {
                 Some(k) => match member(sd, k, *f) {
-                    Some((key, Some(rt))) => match translate_contract_args(args, decl, ps, ret, bound, line, sd) {
-                        Ok(da) => translate_leaf(DExpr::FCall(key, Box::new(DArgs::Cons(d, Box::new(da)))), rt, line),
+                    Some((key, Some((rt, mps)))) => match translate_contract_args(args, decl, ps, ret, bound, line, sd) {
+                        Ok(da) => translate_leaf(DExpr::FCall(key, Box::new(DArgs::Cons(d, Box::new(convert(da, &tail(&mps)))))), rt, line),
                         Err(r) => Err(r),
                     },
                     _ => Err(Refusal::NotPure(*f, line)),
@@ -3306,7 +3371,7 @@ pub fn linked(f: &Function, ens: DConds, pure: &Option<DExpr>) -> (r: DConds)
     }
 }
 
-pub fn member(sd: &Structs, k: u32, name: u32) -> (r: Option<(u32, Option<Ty>)>)
+pub fn member(sd: &Structs, k: u32, name: u32) -> (r: Option<(u32, Option<(Ty, Params)>)>)
     ensures
         r == spec_member(*sd, k, name),
     decreases sd,
@@ -3321,7 +3386,7 @@ pub fn member(sd: &Structs, k: u32, name: u32) -> (r: Option<(u32, Option<Ty>)>)
     }
 }
 
-pub fn member_of(ms: &Members, name: u32) -> (r: Option<(u32, Option<Ty>)>)
+pub fn member_of(ms: &Members, name: u32) -> (r: Option<(u32, Option<(Ty, Params)>)>)
     ensures
         r == spec_member_of(*ms, name),
     decreases ms,
@@ -3329,7 +3394,10 @@ pub fn member_of(ms: &Members, name: u32) -> (r: Option<(u32, Option<Ty>)>)
     match ms {
         Members::Nil => None,
         Members::Cons(n, key, t, rest) => if *n == name {
-            Some((*key, *t))
+            match t {
+                Some((rt, mps)) => Some((*key, Some((*rt, copy_params(mps))))),
+                None => Some((*key, None)),
+            }
         } else {
             member_of(rest, name)
         },
@@ -3365,45 +3433,103 @@ pub fn find(fs: &Fns, key: u32) -> (r: Option<&Function>)
     }
 }
 
-pub fn pure_ret(all: &Fns, key: u32, sd: &Structs) -> (r: Option<Ty>)
+pub fn pure_ret(all: &Fns, key: u32, sd: &Structs, strict: bool) -> (r: Option<(Ty, Params)>)
     ensures
-        r == spec_pure_ret(*all, key, *sd),
+        r == spec_pure_ret(*all, key, *sd, strict),
 {
     match find(all, key) {
-        Some(f) => if signature(f, sd) {
-            match translate_stmts(&f.body, all, &f.params, &f.params, sd) {
-                Ok(body) => match pure_body(&f.params, &body) {
-                    Some(_) => Some(f.ret),
+        Some(f) => if !signature(f, sd) {
+            None
+        } else if strict {
+            match translate_inside(f, all, sd) {
+                Ok((_, _, _, body)) => match pure_body(&f.params, &body) {
+                    Some(_) => Some((f.ret, copy_params(&f.params))),
                     None => None,
                 },
                 Err(_) => None,
             }
         } else {
-            None
+            match translate_stmts(&f.body, all, &f.params, &f.params, sd) {
+                Ok(body) => match pure_body(&f.params, &body) {
+                    Some(_) => Some((f.ret, copy_params(&f.params))),
+                    None => None,
+                },
+                Err(_) => None,
+            }
         },
         None => None,
     }
 }
 
-pub fn mark_members(ms: &Members, all: &Fns, sd: &Structs) -> (r: Members)
+pub fn mark_members(ms: &Members, all: &Fns, sd: &Structs, strict: bool) -> (r: Members)
     ensures
-        r == spec_mark_members(*ms, *all, *sd),
+        r == spec_mark_members(*ms, *all, *sd, strict),
     decreases ms,
 {
     match ms {
         Members::Nil => Members::Nil,
-        Members::Cons(n, key, _, rest) => Members::Cons(*n, *key, pure_ret(all, *key, sd), Box::new(mark_members(rest, all, sd))),
+        Members::Cons(n, key, _, rest) => Members::Cons(*n, *key, pure_ret(all, *key, sd, strict), Box::new(mark_members(rest, all, sd, strict))),
     }
 }
 
-pub fn mark(t: &Structs, all: &Fns, sd: &Structs) -> (r: Structs)
+pub fn mark(t: &Structs, all: &Fns, sd: &Structs, strict: bool) -> (r: Structs)
     ensures
-        r == spec_mark(*t, *all, *sd),
+        r == spec_mark(*t, *all, *sd, strict),
     decreases t,
 {
     match t {
         Structs::Nil => Structs::Nil,
-        Structs::Cons(k, l, fields, ms, rest) => Structs::Cons(*k, *l, copy_params(fields), mark_members(ms, all, sd), Box::new(mark(rest, all, sd))),
+        Structs::Cons(k, l, fields, ms, rest) => Structs::Cons(
+            *k,
+            *l,
+            copy_params(fields),
+            mark_members(ms, all, sd, strict),
+            Box::new(mark(rest, all, sd, strict)),
+        ),
+    }
+}
+
+pub fn int_dty(t: Ty) -> (r: Option<DTy>)
+    ensures
+        r == spec_int_dty(t),
+{
+    match t {
+        Ty::I32 => Some(DTy::Int32),
+        Ty::I64 => Some(DTy::Int64),
+        Ty::U8 => Some(DTy::UInt8),
+        Ty::U32 => Some(DTy::UInt32),
+        Ty::U64 => Some(DTy::UInt64),
+        _ => None,
+    }
+}
+
+pub fn tail(ps: &Params) -> (r: Params)
+    ensures
+        r == spec_tail(*ps),
+{
+    match ps {
+        Params::Cons(_, _, rest) => copy_params(rest),
+        Params::Nil => Params::Nil,
+    }
+}
+
+pub fn convert(da: DArgs, ps: &Params) -> (r: DArgs)
+    ensures
+        r == spec_convert(da, *ps),
+    decreases da,
+{
+    match da {
+        DArgs::Nil => DArgs::Nil,
+        DArgs::Cons(d, rest) => match ps {
+            Params::Cons(_, t, prest) => DArgs::Cons(
+                match int_dty(*t) {
+                    Some(dt) => DExpr::Conv(dt, Box::new(d)),
+                    None => d,
+                },
+                Box::new(convert(*rest, prest)),
+            ),
+            Params::Nil => DArgs::Cons(d, Box::new(convert(*rest, &Params::Nil))),
+        },
     }
 }
 
@@ -3478,9 +3604,10 @@ pub fn translate_structs(sd: &Structs) -> (r: StructModels)
 /// The models of the functions of one file, in their order.
 pub fn translate_unit(all: &Fns, sd: &Structs) -> (r: Models)
     ensures
-        r == spec_unit(*all, *all, spec_mark(*sd, *all, *sd)),
+        r == spec_unit(*all, *all, spec_marked(*sd, *all)),
 {
-    let marked = mark(sd, all, sd);
+    let first = mark(sd, all, sd, false);
+    let marked = mark(sd, all, &first, true);
     translate_each(all, all, &marked)
 }
 
