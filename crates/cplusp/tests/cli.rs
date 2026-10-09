@@ -1692,7 +1692,7 @@ fn calls_locals_and_casts_with_no_rule_are_refused_at_their_lines() {
     let text = stdout(&o);
     assert_eq!(o.status.code(), Some(1), "stdout: {text} stderr: {}", stderr(&o));
     let refusals: Vec<&str> = text.lines().filter(|l| l.starts_with("Not provable: ")).collect();
-    let inside = "a call inside an expression. The translator takes a call only as the full value of a return or of a local.";
+    let inside = "a call out of place. The translator takes a call as the full value of a return or of a local, or alone when it writes its object or gives no value.";
     for (line, expected) in [
         (12, inside),
         (16, inside),
@@ -1839,7 +1839,7 @@ fn loops_and_writes_with_no_rule_are_refused_at_their_lines() {
         "a contract line in the wrong place. A requires, an ensures or a decreases line goes above a function. An invariant or a decreases line goes above a loop.";
     for (line, expected) in [
         (5, "x is a parameter. The translator writes only a local."),
-        (11, "BinaryOperator +=: the translator has no rule for it yet."),
+        (11, "BinaryOperator <<=: the translator has no rule for it yet."),
         (18, "BreakStmt: the translator has no rule for it yet."),
         (25, "z in the loop contract is no variable."),
         (32, misplaced),
@@ -2364,7 +2364,7 @@ fn structs_with_no_rule_are_refused_at_their_lines() {
         let want = format!("model-struct-refuse.cpp:{line}: {expected}");
         assert!(refusals.iter().any(|l| l.ends_with(&want)), "{want}: {text}");
     }
-    assert_eq!(refusals.len(), 5, "{text}");
+    assert_eq!(refusals.len(), 6, "{text}");
 }
 
 /// A function with no method in the model is refused for what it is, not for its name, decision 0069. The check of names covers only
@@ -2785,7 +2785,7 @@ fn a_hex_literal_too_large_and_a_shift_in_a_contract_are_refused() {
     ] {
         assert!(refusals.iter().any(|l| l.ends_with(want)), "{want}: {text}");
     }
-    assert_eq!(refusals.len(), 5, "{text}");
+    assert_eq!(refusals.len(), 6, "{text}");
 }
 
 /// An error inside a function of the companion file prints in the words of Dafny, not as a return of a method, decision 0084.
@@ -2898,7 +2898,7 @@ fn const_member_functions_prove() {
     assert_eq!(text.lines().last(), Some("ok: proved"), "{text}");
 }
 
-/// A member function that is not const, a static member function, and a contract name that is no parameter and no field, are each
+/// A member function with a ref-qualifier, a static member function, and a contract name that is no parameter and no field, are each
 /// refused at their lines, and the rest of the struct still translates, decision 0089.
 #[test]
 fn member_functions_with_no_rule_are_refused_at_their_lines() {
@@ -3052,8 +3052,9 @@ fn prove_names_a_write_that_may_overflow_and_an_ensures_line_of_a_void_function(
     assert_eq!(failed.len(), 2, "{text}");
 }
 
-/// A call that writes a parameter, a call that writes a field of a local, and old() outside the ensures lines of a function that
-/// writes its object, are refused at their lines, decision 0096.
+/// A call that writes a parameter, a call that writes a field of a local, old() outside the ensures lines of a function that writes
+/// its object, a return of a void call, a call alone whose value is dropped, and a write to an optional field, are refused at their
+/// lines, decisions 0096 and 0097.
 #[test]
 fn writes_with_no_rule_are_refused_at_their_lines() {
     if !clang_tidy_available() {
@@ -3068,10 +3069,13 @@ fn writes_with_no_rule_are_refused_at_their_lines() {
         "model-mut-refuse.cpp:17: c is a parameter. The translator writes only a local.",
         "model-mut-refuse.cpp:23: the call writes its object, and the translator writes back only a local.",
         "model-mut-refuse.cpp:27: the contract line has a form the translator cannot read.",
+        "model-mut-refuse.cpp:37: ReturnStmt: the translator has no rule for it yet.",
+        "model-mut-refuse.cpp:45: a call out of place. The translator takes a call as the full value of a return or of a local, or alone when it writes its object or gives no value.",
+        "model-mut-refuse.cpp:53: CXXOperatorCallExpr: the translator has no rule for it yet.",
     ] {
         assert!(refusals.iter().any(|l| l.ends_with(want)), "{want}: {text}");
     }
-    assert_eq!(refusals.len(), 3, "{text}");
+    assert_eq!(refusals.len(), 6, "{text}");
 }
 
 /// Pull `"key":"value"` or `"key":123` out of one JSON line without a JSON library.

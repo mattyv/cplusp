@@ -4,7 +4,7 @@
 struct Counter {
   int32_t n_;
 
-  int32_t grow() {
+  int32_t grow() & {
     n_ = n_ + 1;
     return n_;
   }

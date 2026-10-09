@@ -1,6 +1,6 @@
 #include <cstdint>
-
-// Writes with no rule yet are refused at their lines, decision 0096.
+#include <optional>
+// Writes and calls with no rule yet are refused at their lines, decisions 0096 and 0097.
 struct Counter {
   int32_t n_;
 
@@ -28,3 +28,28 @@ int32_t on_field(Pair p) {
 int32_t old_outside(int32_t x) {
   return x;
 }
+
+void nothing() {
+  return;
+}
+
+void ret_void() {
+  return nothing();
+}
+
+int32_t one() {
+  return 1;
+}
+
+int32_t drops() {
+  one();
+  return 0;
+}
+
+struct Maybe {
+  std::optional<int32_t> o_;
+
+  void set() {
+    o_ = 1;
+  }
+};

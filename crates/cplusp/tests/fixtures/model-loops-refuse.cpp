@@ -1,6 +1,6 @@
 #include <cstdint>
 
-// Loops and writes with no rule are refused at their lines, decision 0061.
+// Loops and writes with no rule are refused at their lines, decisions 0061 and 0096.
 int32_t write_param(int32_t x) {
   x = 1;
   return x;
@@ -8,7 +8,7 @@ int32_t write_param(int32_t x) {
 
 int32_t compound(int32_t x) {
   int32_t y = x;
-  y += 1;
+  y <<= 1;
   return y;
 }
 
