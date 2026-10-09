@@ -282,7 +282,7 @@ pub enum DTy {
 /// on the exact integers. `DivIn` is `(trunc_div(a, b) as T)`, and `RemIn` is the remainder of `T`, which also needs the quotient to
 /// fit `T`, decision 0088. `FCall` calls the function of a pure member function by its key, decision 0090. `After` is `this'`, the
 /// object of a member function that writes it, as the body leaves it, decision 0096. `Ite` is `if c then a else b`, decision 0098.
-/// A Dafny expression calls no method.
+/// `Temp` reads a temporary that a call before the statement set, decision 0103. A Dafny expression calls no method.
 #[derive(PartialEq, Eq, Debug)]
 pub enum DExpr {
     Lit(u64),
@@ -317,6 +317,15 @@ pub enum DExpr {
     FCall(u32, Box<DArgs>),
     After,
     Ite(Box<DExpr>, Box<DExpr>, Box<DExpr>),
+    Temp(u32),
+}
+
+/// The calls that run before a statement, in the order that they run: each sets a temporary of the statement by its number, of a
+/// type, to the value of a method by its key with its arguments, decision 0103.
+#[derive(PartialEq, Eq, Debug)]
+pub enum DCalls {
+    Nil,
+    Cons(u32, DTy, u32, DArgs, Box<DCalls>),
 }
 
 #[derive(PartialEq, Eq, Debug)]
@@ -331,7 +340,8 @@ pub enum DArgs {
 /// step. The start and the step keep their own places, decision 0069. `SetField` is `this' := this'.(f := e);`. `Update` calls a
 /// method that writes its object and writes the object back, `o := m(o, args);`, and `LocalUpdate` also sets a new local to the
 /// value it gives. `CallStmt` is `m(args);` of a method that gives no value, and `Exit` is `return;`, decision 0096. `Assert` is
-/// `assert e;` and `Apply` is `l(args);` of a lemma, decision 0099.
+/// `assert e;` and `Apply` is `l(args);` of a lemma, decision 0099. `Pre` is a statement with the calls that run before it, decision
+/// 0103.
 #[derive(PartialEq, Eq, Debug)]
 pub enum DStmt {
     Return(DExpr),
@@ -350,6 +360,7 @@ pub enum DStmt {
     Exit,
     Assert(DExpr),
     Apply(u32, DArgs),
+    Pre(DCalls, Box<DStmt>),
 }
 
 /// The object that a call writes back: a local by its name, or the object of the member function that makes the call.
@@ -710,6 +721,173 @@ pub open spec fn spec_code(e: Expr, line: u32) -> Result<DExpr, Refusal>
         Expr::Name(n) => Err(Refusal::Name(n, line)),
         Expr::Unknown(k, l) => Err(Refusal::Construct(k, l)),
         _ => Err(Refusal::Syntax(line)),
+    }
+}
+
+/// The calls `a`, then the calls `b`.
+pub open spec fn spec_append_calls(a: DCalls, b: DCalls) -> DCalls
+    decreases a,
+{
+    match a {
+        DCalls::Nil => b,
+        DCalls::Cons(t, dt, k, da, rest) => DCalls::Cons(t, dt, k, da, Box::new(spec_append_calls(*rest, b))),
+    }
+}
+
+/// A statement with the calls that run before it. With no call it is the statement alone.
+pub open spec fn spec_pre(c: DCalls, s: DStmt) -> DStmt {
+    match c {
+        DCalls::Nil => s,
+        _ => DStmt::Pre(c, Box::new(s)),
+    }
+}
+
+/// The type of the value of the callee `key`: a value type, decision 0064.
+pub open spec fn spec_callee_ty(all: Fns, key: u32, line: u32, sd: Structs) -> Result<DTy, Refusal> {
+    match spec_find(all, key) {
+        Some(f) => spec_value_ty(f.ret, line, sd),
+        None => Err(Refusal::Syntax(line)),
+    }
+}
+
+/// An expression of code in which a call runs before the statement, decision 0103. Each call that C++ always evaluates sets a
+/// temporary, numbered from `n`, and the expression reads it. A call on the right of `&&` or `||`, or in a branch of `?:`, may not
+/// run, so it is refused there as by `spec_code`. A call of a function that writes its object stays refused in an expression.
+/// The result is the calls, the expression and the next number.
+// ponytail: only the forms that the examples need lift a call. A call in any other form is refused as by spec_code. Upgrade: one
+// arm for each form of spec_code.
+pub open spec fn spec_lift(e: Expr, all: Fns, line: u32, sd: Structs, n: u32) -> Result<(DCalls, DExpr, u32), Refusal>
+    decreases e,
+{
+    match e {
+        Expr::Call(k, nm, args, at) => if spec_callee_writes(all, k) {
+            Err(Refusal::Place(at))
+        } else if !spec_callable(all, k, sd) {
+            Err(Refusal::Callee(nm, at))
+        } else {
+            match spec_lift_args(*args, all, line, sd, n) {
+                Err(r) => Err(r),
+                Ok((ca, da, n1)) => match spec_callee_ty(all, k, line, sd) {
+                    Err(r) => Err(r),
+                    Ok(dt) => if n1 < 0xFFFF_FFFF {
+                        Ok((spec_append_calls(ca, DCalls::Cons(n1, dt, k, da, Box::new(DCalls::Nil))), DExpr::Temp(n1), (n1 + 1) as u32))
+                    } else {
+                        Err(Refusal::Syntax(line))
+                    },
+                },
+            }
+        },
+        Expr::Bin(op, a, b) => if op == BinOp::Div || op == BinOp::Rem {
+            Err(Refusal::Syntax(line))
+        } else if op == BinOp::And || op == BinOp::Or {
+            match spec_lift(*a, all, line, sd, n) {
+                Err(r) => Err(r),
+                Ok((ca, da, n1)) => match spec_code(*b, line) {
+                    Err(r) => Err(r),
+                    Ok(db) => Ok((ca, DExpr::Bin(op, Box::new(da), Box::new(db)), n1)),
+                },
+            }
+        } else {
+            match spec_lift(*a, all, line, sd, n) {
+                Err(r) => Err(r),
+                Ok((ca, da, n1)) => match spec_lift(*b, all, line, sd, n1) {
+                    Err(r) => Err(r),
+                    Ok((cb, db, n2)) => Ok((spec_append_calls(ca, cb), DExpr::Bin(op, Box::new(da), Box::new(db)), n2)),
+                },
+            }
+        },
+        Expr::Divide(op, a, b, t) => if !(op == BinOp::Div || op == BinOp::Rem) {
+            Err(Refusal::Syntax(line))
+        } else {
+            match spec_lift(*a, all, line, sd, n) {
+                Err(r) => Err(r),
+                Ok((ca, da, n1)) => match spec_lift(*b, all, line, sd, n1) {
+                    Err(r) => Err(r),
+                    Ok((cb, db, n2)) => match spec_divide(op, da, db, t, line) {
+                        Err(r) => Err(r),
+                        Ok(d) => Ok((spec_append_calls(ca, cb), d, n2)),
+                    },
+                },
+            }
+        },
+        Expr::Not(a) => match spec_lift(*a, all, line, sd, n) {
+            Err(r) => Err(r),
+            Ok((c, d, n1)) => Ok((c, DExpr::Not(Box::new(d)), n1)),
+        },
+        Expr::Neg(a) => match spec_lift(*a, all, line, sd, n) {
+            Err(r) => Err(r),
+            Ok((c, d, n1)) => Ok((c, DExpr::Neg(Box::new(d)), n1)),
+        },
+        Expr::Cast(ck, a) => match ck {
+            CastKind::Other(k) => Err(Refusal::Construct(k, line)),
+            CastKind::Integral(from, to) => match spec_lift(*a, all, line, sd, n) {
+                Err(r) => Err(r),
+                Ok((c, d, n1)) => match spec_integral(from, to, d, line) {
+                    Err(r) => Err(r),
+                    Ok(di) => Ok((c, di, n1)),
+                },
+            },
+            _ => spec_lift(*a, all, line, sd, n),
+        },
+        Expr::Paren(a) => spec_lift(*a, all, line, sd, n),
+        Expr::Brace(a) => spec_lift(*a, all, line, sd, n),
+        Expr::Index(o, i) => match spec_lift(*o, all, line, sd, n) {
+            Err(r) => Err(r),
+            Ok((co, d, n1)) => match spec_lift(*i, all, line, sd, n1) {
+                Err(r) => Err(r),
+                Ok((ci, di, n2)) => Ok((spec_append_calls(co, ci), DExpr::Index(Box::new(d), Box::new(di)), n2)),
+            },
+        },
+        Expr::Field(o, f) => match spec_lift(*o, all, line, sd, n) {
+            Err(r) => Err(r),
+            Ok((c, d, n1)) => Ok((c, DExpr::Field(Box::new(d), f), n1)),
+        },
+        Expr::Construct(k, args) => match spec_lift_args(*args, all, line, sd, n) {
+            Err(r) => Err(r),
+            Ok((c, da, n1)) => Ok((c, DExpr::Ctor(k, Box::new(da)), n1)),
+        },
+        Expr::Cond(cnd, a, b) => match spec_lift(*cnd, all, line, sd, n) {
+            Err(r) => Err(r),
+            Ok((c, dc, n1)) => match spec_code(*a, line) {
+                Err(r) => Err(r),
+                Ok(da) => match spec_code(*b, line) {
+                    Err(r) => Err(r),
+                    Ok(db) => Ok((c, DExpr::Ite(Box::new(dc), Box::new(da), Box::new(db)), n1)),
+                },
+            },
+        },
+        _ => match spec_code(e, line) {
+            Err(r) => Err(r),
+            Ok(d) => Ok((DCalls::Nil, d, n)),
+        },
+    }
+}
+
+/// The arguments of a call, each lifted in its order, decision 0103.
+pub open spec fn spec_lift_args(args: Args, all: Fns, line: u32, sd: Structs, n: u32) -> Result<(DCalls, DArgs, u32), Refusal>
+    decreases args,
+{
+    match args {
+        Args::Nil => Ok((DCalls::Nil, DArgs::Nil, n)),
+        Args::Cons(a, rest) => match spec_lift(*a, all, line, sd, n) {
+            Err(r) => Err(r),
+            Ok((ca, da, n1)) => match spec_lift_args(*rest, all, line, sd, n1) {
+                Err(r) => Err(r),
+                Ok((cr, dr, n2)) => Ok((spec_append_calls(ca, cr), DArgs::Cons(da, Box::new(dr)), n2)),
+            },
+        },
+    }
+}
+
+/// A call that stands alone, whose arguments may hold calls that run before it, decision 0103.
+pub open spec fn spec_call_lift(key: u32, name: u32, args: Args, at: u32, all: Fns, line: u32, sd: Structs) -> Result<(DCalls, DArgs), Refusal> {
+    if spec_callable(all, key, sd) {
+        match spec_lift_args(args, all, line, sd, 0) {
+            Ok((c, da, _)) => Ok((c, da)),
+            Err(r) => Err(r),
+        }
+    } else {
+        Err(Refusal::Callee(name, at))
     }
 }
 
@@ -1457,8 +1635,8 @@ pub open spec fn spec_call_stmt(key: u32, name: u32, args: Args, line: u32, all:
     if spec_callee_writes(all, key) {
         match args {
             Args::Cons(o, rest) => match spec_target(*o, ps, line) {
-                Ok(obj) => match spec_call(key, name, *rest, line, all, line, sd) {
-                    Ok(da) => Ok(DStmt::Update(obj, key, da)),
+                Ok(obj) => match spec_call_lift(key, name, *rest, line, all, line, sd) {
+                    Ok((c, da)) => Ok(spec_pre(c, DStmt::Update(obj, key, da))),
                     Err(r) => Err(r),
                 },
                 Err(r) => Err(r),
@@ -1466,9 +1644,9 @@ pub open spec fn spec_call_stmt(key: u32, name: u32, args: Args, line: u32, all:
             Args::Nil => Err(Refusal::Syntax(line)),
         }
     } else {
-        match spec_call(key, name, args, line, all, line, sd) {
-            Ok(da) => if spec_callee_void(all, key) {
-                Ok(DStmt::CallStmt(key, da))
+        match spec_call_lift(key, name, args, line, all, line, sd) {
+            Ok((c, da)) => if spec_callee_void(all, key) {
+                Ok(spec_pre(c, DStmt::CallStmt(key, da)))
             } else {
                 Err(Refusal::Place(line))
             },
@@ -1493,8 +1671,8 @@ pub open spec fn spec_local_call(n: u32, dt: DTy, key: u32, name: u32, args: Arg
     if spec_callee_writes(all, key) {
         match args {
             Args::Cons(o, rest) => match spec_target(*o, ps, line) {
-                Ok(obj) => match spec_call(key, name, *rest, at, all, line, sd) {
-                    Ok(da) => Ok(DStmt::LocalUpdate(n, dt, obj, key, da)),
+                Ok(obj) => match spec_call_lift(key, name, *rest, at, all, line, sd) {
+                    Ok((c, da)) => Ok(spec_pre(c, DStmt::LocalUpdate(n, dt, obj, key, da))),
                     Err(r) => Err(r),
                 },
                 Err(r) => Err(r),
@@ -1502,8 +1680,8 @@ pub open spec fn spec_local_call(n: u32, dt: DTy, key: u32, name: u32, args: Arg
             Args::Nil => Err(Refusal::Syntax(line)),
         }
     } else {
-        match spec_call(key, name, args, at, all, line, sd) {
-            Ok(da) => Ok(DStmt::LocalCall(n, dt, key, da)),
+        match spec_call_lift(key, name, args, at, all, line, sd) {
+            Ok((c, da)) => Ok(spec_pre(c, DStmt::LocalCall(n, dt, key, da))),
             Err(r) => Err(r),
         }
     }
@@ -1523,20 +1701,20 @@ pub open spec fn spec_stmt(s: Stmt, all: Fns, env: Params, ps: Params, sd: Struc
             Expr::Call(k, n, args, at) => if spec_callee_writes(all, k) {
                 Err(Refusal::Place(at))
             } else {
-                match spec_call(k, n, *args, at, all, l, sd) {
-                    Ok(da) => Ok(DStmt::ReturnCall(k, da)),
+                match spec_call_lift(k, n, *args, at, all, l, sd) {
+                    Ok((c, da)) => Ok(spec_pre(c, DStmt::ReturnCall(k, da))),
                     Err(r) => Err(r),
                 }
             },
-            _ => match spec_code(e, l) {
-                Ok(d) => Ok(DStmt::Return(d)),
+            _ => match spec_lift(e, all, l, sd, 0) {
+                Ok((c, d, _)) => Ok(spec_pre(c, DStmt::Return(d))),
                 Err(r) => Err(r),
             },
         },
-        Stmt::If(c, t, f, l) => match spec_code(c, l) {
-            Ok(dc) => match spec_stmts(*t, all, env, ps, sd) {
+        Stmt::If(c, t, f, l) => match spec_lift(c, all, l, sd, 0) {
+            Ok((cc, dc, _)) => match spec_stmts(*t, all, env, ps, sd) {
                 Ok(dt) => match spec_stmts(*f, all, env, ps, sd) {
-                    Ok(df) => Ok(DStmt::If(dc, Box::new(dt), Box::new(df))),
+                    Ok(df) => Ok(spec_pre(cc, DStmt::If(dc, Box::new(dt), Box::new(df)))),
                     Err(r) => Err(r),
                 },
                 Err(r) => Err(r),
@@ -1547,8 +1725,8 @@ pub open spec fn spec_stmt(s: Stmt, all: Fns, env: Params, ps: Params, sd: Struc
             Err(r) => Err(r),
             Ok(dt) => match e {
                 Expr::Call(k, nm, args, at) => spec_local_call(n, dt, k, nm, *args, at, all, l, ps, sd),
-                _ => match spec_code(e, l) {
-                    Ok(d) => Ok(DStmt::Local(n, dt, d)),
+                _ => match spec_lift(e, all, l, sd, 0) {
+                    Ok((c, d, _)) => Ok(spec_pre(c, DStmt::Local(n, dt, d))),
                     Err(r) => Err(r),
                 },
             },
@@ -1560,13 +1738,13 @@ pub open spec fn spec_stmt(s: Stmt, all: Fns, env: Params, ps: Params, sd: Struc
                 Expr::Call(k, nm, args, at) => if spec_callee_writes(all, k) {
                     Err(Refusal::Place(at))
                 } else {
-                    match spec_call(k, nm, *args, at, all, l, sd) {
-                        Ok(da) => Ok(DStmt::AssignCall(n, k, da)),
+                    match spec_call_lift(k, nm, *args, at, all, l, sd) {
+                        Ok((c, da)) => Ok(spec_pre(c, DStmt::AssignCall(n, k, da))),
                         Err(r) => Err(r),
                     }
                 },
-                _ => match spec_code(e, l) {
-                    Ok(d) => Ok(DStmt::Assign(n, d)),
+                _ => match spec_lift(e, all, l, sd, 0) {
+                    Ok((c, d, _)) => Ok(spec_pre(c, DStmt::Assign(n, d))),
                     Err(r) => Err(r),
                 },
             }
@@ -1628,8 +1806,8 @@ pub open spec fn spec_stmt(s: Stmt, all: Fns, env: Params, ps: Params, sd: Struc
             Some((p, t)) => match t {
                 Ty::ThisMut(k) => match spec_field_ty(sd, k, f) {
                     Some(Ty::Seq(_, _)) => Err(Refusal::SeqParam(l)),
-                    Some(_) => match spec_code(e, l) {
-                        Ok(d) => Ok(DStmt::SetField(f, d)),
+                    Some(_) => match spec_lift(e, all, l, sd, 0) {
+                        Ok((c, d, _)) => Ok(spec_pre(c, DStmt::SetField(f, d))),
                         Err(r) => Err(r),
                     },
                     None => Err(Refusal::NoField(f, l)),
@@ -2389,12 +2567,12 @@ pub proof fn lemma_unknown_local_call_is_refused(
         if let Args::Cons(o, rest) = args {
             if unknown_expr(*o) {
                 lemma_unknown_target_is_refused(*o, ps, line);
-            } else if spec_callable(all, key, sd) {
-                lemma_unknown_args_is_refused(*rest, line);
+            } else {
+                lemma_unknown_call_lift_is_refused(key, name, *rest, at, all, line, sd);
             }
         }
-    } else if spec_callable(all, key, sd) {
-        lemma_unknown_args_is_refused(args, line);
+    } else {
+        lemma_unknown_call_lift_is_refused(key, name, args, at, all, line, sd);
     }
 }
 
@@ -2408,15 +2586,43 @@ pub proof fn lemma_unknown_call_stmt_is_refused(key: u32, name: u32, args: Args,
         if let Args::Cons(o, rest) = args {
             if unknown_expr(*o) {
                 lemma_unknown_target_is_refused(*o, ps, line);
-            } else if spec_callable(all, key, sd) {
-                lemma_unknown_args_is_refused(*rest, line);
+            } else {
+                lemma_unknown_call_lift_is_refused(key, name, *rest, line, all, line, sd);
             }
         }
-    } else if spec_callable(all, key, sd) {
-        lemma_unknown_args_is_refused(args, line);
+    } else {
+        lemma_unknown_call_lift_is_refused(key, name, args, line, all, line, sd);
     }
 }
 
+/// A call that stands alone, whose arguments hold a node with no rule, is refused.
+pub proof fn lemma_unknown_call_lift_is_refused(key: u32, name: u32, args: Args, at: u32, all: Fns, line: u32, sd: Structs)
+    requires
+        unknown_args(args),
+    ensures
+        spec_call_lift(key, name, args, at, all, line, sd).is_err(),
+{
+    if spec_callable(all, key, sd) {
+        lemma_unknown_lift_args_is_refused(args, all, line, sd, 0);
+    }
+}
+
+/// The value of a return or of a write, with a node with no rule, is refused.
+pub proof fn lemma_unknown_value_is_refused(e: Expr, all: Fns, line: u32, sd: Structs)
+    requires
+        unknown_expr(e),
+    ensures
+        e is Call ==> spec_call_lift(e->Call_0, e->Call_1, *e->Call_2, e->Call_3, all, line, sd).is_err(),
+        !(e is Call) ==> spec_lift(e, all, line, sd, 0).is_err(),
+{
+    if e is Call {
+        lemma_unknown_call_lift_is_refused(e->Call_0, e->Call_1, *e->Call_2, e->Call_3, all, line, sd);
+    } else {
+        lemma_unknown_lift_is_refused(e, all, line, sd, 0);
+    }
+}
+
+#[verifier::rlimit(40)]
 pub proof fn lemma_unknown_stmt_is_refused(s: Stmt, all: Fns, env: Params, ps: Params, sd: Structs)
     requires
         unknown_stmt(s),
@@ -2425,16 +2631,10 @@ pub proof fn lemma_unknown_stmt_is_refused(s: Stmt, all: Fns, env: Params, ps: P
     decreases s,
 {
     match s {
-        Stmt::Return(e, l) => {
-            if e is Call {
-                lemma_unknown_call_is_refused(e, all, l, sd);
-            } else {
-                lemma_unknown_code_is_refused(e, l);
-            }
-        },
+        Stmt::Return(e, l) => lemma_unknown_value_is_refused(e, all, l, sd),
         Stmt::If(c, t, f, l) => {
             if unknown_expr(c) {
-                lemma_unknown_code_is_refused(c, l);
+                lemma_unknown_lift_is_refused(c, all, l, sd, 0);
             } else if unknown_stmts(*t) {
                 lemma_unknown_stmts_is_refused(*t, all, env, ps, sd);
             } else {
@@ -2447,18 +2647,12 @@ pub proof fn lemma_unknown_stmt_is_refused(s: Stmt, all: Fns, env: Params, ps: P
                     lemma_unknown_local_call_is_refused(n, dt, e->Call_0, e->Call_1, *e->Call_2, e->Call_3, all, l, ps, sd);
                 }
             } else {
-                lemma_unknown_code_is_refused(e, l);
+                lemma_unknown_lift_is_refused(e, all, l, sd, 0);
             }
         },
-        Stmt::SetField(_, e, l) => lemma_unknown_code_is_refused(e, l),
+        Stmt::SetField(_, e, l) => lemma_unknown_lift_is_refused(e, all, l, sd, 0),
         Stmt::Call(k, nm, args, l) => lemma_unknown_call_stmt_is_refused(k, nm, *args, l, all, ps, sd),
-        Stmt::Assign(_, e, l) => {
-            if e is Call {
-                lemma_unknown_call_is_refused(e, all, l, sd);
-            } else {
-                lemma_unknown_code_is_refused(e, l);
-            }
-        },
+        Stmt::Assign(_, e, l) => lemma_unknown_value_is_refused(e, all, l, sd),
         Stmt::While(c, _, body, l) => {
             if unknown_expr(c) {
                 lemma_unknown_code_is_refused(c, l);
@@ -2548,8 +2742,67 @@ pub open spec fn count_dstmt(s: DStmt) -> nat
         DStmt::If(_, t, f) => 1 + count_dstmts(*t) + count_dstmts(*f),
         DStmt::While(_, _, _, body) => 1 + count_dstmts(*body),
         DStmt::For(init, _, _, _, _, body, step, _) => 1 + count_dstmt(*init) + count_dstmt(*step) + count_dstmts(*body),
+        DStmt::Pre(_, s) => count_dstmt(*s),
         _ => 1,
     }
+}
+
+/// The calls before a statement add no statement.
+pub proof fn lemma_pre_count(c: DCalls, s: DStmt)
+    ensures
+        count_dstmt(spec_pre(c, s)) == count_dstmt(s),
+{
+}
+
+/// A statement that holds no statement gives one Dafny statement, with or without calls before it.
+pub proof fn lemma_kept_return(s: Stmt, all: Fns, env: Params, ps: Params, sd: Structs)
+    requires
+        spec_stmt(s, all, env, ps, sd).is_ok(),
+        s is Return,
+    ensures
+        count_dstmt(spec_stmt(s, all, env, ps, sd).unwrap()) == 1,
+{
+    reveal_with_fuel(count_dstmt, 2);
+}
+
+pub proof fn lemma_kept_local(s: Stmt, all: Fns, env: Params, ps: Params, sd: Structs)
+    requires
+        spec_stmt(s, all, env, ps, sd).is_ok(),
+        s is Local,
+    ensures
+        count_dstmt(spec_stmt(s, all, env, ps, sd).unwrap()) == 1,
+{
+    reveal_with_fuel(count_dstmt, 2);
+}
+
+pub proof fn lemma_kept_assign(s: Stmt, all: Fns, env: Params, ps: Params, sd: Structs)
+    requires
+        spec_stmt(s, all, env, ps, sd).is_ok(),
+        s is Assign,
+    ensures
+        count_dstmt(spec_stmt(s, all, env, ps, sd).unwrap()) == 1,
+{
+    reveal_with_fuel(count_dstmt, 2);
+}
+
+pub proof fn lemma_kept_set_field(s: Stmt, all: Fns, env: Params, ps: Params, sd: Structs)
+    requires
+        spec_stmt(s, all, env, ps, sd).is_ok(),
+        s is SetField,
+    ensures
+        count_dstmt(spec_stmt(s, all, env, ps, sd).unwrap()) == 1,
+{
+    reveal_with_fuel(count_dstmt, 2);
+}
+
+pub proof fn lemma_kept_call(s: Stmt, all: Fns, env: Params, ps: Params, sd: Structs)
+    requires
+        spec_stmt(s, all, env, ps, sd).is_ok(),
+        s is Call,
+    ensures
+        count_dstmt(spec_stmt(s, all, env, ps, sd).unwrap()) == 1,
+{
+    reveal_with_fuel(count_dstmt, 2);
 }
 
 pub proof fn lemma_stmt_kept(s: Stmt, all: Fns, env: Params, ps: Params, sd: Structs)
@@ -2560,9 +2813,17 @@ pub proof fn lemma_stmt_kept(s: Stmt, all: Fns, env: Params, ps: Params, sd: Str
     decreases s,
 {
     match s {
-        Stmt::If(_, t, f, _) => {
+        Stmt::Return(_, _) => lemma_kept_return(s, all, env, ps, sd),
+        Stmt::Local(_, _, _, _) => lemma_kept_local(s, all, env, ps, sd),
+        Stmt::Assign(_, _, _) => lemma_kept_assign(s, all, env, ps, sd),
+        Stmt::SetField(_, _, _) => lemma_kept_set_field(s, all, env, ps, sd),
+        Stmt::Call(_, _, _, _) => lemma_kept_call(s, all, env, ps, sd),
+        Stmt::If(c, t, f, l) => {
             lemma_statements_kept(*t, all, env, ps, sd);
             lemma_statements_kept(*f, all, env, ps, sd);
+            let cc = spec_lift(c, all, l, sd, 0).unwrap();
+            let body = DStmt::If(cc.1, Box::new(spec_stmts(*t, all, env, ps, sd).unwrap()), Box::new(spec_stmts(*f, all, env, ps, sd).unwrap()));
+            lemma_pre_count(cc.0, body);
         },
         Stmt::While(_, _, body, _) => {
             lemma_statements_kept(*body, all, env, ps, sd);
@@ -2628,9 +2889,297 @@ pub open spec fn calls_resolve_stmt(s: DStmt, all: Fns, sd: Structs) -> bool
         DStmt::Update(_, k, _) => spec_callable(all, k, sd),
         DStmt::LocalUpdate(_, _, _, k, _) => spec_callable(all, k, sd),
         DStmt::CallStmt(k, _) => spec_callable(all, k, sd),
+        DStmt::Pre(c, s) => calls_resolve_calls(c, all, sd) && calls_resolve_stmt(*s, all, sd),
         DStmt::While(_, _, _, body) => calls_resolve(*body, all, sd),
         DStmt::For(init, _, _, _, _, body, step, _) => calls_resolve_stmt(*init, all, sd) && calls_resolve(*body, all, sd) && calls_resolve_stmt(*step, all, sd),
         _ => true,
+    }
+}
+
+/// Each call that runs before a statement names a key of `all` that has a method.
+pub open spec fn calls_resolve_calls(c: DCalls, all: Fns, sd: Structs) -> bool
+    decreases c,
+{
+    match c {
+        DCalls::Nil => true,
+        DCalls::Cons(_, _, k, _, rest) => spec_callable(all, k, sd) && calls_resolve_calls(*rest, all, sd),
+    }
+}
+
+pub proof fn lemma_append_resolves(a: DCalls, b: DCalls, all: Fns, sd: Structs)
+    ensures
+        calls_resolve_calls(spec_append_calls(a, b), all, sd) == (calls_resolve_calls(a, all, sd) && calls_resolve_calls(b, all, sd)),
+    decreases a,
+{
+    match a {
+        DCalls::Cons(_, _, _, _, rest) => lemma_append_resolves(*rest, b, all, sd),
+        DCalls::Nil => {},
+    }
+}
+
+/// Each call that a lifted expression runs first names a key that has a method.
+#[verifier::rlimit(60)]
+pub proof fn lemma_lift_resolves(e: Expr, all: Fns, line: u32, sd: Structs, n: u32)
+    requires
+        spec_lift(e, all, line, sd, n).is_ok(),
+    ensures
+        calls_resolve_calls(spec_lift(e, all, line, sd, n).unwrap().0, all, sd),
+    decreases e,
+{
+    match e {
+        Expr::Call(k, _, args, _) => {
+            lemma_lift_args_resolves(*args, all, line, sd, n);
+            let (ca, da, n1) = spec_lift_args(*args, all, line, sd, n).unwrap();
+            let dt = spec_callee_ty(all, k, line, sd).unwrap();
+            assert(spec_callable(all, k, sd));
+            assert(calls_resolve_calls(DCalls::Nil, all, sd));
+            assert(calls_resolve_calls(DCalls::Cons(n1, dt, k, da, Box::new(DCalls::Nil)), all, sd));
+            lemma_append_resolves(ca, DCalls::Cons(n1, dt, k, da, Box::new(DCalls::Nil)), all, sd);
+        },
+        Expr::Bin(op, a, b) => {
+            lemma_lift_resolves(*a, all, line, sd, n);
+            if !(op == BinOp::And || op == BinOp::Or) {
+                let n1 = spec_lift(*a, all, line, sd, n).unwrap().2;
+                lemma_lift_resolves(*b, all, line, sd, n1);
+                lemma_append_resolves(spec_lift(*a, all, line, sd, n).unwrap().0, spec_lift(*b, all, line, sd, n1).unwrap().0, all, sd);
+            }
+        },
+        Expr::Divide(_, a, b, _) => {
+            lemma_lift_resolves(*a, all, line, sd, n);
+            let n1 = spec_lift(*a, all, line, sd, n).unwrap().2;
+            lemma_lift_resolves(*b, all, line, sd, n1);
+            lemma_append_resolves(spec_lift(*a, all, line, sd, n).unwrap().0, spec_lift(*b, all, line, sd, n1).unwrap().0, all, sd);
+        },
+        Expr::Not(a) => lemma_lift_resolves(*a, all, line, sd, n),
+        Expr::Neg(a) => lemma_lift_resolves(*a, all, line, sd, n),
+        Expr::Cast(_, a) => lemma_lift_resolves(*a, all, line, sd, n),
+        Expr::Paren(a) => lemma_lift_resolves(*a, all, line, sd, n),
+        Expr::Brace(a) => lemma_lift_resolves(*a, all, line, sd, n),
+        Expr::Index(o, i) => {
+            lemma_lift_resolves(*o, all, line, sd, n);
+            let n1 = spec_lift(*o, all, line, sd, n).unwrap().2;
+            lemma_lift_resolves(*i, all, line, sd, n1);
+            lemma_append_resolves(spec_lift(*o, all, line, sd, n).unwrap().0, spec_lift(*i, all, line, sd, n1).unwrap().0, all, sd);
+        },
+        Expr::Field(o, _) => lemma_lift_resolves(*o, all, line, sd, n),
+        Expr::Construct(_, args) => lemma_lift_args_resolves(*args, all, line, sd, n),
+        Expr::Cond(c, _, _) => lemma_lift_resolves(*c, all, line, sd, n),
+        _ => {},
+    }
+}
+
+pub proof fn lemma_lift_args_resolves(args: Args, all: Fns, line: u32, sd: Structs, n: u32)
+    requires
+        spec_lift_args(args, all, line, sd, n).is_ok(),
+    ensures
+        calls_resolve_calls(spec_lift_args(args, all, line, sd, n).unwrap().0, all, sd),
+    decreases args,
+{
+    match args {
+        Args::Cons(a, rest) => {
+            lemma_lift_resolves(*a, all, line, sd, n);
+            let n1 = spec_lift(*a, all, line, sd, n).unwrap().2;
+            lemma_lift_args_resolves(*rest, all, line, sd, n1);
+            lemma_append_resolves(spec_lift(*a, all, line, sd, n).unwrap().0, spec_lift_args(*rest, all, line, sd, n1).unwrap().0, all, sd);
+        },
+        Args::Nil => {},
+    }
+}
+
+/// An expression that holds a node with no rule is refused when it is lifted.
+pub proof fn lemma_unknown_lift_is_refused(e: Expr, all: Fns, line: u32, sd: Structs, n: u32)
+    requires
+        unknown_expr(e),
+    ensures
+        spec_lift(e, all, line, sd, n).is_err(),
+    decreases e,
+{
+    match e {
+        Expr::Call(_, _, args, _) => lemma_unknown_lift_args_is_refused(*args, all, line, sd, n),
+        Expr::Bin(op, a, b) => {
+            if unknown_expr(*a) {
+                lemma_unknown_lift_is_refused(*a, all, line, sd, n);
+            } else if op == BinOp::And || op == BinOp::Or {
+                lemma_unknown_code_is_refused(*b, line);
+            } else if spec_lift(*a, all, line, sd, n).is_ok() {
+                lemma_unknown_lift_is_refused(*b, all, line, sd, spec_lift(*a, all, line, sd, n).unwrap().2);
+            }
+        },
+        Expr::Divide(_, a, b, _) => {
+            if unknown_expr(*a) {
+                lemma_unknown_lift_is_refused(*a, all, line, sd, n);
+            } else if spec_lift(*a, all, line, sd, n).is_ok() {
+                lemma_unknown_lift_is_refused(*b, all, line, sd, spec_lift(*a, all, line, sd, n).unwrap().2);
+            }
+        },
+        Expr::Not(a) => lemma_unknown_lift_is_refused(*a, all, line, sd, n),
+        Expr::Neg(a) => lemma_unknown_lift_is_refused(*a, all, line, sd, n),
+        Expr::Cast(_, a) => lemma_unknown_lift_is_refused(*a, all, line, sd, n),
+        Expr::Paren(a) => lemma_unknown_lift_is_refused(*a, all, line, sd, n),
+        Expr::Brace(a) => lemma_unknown_lift_is_refused(*a, all, line, sd, n),
+        Expr::Index(o, i) => {
+            if unknown_expr(*o) {
+                lemma_unknown_lift_is_refused(*o, all, line, sd, n);
+            } else if spec_lift(*o, all, line, sd, n).is_ok() {
+                lemma_unknown_lift_is_refused(*i, all, line, sd, spec_lift(*o, all, line, sd, n).unwrap().2);
+            }
+        },
+        Expr::Field(o, _) => lemma_unknown_lift_is_refused(*o, all, line, sd, n),
+        Expr::Construct(_, args) => lemma_unknown_lift_args_is_refused(*args, all, line, sd, n),
+        Expr::Cond(c, a, b) => {
+            if unknown_expr(*c) {
+                lemma_unknown_lift_is_refused(*c, all, line, sd, n);
+            } else if unknown_expr(*a) {
+                lemma_unknown_code_is_refused(*a, line);
+            } else {
+                lemma_unknown_code_is_refused(*b, line);
+            }
+        },
+        _ => lemma_unknown_code_is_refused(e, line),
+    }
+}
+
+pub proof fn lemma_unknown_lift_args_is_refused(args: Args, all: Fns, line: u32, sd: Structs, n: u32)
+    requires
+        unknown_args(args),
+    ensures
+        spec_lift_args(args, all, line, sd, n).is_err(),
+    decreases args,
+{
+    match args {
+        Args::Cons(a, rest) => {
+            if unknown_expr(*a) {
+                lemma_unknown_lift_is_refused(*a, all, line, sd, n);
+            } else if spec_lift(*a, all, line, sd, n).is_ok() {
+                lemma_unknown_lift_args_is_refused(*rest, all, line, sd, spec_lift(*a, all, line, sd, n).unwrap().2);
+            }
+        },
+        Args::Nil => {},
+    }
+}
+
+/// The calls before a statement resolve when each of them names a key with a method.
+pub proof fn lemma_pre_resolves(c: DCalls, s: DStmt, all: Fns, sd: Structs)
+    ensures
+        calls_resolve_stmt(spec_pre(c, s), all, sd) == (calls_resolve_calls(c, all, sd) && calls_resolve_stmt(s, all, sd)),
+{
+}
+
+/// A call that stands alone names a key with a method, and so does each call in its arguments.
+pub proof fn lemma_call_lift_resolves(key: u32, name: u32, args: Args, at: u32, all: Fns, line: u32, sd: Structs)
+    requires
+        spec_call_lift(key, name, args, at, all, line, sd).is_ok(),
+    ensures
+        spec_callable(all, key, sd),
+        calls_resolve_calls(spec_call_lift(key, name, args, at, all, line, sd).unwrap().0, all, sd),
+{
+    lemma_lift_args_resolves(args, all, line, sd, 0);
+}
+
+/// The value of a return or of a write resolves its calls.
+pub proof fn lemma_value_resolves(e: Expr, all: Fns, line: u32, sd: Structs)
+    ensures
+        (e is Call && spec_call_lift(e->Call_0, e->Call_1, *e->Call_2, e->Call_3, all, line, sd).is_ok()) ==> spec_callable(all, e->Call_0, sd)
+            && calls_resolve_calls(spec_call_lift(e->Call_0, e->Call_1, *e->Call_2, e->Call_3, all, line, sd).unwrap().0, all, sd),
+        (!(e is Call) && spec_lift(e, all, line, sd, 0).is_ok()) ==> calls_resolve_calls(spec_lift(e, all, line, sd, 0).unwrap().0, all, sd),
+{
+    if e is Call {
+        if spec_call_lift(e->Call_0, e->Call_1, *e->Call_2, e->Call_3, all, line, sd).is_ok() {
+            lemma_call_lift_resolves(e->Call_0, e->Call_1, *e->Call_2, e->Call_3, all, line, sd);
+        }
+    } else if spec_lift(e, all, line, sd, 0).is_ok() {
+        lemma_lift_resolves(e, all, line, sd, 0);
+    }
+}
+
+pub proof fn lemma_resolves_return(s: Stmt, all: Fns, env: Params, ps: Params, sd: Structs)
+    requires
+        spec_stmt(s, all, env, ps, sd).is_ok(),
+        s is Return,
+    ensures
+        calls_resolve_stmt(spec_stmt(s, all, env, ps, sd).unwrap(), all, sd),
+{
+    reveal_with_fuel(calls_resolve_stmt, 2);
+    lemma_value_resolves(s->Return_0, all, s->Return_1, sd);
+}
+
+pub proof fn lemma_resolves_assign(s: Stmt, all: Fns, env: Params, ps: Params, sd: Structs)
+    requires
+        spec_stmt(s, all, env, ps, sd).is_ok(),
+        s is Assign,
+    ensures
+        calls_resolve_stmt(spec_stmt(s, all, env, ps, sd).unwrap(), all, sd),
+{
+    reveal_with_fuel(calls_resolve_stmt, 2);
+    lemma_value_resolves(s->Assign_1, all, s->Assign_2, sd);
+}
+
+pub proof fn lemma_resolves_set_field(s: Stmt, all: Fns, env: Params, ps: Params, sd: Structs)
+    requires
+        spec_stmt(s, all, env, ps, sd).is_ok(),
+        s is SetField,
+    ensures
+        calls_resolve_stmt(spec_stmt(s, all, env, ps, sd).unwrap(), all, sd),
+{
+    reveal_with_fuel(calls_resolve_stmt, 2);
+    let e = s->SetField_1;
+    let l = s->SetField_2;
+    if spec_lift(e, all, l, sd, 0).is_ok() {
+        lemma_lift_resolves(e, all, l, sd, 0);
+        let (c, d, _) = spec_lift(e, all, l, sd, 0).unwrap();
+        lemma_pre_resolves(c, DStmt::SetField(s->SetField_0, d), all, sd);
+    }
+}
+
+/// A statement that holds no call gives a Dafny statement that holds none.
+pub proof fn lemma_resolves_plain(s: Stmt, all: Fns, env: Params, ps: Params, sd: Structs)
+    requires
+        spec_stmt(s, all, env, ps, sd).is_ok(),
+        s is Step || s is Exit || s is Assert || s is Apply || s is Unknown,
+    ensures
+        calls_resolve_stmt(spec_stmt(s, all, env, ps, sd).unwrap(), all, sd),
+{
+}
+
+pub proof fn lemma_resolves_local(s: Stmt, all: Fns, env: Params, ps: Params, sd: Structs)
+    requires
+        spec_stmt(s, all, env, ps, sd).is_ok(),
+        s is Local,
+    ensures
+        calls_resolve_stmt(spec_stmt(s, all, env, ps, sd).unwrap(), all, sd),
+{
+    reveal_with_fuel(calls_resolve_stmt, 2);
+    let e = s->Local_2;
+    let l = s->Local_3;
+    lemma_value_resolves(e, all, l, sd);
+    if let Expr::Call(k, nm, args, at) = e {
+        if let Args::Cons(_, rest) = *args {
+            if spec_call_lift(k, nm, *rest, at, all, l, sd).is_ok() {
+                lemma_call_lift_resolves(k, nm, *rest, at, all, l, sd);
+            }
+        }
+    }
+}
+
+pub proof fn lemma_resolves_call(s: Stmt, all: Fns, env: Params, ps: Params, sd: Structs)
+    requires
+        spec_stmt(s, all, env, ps, sd).is_ok(),
+        s is Call,
+    ensures
+        calls_resolve_stmt(spec_stmt(s, all, env, ps, sd).unwrap(), all, sd),
+{
+    reveal_with_fuel(calls_resolve_stmt, 2);
+    let k = s->Call_0;
+    let nm = s->Call_1;
+    let args = *s->Call_2;
+    let l = s->Call_3;
+    if spec_call_lift(k, nm, args, l, all, l, sd).is_ok() {
+        lemma_call_lift_resolves(k, nm, args, l, all, l, sd);
+    }
+    if let Args::Cons(_, rest) = args {
+        if spec_call_lift(k, nm, *rest, l, all, l, sd).is_ok() {
+            lemma_call_lift_resolves(k, nm, *rest, l, all, l, sd);
+        }
     }
 }
 
@@ -2642,9 +3191,23 @@ pub proof fn lemma_stmt_calls_resolve(s: Stmt, all: Fns, env: Params, ps: Params
     decreases s,
 {
     match s {
-        Stmt::If(_, t, f, _) => {
+        Stmt::Return(_, _) => lemma_resolves_return(s, all, env, ps, sd),
+        Stmt::Assign(_, _, _) => lemma_resolves_assign(s, all, env, ps, sd),
+        Stmt::SetField(_, _, _) => lemma_resolves_set_field(s, all, env, ps, sd),
+        Stmt::Local(_, _, _, _) => lemma_resolves_local(s, all, env, ps, sd),
+        Stmt::Call(_, _, _, _) => lemma_resolves_call(s, all, env, ps, sd),
+        Stmt::Step(_, _, _, _) => lemma_resolves_plain(s, all, env, ps, sd),
+        Stmt::Exit(_) => lemma_resolves_plain(s, all, env, ps, sd),
+        Stmt::Assert(_, _) => lemma_resolves_plain(s, all, env, ps, sd),
+        Stmt::Apply(_, _, _) => lemma_resolves_plain(s, all, env, ps, sd),
+        Stmt::Unknown(_, _) => lemma_resolves_plain(s, all, env, ps, sd),
+        Stmt::If(c, t, f, l) => {
             lemma_stmts_calls_resolve(*t, all, env, ps, sd);
             lemma_stmts_calls_resolve(*f, all, env, ps, sd);
+            lemma_lift_resolves(c, all, l, sd, 0);
+            let (cc, dc, _) = spec_lift(c, all, l, sd, 0).unwrap();
+            let body = DStmt::If(dc, Box::new(spec_stmts(*t, all, env, ps, sd).unwrap()), Box::new(spec_stmts(*f, all, env, ps, sd).unwrap()));
+            lemma_pre_resolves(cc, body, all, sd);
         },
         Stmt::While(_, _, body, _) => {
             lemma_stmts_calls_resolve(*body, all, env, ps, sd);
@@ -2654,7 +3217,6 @@ pub proof fn lemma_stmt_calls_resolve(s: Stmt, all: Fns, env: Params, ps: Params
             lemma_stmt_calls_resolve(*step, all, spec_scope(*init, env), ps, sd);
             lemma_stmts_calls_resolve(*body, all, spec_scope(*init, env), ps, sd);
         },
-        _ => {},
     }
 }
 
@@ -2974,6 +3536,177 @@ pub fn translate_code(e: &Expr, line: u32) -> (r: Result<DExpr, Refusal>)
         Expr::Name(n) => Err(Refusal::Name(*n, line)),
         Expr::Unknown(k, l) => Err(Refusal::Construct(*k, *l)),
         _ => Err(Refusal::Syntax(line)),
+    }
+}
+
+pub fn append_calls(a: DCalls, b: DCalls) -> (r: DCalls)
+    ensures
+        r == spec_append_calls(a, b),
+    decreases a,
+{
+    match a {
+        DCalls::Nil => b,
+        DCalls::Cons(t, dt, k, da, rest) => DCalls::Cons(t, dt, k, da, Box::new(append_calls(*rest, b))),
+    }
+}
+
+pub fn pre(c: DCalls, s: DStmt) -> (r: DStmt)
+    ensures
+        r == spec_pre(c, s),
+{
+    match c {
+        DCalls::Nil => s,
+        _ => DStmt::Pre(c, Box::new(s)),
+    }
+}
+
+pub fn callee_ty(all: &Fns, key: u32, line: u32, sd: &Structs) -> (r: Result<DTy, Refusal>)
+    ensures
+        r == spec_callee_ty(*all, key, line, *sd),
+{
+    match find(all, key) {
+        Some(f) => translate_value_ty(f.ret, line, sd),
+        None => Err(Refusal::Syntax(line)),
+    }
+}
+
+pub fn lift(e: &Expr, all: &Fns, line: u32, sd: &Structs, n: u32) -> (r: Result<(DCalls, DExpr, u32), Refusal>)
+    ensures
+        r == spec_lift(*e, *all, line, *sd, n),
+    decreases e,
+{
+    match e {
+        Expr::Call(k, nm, args, at) => if callee_writes(all, *k) {
+            Err(Refusal::Place(*at))
+        } else if !callable(all, *k, sd) {
+            Err(Refusal::Callee(*nm, *at))
+        } else {
+            match lift_args(args, all, line, sd, n) {
+                Err(r) => Err(r),
+                Ok((ca, da, n1)) => match callee_ty(all, *k, line, sd) {
+                    Err(r) => Err(r),
+                    Ok(dt) => if n1 < 0xFFFF_FFFF {
+                        Ok((append_calls(ca, DCalls::Cons(n1, dt, *k, da, Box::new(DCalls::Nil))), DExpr::Temp(n1), n1 + 1))
+                    } else {
+                        Err(Refusal::Syntax(line))
+                    },
+                },
+            }
+        },
+        Expr::Bin(op, a, b) => if *op == BinOp::Div || *op == BinOp::Rem {
+            Err(Refusal::Syntax(line))
+        } else if *op == BinOp::And || *op == BinOp::Or {
+            match lift(a, all, line, sd, n) {
+                Err(r) => Err(r),
+                Ok((ca, da, n1)) => match translate_code(b, line) {
+                    Err(r) => Err(r),
+                    Ok(db) => Ok((ca, DExpr::Bin(*op, Box::new(da), Box::new(db)), n1)),
+                },
+            }
+        } else {
+            match lift(a, all, line, sd, n) {
+                Err(r) => Err(r),
+                Ok((ca, da, n1)) => match lift(b, all, line, sd, n1) {
+                    Err(r) => Err(r),
+                    Ok((cb, db, n2)) => Ok((append_calls(ca, cb), DExpr::Bin(*op, Box::new(da), Box::new(db)), n2)),
+                },
+            }
+        },
+        Expr::Divide(op, a, b, t) => if !(*op == BinOp::Div || *op == BinOp::Rem) {
+            Err(Refusal::Syntax(line))
+        } else {
+            match lift(a, all, line, sd, n) {
+                Err(r) => Err(r),
+                Ok((ca, da, n1)) => match lift(b, all, line, sd, n1) {
+                    Err(r) => Err(r),
+                    Ok((cb, db, n2)) => match divide(*op, da, db, *t, line) {
+                        Err(r) => Err(r),
+                        Ok(d) => Ok((append_calls(ca, cb), d, n2)),
+                    },
+                },
+            }
+        },
+        Expr::Not(a) => match lift(a, all, line, sd, n) {
+            Err(r) => Err(r),
+            Ok((c, d, n1)) => Ok((c, DExpr::Not(Box::new(d)), n1)),
+        },
+        Expr::Neg(a) => match lift(a, all, line, sd, n) {
+            Err(r) => Err(r),
+            Ok((c, d, n1)) => Ok((c, DExpr::Neg(Box::new(d)), n1)),
+        },
+        Expr::Cast(ck, a) => match ck {
+            CastKind::Other(k) => Err(Refusal::Construct(*k, line)),
+            CastKind::Integral(from, to) => match lift(a, all, line, sd, n) {
+                Err(r) => Err(r),
+                Ok((c, d, n1)) => match translate_integral(*from, *to, d, line) {
+                    Err(r) => Err(r),
+                    Ok(di) => Ok((c, di, n1)),
+                },
+            },
+            _ => lift(a, all, line, sd, n),
+        },
+        Expr::Paren(a) => lift(a, all, line, sd, n),
+        Expr::Brace(a) => lift(a, all, line, sd, n),
+        Expr::Index(o, i) => match lift(o, all, line, sd, n) {
+            Err(r) => Err(r),
+            Ok((co, d, n1)) => match lift(i, all, line, sd, n1) {
+                Err(r) => Err(r),
+                Ok((ci, di, n2)) => Ok((append_calls(co, ci), DExpr::Index(Box::new(d), Box::new(di)), n2)),
+            },
+        },
+        Expr::Field(o, f) => match lift(o, all, line, sd, n) {
+            Err(r) => Err(r),
+            Ok((c, d, n1)) => Ok((c, DExpr::Field(Box::new(d), *f), n1)),
+        },
+        Expr::Construct(k, args) => match lift_args(args, all, line, sd, n) {
+            Err(r) => Err(r),
+            Ok((c, da, n1)) => Ok((c, DExpr::Ctor(*k, Box::new(da)), n1)),
+        },
+        Expr::Cond(cnd, a, b) => match lift(cnd, all, line, sd, n) {
+            Err(r) => Err(r),
+            Ok((c, dc, n1)) => match translate_code(a, line) {
+                Err(r) => Err(r),
+                Ok(da) => match translate_code(b, line) {
+                    Err(r) => Err(r),
+                    Ok(db) => Ok((c, DExpr::Ite(Box::new(dc), Box::new(da), Box::new(db)), n1)),
+                },
+            },
+        },
+        _ => match translate_code(e, line) {
+            Err(r) => Err(r),
+            Ok(d) => Ok((DCalls::Nil, d, n)),
+        },
+    }
+}
+
+pub fn lift_args(args: &Args, all: &Fns, line: u32, sd: &Structs, n: u32) -> (r: Result<(DCalls, DArgs, u32), Refusal>)
+    ensures
+        r == spec_lift_args(*args, *all, line, *sd, n),
+    decreases args,
+{
+    match args {
+        Args::Nil => Ok((DCalls::Nil, DArgs::Nil, n)),
+        Args::Cons(a, rest) => match lift(a, all, line, sd, n) {
+            Err(r) => Err(r),
+            Ok((ca, da, n1)) => match lift_args(rest, all, line, sd, n1) {
+                Err(r) => Err(r),
+                Ok((cr, dr, n2)) => Ok((append_calls(ca, cr), DArgs::Cons(da, Box::new(dr)), n2)),
+            },
+        },
+    }
+}
+
+pub fn call_lift(key: u32, name: u32, args: &Args, at: u32, all: &Fns, line: u32, sd: &Structs) -> (r: Result<(DCalls, DArgs), Refusal>)
+    ensures
+        r == spec_call_lift(key, name, *args, at, *all, line, *sd),
+{
+    if callable(all, key, sd) {
+        match lift_args(args, all, line, sd, 0) {
+            Ok((c, da, _)) => Ok((c, da)),
+            Err(r) => Err(r),
+        }
+    } else {
+        Err(Refusal::Callee(name, at))
     }
 }
 
@@ -3785,8 +4518,8 @@ pub fn call_stmt(key: u32, name: u32, args: &Args, line: u32, all: &Fns, ps: &Pa
     if callee_writes(all, key) {
         match args {
             Args::Cons(o, rest) => match target(o, ps, line) {
-                Ok(obj) => match translate_call(key, name, rest, line, all, line, sd) {
-                    Ok(da) => Ok(DStmt::Update(obj, key, da)),
+                Ok(obj) => match call_lift(key, name, rest, line, all, line, sd) {
+                    Ok((c, da)) => Ok(pre(c, DStmt::Update(obj, key, da))),
                     Err(r) => Err(r),
                 },
                 Err(r) => Err(r),
@@ -3794,9 +4527,9 @@ pub fn call_stmt(key: u32, name: u32, args: &Args, line: u32, all: &Fns, ps: &Pa
             Args::Nil => Err(Refusal::Syntax(line)),
         }
     } else {
-        match translate_call(key, name, args, line, all, line, sd) {
-            Ok(da) => if callee_void(all, key) {
-                Ok(DStmt::CallStmt(key, da))
+        match call_lift(key, name, args, line, all, line, sd) {
+            Ok((c, da)) => if callee_void(all, key) {
+                Ok(pre(c, DStmt::CallStmt(key, da)))
             } else {
                 Err(Refusal::Place(line))
             },
@@ -3815,8 +4548,8 @@ pub fn local_call(n: u32, dt: DTy, key: u32, name: u32, args: &Args, at: u32, al
     if callee_writes(all, key) {
         match args {
             Args::Cons(o, rest) => match target(o, ps, line) {
-                Ok(obj) => match translate_call(key, name, rest, at, all, line, sd) {
-                    Ok(da) => Ok(DStmt::LocalUpdate(n, dt, obj, key, da)),
+                Ok(obj) => match call_lift(key, name, rest, at, all, line, sd) {
+                    Ok((c, da)) => Ok(pre(c, DStmt::LocalUpdate(n, dt, obj, key, da))),
                     Err(r) => Err(r),
                 },
                 Err(r) => Err(r),
@@ -3824,8 +4557,8 @@ pub fn local_call(n: u32, dt: DTy, key: u32, name: u32, args: &Args, at: u32, al
             Args::Nil => Err(Refusal::Syntax(line)),
         }
     } else {
-        match translate_call(key, name, args, at, all, line, sd) {
-            Ok(da) => Ok(DStmt::LocalCall(n, dt, key, da)),
+        match call_lift(key, name, args, at, all, line, sd) {
+            Ok((c, da)) => Ok(pre(c, DStmt::LocalCall(n, dt, key, da))),
             Err(r) => Err(r),
         }
     }
@@ -3841,20 +4574,20 @@ pub fn translate_stmt(s: &Stmt, all: &Fns, env: &Params, ps: &Params, sd: &Struc
             Expr::Call(k, n, args, at) => if callee_writes(all, *k) {
                 Err(Refusal::Place(*at))
             } else {
-                match translate_call(*k, *n, args, *at, all, *l, sd) {
-                    Ok(da) => Ok(DStmt::ReturnCall(*k, da)),
+                match call_lift(*k, *n, args, *at, all, *l, sd) {
+                    Ok((c, da)) => Ok(pre(c, DStmt::ReturnCall(*k, da))),
                     Err(r) => Err(r),
                 }
             },
-            _ => match translate_code(e, *l) {
-                Ok(d) => Ok(DStmt::Return(d)),
+            _ => match lift(e, all, *l, sd, 0) {
+                Ok((c, d, _)) => Ok(pre(c, DStmt::Return(d))),
                 Err(r) => Err(r),
             },
         },
-        Stmt::If(c, t, f, l) => match translate_code(c, *l) {
-            Ok(dc) => match translate_stmts(t, all, env, ps, sd) {
+        Stmt::If(c, t, f, l) => match lift(c, all, *l, sd, 0) {
+            Ok((cc, dc, _)) => match translate_stmts(t, all, env, ps, sd) {
                 Ok(dt) => match translate_stmts(f, all, env, ps, sd) {
-                    Ok(df) => Ok(DStmt::If(dc, Box::new(dt), Box::new(df))),
+                    Ok(df) => Ok(pre(cc, DStmt::If(dc, Box::new(dt), Box::new(df)))),
                     Err(r) => Err(r),
                 },
                 Err(r) => Err(r),
@@ -3865,8 +4598,8 @@ pub fn translate_stmt(s: &Stmt, all: &Fns, env: &Params, ps: &Params, sd: &Struc
             Err(r) => Err(r),
             Ok(dt) => match e {
                 Expr::Call(k, nm, args, at) => local_call(*n, dt, *k, *nm, args, *at, all, *l, ps, sd),
-                _ => match translate_code(e, *l) {
-                    Ok(d) => Ok(DStmt::Local(*n, dt, d)),
+                _ => match lift(e, all, *l, sd, 0) {
+                    Ok((c, d, _)) => Ok(pre(c, DStmt::Local(*n, dt, d))),
                     Err(r) => Err(r),
                 },
             },
@@ -3878,13 +4611,13 @@ pub fn translate_stmt(s: &Stmt, all: &Fns, env: &Params, ps: &Params, sd: &Struc
                 Expr::Call(k, nm, args, at) => if callee_writes(all, *k) {
                     Err(Refusal::Place(*at))
                 } else {
-                    match translate_call(*k, *nm, args, *at, all, *l, sd) {
-                        Ok(da) => Ok(DStmt::AssignCall(*n, *k, da)),
+                    match call_lift(*k, *nm, args, *at, all, *l, sd) {
+                        Ok((c, da)) => Ok(pre(c, DStmt::AssignCall(*n, *k, da))),
                         Err(r) => Err(r),
                     }
                 },
-                _ => match translate_code(e, *l) {
-                    Ok(d) => Ok(DStmt::Assign(*n, d)),
+                _ => match lift(e, all, *l, sd, 0) {
+                    Ok((c, d, _)) => Ok(pre(c, DStmt::Assign(*n, d))),
                     Err(r) => Err(r),
                 },
             }
@@ -3943,8 +4676,8 @@ pub fn translate_stmt(s: &Stmt, all: &Fns, env: &Params, ps: &Params, sd: &Struc
             Some((p, t)) => match t {
                 Ty::ThisMut(k) => match field_ty(sd, k, *f) {
                     Some(Ty::Seq(_, _)) => Err(Refusal::SeqParam(*l)),
-                    Some(_) => match translate_code(e, *l) {
-                        Ok(d) => Ok(DStmt::SetField(*f, d)),
+                    Some(_) => match lift(e, all, *l, sd, 0) {
+                        Ok((c, d, _)) => Ok(pre(c, DStmt::SetField(*f, d))),
                         Err(r) => Err(r),
                     },
                     None => Err(Refusal::NoField(*f, *l)),
@@ -4297,6 +5030,7 @@ pub fn copy_dexpr(d: &DExpr) -> (r: DExpr)
         DExpr::FCall(x0, x1) => DExpr::FCall(*x0, Box::new(copy_dargs(x1))),
         DExpr::After => DExpr::After,
         DExpr::Ite(x0, x1, x2) => DExpr::Ite(Box::new(copy_dexpr(x0)), Box::new(copy_dexpr(x1)), Box::new(copy_dexpr(x2))),
+        DExpr::Temp(x0) => DExpr::Temp(*x0),
     }
 }
 
