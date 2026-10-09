@@ -1267,3 +1267,56 @@ fn a_slice_of_a_name_that_is_no_sequence_and_a_slice_in_code_are_refused() {
     let seq = || b(Expr::Var(X, Ty::Seq(Scalar::I32, Extent::Dynamic)));
     assert_eq!(translate_code(&Expr::Suffix(seq(), b(Expr::Lit(1, Ty::U64))), 3), Err(Refusal::Syntax(3)));
 }
+
+#[test]
+fn code_divides_and_takes_the_remainder_as_cpp_does() {
+    // a / 2 and a % 2 on int32_t, with the type of the result that the compiler gave
+    let two = || b(Expr::Lit(2, Ty::I32));
+    let int = |d: DExpr| Box::new(DExpr::AsInt(Box::new(d)));
+    let lit2 = || DExpr::Conv(DTy::Int32, Box::new(DExpr::Lit(2)));
+    let div = Expr::Divide(BinOp::Div, b(read(A, Ty::I32)), two(), Ty::I32);
+    assert_eq!(translate_code(&div, 3), Ok(DExpr::DivIn(int(DExpr::Var(A)), int(lit2()), DTy::Int32)));
+    let rem = Expr::Divide(BinOp::Rem, b(read(A, Ty::I32)), two(), Ty::I32);
+    assert_eq!(translate_code(&rem, 3), Ok(DExpr::RemIn(int(DExpr::Var(A)), int(lit2()), DTy::Int32)));
+    // A division with no type, as a plain binary node, and a division of bool, are refused.
+    assert_eq!(translate_code(&Expr::Bin(BinOp::Div, b(var(A)), b(var(B))), 3), Err(Refusal::Syntax(3)));
+    assert_eq!(translate_code(&Expr::Divide(BinOp::Div, b(Expr::Bool(true)), b(Expr::Bool(true)), Ty::Bool), 3), Err(Refusal::Convert(3)));
+    assert_eq!(translate_code(&Expr::Divide(BinOp::Add, b(var(A)), b(var(B)), Ty::I32), 3), Err(Refusal::Syntax(3)));
+}
+
+#[test]
+fn a_contract_divides_with_trunc_div_and_trunc_rem() {
+    // ensures result == a / b && result % 2 == 0
+    let ens = Expr::Bin(
+        BinOp::And,
+        b(Expr::Bin(BinOp::Eq, b(Expr::Result), b(Expr::Bin(BinOp::Div, b(Expr::Name(A)), b(Expr::Name(B)))))),
+        b(Expr::Bin(BinOp::Eq, b(Expr::Bin(BinOp::Rem, b(Expr::Result), b(Expr::Int(2)))), b(Expr::Int(0)))),
+    );
+    let f = Function {
+        name: SAT,
+        line: 10,
+        params: Params::Cons(A, Ty::I32, Box::new(Params::Cons(B, Ty::I32, Box::new(Params::Nil)))),
+        ret: Ty::I32,
+        conds: Conds::Cons(CondKind::Ensures, ens, 9, names(&[A, B]), Box::new(Conds::Nil)),
+        body: one(Stmt::Return(Expr::Lit(0, Ty::I32), 11)),
+    };
+    let Model::Full(m) = translate_function(&f, &Fns::Nil, &Structs::Nil) else { panic!("a full model") };
+    let int = |d: DExpr| Box::new(DExpr::AsInt(Box::new(d)));
+    let want = DExpr::Bin(
+        BinOp::And,
+        Box::new(DExpr::Bin(BinOp::Eq, int(DExpr::Result), Box::new(DExpr::TDiv(int(DExpr::Var(A)), int(DExpr::Var(B)))))),
+        Box::new(DExpr::Bin(BinOp::Eq, Box::new(DExpr::TRem(int(DExpr::Result), Box::new(DExpr::Lit(2)))), Box::new(DExpr::Lit(0)))),
+    );
+    assert_eq!(strip_conds(m.ensures), DConds::Cons(want, 0, Box::new(DConds::Nil)));
+}
+
+#[test]
+fn the_parser_reads_division_and_remainder_with_multiplication() {
+    // a / b % c is (a / b) % c, and a + b / c is a + (b / c)
+    let toks = vec![Tok::Ident(A), Tok::Op(BinOp::Div), Tok::Ident(B), Tok::Op(BinOp::Rem), Tok::Ident(X)];
+    let want = Expr::Bin(BinOp::Rem, b(Expr::Bin(BinOp::Div, b(Expr::Name(A)), b(Expr::Name(B)))), b(Expr::Name(X)));
+    assert_eq!(parse_contract(&toks, 3), Ok(want));
+    let toks = vec![Tok::Ident(A), Tok::Op(BinOp::Add), Tok::Ident(B), Tok::Op(BinOp::Div), Tok::Ident(X)];
+    let want = Expr::Bin(BinOp::Add, b(Expr::Name(A)), b(Expr::Bin(BinOp::Div, b(Expr::Name(B)), b(Expr::Name(X)))));
+    assert_eq!(parse_contract(&toks, 3), Ok(want));
+}

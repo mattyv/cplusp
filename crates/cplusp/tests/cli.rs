@@ -2848,6 +2848,42 @@ fn prove_names_a_slice_that_may_start_past_the_end() {
     assert_eq!(failed.len(), 2, "{text}");
 }
 
+/// Division and remainder truncate as in C++, in code and in contracts, signed and unsigned, decision 0088.
+#[test]
+fn division_truncates_as_in_cpp() {
+    let Some(dafny) = dafny() else { return };
+    if !clang_tidy_available() {
+        return;
+    }
+    let o = prove("model-div.cpp", &[], &dafny);
+    let text = stdout(&o);
+    assert_eq!(o.status.code(), Some(0), "stdout: {text} stderr: {}", stderr(&o));
+    assert_eq!(text.lines().last(), Some("ok: proved"), "{text}");
+}
+
+/// A divisor that may be zero, a quotient that may not fit, also for %, and a contract that expects Dafny's own division, are
+/// each named at their lines, decision 0088.
+#[test]
+fn prove_names_a_division_that_may_fail() {
+    let Some(dafny) = dafny() else { return };
+    if !clang_tidy_available() {
+        return;
+    }
+    let o = prove("model-div-wrong.cpp", &[], &dafny);
+    let text = stdout(&o);
+    assert_eq!(o.status.code(), Some(1), "stdout: {text} stderr: {}", stderr(&o));
+    let failed: Vec<&str> = text.lines().filter(|l| l.starts_with("Not proved: ")).collect();
+    for want in [
+        "model-div-wrong.cpp:5: the divisor may be zero.",
+        "model-div-wrong.cpp:5: the value may not fit int32_t.",
+        "model-div-wrong.cpp:10: the value may not fit int32_t.",
+        "model-div-wrong.cpp:16: the ensures line may not hold on this return.",
+    ] {
+        assert!(failed.iter().any(|l| l.ends_with(want)), "{want}: {text}");
+    }
+    assert_eq!(failed.len(), 4, "{text}");
+}
+
 /// Pull `"key":"value"` or `"key":123` out of one JSON line without a JSON library.
 fn field(line: &str, key: &str) -> String {
     let needle = format!("\"{key}\":");
