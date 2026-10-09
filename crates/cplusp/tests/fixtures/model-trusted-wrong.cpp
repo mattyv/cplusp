@@ -21,3 +21,7 @@ int32_t unchecked(int32_t x) {
   int32_t y = increment(x);
   return y;
 }
+
+int32_t shifted(int32_t x) {
+  return x << 1;
+}

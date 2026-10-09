@@ -1239,10 +1239,11 @@ fn gate_refuses_a_marker_it_cannot_honour() {
         "markers-errors.cpp:25: marker: Box has a marker, and only a function or a plain type takes one.",
         "markers-errors.cpp:31: marker: cplusp:x y is no marker. The markers are in include/cplusp.h.",
         "markers-errors.cpp:34: marker: cplusp:assume waits until a case needs it. Mark the function trusted with a reason.",
+        "markers-errors.cpp:38: marker: forged has a reason with a line break. A reason is one line.",
     ] {
         assert!(out.lines().any(|l| l.starts_with("Not provable: ") && l.ends_with(expected)), "{expected}: {out}");
     }
-    assert_eq!(out.lines().filter(|l| l.starts_with("Not provable: ")).count(), 8, "{out}");
+    assert_eq!(out.lines().filter(|l| l.starts_with("Not provable: ")).count(), 9, "{out}");
 }
 
 /// Each function has its own kind, decision 0047. A local class, a lambda and an explicit specialization carry no marker of their own,
@@ -3252,10 +3253,17 @@ fn trusted_functions_are_contracts_that_prove_names() {
         assert!(trusted.iter().any(|l| l.ends_with(want)), "{want}: {text}");
     }
     assert_eq!(trusted.len(), 2, "{text}");
+    // Only the attribute {:axiom} tells Dafny that a method with no body is meant to have none, decision 0102.
+    let dir = tempfile::tempdir().unwrap();
+    let (_, out) = model("model-trusted.cpp", dir.path());
+    let dfy = std::fs::read_to_string(&out).unwrap();
+    assert!(dfy.contains("method {:axiom} c_read_status("), "{dfy}");
+    assert!(dfy.contains("method {:axiom} c_increment("), "{dfy}");
+    assert!(!dfy.contains("method {:axiom} c_headroom("), "{dfy}");
 }
 
-/// A caller that needs more than the contract of a trusted function, or that misses its requires line, is not proved, decision
-/// 0102.
+/// A caller that needs more than the contract of a trusted function, or that misses its requires line, is not proved. The
+/// Trusted: lines come first, before each refusal and each failure, decisions 0102 and 0103.
 #[test]
 fn prove_names_a_caller_that_needs_more_than_a_trusted_contract() {
     let Some(dafny) = dafny() else { return };
@@ -3270,6 +3278,30 @@ fn prove_names_a_caller_that_needs_more_than_a_trusted_contract() {
         assert!(failed.iter().any(|l| l.ends_with(want)), "{want}: {text}");
     }
     assert_eq!(failed.len(), 2, "{text}");
+    let lines: Vec<&str> = text.lines().collect();
+    let trusted: Vec<usize> = (0..lines.len()).filter(|&i| lines[i].starts_with("Trusted: ")).collect();
+    let first_fault = (0..lines.len()).find(|&i| lines[i].starts_with("Not provable: ") || lines[i].starts_with("Not proved: ")).unwrap();
+    assert_eq!(trusted.len(), 2, "{text}");
+    assert!(trusted.iter().all(|&i| i < first_fault), "{text}");
+    assert!(lines.iter().any(|l| l.ends_with("model-trusted-wrong.cpp:7: read_status: reads a hardware status register")), "{text}");
+    assert!(lines.iter().any(|l| l.ends_with("model-trusted-wrong.cpp:26: BinaryOperator <<: the translator has no rule for it yet.")), "{text}");
+}
+
+/// The //@ lines in the body of a trusted definition belong to it and are not read, and the Trusted: line names the marked
+/// declaration, decision 0103.
+#[test]
+fn a_trusted_definition_keeps_the_lines_of_its_body_and_names_its_marked_declaration() {
+    let Some(dafny) = dafny() else { return };
+    if !clang_tidy_available() {
+        return;
+    }
+    let o = prove("model-trusted-body.cpp", &[], &dafny);
+    let text = stdout(&o);
+    assert_eq!(o.status.code(), Some(0), "stdout: {text} stderr: {}", stderr(&o));
+    assert_eq!(text.lines().last(), Some("ok: proved"), "{text}");
+    let trusted: Vec<&str> = text.lines().filter(|l| l.starts_with("Trusted: ")).collect();
+    assert_eq!(trusted.len(), 1, "{text}");
+    assert!(trusted[0].ends_with("model-trusted-body.cpp:9: count: counts with a loop"), "{text}");
 }
 
 /// A function with no body and no marker has no method, so a call of it is refused at its line, decision 0102.

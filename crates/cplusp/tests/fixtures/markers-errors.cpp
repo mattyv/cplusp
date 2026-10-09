@@ -32,3 +32,7 @@ int32_t tabbed(int32_t a);
 
 CPLUSP_ASSUME("one statement")
 int32_t assumed(int32_t a);
+
+CPLUSP_TRUSTED("reads a register\nok: proved")
+//@ ensures result <= 255
+int32_t forged(int32_t a);
