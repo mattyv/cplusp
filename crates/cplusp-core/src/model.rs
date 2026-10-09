@@ -43,8 +43,9 @@ pub enum Extent {
 /// object of a `const` member function of the struct by its key, a parameter by value, decision 0089. `ThisMut` is the object of a
 /// member function that writes it, which takes it in and gives it back, decision 0096. `ThisAfter` is that object after the call,
 /// as an ensures line reads it, and `Fresh` is the result of a constructor before it exists, as its requires line reads it. The
-/// translator makes these two views itself. `Void` is the result type of a function that gives no value. `Other` is a type the
-/// translator has no rule for, by the id of its name.
+/// translator makes these two views itself. `Mut` is a reference parameter that the function writes, which takes a value in and
+/// gives it back, and `MutAfter` is its value after the call, as an ensures line reads it, decision 0108. `Void` is the result type
+/// of a function that gives no value. `Other` is a type the translator has no rule for, by the id of its name.
 #[derive(Structural, PartialEq, Eq, Clone, Copy, Debug)]
 pub enum Ty {
     I32,
@@ -62,6 +63,8 @@ pub enum Ty {
     This(u32),
     ThisMut(u32),
     ThisAfter(u32),
+    Mut(Scalar),
+    MutAfter(Scalar),
     Fresh(u32),
     Void,
     Other(u32),
@@ -161,7 +164,7 @@ pub enum Args {
 /// A statement of the body, with its line. `Local` declares a name of a type with a start value. `Assign` writes a name. `Step`
 /// adds one to a name of a type, or takes one away when its flag is false. `While` is a condition, the contract lines above the loop
 /// and the body. `For` is a start, a condition, a step, the contract lines and the body, decision 0061. `SetField` writes a field of
-/// the object of a member function. `Call` is a call that stands alone as a statement, by the key of its callee, the id of its
+/// the object of a member function, and `SetRefField` a field of a reference parameter, decision 0108. `Call` is a call that stands alone as a statement, by the key of its callee, the id of its
 /// name and its arguments. `Exit` is `return;`, decision 0096. `Assert` is a `//@ assert` line in the body, and `Apply` is a
 /// `//@ apply` line that calls a lemma of the companion file by the id of its name, decision 0099.
 #[derive(PartialEq, Eq, Debug)]
@@ -174,6 +177,7 @@ pub enum Stmt {
     While(Expr, Box<Conds>, Box<Stmts>, u32),
     For(Box<Stmt>, Expr, Box<Stmt>, Box<Conds>, Box<Stmts>, u32),
     SetField(u32, Expr, u32),
+    SetRefField(u32, u32, Expr, u32),
     Call(u32, u32, Box<Args>, u32),
     Exit(u32),
     Assert(Expr, u32),
@@ -193,14 +197,16 @@ pub enum Params {
     Cons(u32, Ty, Box<Params>),
 }
 
-/// What a contract line says. `Other` is a word the translator has no rule for yet, by the id of the word. `Bad` is a line that the
-/// shell could not cut or parse, with the refusal it got.
+/// What a contract line says. `Modifies` names one reference parameter that the function writes, decision 0108. `Other` is a word
+/// the translator has no rule for yet, by the id of the word. `Bad` is a line that the shell could not cut or parse, with the refusal
+/// it got.
 #[derive(Structural, PartialEq, Eq, Clone, Copy, Debug)]
 pub enum CondKind {
     Requires,
     Ensures,
     Invariant,
     Decreases,
+    Modifies,
     Other(u32),
     Bad(Refusal),
 }
@@ -288,7 +294,8 @@ pub enum DTy {
 /// decision 0079. `Take` is `s[..j]` and `Slice` is `s[i..j]`, decision 0085. `TDiv` and `TRem` are `trunc_div` and `trunc_rem`
 /// on the exact integers. `DivIn` is `(trunc_div(a, b) as T)`, and `RemIn` is the remainder of `T`, which also needs the quotient to
 /// fit `T`, decision 0088. `FCall` calls the function of a pure member function by its key, decision 0090. `After` is `this'`, the
-/// object of a member function that writes it, as the body leaves it, decision 0096. `Ite` is `if c then a else b`, decision 0098.
+/// object of a member function that writes it, as the body leaves it, decision 0096. `Out` is `x'`, a reference parameter as the body
+/// leaves it, decision 0108. `Ite` is `if c then a else b`, decision 0098.
 /// `Temp` reads a temporary that a call before the statement set, decision 0104. `ShrIn` is `(shr(a, n, W) as T)`, a right shift
 /// of the width `W`, decision 0106. A Dafny expression calls no method.
 #[derive(PartialEq, Eq, Debug)]
@@ -324,6 +331,7 @@ pub enum DExpr {
     RemIn(Box<DExpr>, Box<DExpr>, DTy),
     FCall(u32, Box<DArgs>),
     After,
+    Out(u32),
     Ite(Box<DExpr>, Box<DExpr>, Box<DExpr>),
     Temp(u32),
     ShrIn(Box<DExpr>, Box<DExpr>, DTy, u32),
@@ -346,9 +354,10 @@ pub enum DArgs {
 /// A Dafny statement. `Local` is `var x: T := e;`. `LocalCall` is `var x: T := m(args);`. `ReturnCall` is `result := m(args);
 /// return;`, since Dafny takes no call in a `return`. `Assign` is `x := e;` and `AssignCall` is `x := m(args);`. `While` is the
 /// condition, the invariants, the decreases lines and the body. `For` prints as its start, then a `while` whose body ends with the
-/// step. The start and the step keep their own places, decision 0069. `SetField` is `this' := this'.(f := e);`. `Update` calls a
-/// method that writes its object and writes the object back, `o := m(o, args);`, and `LocalUpdate` also sets a new local to the
-/// value it gives. `CallStmt` is `m(args);` of a method that gives no value, and `Exit` is `return;`, decision 0096. `Assert` is
+/// step. The start and the step keep their own places, decision 0069. `SetField` is `this' := this'.(f := e);`. `SetOut` is
+/// `x' := e;` and `SetOutField` is `x' := x'.(f := e);` of a reference parameter, decision 0108. `Update` calls a method that writes
+/// back, `o, x := m(o, x, args);`, and `LocalUpdate` also sets a new local to the value it gives, decisions 0096 and 0108. The
+/// arguments hold each argument of the call. `CallStmt` is `m(args);` of a method that gives no value, and `Exit` is `return;`, decision 0096. `Assert` is
 /// `assert e;` and `Apply` is `l(args);` of a lemma, decision 0099. `Pre` is a statement with the calls that run before it, decision
 /// 0104.
 #[derive(PartialEq, Eq, Debug)]
@@ -363,8 +372,10 @@ pub enum DStmt {
     While(DExpr, DConds, DConds, Box<DStmts>),
     For(Box<DStmt>, u32, DExpr, DConds, DConds, Box<DStmts>, Box<DStmt>, u32),
     SetField(u32, DExpr),
-    Update(Obj, u32, DArgs),
-    LocalUpdate(u32, DTy, Obj, u32, DArgs),
+    SetOut(u32, DExpr),
+    SetOutField(u32, u32, DExpr),
+    Update(Objs, u32, DArgs),
+    LocalUpdate(u32, DTy, Objs, u32, DArgs),
     CallStmt(u32, DArgs),
     Exit,
     Assert(DExpr),
@@ -372,11 +383,21 @@ pub enum DStmt {
     Pre(DCalls, Box<DStmt>),
 }
 
-/// The object that a call writes back: a local by its name, or the object of the member function that makes the call.
+/// A place that a call writes back: a local by its name, the object of the member function that makes the call, or a reference
+/// parameter of that function, decision 0108.
 #[derive(Structural, PartialEq, Eq, Clone, Copy, Debug)]
 pub enum Obj {
     Local(u32),
     Object,
+    Out(u32),
+}
+
+/// The places that a call writes back, in the order of the results of its method after `result`: the object, then each reference
+/// parameter, decision 0108.
+#[derive(PartialEq, Eq, Debug)]
+pub enum Objs {
+    Nil,
+    Cons(Obj, Box<Objs>),
 }
 
 /// The statements of a Dafny body. Each keeps the place of the C++ statement it comes from, decision 0068.
@@ -400,7 +421,8 @@ pub enum DConds {
 }
 
 /// A Dafny method. `function` is the body of the Dafny function of a pure member function, decision 0090. `writes` holds when the
-/// method takes its object in and gives it back as `this'`, decision 0096. `trusted` holds for the method of a trusted function: it has
+/// method takes its object in and gives it back as `this'`, decision 0096. `outs` are the reference parameters that it gives back,
+/// decision 0108. `trusted` holds for the method of a trusted function: it has
 /// no body, and Dafny takes its contract as given, decision 0102.
 #[derive(PartialEq, Eq, Debug)]
 pub struct Method {
@@ -413,6 +435,7 @@ pub struct Method {
     pub body: DStmts,
     pub function: Option<DExpr>,
     pub writes: bool,
+    pub outs: DParams,
     pub trusted: bool,
 }
 
@@ -441,8 +464,10 @@ pub enum Models {
 /// `NoField` is a field of a contract that its struct does not have. `HoldsSeq` is a local or a result of a struct that holds a
 /// sequence, decision 0076. `Element` is an optional of a struct or a sequence of `bool`, which have no rule, decisions 0064 and 0076.
 /// `NotPure` is a contract that calls a member function that is not pure, or no member function, by the id of the name, decision
-/// 0090. `NoTarget` is a call that writes its object, on an object that is no local, by the line. `NoObject` is a field or a member
-/// function in a requires line of a constructor, before the object exists, by the id of the name, decision 0096.
+/// 0090. `NoTarget` is a call that writes a value back to a place that is no local and no reference parameter, by the line. `NoObject`
+/// is a field or a member function in a requires line of a constructor, before the object exists, by the id of the name, decision
+/// 0096. `NotRef` is a name on a modifies line that is no reference parameter, and `Unlisted` is a reference parameter that no
+/// modifies line names, decision 0108.
 #[derive(Structural, PartialEq, Eq, Clone, Copy, Debug)]
 pub enum Refusal {
     Construct(u32, u32),
@@ -464,6 +489,8 @@ pub enum Refusal {
     NotPure(u32, u32),
     NoTarget(u32),
     NoObject(u32, u32),
+    NotRef(u32, u32),
+    Unlisted(u32, u32),
 }
 
 // ------------------------------------------------------------------ the rules
@@ -471,7 +498,21 @@ pub enum Refusal {
 /// The id of the name `operator()`. The shell gives this id to that text, decision 0098.
 pub const CALL_OP: u32 = 0;
 
-/// A type of the subset maps to its Dafny newtype, decision 0029 and the battery case signed_overflow.
+/// The Dafny type of a scalar, decision 0108.
+pub open spec fn spec_scalar_dty(s: Scalar) -> DTy {
+    match s {
+        Scalar::I32 => DTy::Int32,
+        Scalar::I64 => DTy::Int64,
+        Scalar::U8 => DTy::UInt8,
+        Scalar::U32 => DTy::UInt32,
+        Scalar::U64 => DTy::UInt64,
+        Scalar::Bool => DTy::Bool,
+        Scalar::Struct(k) => DTy::Struct(k),
+    }
+}
+
+/// A type of the subset maps to its Dafny newtype, decision 0029 and the battery case signed_overflow. A reference parameter has the
+/// type of its value, decision 0108.
 pub open spec fn spec_ty(t: Ty, line: u32) -> Result<DTy, Refusal> {
     match t {
         Ty::I32 => Ok(DTy::Int32),
@@ -491,6 +532,8 @@ pub open spec fn spec_ty(t: Ty, line: u32) -> Result<DTy, Refusal> {
         Ty::This(k) => Ok(DTy::Struct(k)),
         Ty::ThisMut(k) => Ok(DTy::Struct(k)),
         Ty::ThisAfter(k) => Ok(DTy::Struct(k)),
+        Ty::Mut(s) => Ok(spec_scalar_dty(s)),
+        Ty::MutAfter(s) => Ok(spec_scalar_dty(s)),
         Ty::Fresh(_) => Err(Refusal::Syntax(line)),
         Ty::Void => Err(Refusal::Syntax(line)),
         Ty::Other(k) => Err(Refusal::Construct(k, line)),
@@ -507,6 +550,8 @@ pub open spec fn spec_value_ty(t: Ty, line: u32, sd: Structs) -> Result<DTy, Ref
             Ty::This(_) => Err(Refusal::Syntax(line)),
             Ty::ThisMut(_) => Err(Refusal::Syntax(line)),
             Ty::ThisAfter(_) => Err(Refusal::Syntax(line)),
+            Ty::Mut(_) => Err(Refusal::Syntax(line)),
+            Ty::MutAfter(_) => Err(Refusal::Syntax(line)),
             Ty::Struct(k) => if spec_holds(sd, k) {
                 Err(Refusal::HoldsSeq(line))
             } else {
@@ -860,19 +905,32 @@ pub open spec fn spec_call_lift(key: u32, name: u32, args: Args, at: u32, all: F
     }
 }
 
-/// A variable of code. The object of a member function that writes it is `this'` in the body, decision 0096.
+/// A variable of code. The object of a member function that writes it is `this'` in the body, decision 0096, and a reference
+/// parameter is `x'`, decision 0108.
 pub open spec fn spec_code_var(v: u32, t: Ty) -> DExpr {
     match t {
         Ty::ThisMut(_) => DExpr::After,
+        Ty::Mut(_) => DExpr::Out(v),
         _ => DExpr::Var(v),
     }
 }
 
-/// A variable of a contract. The object after the call is `this'`, decision 0096.
+/// A variable of a contract. The object after the call is `this'`, decision 0096, and a reference parameter after the call is `x'`,
+/// decision 0108.
 pub open spec fn spec_var(v: u32, t: Ty) -> DExpr {
     match t {
         Ty::ThisAfter(_) => DExpr::After,
+        Ty::MutAfter(_) => DExpr::Out(v),
         _ => DExpr::Var(v),
+    }
+}
+
+/// The type of the value of a variable of a contract: a reference parameter has the type of its value, decision 0108.
+pub open spec fn spec_view_ty(t: Ty) -> Ty {
+    match t {
+        Ty::Mut(s) => spec_elem(s),
+        Ty::MutAfter(s) => spec_elem(s),
+        _ => t,
     }
 }
 
@@ -946,7 +1004,7 @@ pub open spec fn spec_contract(e: Expr, decl: Names, ps: Params, ret: Option<Ty>
             Ok(DExpr::Bound(n))
         } else {
             match spec_rebind(decl, ps, n) {
-                Some((p, t)) => spec_leaf(spec_var(p, t), t, line),
+                Some((p, t)) => spec_leaf(spec_var(p, t), spec_view_ty(t), line),
                 None => match spec_this_field(ps, ret, n, sd) {
                     Some((d, ft)) => spec_leaf(d, ft, line),
                     None => Err(spec_no_name(n, ret, line, sd)),
@@ -1163,7 +1221,7 @@ pub open spec fn spec_path(e: Expr, decl: Names, ps: Params, ret: Option<Ty>, bo
             Err(Refusal::Syntax(line))
         } else {
             match spec_rebind(decl, ps, n) {
-                Some((p, t)) => Ok((spec_var(p, t), t)),
+                Some((p, t)) => Ok((spec_var(p, t), spec_view_ty(t))),
                 None => match spec_this_field(ps, ret, n, sd) {
                     Some(x) => Ok(x),
                     None => Err(spec_no_name(n, ret, line, sd)),
@@ -1281,6 +1339,7 @@ pub open spec fn spec_after(ps: Params) -> Params
             p,
             match t {
                 Ty::ThisMut(k) => Ty::ThisAfter(k),
+                Ty::Mut(s) => Ty::MutAfter(s),
                 _ => t,
             },
             Box::new(spec_after(*rest)),
@@ -1298,6 +1357,7 @@ pub open spec fn spec_before(ps: Params) -> Params
             p,
             match t {
                 Ty::ThisAfter(k) => Ty::ThisMut(k),
+                Ty::MutAfter(s) => Ty::Mut(s),
                 _ => t,
             },
             Box::new(spec_before(*rest)),
@@ -1305,11 +1365,142 @@ pub open spec fn spec_before(ps: Params) -> Params
     }
 }
 
-/// The contract reads the object after the call, so `old()` has a meaning: an ensures line of a function that writes its object.
+/// The contract reads the object or a reference parameter after the call, so `old()` has a meaning: an ensures line of a function
+/// that writes its object, decision 0096, or a reference parameter, decision 0108.
 pub open spec fn spec_has_after(ps: Params) -> bool {
     match spec_self(ps) {
         Some((_, Ty::ThisAfter(_))) => true,
+        _ => spec_any_after(ps),
+    }
+}
+
+/// A reference parameter after the call is among the parameters, decision 0108.
+pub open spec fn spec_any_after(ps: Params) -> bool
+    decreases ps,
+{
+    match ps {
+        Params::Nil => false,
+        Params::Cons(_, t, rest) => match t {
+            Ty::MutAfter(_) => true,
+            _ => spec_any_after(*rest),
+        },
+    }
+}
+
+/// The type of the parameter `name`.
+pub open spec fn spec_ty_of(ps: Params, name: u32) -> Option<Ty>
+    decreases ps,
+{
+    match ps {
+        Params::Nil => None,
+        Params::Cons(n, t, rest) => if n == name {
+            Some(t)
+        } else {
+            spec_ty_of(*rest, name)
+        },
+    }
+}
+
+/// `name` is a reference parameter that the function writes, decision 0108.
+pub open spec fn spec_is_mut(ps: Params, name: u32) -> bool {
+    match spec_ty_of(ps, name) {
+        Some(Ty::Mut(_)) => true,
         _ => false,
+    }
+}
+
+/// A parameter takes a value in and gives it back: the object of a member function that writes it, decision 0096, or a reference
+/// parameter, decision 0108.
+pub open spec fn spec_written(t: Ty) -> bool {
+    match t {
+        Ty::ThisMut(_) => true,
+        Ty::Mut(_) => true,
+        _ => false,
+    }
+}
+
+/// The function gives back a value of a parameter, decisions 0096 and 0108.
+pub open spec fn spec_mutates(ps: Params) -> bool
+    decreases ps,
+{
+    match ps {
+        Params::Nil => false,
+        Params::Cons(_, t, rest) => spec_written(t) || spec_mutates(*rest),
+    }
+}
+
+/// The reference parameters that the function gives back, as Dafny parameters, decision 0108.
+pub open spec fn spec_outs(ps: Params) -> DParams
+    decreases ps,
+{
+    match ps {
+        Params::Nil => DParams::Nil,
+        Params::Cons(n, t, rest) => match t {
+            Ty::Mut(s) => DParams::Cons(n, spec_scalar_dty(s), Box::new(spec_outs(*rest))),
+            _ => spec_outs(*rest),
+        },
+    }
+}
+
+/// The modifies lines name each reference parameter and nothing else, decision 0108. A name reads the parameter of the definition at
+/// its place in the declaration, decision 0060.
+pub open spec fn spec_modifies(ps: Params, cs: Conds, line: u32) -> Option<Refusal> {
+    match spec_bad_modifies(ps, cs) {
+        Some(r) => Some(r),
+        None => spec_unlisted(ps, ps, cs, line),
+    }
+}
+
+/// The first modifies line that names no reference parameter.
+pub open spec fn spec_bad_modifies(ps: Params, cs: Conds) -> Option<Refusal>
+    decreases cs,
+{
+    match cs {
+        Conds::Nil => None,
+        Conds::Cons(k, e, l, decl, rest) => if k == CondKind::Modifies {
+            match e {
+                Expr::Name(n) => match spec_rebind(decl, ps, n) {
+                    Some((_, Ty::Mut(_))) => spec_bad_modifies(ps, *rest),
+                    _ => Some(Refusal::NotRef(n, l)),
+                },
+                _ => Some(Refusal::Syntax(l)),
+            }
+        } else {
+            spec_bad_modifies(ps, *rest)
+        },
+    }
+}
+
+/// A modifies line names the parameter `p`.
+pub open spec fn spec_lists(ps: Params, cs: Conds, p: u32) -> bool
+    decreases cs,
+{
+    match cs {
+        Conds::Nil => false,
+        Conds::Cons(k, e, _, decl, rest) => (k == CondKind::Modifies && match e {
+            Expr::Name(n) => match spec_rebind(decl, ps, n) {
+                Some((q, _)) => q == p,
+                None => false,
+            },
+            _ => false,
+        }) || spec_lists(ps, *rest, p),
+    }
+}
+
+/// The first reference parameter among `todo` that no modifies line names.
+pub open spec fn spec_unlisted(todo: Params, ps: Params, cs: Conds, line: u32) -> Option<Refusal>
+    decreases todo,
+{
+    match todo {
+        Params::Nil => None,
+        Params::Cons(p, t, rest) => match t {
+            Ty::Mut(_) => if spec_lists(ps, cs, p) {
+                spec_unlisted(*rest, ps, cs, line)
+            } else {
+                Some(Refusal::Unlisted(p, line))
+            },
+            _ => spec_unlisted(*rest, ps, cs, line),
+        },
     }
 }
 
@@ -1425,6 +1616,7 @@ pub open spec fn spec_no_name(n: u32, ret: Option<Ty>, line: u32, sd: Structs) -
 pub open spec fn spec_param_ty(t: Ty, line: u32) -> Result<DTy, Refusal> {
     match t {
         Ty::ThisAfter(_) => Err(Refusal::Syntax(line)),
+        Ty::MutAfter(_) => Err(Refusal::Syntax(line)),
         _ => spec_ty(t, line),
     }
 }
@@ -1445,9 +1637,10 @@ pub open spec fn spec_params(ps: Params, line: u32) -> Result<DParams, Refusal>
     }
 }
 
-/// A function has a method when its parameters and its return type are in the subset.
+/// A function has a method when its parameters and its return type are in the subset, and its modifies lines name each reference
+/// parameter and nothing else, decision 0108.
 pub open spec fn has_signature(f: Function, sd: Structs) -> bool {
-    spec_params(f.params, f.line).is_ok() && spec_ret_ty(f.ret, f.line, sd).is_ok()
+    spec_params(f.params, f.line).is_ok() && spec_ret_ty(f.ret, f.line, sd).is_ok() && spec_modifies(f.params, f.conds, f.line) is None
 }
 
 /// A key names a function of the file that has a method.
@@ -1471,6 +1664,7 @@ pub open spec fn spec_place(s: Stmt) -> u32 {
         Stmt::While(_, _, _, l) => l,
         Stmt::For(_, _, _, _, _, l) => l,
         Stmt::SetField(_, _, l) => l,
+        Stmt::SetRefField(_, _, _, l) => l,
         Stmt::Call(_, _, _, l) => l,
         Stmt::Exit(l) => l,
         Stmt::Assert(_, l) => l,
@@ -1521,6 +1715,7 @@ pub open spec fn spec_loop_conds(cs: Conds, want: CondKind, env: Params, sd: Str
             CondKind::Bad(r) => Err(r),
             CondKind::Requires => Err(Refusal::Misplaced(l)),
             CondKind::Ensures => Err(Refusal::Misplaced(l)),
+            CondKind::Modifies => Err(Refusal::Misplaced(l)),
             _ => match spec_loop_conds(*rest, want, env, sd) {
                 Ok(dr) => if k == want {
                     match spec_contract(e, spec_names_of(env), spec_after(env), None, Names::Nil, l, sd) {
@@ -1536,16 +1731,17 @@ pub open spec fn spec_loop_conds(cs: Conds, want: CondKind, env: Params, sd: Str
     }
 }
 
-/// The callee with the key `key` writes its object, decision 0096.
+/// The callee with the key `key` gives back a value of a parameter: its object, decision 0096, or a reference parameter, decision
+/// 0108.
 pub open spec fn spec_callee_writes(all: Fns, key: u32) -> bool {
     match spec_find(all, key) {
-        Some(f) => spec_writes(f.params),
+        Some(f) => spec_mutates(f.params),
         None => false,
     }
 }
 
-/// The object of a call that writes it, decision 0096: a local, or the object of a member function that writes it. A parameter is
-/// never written, and any other object has no rule yet.
+/// A place that a call writes back, decisions 0096 and 0108: a local, the object of a member function that writes it, or a reference
+/// parameter. A parameter by value is never written, and any other place has no rule yet.
 pub open spec fn spec_target(o: Expr, ps: Params, line: u32) -> Result<Obj, Refusal>
     decreases o,
 {
@@ -1553,6 +1749,11 @@ pub open spec fn spec_target(o: Expr, ps: Params, line: u32) -> Result<Obj, Refu
         Expr::Var(v, t) => match t {
             Ty::ThisMut(_) => if spec_writes(ps) {
                 Ok(Obj::Object)
+            } else {
+                Err(Refusal::Syntax(line))
+            },
+            Ty::Mut(_) => if spec_is_mut(ps, v) {
+                Ok(Obj::Out(v))
             } else {
                 Err(Refusal::Syntax(line))
             },
@@ -1572,19 +1773,48 @@ pub open spec fn spec_target(o: Expr, ps: Params, line: u32) -> Result<Obj, Refu
     }
 }
 
-/// A call that stands alone as a statement, decision 0096. A call of a function that writes its object writes the object back. A
-/// call of any other function must give no value.
+/// The places that a call writes back: the argument at each parameter `cps` of the callee that takes a value in and gives it back,
+/// in order, decisions 0096 and 0108.
+pub open spec fn spec_writebacks(args: Args, cps: Params, ps: Params, line: u32) -> Result<Objs, Refusal>
+    decreases args,
+{
+    match args {
+        Args::Nil => Ok(Objs::Nil),
+        Args::Cons(a, rest) => match cps {
+            Params::Nil => Err(Refusal::Syntax(line)),
+            Params::Cons(_, t, crest) => if spec_written(t) {
+                match spec_target(*a, ps, line) {
+                    Err(r) => Err(r),
+                    Ok(o) => match spec_writebacks(*rest, *crest, ps, line) {
+                        Err(r) => Err(r),
+                        Ok(os) => Ok(Objs::Cons(o, Box::new(os))),
+                    },
+                }
+            } else {
+                spec_writebacks(*rest, *crest, ps, line)
+            },
+        },
+    }
+}
+
+/// The places that a call of the callee with the key `key` writes back.
+pub open spec fn spec_callee_writebacks(all: Fns, key: u32, args: Args, ps: Params, line: u32) -> Result<Objs, Refusal> {
+    match spec_find(all, key) {
+        Some(f) => spec_writebacks(args, f.params, ps, line),
+        None => Err(Refusal::Syntax(line)),
+    }
+}
+
+/// A call that stands alone as a statement, decision 0096. A call of a function that gives back a value of a parameter writes each
+/// such argument back, decision 0108. A call of any other function must give no value.
 pub open spec fn spec_call_stmt(key: u32, name: u32, args: Args, line: u32, all: Fns, ps: Params, sd: Structs) -> Result<DStmt, Refusal> {
     if spec_callee_writes(all, key) {
-        match args {
-            Args::Cons(o, rest) => match spec_target(*o, ps, line) {
-                Ok(obj) => match spec_call_lift(key, name, *rest, line, all, line, sd) {
-                    Ok((c, da)) => Ok(spec_pre(c, DStmt::Update(obj, key, da))),
-                    Err(r) => Err(r),
-                },
+        match spec_callee_writebacks(all, key, args, ps, line) {
+            Err(r) => Err(r),
+            Ok(os) => match spec_call_lift(key, name, args, line, all, line, sd) {
+                Ok((c, da)) => Ok(spec_pre(c, DStmt::Update(os, key, da))),
                 Err(r) => Err(r),
             },
-            Args::Nil => Err(Refusal::Syntax(line)),
         }
     } else {
         match spec_call_lift(key, name, args, line, all, line, sd) {
@@ -1612,21 +1842,33 @@ pub open spec fn spec_local_call(n: u32, dt: DTy, key: u32, name: u32, args: Arg
     Refusal,
 > {
     if spec_callee_writes(all, key) {
-        match args {
-            Args::Cons(o, rest) => match spec_target(*o, ps, line) {
-                Ok(obj) => match spec_call_lift(key, name, *rest, at, all, line, sd) {
-                    Ok((c, da)) => Ok(spec_pre(c, DStmt::LocalUpdate(n, dt, obj, key, da))),
-                    Err(r) => Err(r),
-                },
+        match spec_callee_writebacks(all, key, args, ps, line) {
+            Err(r) => Err(r),
+            Ok(os) => match spec_call_lift(key, name, args, at, all, line, sd) {
+                Ok((c, da)) => Ok(spec_pre(c, DStmt::LocalUpdate(n, dt, os, key, da))),
                 Err(r) => Err(r),
             },
-            Args::Nil => Err(Refusal::Syntax(line)),
         }
     } else {
         match spec_call_lift(key, name, args, at, all, line, sd) {
             Ok((c, da)) => Ok(spec_pre(c, DStmt::LocalCall(n, dt, key, da))),
             Err(r) => Err(r),
         }
+    }
+}
+
+/// `++x` or `--x`: a local, or a reference parameter that the function writes, decision 0108.
+pub open spec fn spec_step(n: u32, dt: DTy, up: bool, out: bool) -> DStmt {
+    let op = if up {
+        BinOp::Add
+    } else {
+        BinOp::Sub
+    };
+    let one = Box::new(DExpr::Conv(dt, Box::new(DExpr::Lit(1))));
+    if out {
+        DStmt::SetOut(n, DExpr::Bin(op, Box::new(DExpr::Out(n)), one))
+    } else {
+        DStmt::Assign(n, DExpr::Bin(op, Box::new(DExpr::Var(n)), one))
     }
 }
 
@@ -1674,7 +1916,12 @@ pub open spec fn spec_stmt(s: Stmt, all: Fns, env: Params, ps: Params, sd: Struc
                 },
             },
         },
-        Stmt::Assign(n, e, l) => if spec_is_param(ps, n) {
+        Stmt::Assign(n, e, l) => if spec_is_mut(ps, n) {
+            match spec_lift(e, all, l, sd, 0, true) {
+                Ok((c, d, _)) => Ok(spec_pre(c, DStmt::SetOut(n, d))),
+                Err(r) => Err(r),
+            }
+        } else if spec_is_param(ps, n) {
             Err(Refusal::WriteParam(n, l))
         } else {
             match e {
@@ -1692,25 +1939,12 @@ pub open spec fn spec_stmt(s: Stmt, all: Fns, env: Params, ps: Params, sd: Struc
                 },
             }
         },
-        Stmt::Step(n, t, up, l) => if spec_is_param(ps, n) {
+        Stmt::Step(n, t, up, l) => if spec_is_param(ps, n) && !spec_is_mut(ps, n) {
             Err(Refusal::WriteParam(n, l))
         } else {
             match spec_ty(t, l) {
                 Err(r) => Err(r),
-                Ok(dt) => Ok(
-                    DStmt::Assign(
-                        n,
-                        DExpr::Bin(
-                            if up {
-                                BinOp::Add
-                            } else {
-                                BinOp::Sub
-                            },
-                            Box::new(DExpr::Var(n)),
-                            Box::new(DExpr::Conv(dt, Box::new(DExpr::Lit(1)))),
-                        ),
-                    ),
-                ),
+                Ok(dt) => Ok(spec_step(n, dt, up, spec_is_mut(ps, n))),
             }
         },
         Stmt::While(c, lc, body, l) => match spec_loop_conds(*lc, CondKind::Invariant, env, sd) {
@@ -1757,6 +1991,18 @@ pub open spec fn spec_stmt(s: Stmt, all: Fns, env: Params, ps: Params, sd: Struc
                 },
                 _ => Err(Refusal::WriteParam(p, l)),
             },
+            None => Err(Refusal::Syntax(l)),
+        },
+        Stmt::SetRefField(p, f, e, l) => match spec_ty_of(ps, p) {
+            Some(Ty::Mut(Scalar::Struct(k))) => match spec_field_ty(sd, k, f) {
+                Some(Ty::Seq(_, _)) => Err(Refusal::SeqParam(l)),
+                Some(_) => match spec_lift(e, all, l, sd, 0, true) {
+                    Ok((c, d, _)) => Ok(spec_pre(c, DStmt::SetOutField(p, f, d))),
+                    Err(r) => Err(r),
+                },
+                None => Err(Refusal::NoField(f, l)),
+            },
+            Some(_) => Err(Refusal::WriteParam(p, l)),
             None => Err(Refusal::Syntax(l)),
         },
         Stmt::Call(k, nm, args, l) => spec_call_stmt(k, nm, *args, l, all, ps, sd),
@@ -2023,19 +2269,24 @@ pub open spec fn spec_bounds(ps: Params, line: u32, tail: DConds) -> DConds
 }
 
 /// The body of the Dafny function of a member function: the expression of its one `return`, when the function has `this` and its
-/// body is that `return` alone, decision 0090. A `return` of a call is a `ReturnCall`, so a pure body holds no call.
+/// body is that `return` alone, decision 0090. A `return` of a call is a `ReturnCall`, so a pure body holds no call. A function that
+/// writes a reference parameter is never pure, decision 0108.
 pub open spec fn spec_pure_body(ps: Params, body: DStmts) -> Option<DExpr> {
     match spec_this(ps) {
-        Some(_) => match body {
-            DStmts::Cons(s, _, rest) => if *rest == DStmts::Nil {
-                match *s {
-                    DStmt::Return(d) => Some(d),
-                    _ => None,
-                }
-            } else {
-                None
-            },
-            DStmts::Nil => None,
+        Some(_) => if spec_mutates(ps) {
+            None
+        } else {
+            match body {
+                DStmts::Cons(s, _, rest) => if *rest == DStmts::Nil {
+                    match *s {
+                        DStmt::Return(d) => Some(d),
+                        _ => None,
+                    }
+                } else {
+                    None
+                },
+                DStmts::Nil => None,
+            }
         },
         None => None,
     }
@@ -2241,22 +2492,26 @@ pub open spec fn spec_function(f: Function, all: Fns, sd: Structs) -> Model {
         Err(r) => Model::Refused(r),
         Ok(ps) => match spec_ret_ty(f.ret, f.line, sd) {
             Err(r) => Model::Refused(r),
-            Ok(ret) => match spec_inside(f, all, sd) {
-                Err(r) => Model::Bare(f.name, ps, ret, r),
-                Ok((req, ens, dec, body)) => Model::Full(
-                    Method {
-                        name: f.name,
-                        params: ps,
-                        ret,
-                        requires: spec_bounds(f.params, f.line, req),
-                        ensures: spec_linked(f, ens, spec_pure_body(f.params, body)),
-                        decreases: dec,
-                        body,
-                        function: spec_pure_body(f.params, body),
-                        writes: spec_writes(f.params),
-                        trusted: f.trusted,
-                    },
-                ),
+            Ok(ret) => match spec_modifies(f.params, f.conds, f.line) {
+                Some(r) => Model::Refused(r),
+                None => match spec_inside(f, all, sd) {
+                    Err(r) => Model::Bare(f.name, ps, ret, r),
+                    Ok((req, ens, dec, body)) => Model::Full(
+                        Method {
+                            name: f.name,
+                            params: ps,
+                            ret,
+                            requires: spec_bounds(f.params, f.line, req),
+                            ensures: spec_linked(f, ens, spec_pure_body(f.params, body)),
+                            decreases: dec,
+                            body,
+                            function: spec_pure_body(f.params, body),
+                            writes: spec_writes(f.params),
+                            outs: spec_outs(f.params),
+                            trusted: f.trusted,
+                        },
+                    ),
+                },
             },
         },
     }
@@ -2365,6 +2620,7 @@ pub open spec fn unknown_stmt(s: Stmt) -> bool
         Stmt::While(c, _, body, _) => unknown_expr(c) || unknown_stmts(*body),
         Stmt::For(init, c, step, _, body, _) => unknown_stmt(*init) || unknown_expr(c) || unknown_stmt(*step) || unknown_stmts(*body),
         Stmt::SetField(_, e, _) => unknown_expr(e),
+        Stmt::SetRefField(_, _, e, _) => unknown_expr(e),
         Stmt::Call(_, _, args, _) => unknown_args(*args),
         Stmt::Exit(_) => false,
         Stmt::Assert(_, _) => false,
@@ -2390,25 +2646,6 @@ pub proof fn lemma_unknown_code_is_refused(e: Expr, line: u32)
     lemma_unknown_lift_is_refused(e, Fns::Nil, line, Structs::Nil, 0, false);
 }
 
-/// An object that holds a node with no rule is no target.
-pub proof fn lemma_unknown_target_is_refused(o: Expr, ps: Params, line: u32)
-    requires
-        unknown_expr(o),
-    ensures
-        spec_target(o, ps, line).is_err(),
-    decreases o,
-{
-    match o {
-        Expr::Cast(c, a) => {
-            if c == CastKind::Read || c == CastKind::NoOp {
-                lemma_unknown_target_is_refused(*a, ps, line);
-            }
-        },
-        Expr::Paren(a) => lemma_unknown_target_is_refused(*a, ps, line),
-        _ => {},
-    }
-}
-
 pub proof fn lemma_unknown_local_call_is_refused(
     n: u32,
     dt: DTy,
@@ -2426,17 +2663,7 @@ pub proof fn lemma_unknown_local_call_is_refused(
     ensures
         spec_local_call(n, dt, key, name, args, at, all, line, ps, sd).is_err(),
 {
-    if spec_callee_writes(all, key) {
-        if let Args::Cons(o, rest) = args {
-            if unknown_expr(*o) {
-                lemma_unknown_target_is_refused(*o, ps, line);
-            } else {
-                lemma_unknown_call_lift_is_refused(key, name, *rest, at, all, line, sd);
-            }
-        }
-    } else {
-        lemma_unknown_call_lift_is_refused(key, name, args, at, all, line, sd);
-    }
+    lemma_unknown_call_lift_is_refused(key, name, args, at, all, line, sd);
 }
 
 pub proof fn lemma_unknown_call_stmt_is_refused(key: u32, name: u32, args: Args, line: u32, all: Fns, ps: Params, sd: Structs)
@@ -2445,17 +2672,7 @@ pub proof fn lemma_unknown_call_stmt_is_refused(key: u32, name: u32, args: Args,
     ensures
         spec_call_stmt(key, name, args, line, all, ps, sd).is_err(),
 {
-    if spec_callee_writes(all, key) {
-        if let Args::Cons(o, rest) = args {
-            if unknown_expr(*o) {
-                lemma_unknown_target_is_refused(*o, ps, line);
-            } else {
-                lemma_unknown_call_lift_is_refused(key, name, *rest, line, all, line, sd);
-            }
-        }
-    } else {
-        lemma_unknown_call_lift_is_refused(key, name, args, line, all, line, sd);
-    }
+    lemma_unknown_call_lift_is_refused(key, name, args, line, all, line, sd);
 }
 
 /// A call that stands alone, whose arguments hold a node with no rule, is refused.
@@ -2514,6 +2731,7 @@ pub proof fn lemma_unknown_stmt_is_refused(s: Stmt, all: Fns, env: Params, ps: P
             }
         },
         Stmt::SetField(_, e, l) => lemma_unknown_lift_is_refused(e, all, l, sd, 0, true),
+        Stmt::SetRefField(_, _, e, l) => lemma_unknown_lift_is_refused(e, all, l, sd, 0, true),
         Stmt::Call(k, nm, args, l) => lemma_unknown_call_stmt_is_refused(k, nm, *args, l, all, ps, sd),
         Stmt::Assign(_, e, l) => lemma_unknown_value_is_refused(e, all, l, sd),
         Stmt::While(c, _, body, l) => {
@@ -2651,7 +2869,7 @@ pub proof fn lemma_kept_assign(s: Stmt, all: Fns, env: Params, ps: Params, sd: S
 pub proof fn lemma_kept_set_field(s: Stmt, all: Fns, env: Params, ps: Params, sd: Structs)
     requires
         spec_stmt(s, all, env, ps, sd).is_ok(),
-        s is SetField,
+        s is SetField || s is SetRefField,
     ensures
         count_dstmt(spec_stmt(s, all, env, ps, sd).unwrap()) == 1,
 {
@@ -2680,6 +2898,7 @@ pub proof fn lemma_stmt_kept(s: Stmt, all: Fns, env: Params, ps: Params, sd: Str
         Stmt::Local(_, _, _, _) => lemma_kept_local(s, all, env, ps, sd),
         Stmt::Assign(_, _, _) => lemma_kept_assign(s, all, env, ps, sd),
         Stmt::SetField(_, _, _) => lemma_kept_set_field(s, all, env, ps, sd),
+        Stmt::SetRefField(_, _, _, _) => lemma_kept_set_field(s, all, env, ps, sd),
         Stmt::Call(_, _, _, _) => lemma_kept_call(s, all, env, ps, sd),
         Stmt::If(c, t, f, l) => {
             lemma_statements_kept(*t, all, env, ps, sd);
@@ -3090,7 +3309,15 @@ pub proof fn lemma_resolves_assign(s: Stmt, all: Fns, env: Params, ps: Params, s
         calls_resolve_stmt(spec_stmt(s, all, env, ps, sd).unwrap(), all, sd),
 {
     reveal_with_fuel(calls_resolve_stmt, 2);
-    lemma_value_resolves(s->Assign_1, all, s->Assign_2, sd);
+    let e = s->Assign_1;
+    let l = s->Assign_2;
+    if spec_is_mut(ps, s->Assign_0) {
+        lemma_lift_resolves(e, all, l, sd, 0, true);
+        let (c, d, _) = spec_lift(e, all, l, sd, 0, true).unwrap();
+        lemma_pre_resolves(c, DStmt::SetOut(s->Assign_0, d), all, sd);
+    } else {
+        lemma_value_resolves(e, all, l, sd);
+    }
 }
 
 pub proof fn lemma_resolves_set_field(s: Stmt, all: Fns, env: Params, ps: Params, sd: Structs)
@@ -3107,6 +3334,23 @@ pub proof fn lemma_resolves_set_field(s: Stmt, all: Fns, env: Params, ps: Params
         lemma_lift_resolves(e, all, l, sd, 0, true);
         let (c, d, _) = spec_lift(e, all, l, sd, 0, true).unwrap();
         lemma_pre_resolves(c, DStmt::SetField(s->SetField_0, d), all, sd);
+    }
+}
+
+pub proof fn lemma_resolves_set_ref_field(s: Stmt, all: Fns, env: Params, ps: Params, sd: Structs)
+    requires
+        spec_stmt(s, all, env, ps, sd).is_ok(),
+        s is SetRefField,
+    ensures
+        calls_resolve_stmt(spec_stmt(s, all, env, ps, sd).unwrap(), all, sd),
+{
+    reveal_with_fuel(calls_resolve_stmt, 2);
+    let e = s->SetRefField_2;
+    let l = s->SetRefField_3;
+    if spec_lift(e, all, l, sd, 0, true).is_ok() {
+        lemma_lift_resolves(e, all, l, sd, 0, true);
+        let (c, d, _) = spec_lift(e, all, l, sd, 0, true).unwrap();
+        lemma_pre_resolves(c, DStmt::SetOutField(s->SetRefField_0, s->SetRefField_1, d), all, sd);
     }
 }
 
@@ -3173,6 +3417,7 @@ pub proof fn lemma_stmt_calls_resolve(s: Stmt, all: Fns, env: Params, ps: Params
         Stmt::Return(_, _) => lemma_resolves_return(s, all, env, ps, sd),
         Stmt::Assign(_, _, _) => lemma_resolves_assign(s, all, env, ps, sd),
         Stmt::SetField(_, _, _) => lemma_resolves_set_field(s, all, env, ps, sd),
+        Stmt::SetRefField(_, _, _, _) => lemma_resolves_set_ref_field(s, all, env, ps, sd),
         Stmt::Local(_, _, _, _) => lemma_resolves_local(s, all, env, ps, sd),
         Stmt::Call(_, _, _, _) => lemma_resolves_call(s, all, env, ps, sd),
         Stmt::Step(_, _, _, _) => lemma_resolves_plain(s, all, env, ps, sd),
@@ -3251,6 +3496,21 @@ pub proof fn lemma_calls_resolve(f: Function, all: Fns, sd: Structs)
 
 // ------------------------------------------------------------------ the code that runs
 
+pub fn scalar_dty(s: Scalar) -> (r: DTy)
+    ensures
+        r == spec_scalar_dty(s),
+{
+    match s {
+        Scalar::I32 => DTy::Int32,
+        Scalar::I64 => DTy::Int64,
+        Scalar::U8 => DTy::UInt8,
+        Scalar::U32 => DTy::UInt32,
+        Scalar::U64 => DTy::UInt64,
+        Scalar::Bool => DTy::Bool,
+        Scalar::Struct(k) => DTy::Struct(k),
+    }
+}
+
 pub fn translate_ty(t: Ty, line: u32) -> (r: Result<DTy, Refusal>)
     ensures
         r == spec_ty(t, line),
@@ -3273,6 +3533,8 @@ pub fn translate_ty(t: Ty, line: u32) -> (r: Result<DTy, Refusal>)
         Ty::This(k) => Ok(DTy::Struct(k)),
         Ty::ThisMut(k) => Ok(DTy::Struct(k)),
         Ty::ThisAfter(k) => Ok(DTy::Struct(k)),
+        Ty::Mut(s) => Ok(scalar_dty(s)),
+        Ty::MutAfter(s) => Ok(scalar_dty(s)),
         Ty::Fresh(_) => Err(Refusal::Syntax(line)),
         Ty::Void => Err(Refusal::Syntax(line)),
         Ty::Other(k) => Err(Refusal::Construct(k, line)),
@@ -3290,6 +3552,8 @@ pub fn translate_value_ty(t: Ty, line: u32, sd: &Structs) -> (r: Result<DTy, Ref
             Ty::This(_) => Err(Refusal::Syntax(line)),
             Ty::ThisMut(_) => Err(Refusal::Syntax(line)),
             Ty::ThisAfter(_) => Err(Refusal::Syntax(line)),
+            Ty::Mut(_) => Err(Refusal::Syntax(line)),
+            Ty::MutAfter(_) => Err(Refusal::Syntax(line)),
             Ty::Struct(k) => if holds_seq(sd, k) {
                 Err(Refusal::HoldsSeq(line))
             } else {
@@ -3634,6 +3898,7 @@ pub fn code_var(v: u32, t: Ty) -> (r: DExpr)
 {
     match t {
         Ty::ThisMut(_) => DExpr::After,
+        Ty::Mut(_) => DExpr::Out(v),
         _ => DExpr::Var(v),
     }
 }
@@ -3644,7 +3909,19 @@ pub fn contract_var(v: u32, t: Ty) -> (r: DExpr)
 {
     match t {
         Ty::ThisAfter(_) => DExpr::After,
+        Ty::MutAfter(_) => DExpr::Out(v),
         _ => DExpr::Var(v),
+    }
+}
+
+pub fn view_ty(t: Ty) -> (r: Ty)
+    ensures
+        r == spec_view_ty(t),
+{
+    match t {
+        Ty::Mut(s) => elem(s),
+        Ty::MutAfter(s) => elem(s),
+        _ => t,
     }
 }
 
@@ -3757,7 +4034,7 @@ pub fn translate_contract(e: &Expr, decl: &Names, ps: &Params, ret: Option<Ty>, 
             Ok(DExpr::Bound(*n))
         } else {
             match rebind(decl, ps, *n) {
-                Some((p, t)) => translate_leaf(contract_var(p, t), t, line),
+                Some((p, t)) => translate_leaf(contract_var(p, t), view_ty(t), line),
                 None => match this_field(ps, ret, *n, sd) {
                     Some((d, ft)) => translate_leaf(d, ft, line),
                     None => Err(no_name(*n, ret, line, sd)),
@@ -3967,7 +4244,7 @@ pub fn path(e: &Expr, decl: &Names, ps: &Params, ret: Option<Ty>, bound: &Names,
             Err(Refusal::Syntax(line))
         } else {
             match rebind(decl, ps, *n) {
-                Some((p, t)) => Ok((contract_var(p, t), t)),
+                Some((p, t)) => Ok((contract_var(p, t), view_ty(t))),
                 None => match this_field(ps, ret, *n, sd) {
                     Some(x) => Ok(x),
                     None => Err(no_name(*n, ret, line, sd)),
@@ -4078,6 +4355,7 @@ pub fn after(ps: &Params) -> (r: Params)
         Params::Cons(p, t, rest) => {
             let v = match t {
                 Ty::ThisMut(k) => Ty::ThisAfter(*k),
+                Ty::Mut(s) => Ty::MutAfter(*s),
                 _ => *t,
             };
             Params::Cons(*p, v, Box::new(after(rest)))
@@ -4095,6 +4373,7 @@ pub fn before(ps: &Params) -> (r: Params)
         Params::Cons(p, t, rest) => {
             let v = match t {
                 Ty::ThisAfter(k) => Ty::ThisMut(*k),
+                Ty::MutAfter(s) => Ty::Mut(*s),
                 _ => *t,
             };
             Params::Cons(*p, v, Box::new(before(rest)))
@@ -4108,9 +4387,154 @@ pub fn has_after(ps: &Params) -> (r: bool)
 {
     match self_param(ps) {
         Some((_, Ty::ThisAfter(_))) => true,
+        _ => any_after(ps),
+    }
+}
+
+pub fn any_after(ps: &Params) -> (r: bool)
+    ensures
+        r == spec_any_after(*ps),
+    decreases ps,
+{
+    match ps {
+        Params::Nil => false,
+        Params::Cons(_, t, rest) => match t {
+            Ty::MutAfter(_) => true,
+            _ => any_after(rest),
+        },
+    }
+}
+
+pub fn ty_of(ps: &Params, name: u32) -> (r: Option<Ty>)
+    ensures
+        r == spec_ty_of(*ps, name),
+    decreases ps,
+{
+    match ps {
+        Params::Nil => None,
+        Params::Cons(n, t, rest) => if *n == name {
+            Some(*t)
+        } else {
+            ty_of(rest, name)
+        },
+    }
+}
+
+pub fn is_mut(ps: &Params, name: u32) -> (r: bool)
+    ensures
+        r == spec_is_mut(*ps, name),
+{
+    match ty_of(ps, name) {
+        Some(Ty::Mut(_)) => true,
         _ => false,
     }
 }
+
+pub fn written(t: Ty) -> (r: bool)
+    ensures
+        r == spec_written(t),
+{
+    match t {
+        Ty::ThisMut(_) => true,
+        Ty::Mut(_) => true,
+        _ => false,
+    }
+}
+
+pub fn mutates(ps: &Params) -> (r: bool)
+    ensures
+        r == spec_mutates(*ps),
+    decreases ps,
+{
+    match ps {
+        Params::Nil => false,
+        Params::Cons(_, t, rest) => written(*t) || mutates(rest),
+    }
+}
+
+pub fn outs(ps: &Params) -> (r: DParams)
+    ensures
+        r == spec_outs(*ps),
+    decreases ps,
+{
+    match ps {
+        Params::Nil => DParams::Nil,
+        Params::Cons(n, t, rest) => match t {
+            Ty::Mut(s) => DParams::Cons(*n, scalar_dty(*s), Box::new(outs(rest))),
+            _ => outs(rest),
+        },
+    }
+}
+
+pub fn modifies(ps: &Params, cs: &Conds, line: u32) -> (r: Option<Refusal>)
+    ensures
+        r == spec_modifies(*ps, *cs, line),
+{
+    match bad_modifies(ps, cs) {
+        Some(r) => Some(r),
+        None => unlisted(ps, ps, cs, line),
+    }
+}
+
+pub fn bad_modifies(ps: &Params, cs: &Conds) -> (r: Option<Refusal>)
+    ensures
+        r == spec_bad_modifies(*ps, *cs),
+    decreases cs,
+{
+    match cs {
+        Conds::Nil => None,
+        Conds::Cons(k, e, l, decl, rest) => if *k == CondKind::Modifies {
+            match e {
+                Expr::Name(n) => match rebind(decl, ps, *n) {
+                    Some((_, Ty::Mut(_))) => bad_modifies(ps, rest),
+                    _ => Some(Refusal::NotRef(*n, *l)),
+                },
+                _ => Some(Refusal::Syntax(*l)),
+            }
+        } else {
+            bad_modifies(ps, rest)
+        },
+    }
+}
+
+pub fn lists(ps: &Params, cs: &Conds, p: u32) -> (r: bool)
+    ensures
+        r == spec_lists(*ps, *cs, p),
+    decreases cs,
+{
+    match cs {
+        Conds::Nil => false,
+        Conds::Cons(k, e, _, decl, rest) => {
+            let here = *k == CondKind::Modifies && match e {
+                Expr::Name(n) => match rebind(decl, ps, *n) {
+                    Some((q, _)) => q == p,
+                    None => false,
+                },
+                _ => false,
+            };
+            here || lists(ps, rest, p)
+        },
+    }
+}
+
+pub fn unlisted(todo: &Params, ps: &Params, cs: &Conds, line: u32) -> (r: Option<Refusal>)
+    ensures
+        r == spec_unlisted(*todo, *ps, *cs, line),
+    decreases todo,
+{
+    match todo {
+        Params::Nil => None,
+        Params::Cons(p, t, rest) => match t {
+            Ty::Mut(_) => if lists(ps, cs, *p) {
+                unlisted(rest, ps, cs, line)
+            } else {
+                Some(Refusal::Unlisted(*p, line))
+            },
+            _ => unlisted(rest, ps, cs, line),
+        },
+    }
+}
+
 
 pub fn object(ps: &Params, ret: Option<Ty>) -> (r: Option<(DExpr, u32)>)
     ensures
@@ -4259,6 +4683,7 @@ pub fn param_ty(t: Ty, line: u32) -> (r: Result<DTy, Refusal>)
 {
     match t {
         Ty::ThisAfter(_) => Err(Refusal::Syntax(line)),
+        Ty::MutAfter(_) => Err(Refusal::Syntax(line)),
         _ => translate_ty(t, line),
     }
 }
@@ -4284,7 +4709,7 @@ pub fn signature(f: &Function, sd: &Structs) -> (r: bool)
     ensures
         r == has_signature(*f, *sd),
 {
-    translate_params(&f.params, f.line).is_ok() && ret_ty(f.ret, f.line, sd).is_ok()
+    translate_params(&f.params, f.line).is_ok() && ret_ty(f.ret, f.line, sd).is_ok() && modifies(&f.params, &f.conds, f.line).is_none()
 }
 
 pub fn callable(fs: &Fns, key: u32, sd: &Structs) -> (r: bool)
@@ -4322,6 +4747,7 @@ pub fn place(s: &Stmt) -> (r: u32)
         Stmt::While(_, _, _, l) => *l,
         Stmt::For(_, _, _, _, _, l) => *l,
         Stmt::SetField(_, _, l) => *l,
+        Stmt::SetRefField(_, _, _, l) => *l,
         Stmt::Call(_, _, _, l) => *l,
         Stmt::Exit(l) => *l,
         Stmt::Assert(_, l) => *l,
@@ -4374,6 +4800,7 @@ pub fn translate_loop_conds(cs: &Conds, want: CondKind, env: &Params, sd: &Struc
             CondKind::Bad(r) => Err(*r),
             CondKind::Requires => Err(Refusal::Misplaced(*l)),
             CondKind::Ensures => Err(Refusal::Misplaced(*l)),
+            CondKind::Modifies => Err(Refusal::Misplaced(*l)),
             _ => match translate_loop_conds(rest, want, env, sd) {
                 Ok(dr) => if *k == want {
                     match translate_contract(e, &names_of(env), &after(env), None, &Names::Nil, *l, sd) {
@@ -4394,7 +4821,7 @@ pub fn callee_writes(all: &Fns, key: u32) -> (r: bool)
         r == spec_callee_writes(*all, key),
 {
     match find(all, key) {
-        Some(f) => writes(&f.params),
+        Some(f) => mutates(&f.params),
         None => false,
     }
 }
@@ -4421,6 +4848,11 @@ pub fn target(o: &Expr, ps: &Params, line: u32) -> (r: Result<Obj, Refusal>)
             } else {
                 Err(Refusal::Syntax(line))
             },
+            Ty::Mut(_) => if is_mut(ps, *v) {
+                Ok(Obj::Out(*v))
+            } else {
+                Err(Refusal::Syntax(line))
+            },
             _ => if is_param(ps, *v) {
                 Err(Refusal::WriteParam(*v, line))
             } else {
@@ -4437,20 +4869,51 @@ pub fn target(o: &Expr, ps: &Params, line: u32) -> (r: Result<Obj, Refusal>)
     }
 }
 
+pub fn writebacks(args: &Args, cps: &Params, ps: &Params, line: u32) -> (r: Result<Objs, Refusal>)
+    ensures
+        r == spec_writebacks(*args, *cps, *ps, line),
+    decreases args,
+{
+    match args {
+        Args::Nil => Ok(Objs::Nil),
+        Args::Cons(a, rest) => match cps {
+            Params::Nil => Err(Refusal::Syntax(line)),
+            Params::Cons(_, t, crest) => if written(*t) {
+                match target(a, ps, line) {
+                    Err(r) => Err(r),
+                    Ok(o) => match writebacks(rest, crest, ps, line) {
+                        Err(r) => Err(r),
+                        Ok(os) => Ok(Objs::Cons(o, Box::new(os))),
+                    },
+                }
+            } else {
+                writebacks(rest, crest, ps, line)
+            },
+        },
+    }
+}
+
+pub fn callee_writebacks(all: &Fns, key: u32, args: &Args, ps: &Params, line: u32) -> (r: Result<Objs, Refusal>)
+    ensures
+        r == spec_callee_writebacks(*all, key, *args, *ps, line),
+{
+    match find(all, key) {
+        Some(f) => writebacks(args, &f.params, ps, line),
+        None => Err(Refusal::Syntax(line)),
+    }
+}
+
 pub fn call_stmt(key: u32, name: u32, args: &Args, line: u32, all: &Fns, ps: &Params, sd: &Structs) -> (r: Result<DStmt, Refusal>)
     ensures
         r == spec_call_stmt(key, name, *args, line, *all, *ps, *sd),
 {
     if callee_writes(all, key) {
-        match args {
-            Args::Cons(o, rest) => match target(o, ps, line) {
-                Ok(obj) => match call_lift(key, name, rest, line, all, line, sd) {
-                    Ok((c, da)) => Ok(pre(c, DStmt::Update(obj, key, da))),
-                    Err(r) => Err(r),
-                },
+        match callee_writebacks(all, key, args, ps, line) {
+            Err(r) => Err(r),
+            Ok(os) => match call_lift(key, name, args, line, all, line, sd) {
+                Ok((c, da)) => Ok(pre(c, DStmt::Update(os, key, da))),
                 Err(r) => Err(r),
             },
-            Args::Nil => Err(Refusal::Syntax(line)),
         }
     } else {
         match call_lift(key, name, args, line, all, line, sd) {
@@ -4472,21 +4935,35 @@ pub fn local_call(n: u32, dt: DTy, key: u32, name: u32, args: &Args, at: u32, al
         r == spec_local_call(n, dt, key, name, *args, at, *all, line, *ps, *sd),
 {
     if callee_writes(all, key) {
-        match args {
-            Args::Cons(o, rest) => match target(o, ps, line) {
-                Ok(obj) => match call_lift(key, name, rest, at, all, line, sd) {
-                    Ok((c, da)) => Ok(pre(c, DStmt::LocalUpdate(n, dt, obj, key, da))),
-                    Err(r) => Err(r),
-                },
+        match callee_writebacks(all, key, args, ps, line) {
+            Err(r) => Err(r),
+            Ok(os) => match call_lift(key, name, args, at, all, line, sd) {
+                Ok((c, da)) => Ok(pre(c, DStmt::LocalUpdate(n, dt, os, key, da))),
                 Err(r) => Err(r),
             },
-            Args::Nil => Err(Refusal::Syntax(line)),
         }
     } else {
         match call_lift(key, name, args, at, all, line, sd) {
             Ok((c, da)) => Ok(pre(c, DStmt::LocalCall(n, dt, key, da))),
             Err(r) => Err(r),
         }
+    }
+}
+
+pub fn step(n: u32, dt: DTy, up: bool, out: bool) -> (r: DStmt)
+    ensures
+        r == spec_step(n, dt, up, out),
+{
+    let op = if up {
+        BinOp::Add
+    } else {
+        BinOp::Sub
+    };
+    let one = Box::new(DExpr::Conv(dt, Box::new(DExpr::Lit(1))));
+    if out {
+        DStmt::SetOut(n, DExpr::Bin(op, Box::new(DExpr::Out(n)), one))
+    } else {
+        DStmt::Assign(n, DExpr::Bin(op, Box::new(DExpr::Var(n)), one))
     }
 }
 
@@ -4530,7 +5007,12 @@ pub fn translate_stmt(s: &Stmt, all: &Fns, env: &Params, ps: &Params, sd: &Struc
                 },
             },
         },
-        Stmt::Assign(n, e, l) => if is_param(ps, *n) {
+        Stmt::Assign(n, e, l) => if is_mut(ps, *n) {
+            match lift(e, all, *l, sd, 0, true) {
+                Ok((c, d, _)) => Ok(pre(c, DStmt::SetOut(*n, d))),
+                Err(r) => Err(r),
+            }
+        } else if is_param(ps, *n) {
             Err(Refusal::WriteParam(*n, *l))
         } else {
             match e {
@@ -4548,19 +5030,12 @@ pub fn translate_stmt(s: &Stmt, all: &Fns, env: &Params, ps: &Params, sd: &Struc
                 },
             }
         },
-        Stmt::Step(n, t, up, l) => if is_param(ps, *n) {
+        Stmt::Step(n, t, up, l) => if is_param(ps, *n) && !is_mut(ps, *n) {
             Err(Refusal::WriteParam(*n, *l))
         } else {
             match translate_ty(*t, *l) {
                 Err(r) => Err(r),
-                Ok(dt) => {
-                    let op = if *up {
-                        BinOp::Add
-                    } else {
-                        BinOp::Sub
-                    };
-                    Ok(DStmt::Assign(*n, DExpr::Bin(op, Box::new(DExpr::Var(*n)), Box::new(DExpr::Conv(dt, Box::new(DExpr::Lit(1)))))))
-                },
+                Ok(dt) => Ok(step(*n, dt, *up, is_mut(ps, *n))),
             }
         },
         Stmt::While(c, lc, body, l) => match translate_loop_conds(lc, CondKind::Invariant, env, sd) {
@@ -4610,6 +5085,18 @@ pub fn translate_stmt(s: &Stmt, all: &Fns, env: &Params, ps: &Params, sd: &Struc
                 },
                 _ => Err(Refusal::WriteParam(p, *l)),
             },
+            None => Err(Refusal::Syntax(*l)),
+        },
+        Stmt::SetRefField(p, f, e, l) => match ty_of(ps, *p) {
+            Some(Ty::Mut(Scalar::Struct(k))) => match field_ty(sd, k, *f) {
+                Some(Ty::Seq(_, _)) => Err(Refusal::SeqParam(*l)),
+                Some(_) => match lift(e, all, *l, sd, 0, true) {
+                    Ok((c, d, _)) => Ok(pre(c, DStmt::SetOutField(*p, *f, d))),
+                    Err(r) => Err(r),
+                },
+                None => Err(Refusal::NoField(*f, *l)),
+            },
+            Some(_) => Err(Refusal::WriteParam(*p, *l)),
             None => Err(Refusal::Syntax(*l)),
         },
         Stmt::Call(k, nm, args, l) => call_stmt(*k, *nm, args, *l, all, ps, sd),
@@ -4955,6 +5442,7 @@ pub fn copy_dexpr(d: &DExpr) -> (r: DExpr)
         DExpr::RemIn(x0, x1, x2) => DExpr::RemIn(Box::new(copy_dexpr(x0)), Box::new(copy_dexpr(x1)), *x2),
         DExpr::FCall(x0, x1) => DExpr::FCall(*x0, Box::new(copy_dargs(x1))),
         DExpr::After => DExpr::After,
+        DExpr::Out(x0) => DExpr::Out(*x0),
         DExpr::Ite(x0, x1, x2) => DExpr::Ite(Box::new(copy_dexpr(x0)), Box::new(copy_dexpr(x1)), Box::new(copy_dexpr(x2))),
         DExpr::Temp(x0) => DExpr::Temp(*x0),
         DExpr::ShrIn(x0, x1, x2, x3) => DExpr::ShrIn(Box::new(copy_dexpr(x0)), Box::new(copy_dexpr(x1)), *x2, *x3),
@@ -4977,15 +5465,19 @@ pub fn pure_body(ps: &Params, body: &DStmts) -> (r: Option<DExpr>)
         r == spec_pure_body(*ps, *body),
 {
     match this_param(ps) {
-        Some(_) => match body {
-            DStmts::Cons(s, _, rest) => match &**rest {
-                DStmts::Nil => match &**s {
-                    DStmt::Return(d) => Some(copy_dexpr(d)),
+        Some(_) => if mutates(ps) {
+            None
+        } else {
+            match body {
+                DStmts::Cons(s, _, rest) => match &**rest {
+                    DStmts::Nil => match &**s {
+                        DStmt::Return(d) => Some(copy_dexpr(d)),
+                        _ => None,
+                    },
                     _ => None,
                 },
-                _ => None,
-            },
-            DStmts::Nil => None,
+                DStmts::Nil => None,
+            }
         },
         None => None,
     }
@@ -5205,25 +5697,29 @@ pub fn translate_function(f: &Function, all: &Fns, sd: &Structs) -> (r: Model)
         Err(r) => Model::Refused(r),
         Ok(ps) => match ret_ty(f.ret, f.line, sd) {
             Err(r) => Model::Refused(r),
-            Ok(ret) => match translate_inside(f, all, sd) {
-                Err(r) => Model::Bare(f.name, ps, ret, r),
-                Ok((req, ens, dec, body)) => {
-                    let pure = pure_body(&f.params, &body);
-                    let ensures = linked(f, ens, &pure);
-                    Model::Full(
-                        Method {
-                            name: f.name,
-                            params: ps,
-                            ret,
-                            requires: bounds(&f.params, f.line, req),
-                            ensures,
-                            decreases: dec,
-                            body,
-                            function: pure,
-                            writes: writes(&f.params),
-                            trusted: f.trusted,
-                        },
-                    )
+            Ok(ret) => match modifies(&f.params, &f.conds, f.line) {
+                Some(r) => Model::Refused(r),
+                None => match translate_inside(f, all, sd) {
+                    Err(r) => Model::Bare(f.name, ps, ret, r),
+                    Ok((req, ens, dec, body)) => {
+                        let pure = pure_body(&f.params, &body);
+                        let ensures = linked(f, ens, &pure);
+                        Model::Full(
+                            Method {
+                                name: f.name,
+                                params: ps,
+                                ret,
+                                requires: bounds(&f.params, f.line, req),
+                                ensures,
+                                decreases: dec,
+                                body,
+                                function: pure,
+                                writes: writes(&f.params),
+                                outs: outs(&f.params),
+                                trusted: f.trusted,
+                            },
+                        )
+                    },
                 },
             },
         },

@@ -2124,7 +2124,6 @@ const SRC: u32 = 191;
 const TAKE_REF: u32 = 192;
 const NEXT: u32 = 193;
 const FIRST: u32 = 194;
-const FA: u32 = 195;
 
 fn mut32() -> Ty {
     Ty::Mut(Scalar::I32)
@@ -2250,7 +2249,7 @@ fn a_call_writes_back_each_argument_of_a_reference_parameter() {
             Box::new(Stmts::Cons(
                 Box::new(Stmt::Local(B, Ty::I32, Expr::Lit(5, Ty::I32), 22)),
                 Box::new(Stmts::Cons(
-                    Box::new(Stmt::Call(TAKE_REF, SAT_NAME, Box::new(Args::Cons(b(var(A)), Box::new(Args::Cons(b(var(B)), Box::new(Args::Nil)))))), 23)),
+                    Box::new(Stmt::Call(TAKE_REF, SAT_NAME, Box::new(Args::Cons(b(var(A)), Box::new(Args::Cons(b(var(B)), Box::new(Args::Nil))))), 23)),
                     Box::new(one(Stmt::Return(read(A, Ty::I32), 24))),
                 )),
             )),
