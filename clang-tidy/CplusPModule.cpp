@@ -4032,9 +4032,19 @@ private:
         llvm::json::Array Fields;
         for (const FieldDecl *F : RD->fields())
           Fields.push_back(llvm::json::Array{F->getNameAsString(), type(F->getType(), true)});
+        // The member functions that are written as functions, as (name, key), decision 0090. A name that two of them share is left out:
+        // a contract cannot tell the overloads apart, so it calls none.
+        std::map<std::string, std::vector<std::string>> Named;
+        for (const Decl *D : RD->decls())
+          if (const auto *M = dyn_cast<CXXMethodDecl>(D); M && constMember(M))
+            Named[M->getNameAsString()].push_back(key(M));
+        llvm::json::Array Members;
+        for (const auto &[Name, Keys] : Named)
+          if (Keys.size() == 1)
+            Members.push_back(llvm::json::Array{Name, Keys.front()});
         const SourceLocation Loc = SM.getFileLoc(RD->getLocation());
         Structs.at(Key) = llvm::json::Object{{"struct", Key}, {"name", RD->getNameAsString()}, {"file", file(Loc)}, {"line", number(line(Loc))},
-                                                 {"fields", std::move(Fields)}};
+                                                 {"fields", std::move(Fields)}, {"members", std::move(Members)}};
       }
       return tag("Struct", Key);
     }

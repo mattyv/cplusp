@@ -8,7 +8,7 @@ use std::fmt::Write;
 use anyhow::{Context, Result};
 use cplusp_core::model::{
     parse_contract, translate_structs, translate_unit, Args, BinOp, CastKind, CondKind, Conds, DArgs, DConds, DExpr, DParams, DStmt, DStmts, DTy, Expr, Extent, Fns,
-    Function, Method, Model, Models, Names as CNames, Params, Refusal, Scalar, Stmt, Stmts, StructModels, Structs, Tok, Ty,
+    Function, Members, Method, Model, Models, Names as CNames, Params, Refusal, Scalar, Stmt, Stmts, StructModels, Structs, Tok, Ty,
 };
 use serde::Deserialize;
 
@@ -132,6 +132,8 @@ struct JStruct {
     file: String,
     line: u32,
     fields: Vec<(String, JTy)>,
+    /// The member functions that are written as functions, as (name, key), decision 0090.
+    members: Vec<(String, String)>,
 }
 
 #[derive(Deserialize)]
@@ -165,6 +167,12 @@ struct Names {
     declared: Vec<String>,
     /// The first call to an undeclared name in a contract line, by the place of the line.
     bad_calls: HashMap<u32, String>,
+    /// The member names of each struct by its key, for the contracts of its member functions, decision 0090.
+    members: HashMap<String, Vec<String>>,
+    /// The member names of the struct of `this` in the function that is being converted. Empty for any other function.
+    this_members: Vec<String>,
+    /// The Dafny name of the function of each pure member function by the id of its key: the name of its method, and `'`.
+    functions: HashMap<u32, String>,
 }
 
 impl Names {
@@ -342,8 +350,9 @@ fn lex(text: &str, line: u32, names: &mut Names) -> Vec<Tok> {
                 "true" => Tok::Bool(true),
                 "false" => Tok::Bool(false),
                 w => {
-                    // A name followed by `(` is a call, and the companion file must declare it.
-                    if rest[end..].trim_start().starts_with('(') && !names.declared.iter().any(|d| d == w) {
+                    // A name followed by `(` is a call, and the companion file must declare it. A member name in a member function may be a call of
+                    // the member, and the core decides, decision 0090.
+                    if rest[end..].trim_start().starts_with('(') && !names.declared.iter().any(|d| d == w) && !names.this_members.iter().any(|d| d == w) {
                         names.bad_calls.entry(line).or_insert_with(|| w.to_string());
                     }
                     Tok::Ident(names.id(w))
@@ -646,6 +655,10 @@ fn unreadable_struct_name(st: &JStruct) -> Option<&str> {
 fn function(f: JFunction, names: &mut Names) -> Function {
     let name = names.id(&f.key);
     names.file = f.file;
+    names.this_members = match f.params.first() {
+        Some((_, JTy::This(k))) => names.members.get(k).cloned().unwrap_or_default(),
+        _ => Vec::new(),
+    };
     // A parameter with no name is named by its position, as `'N`. C++ cannot write that, so it clashes with no name. The mangling makes it `v_'N`.
     let ps: Vec<(u32, Ty)> = f
         .params
@@ -787,6 +800,7 @@ fn dexpr(e: &DExpr, names: &Names) -> String {
         DExpr::Exists(j, b) => format!("(exists b_{}: int :: {})", names.text(*j), dexpr(b, names)),
         DExpr::Bound(j) => format!("b_{}", names.text(*j)),
         DExpr::Apply(f, args) => format!("{}({})", names.text(*f), dargs(args, names).join(", ")),
+        DExpr::FCall(k, args) => format!("{}({})", names.functions[k], dargs(args, names).join(", ")),
         DExpr::TDiv(a, b) => format!("trunc_div({}, {})", dexpr(a, names), dexpr(b, names)),
         DExpr::TRem(a, b) => format!("trunc_rem({}, {})", dexpr(a, names), dexpr(b, names)),
         DExpr::DivIn(a, b, t) => format!("(trunc_div({}, {}) as {})", dexpr(a, names), dexpr(b, names), dty(*t, names)),
@@ -946,7 +960,33 @@ impl Printer<'_> {
         self.put(0, format!("method {}({}) returns (result: {})", self.methods[&name], shown.join(", "), dty(ret, self.names)), place);
     }
 
+    /// The Dafny function of a pure member function, right before its method, decision 0090. Its requires lines are those of the method.
+    fn function(&mut self, m: &Method, body: &DExpr, place: u32) {
+        let mut shown = Vec::new();
+        let mut ps = &m.params;
+        while let DParams::Cons(n, t, next) = ps {
+            shown.push(format!("{}: {}", mangle(self.names.text(*n)), dty(*t, self.names)));
+            ps = next;
+        }
+        self.out.push('\n');
+        self.lines.push(None);
+        self.put(0, format!("function {}({}): {}", self.names.functions[&m.name], shown.join(", "), dty(m.ret, self.names)), place);
+        let mut cs = &m.requires;
+        while let DConds::Cons(e, line, next) = cs {
+            self.put(1, format!("requires {}", dexpr(e, self.names)), *line);
+            self.scope.push(*line);
+            cs = next;
+        }
+        self.put(0, "{".to_string(), place);
+        self.put(1, dexpr(body, self.names), place);
+        self.put(0, "}".to_string(), place);
+        self.scope.clear();
+    }
+
     fn method(&mut self, m: &Method, place: u32) {
+        if let Some(body) = &m.function {
+            self.function(m, body, place);
+        }
         self.header(m.name, &m.params, m.ret, place);
         // A requires line has the requires lines before it in scope, and an ensures or decreases line and the body have all of them.
         for (word, list) in [("requires", &m.requires), ("ensures", &m.ensures), ("decreases", &m.decreases)] {
@@ -972,6 +1012,7 @@ fn sentence(r: Refusal, names: &Names) -> (u32, String) {
         Refusal::Construct(k, line) => (line, format!("{}: the translator has no rule for it yet.", names.text(k))),
         Refusal::Name(n, line) => (line, format!("{} in the contract is no parameter.", names.text(n))),
         Refusal::NoField(f, line) => (line, format!("{} in the contract is no field of the struct.", names.text(f))),
+        Refusal::NotPure(n, line) => (line, format!("{} is no pure member function of its struct.", names.text(n))),
         Refusal::Syntax(line) if names.bad_calls.contains_key(&line) => (line, format!("{} is no function of the companion file.", names.bad_calls[&line])),
         Refusal::Syntax(line) => (line, "the contract line has a form the translator cannot read.".to_string()),
         Refusal::Backslash(line) => (line, "a contract line that ends in a backslash.".to_string()),
@@ -1048,6 +1089,7 @@ pub fn translate(lines: &str, companion: Option<(&str, &str)>) -> Result<Transla
         let k = funcs[..=i].iter().filter(|g| plain(g) == plain(f)).count();
         let dafny = if same == 1 { format!("c_{}", plain(f)) } else { format!("c_{}'{k}", plain(f)) };
         let key = names.id(&f.key);
+        names.functions.insert(key, format!("{dafny}'"));
         methods.insert(key, dafny);
         at.insert(key, names.place(&f.file, f.line));
     }
@@ -1058,6 +1100,7 @@ pub fn translate(lines: &str, companion: Option<(&str, &str)>) -> Result<Transla
         let k = structs[..=i].iter().filter(|g| g.name == st.name).count();
         let key = names.id(&st.key);
         names.datatypes.insert(key, if same == 1 { format!("S_{}", st.name) } else { format!("S_{}'{k}", st.name) });
+        names.members.insert(st.key.clone(), st.members.iter().map(|(n, _)| n.clone()).collect());
     }
     let struct_places: Vec<(u32, Option<String>)> = structs.iter().map(|st| (names.place(&st.file, st.line), unreadable_struct_name(st).map(String::from))).collect();
     for st in structs.into_iter().rev() {
@@ -1065,7 +1108,9 @@ pub fn translate(lines: &str, companion: Option<(&str, &str)>) -> Result<Transla
         let place = names.place(&st.file, st.line);
         names.file = st.file;
         let fields = st.fields.into_iter().rev().fold(Params::Nil, |rest, (n, t)| Params::Cons(names.id(&n), ty(t, &mut names), Box::new(rest)));
-        table = Structs::Cons(key, place, fields, Box::new(table));
+        // The core marks which members are pure and their types, so the shell writes `None`.
+        let members = st.members.into_iter().rev().fold(Members::Nil, |rest, (n, k)| Members::Cons(names.id(&n), names.id(&k), None, Box::new(rest)));
+        table = Structs::Cons(key, place, fields, members, Box::new(table));
     }
     let count = funcs.len();
     let fns = funcs.into_iter().rev().map(|f| function(f, &mut names)).fold(Fns::Nil, |rest, f| Fns::Cons(Box::new(f), Box::new(rest)));
