@@ -105,7 +105,8 @@ pub enum CastKind {
 /// is `v.empty()` and `Subspan` is `s.subspan(k)`, decision 0078. `Apply` is a call in a contract of a function of the companion
 /// file, by the id of its name, decision 0079. `Suffix`, `Prefix` and `Slice` are `v[i..]`, `v[..j]` and `v[i..j]` in a contract,
 /// decision 0085. `Divide` is `/` or `%` in code, with the type of its result, decision 0088. `MApply` is `o.f(args)` in a contract,
-/// a call of a member function by the id of its name, decision 0090. `Old` is `old(e)` in an ensures line, decision 0096. `Unknown` is a construct with no
+/// a call of a member function by the id of its name, decision 0090. `Old` is `old(e)` in an ensures line, decision 0096. `Cond` is
+/// `c ? a : b`, decision 0098. `Unknown` is a construct with no
 /// rule, by the id of its kind and its line.
 #[derive(PartialEq, Eq, Debug)]
 pub enum Expr {
@@ -143,6 +144,7 @@ pub enum Expr {
     Divide(BinOp, Box<Expr>, Box<Expr>, Ty),
     MApply(Box<Expr>, u32, Box<Args>),
     Old(Box<Expr>),
+    Cond(Box<Expr>, Box<Expr>, Box<Expr>),
     Unknown(u32, u32),
 }
 
@@ -274,7 +276,8 @@ pub enum DTy {
 /// decision 0079. `Take` is `s[..j]` and `Slice` is `s[i..j]`, decision 0085. `TDiv` and `TRem` are `trunc_div` and `trunc_rem`
 /// on the exact integers. `DivIn` is `(trunc_div(a, b) as T)`, and `RemIn` is the remainder of `T`, which also needs the quotient to
 /// fit `T`, decision 0088. `FCall` calls the function of a pure member function by its key, decision 0090. `After` is `this'`, the
-/// object of a member function that writes it, as the body leaves it, decision 0096. A Dafny expression calls no method.
+/// object of a member function that writes it, as the body leaves it, decision 0096. `Ite` is `if c then a else b`, decision 0098.
+/// A Dafny expression calls no method.
 #[derive(PartialEq, Eq, Debug)]
 pub enum DExpr {
     Lit(u64),
@@ -308,6 +311,7 @@ pub enum DExpr {
     RemIn(Box<DExpr>, Box<DExpr>, DTy),
     FCall(u32, Box<DArgs>),
     After,
+    Ite(Box<DExpr>, Box<DExpr>, Box<DExpr>),
 }
 
 #[derive(PartialEq, Eq, Debug)]
@@ -433,6 +437,9 @@ pub enum Refusal {
 }
 
 // ------------------------------------------------------------------ the rules
+
+/// The id of the name `operator()`. The shell gives this id to that text, decision 0098.
+pub const CALL_OP: u32 = 0;
 
 /// A type of the subset maps to its Dafny newtype, decision 0029 and the battery case signed_overflow.
 pub open spec fn spec_ty(t: Ty, line: u32) -> Result<DTy, Refusal> {
@@ -680,6 +687,16 @@ pub open spec fn spec_code(e: Expr, line: u32) -> Result<DExpr, Refusal>
             },
             Err(r) => Err(r),
         },
+        Expr::Cond(c, a, b) => match spec_code(*c, line) {
+            Ok(dc) => match spec_code(*a, line) {
+                Ok(da) => match spec_code(*b, line) {
+                    Ok(db) => Ok(DExpr::Ite(Box::new(dc), Box::new(da), Box::new(db))),
+                    Err(r) => Err(r),
+                },
+                Err(r) => Err(r),
+            },
+            Err(r) => Err(r),
+        },
         Expr::Name(n) => Err(Refusal::Name(n, line)),
         Expr::Unknown(k, l) => Err(Refusal::Construct(k, l)),
         _ => Err(Refusal::Syntax(line)),
@@ -863,7 +880,15 @@ pub open spec fn spec_contract(e: Expr, decl: Names, ps: Params, ret: Option<Ty>
             Ok(_) => Err(Refusal::Syntax(line)),
             Err(r) => Err(r),
         },
-        Expr::Apply(f, args) => match spec_object(ps, ret) {
+        Expr::Apply(f, args) => match spec_functor(f, decl, ps, ret, bound, sd) {
+            Some((d, k)) => match spec_member(sd, k, CALL_OP) {
+                Some((key, Some((rt, mps)))) => match spec_contract_args(*args, decl, ps, ret, bound, line, sd) {
+                    Ok(da) => spec_leaf(DExpr::FCall(key, Box::new(DArgs::Cons(d, Box::new(spec_convert(da, spec_tail(mps)))))), rt, line),
+                    Err(r) => Err(r),
+                },
+                _ => Err(Refusal::NotPure(CALL_OP, line)),
+            },
+            None => match spec_object(ps, ret) {
             Some((o, k)) => match spec_member(sd, k, f) {
                 Some((key, Some((t, mps)))) => match spec_contract_args(*args, decl, ps, ret, bound, line, sd) {
                     Ok(da) => spec_leaf(DExpr::FCall(key, Box::new(DArgs::Cons(o, Box::new(spec_convert(da, spec_tail(mps)))))), t, line),
@@ -884,10 +909,21 @@ pub open spec fn spec_contract(e: Expr, decl: Names, ps: Params, ret: Option<Ty>
                 }
             },
         },
+        },
         Expr::Old(a) => if spec_has_after(ps) {
             spec_contract(*a, decl, spec_before(ps), ret, bound, line, sd)
         } else {
             Err(Refusal::Syntax(line))
+        },
+        Expr::Cond(c, a, b) => match spec_contract(*c, decl, ps, ret, bound, line, sd) {
+            Ok(dc) => match spec_contract(*a, decl, ps, ret, bound, line, sd) {
+                Ok(da) => match spec_contract(*b, decl, ps, ret, bound, line, sd) {
+                    Ok(db) => Ok(DExpr::Ite(Box::new(dc), Box::new(da), Box::new(db))),
+                    Err(r) => Err(r),
+                },
+                Err(r) => Err(r),
+            },
+            Err(r) => Err(r),
         },
         Expr::MApply(o, f, args) => match spec_path(*o, decl, ps, ret, bound, line, sd) {
             Ok((d, t)) => match spec_struct_key(t) {
@@ -1142,6 +1178,28 @@ pub open spec fn spec_object(ps: Params, ret: Option<Ty>) -> Option<(DExpr, u32)
             Some(Ty::This(k)) => Some((DExpr::Result, k)),
             _ => None,
         },
+    }
+}
+
+/// A name of a contract that is a parameter or a field of the object, of a struct type: an object whose `operator()` a call of the
+/// name calls, with its Dafny form and the key of its struct, decision 0098.
+pub open spec fn spec_functor(f: u32, decl: Names, ps: Params, ret: Option<Ty>, bound: Names, sd: Structs) -> Option<(DExpr, u32)> {
+    if spec_has(bound, f) {
+        None
+    } else {
+        match spec_rebind(decl, ps, f) {
+            Some((p, t)) => match spec_struct_key(t) {
+                Some(k) => Some((spec_var(p, t), k)),
+                None => None,
+            },
+            None => match spec_this_field(ps, ret, f, sd) {
+                Some((d, ft)) => match spec_struct_key(ft) {
+                    Some(k) => Some((d, k)),
+                    None => None,
+                },
+                None => None,
+            },
+        }
     }
 }
 
@@ -1606,6 +1664,7 @@ pub open spec fn spec_has_result(e: Expr) -> bool
         Expr::Value(a) => spec_has_result(*a),
         Expr::Chain(_, _, a, b, c) => spec_has_result(*a) || spec_has_result(*b) || spec_has_result(*c),
         Expr::Old(a) => spec_has_result(*a),
+        Expr::Cond(c, a, b) => spec_has_result(*c) || spec_has_result(*a) || spec_has_result(*b),
         _ => false,
     }
 }
@@ -2120,6 +2179,7 @@ pub open spec fn unknown_expr(e: Expr) -> bool
         Expr::Slice(a, i, j) => unknown_expr(*a) || unknown_expr(*i) || unknown_expr(*j),
         Expr::Divide(_, a, b, _) => unknown_expr(*a) || unknown_expr(*b),
         Expr::Old(a) => unknown_expr(*a),
+        Expr::Cond(c, a, b) => unknown_expr(*c) || unknown_expr(*a) || unknown_expr(*b),
         _ => false,
     }
 }
@@ -2207,6 +2267,15 @@ pub proof fn lemma_unknown_code_is_refused(e: Expr, line: u32)
                 lemma_unknown_code_is_refused(*a, line);
             } else {
                 lemma_unknown_code_is_refused(*k, line);
+            }
+        },
+        Expr::Cond(c, a, b) => {
+            if unknown_expr(*c) {
+                lemma_unknown_code_is_refused(*c, line);
+            } else if unknown_expr(*a) {
+                lemma_unknown_code_is_refused(*a, line);
+            } else {
+                lemma_unknown_code_is_refused(*b, line);
             }
         },
         _ => {},
@@ -2852,6 +2921,16 @@ pub fn translate_code(e: &Expr, line: u32) -> (r: Result<DExpr, Refusal>)
             },
             Err(r) => Err(r),
         },
+        Expr::Cond(c, a, b) => match translate_code(c, line) {
+            Ok(dc) => match translate_code(a, line) {
+                Ok(da) => match translate_code(b, line) {
+                    Ok(db) => Ok(DExpr::Ite(Box::new(dc), Box::new(da), Box::new(db))),
+                    Err(r) => Err(r),
+                },
+                Err(r) => Err(r),
+            },
+            Err(r) => Err(r),
+        },
         Expr::Name(n) => Err(Refusal::Name(*n, line)),
         Expr::Unknown(k, l) => Err(Refusal::Construct(*k, *l)),
         _ => Err(Refusal::Syntax(line)),
@@ -3037,7 +3116,15 @@ pub fn translate_contract(e: &Expr, decl: &Names, ps: &Params, ret: Option<Ty>, 
             Ok(_) => Err(Refusal::Syntax(line)),
             Err(r) => Err(r),
         },
-        Expr::Apply(f, args) => match object(ps, ret) {
+        Expr::Apply(f, args) => match functor(*f, decl, ps, ret, bound, sd) {
+            Some((d, k)) => match member(sd, k, CALL_OP) {
+                Some((key, Some((rt, mps)))) => match translate_contract_args(args, decl, ps, ret, bound, line, sd) {
+                    Ok(da) => translate_leaf(DExpr::FCall(key, Box::new(DArgs::Cons(d, Box::new(convert(da, &tail(&mps)))))), rt, line),
+                    Err(r) => Err(r),
+                },
+                _ => Err(Refusal::NotPure(CALL_OP, line)),
+            },
+            None => match object(ps, ret) {
             Some((o, k)) => match member(sd, k, *f) {
                 Some((key, Some((t, mps)))) => match translate_contract_args(args, decl, ps, ret, bound, line, sd) {
                     Ok(da) => translate_leaf(DExpr::FCall(key, Box::new(DArgs::Cons(o, Box::new(convert(da, &tail(&mps)))))), t, line),
@@ -3058,10 +3145,21 @@ pub fn translate_contract(e: &Expr, decl: &Names, ps: &Params, ret: Option<Ty>, 
                 }
             },
         },
+        },
         Expr::Old(a) => if has_after(ps) {
             translate_contract(a, decl, &before(ps), ret, bound, line, sd)
         } else {
             Err(Refusal::Syntax(line))
+        },
+        Expr::Cond(c, a, b) => match translate_contract(c, decl, ps, ret, bound, line, sd) {
+            Ok(dc) => match translate_contract(a, decl, ps, ret, bound, line, sd) {
+                Ok(da) => match translate_contract(b, decl, ps, ret, bound, line, sd) {
+                    Ok(db) => Ok(DExpr::Ite(Box::new(dc), Box::new(da), Box::new(db))),
+                    Err(r) => Err(r),
+                },
+                Err(r) => Err(r),
+            },
+            Err(r) => Err(r),
         },
         Expr::MApply(o, f, args) => match path(o, decl, ps, ret, bound, line, sd) {
             Ok((d, t)) => match struct_key(t) {
@@ -3314,6 +3412,29 @@ pub fn object(ps: &Params, ret: Option<Ty>) -> (r: Option<(DExpr, u32)>)
             Some(Ty::This(k)) => Some((DExpr::Result, k)),
             _ => None,
         },
+    }
+}
+
+pub fn functor(f: u32, decl: &Names, ps: &Params, ret: Option<Ty>, bound: &Names, sd: &Structs) -> (r: Option<(DExpr, u32)>)
+    ensures
+        r == spec_functor(f, *decl, *ps, ret, *bound, *sd),
+{
+    if has(bound, f) {
+        None
+    } else {
+        match rebind(decl, ps, f) {
+            Some((p, t)) => match struct_key(t) {
+                Some(k) => Some((contract_var(p, t), k)),
+                None => None,
+            },
+            None => match this_field(ps, ret, f, sd) {
+                Some((d, ft)) => match struct_key(ft) {
+                    Some(k) => Some((d, k)),
+                    None => None,
+                },
+                None => None,
+            },
+        }
     }
 }
 
@@ -3834,6 +3955,7 @@ pub fn has_result(e: &Expr) -> (r: bool)
         Expr::Value(a) => has_result(a),
         Expr::Chain(_, _, a, b, c) => has_result(a) || has_result(b) || has_result(c),
         Expr::Old(a) => has_result(a),
+        Expr::Cond(c, a, b) => has_result(c) || has_result(a) || has_result(b),
         _ => false,
     }
 }
@@ -4115,6 +4237,7 @@ pub fn copy_dexpr(d: &DExpr) -> (r: DExpr)
         DExpr::RemIn(x0, x1, x2) => DExpr::RemIn(Box::new(copy_dexpr(x0)), Box::new(copy_dexpr(x1)), *x2),
         DExpr::FCall(x0, x1) => DExpr::FCall(*x0, Box::new(copy_dargs(x1))),
         DExpr::After => DExpr::After,
+        DExpr::Ite(x0, x1, x2) => DExpr::Ite(Box::new(copy_dexpr(x0)), Box::new(copy_dexpr(x1)), Box::new(copy_dexpr(x2))),
     }
 }
 
@@ -4445,7 +4568,8 @@ pub fn translate_unit(all: &Fns, sd: &Structs) -> (r: Models)
 /// negation where no operand is before it. `Size` is the text `.size()`, decision 0064. `Field` is `.name`, decision 0073.
 /// `HasValue` and `Value` are the texts `.has_value()` and `.value()`, decision 0075. `Empty` is `.empty()`, decision 0078. `Comma`
 /// parts the arguments of a call, decision 0079. `Bool` is `true`
-/// or `false`, decision 0084. `Old` is the word `old`, decision 0096. `Unknown` is text with no token, by the id of
+/// or `false`, decision 0084. `Old` is the word `old`, decision 0096. `Question` and `Colon` are `?` and `:`, decision 0098.
+/// `Unknown` is text with no token, by the id of
 /// its kind and its line.
 #[derive(Structural, PartialEq, Eq, Clone, Copy, Debug)]
 pub enum Tok {
@@ -4470,6 +4594,8 @@ pub enum Tok {
     Exists,
     ColonColon,
     Old,
+    Question,
+    Colon,
     Unknown(u32, u32),
 }
 
@@ -4489,7 +4615,7 @@ fn is_cmp(op: BinOp) -> (b: bool) {
     }
 }
 
-/// The precedence of the contract language, lowest first: `==>`, which groups to the right, then `||`, `&&`, a comparison or a
+/// The precedence of the contract language, lowest first: `==>`, which groups to the right, then `?:`, then `||`, `&&`, a comparison or a
 /// chain of two, `+` and `-`, `*`, the prefix `!` and `-`, and the postfix `.size()` and `[e]`. Parentheses group, and `forall j ::`
 /// takes all that follows, decision 0064.
 /// ponytail: the parser is proved to end and to read each token once, not to follow a grammar written as a spec. Upgrade: the
@@ -4499,9 +4625,9 @@ fn parse_implies(toks: &Vec<Tok>, pos: usize, line: u32) -> (r: Result<(Expr, us
         pos <= toks.len(),
     ensures
         parsed(r, toks@, pos),
-    decreases toks.len() - pos, 8usize,
+    decreases toks.len() - pos, 9usize,
 {
-    let (a, p) = match parse_or(toks, pos, line) {
+    let (a, p) = match parse_cond(toks, pos, line) {
         Ok(x) => x,
         Err(e) => return Err(e),
     };
@@ -4512,6 +4638,36 @@ fn parse_implies(toks: &Vec<Tok>, pos: usize, line: u32) -> (r: Result<(Expr, us
         }
     } else {
         Ok((a, p))
+    }
+}
+
+/// `c ? a : b`, decision 0098. The middle part reaches to its `:`, and the last part is a conditional again.
+fn parse_cond(toks: &Vec<Tok>, pos: usize, line: u32) -> (r: Result<(Expr, usize), Refusal>)
+    requires
+        pos <= toks.len(),
+    ensures
+        parsed(r, toks@, pos),
+    decreases toks.len() - pos, 8usize,
+{
+    let (c, p) = match parse_or(toks, pos, line) {
+        Ok(x) => x,
+        Err(e) => return Err(e),
+    };
+    if p < toks.len() && toks[p] == Tok::Question {
+        let (a, q) = match parse_implies(toks, p + 1, line) {
+            Ok(x) => x,
+            Err(e) => return Err(e),
+        };
+        if q < toks.len() && toks[q] == Tok::Colon {
+            match parse_cond(toks, q + 1, line) {
+                Ok((b, r)) => Ok((Expr::Cond(Box::new(c), Box::new(a), Box::new(b)), r)),
+                Err(e) => Err(e),
+            }
+        } else {
+            Err(Refusal::Syntax(line))
+        }
+    } else {
+        Ok((c, p))
     }
 }
 
@@ -4797,7 +4953,7 @@ fn parse_binders(toks: &Vec<Tok>, pos: usize, all: bool, line: u32) -> (r: Resul
         pos <= toks.len(),
     ensures
         parsed(r, toks@, pos),
-    decreases toks.len() - pos, 9usize,
+    decreases toks.len() - pos, 10usize,
 {
     if toks.len() - pos < 2 {
         return Err(Refusal::Syntax(line));
@@ -4814,9 +4970,10 @@ fn parse_binders(toks: &Vec<Tok>, pos: usize, all: bool, line: u32) -> (r: Resul
         Err(Refusal::Syntax(line))
     };
     match inner {
-        // The body of a quantifier reaches to the end of the line, or to the bracket or comma that closes what holds it. A body
-        // that stops before them would leave the rest of the line outside the quantifier, so the line is refused.
-        Ok((body, p)) => if p < toks.len() && !(toks[p] == Tok::RParen || toks[p] == Tok::RBracket || toks[p] == Tok::Comma) {
+        // The body of a quantifier reaches to the end of the line, or to the bracket, comma or colon that closes what holds it. A
+        // body that stops before them would leave the rest of the line outside the quantifier, so the line is refused.
+        Ok((body, p)) => if p < toks.len() && !(toks[p] == Tok::RParen || toks[p] == Tok::RBracket || toks[p] == Tok::Comma
+            || toks[p] == Tok::Colon) {
             Err(Refusal::Syntax(line))
         } else if all {
             Ok((Expr::Forall(j, Box::new(body)), p))
@@ -4841,7 +4998,7 @@ fn parse_args(toks: &Vec<Tok>, pos: usize, line: u32) -> (r: Result<(Args, usize
         pos <= toks.len(),
     ensures
         parsed_args(r, toks@, pos),
-    decreases toks.len() - pos, 9usize,
+    decreases toks.len() - pos, 10usize,
 {
     match parse_implies(toks, pos, line) {
         Ok((a, p)) => if p < toks.len() && toks[p] == Tok::RParen {
