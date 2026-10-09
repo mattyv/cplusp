@@ -372,7 +372,7 @@ fn lex(text: &str, line: u32, names: &mut Names) -> Vec<Tok> {
             };
             toks.push(value.map_or_else(|kind| Tok::Unknown(names.id(&kind), line), Tok::Int));
             rest = &rest[end..];
-        } else if let Some(t) = [(".size()", Tok::Size), (".empty()", Tok::Empty), (".has_value()", Tok::HasValue), (".value()", Tok::Value), ("::", Tok::ColonColon)].into_iter().find(|(s, _)| rest.starts_with(s)) {
+        } else if let Some(t) = [(".size()", Tok::Size), (".empty()", Tok::Empty), (".has_value()", Tok::HasValue), (".value()", Tok::Value), ("..", Tok::DotDot), ("::", Tok::ColonColon)].into_iter().find(|(s, _)| rest.starts_with(s)) {
             rest = &rest[t.0.len()..];
             toks.push(t.1);
         } else if c == '.' && rest[1..].starts_with(|ch: char| ch.is_ascii_alphabetic() || ch == '_') {
@@ -741,6 +741,8 @@ fn dexpr(e: &DExpr, names: &Names) -> String {
         DExpr::Len(a) => format!("|{}|", dexpr(a, names)),
         DExpr::Index(a, i) => format!("{}[{}]", dexpr(a, names), dexpr(i, names)),
         DExpr::Drop(a, k) => format!("{}[{}..]", dexpr(a, names), dexpr(k, names)),
+        DExpr::Take(a, j) => format!("{}[..{}]", dexpr(a, names), dexpr(j, names)),
+        DExpr::Slice(a, i, j) => format!("{}[{}..{}]", dexpr(a, names), dexpr(i, names), dexpr(j, names)),
         // The prefix `b_` keeps a bound name apart from `v_` and `c_` names.
         DExpr::Forall(j, b) => format!("(forall b_{}: int :: {})", names.text(*j), dexpr(b, names)),
         DExpr::Exists(j, b) => format!("(exists b_{}: int :: {})", names.text(*j), dexpr(b, names)),
