@@ -733,7 +733,7 @@ pub open spec fn spec_contract(e: Expr, decl: Names, ps: Params, ret: Option<Ty>
         } else {
             match spec_rebind(decl, ps, n) {
                 Some((p, t)) => spec_leaf(DExpr::Var(p), t, line),
-                None => match spec_this_field(ps, n, sd) {
+                None => match spec_this_field(ps, ret, n, sd) {
                     Some((d, ft)) => spec_leaf(d, ft, line),
                     None => spec_unnamed(n, ret, line),
                 },
@@ -807,10 +807,10 @@ pub open spec fn spec_contract(e: Expr, decl: Names, ps: Params, ret: Option<Ty>
             Ok(_) => Err(Refusal::Syntax(line)),
             Err(r) => Err(r),
         },
-        Expr::Apply(f, args) => match spec_this(ps) {
-            Some((p, k)) => match spec_member(sd, k, f) {
+        Expr::Apply(f, args) => match spec_object(ps, ret) {
+            Some((o, k)) => match spec_member(sd, k, f) {
                 Some((key, Some((t, mps)))) => match spec_contract_args(*args, decl, ps, ret, bound, line, sd) {
-                    Ok(da) => spec_leaf(DExpr::FCall(key, Box::new(DArgs::Cons(DExpr::Var(p), Box::new(spec_convert(da, spec_tail(mps)))))), t, line),
+                    Ok(da) => spec_leaf(DExpr::FCall(key, Box::new(DArgs::Cons(o, Box::new(spec_convert(da, spec_tail(mps)))))), t, line),
                     Err(r) => Err(r),
                 },
                 Some((_, None)) => Err(Refusal::NotPure(f, line)),
@@ -917,7 +917,7 @@ pub open spec fn spec_path(e: Expr, decl: Names, ps: Params, ret: Option<Ty>, bo
         } else {
             match spec_rebind(decl, ps, n) {
                 Some((p, t)) => Ok((DExpr::Var(p), t)),
-                None => match spec_this_field(ps, n, sd) {
+                None => match spec_this_field(ps, ret, n, sd) {
                     Some(x) => Ok(x),
                     None => match ret {
                         Some(_) => Err(Refusal::Name(n, line)),
@@ -932,11 +932,13 @@ pub open spec fn spec_path(e: Expr, decl: Names, ps: Params, ret: Option<Ty>, bo
         },
         Expr::Paren(a) => spec_path(*a, decl, ps, ret, bound, line, sd),
         Expr::Field(o, f) => match spec_path(*o, decl, ps, ret, bound, line, sd) {
-            Ok((d, Ty::Struct(k))) => match spec_field_ty(sd, k, f) {
-                Some(ft) => Ok((DExpr::Field(Box::new(d), f), ft)),
-                None => Err(Refusal::NoField(f, line)),
+            Ok((d, t)) => match spec_struct_key(t) {
+                Some(k) => match spec_field_ty(sd, k, f) {
+                    Some(ft) => Ok((DExpr::Field(Box::new(d), f), ft)),
+                    None => Err(Refusal::NoField(f, line)),
+                },
+                None => Err(Refusal::Syntax(line)),
             },
-            Ok(_) => Err(Refusal::Syntax(line)),
             Err(r) => Err(r),
         },
         Expr::Index(o, i) => match spec_path(*o, decl, ps, ret, bound, line, sd) {
@@ -1001,14 +1003,38 @@ pub open spec fn spec_this(ps: Params) -> Option<(u32, u32)>
     }
 }
 
-/// A name that is no parameter of a member function and is a field of its struct: that field of `this`, decision 0089.
-pub open spec fn spec_this_field(ps: Params, n: u32, sd: Structs) -> Option<(DExpr, Ty)> {
+/// The object of a contract and the key of its struct: `this` of a member function, decision 0089, or `result` of a constructor,
+/// whose result type is `This`, decision 0094.
+pub open spec fn spec_object(ps: Params, ret: Option<Ty>) -> Option<(DExpr, u32)> {
     match spec_this(ps) {
-        Some((p, k)) => match spec_field_ty(sd, k, n) {
-            Some(ft) => Some((DExpr::Field(Box::new(DExpr::Var(p)), n), ft)),
+        Some((p, k)) => Some((DExpr::Var(p), k)),
+        None => match ret {
+            Some(Ty::This(k)) => Some((DExpr::Result, k)),
+            _ => None,
+        },
+    }
+}
+
+/// A name that is no parameter and is a field of the struct of the object: that field of the object, decisions 0089 and 0094.
+pub open spec fn spec_this_field(ps: Params, ret: Option<Ty>, n: u32, sd: Structs) -> Option<(DExpr, Ty)> {
+    match spec_object(ps, ret) {
+        Some((d, k)) => match spec_field_ty(sd, k, n) {
+            Some(ft) => Some((DExpr::Field(Box::new(d), n), ft)),
             None => None,
         },
         None => None,
+    }
+}
+
+/// The type of the result of a function: a value type, or `This` of a constructor, which must not hold a sequence, decision 0094.
+pub open spec fn spec_ret_ty(t: Ty, line: u32, sd: Structs) -> Result<DTy, Refusal> {
+    match t {
+        Ty::This(k) => if spec_holds(sd, k) {
+            Err(Refusal::HoldsSeq(line))
+        } else {
+            Ok(DTy::Struct(k))
+        },
+        _ => spec_value_ty(t, line, sd),
     }
 }
 
@@ -1038,7 +1064,7 @@ pub open spec fn spec_params(ps: Params, line: u32) -> Result<DParams, Refusal>
 
 /// A function has a method when its parameters and its return type are in the subset.
 pub open spec fn has_signature(f: Function, sd: Structs) -> bool {
-    spec_params(f.params, f.line).is_ok() && spec_value_ty(f.ret, f.line, sd).is_ok()
+    spec_params(f.params, f.line).is_ok() && spec_ret_ty(f.ret, f.line, sd).is_ok()
 }
 
 /// A key names a function of the file that has a method.
@@ -1649,7 +1675,7 @@ pub open spec fn spec_convert(da: DArgs, ps: Params) -> DArgs
 pub open spec fn spec_function(f: Function, all: Fns, sd: Structs) -> Model {
     match spec_params(f.params, f.line) {
         Err(r) => Model::Refused(r),
-        Ok(ps) => match spec_value_ty(f.ret, f.line, sd) {
+        Ok(ps) => match spec_ret_ty(f.ret, f.line, sd) {
             Err(r) => Model::Refused(r),
             Ok(ret) => match spec_inside(f, all, sd) {
                 Err(r) => Model::Bare(f.name, ps, ret, r),
@@ -2489,7 +2515,7 @@ pub fn translate_contract(e: &Expr, decl: &Names, ps: &Params, ret: Option<Ty>, 
         } else {
             match rebind(decl, ps, *n) {
                 Some((p, t)) => translate_leaf(DExpr::Var(p), t, line),
-                None => match this_field(ps, *n, sd) {
+                None => match this_field(ps, ret, *n, sd) {
                     Some((d, ft)) => translate_leaf(d, ft, line),
                     None => unnamed(*n, ret, line),
                 },
@@ -2557,10 +2583,10 @@ pub fn translate_contract(e: &Expr, decl: &Names, ps: &Params, ret: Option<Ty>, 
             Ok(_) => Err(Refusal::Syntax(line)),
             Err(r) => Err(r),
         },
-        Expr::Apply(f, args) => match this_param(ps) {
-            Some((p, k)) => match member(sd, k, *f) {
+        Expr::Apply(f, args) => match object(ps, ret) {
+            Some((o, k)) => match member(sd, k, *f) {
                 Some((key, Some((t, mps)))) => match translate_contract_args(args, decl, ps, ret, bound, line, sd) {
-                    Ok(da) => translate_leaf(DExpr::FCall(key, Box::new(DArgs::Cons(DExpr::Var(p), Box::new(convert(da, &tail(&mps)))))), t, line),
+                    Ok(da) => translate_leaf(DExpr::FCall(key, Box::new(DArgs::Cons(o, Box::new(convert(da, &tail(&mps)))))), t, line),
                     Err(r) => Err(r),
                 },
                 Some((_, None)) => Err(Refusal::NotPure(*f, line)),
@@ -2667,7 +2693,7 @@ pub fn path(e: &Expr, decl: &Names, ps: &Params, ret: Option<Ty>, bound: &Names,
         } else {
             match rebind(decl, ps, *n) {
                 Some((p, t)) => Ok((DExpr::Var(p), t)),
-                None => match this_field(ps, *n, sd) {
+                None => match this_field(ps, ret, *n, sd) {
                     Some(x) => Ok(x),
                     None => match ret {
                         Some(_) => Err(Refusal::Name(*n, line)),
@@ -2682,11 +2708,13 @@ pub fn path(e: &Expr, decl: &Names, ps: &Params, ret: Option<Ty>, bound: &Names,
         },
         Expr::Paren(a) => path(a, decl, ps, ret, bound, line, sd),
         Expr::Field(o, f) => match path(o, decl, ps, ret, bound, line, sd) {
-            Ok((d, Ty::Struct(k))) => match field_ty(sd, k, *f) {
-                Some(ft) => Ok((DExpr::Field(Box::new(d), *f), ft)),
-                None => Err(Refusal::NoField(*f, line)),
+            Ok((d, t)) => match struct_key(t) {
+                Some(k) => match field_ty(sd, k, *f) {
+                    Some(ft) => Ok((DExpr::Field(Box::new(d), *f), ft)),
+                    None => Err(Refusal::NoField(*f, line)),
+                },
+                None => Err(Refusal::Syntax(line)),
             },
-            Ok(_) => Err(Refusal::Syntax(line)),
             Err(r) => Err(r),
         },
         Expr::Index(o, i) => match path(o, decl, ps, ret, bound, line, sd) {
@@ -2742,16 +2770,43 @@ pub fn this_param(ps: &Params) -> (r: Option<(u32, u32)>)
     }
 }
 
-pub fn this_field(ps: &Params, n: u32, sd: &Structs) -> (r: Option<(DExpr, Ty)>)
+pub fn object(ps: &Params, ret: Option<Ty>) -> (r: Option<(DExpr, u32)>)
     ensures
-        r == spec_this_field(*ps, n, *sd),
+        r == spec_object(*ps, ret),
 {
     match this_param(ps) {
-        Some((p, k)) => match field_ty(sd, k, n) {
-            Some(ft) => Some((DExpr::Field(Box::new(DExpr::Var(p)), n), ft)),
+        Some((p, k)) => Some((DExpr::Var(p), k)),
+        None => match ret {
+            Some(Ty::This(k)) => Some((DExpr::Result, k)),
+            _ => None,
+        },
+    }
+}
+
+pub fn this_field(ps: &Params, ret: Option<Ty>, n: u32, sd: &Structs) -> (r: Option<(DExpr, Ty)>)
+    ensures
+        r == spec_this_field(*ps, ret, n, *sd),
+{
+    match object(ps, ret) {
+        Some((d, k)) => match field_ty(sd, k, n) {
+            Some(ft) => Some((DExpr::Field(Box::new(d), n), ft)),
             None => None,
         },
         None => None,
+    }
+}
+
+pub fn ret_ty(t: Ty, line: u32, sd: &Structs) -> (r: Result<DTy, Refusal>)
+    ensures
+        r == spec_ret_ty(t, line, *sd),
+{
+    match t {
+        Ty::This(k) => if holds_seq(sd, k) {
+            Err(Refusal::HoldsSeq(line))
+        } else {
+            Ok(DTy::Struct(k))
+        },
+        _ => translate_value_ty(t, line, sd),
     }
 }
 
@@ -2808,7 +2863,7 @@ pub fn signature(f: &Function, sd: &Structs) -> (r: bool)
     ensures
         r == has_signature(*f, *sd),
 {
-    translate_params(&f.params, f.line).is_ok() && translate_value_ty(f.ret, f.line, sd).is_ok()
+    translate_params(&f.params, f.line).is_ok() && ret_ty(f.ret, f.line, sd).is_ok()
 }
 
 pub fn callable(fs: &Fns, key: u32, sd: &Structs) -> (r: bool)
@@ -3539,7 +3594,7 @@ pub fn translate_function(f: &Function, all: &Fns, sd: &Structs) -> (r: Model)
 {
     match translate_params(&f.params, f.line) {
         Err(r) => Model::Refused(r),
-        Ok(ps) => match translate_value_ty(f.ret, f.line, sd) {
+        Ok(ps) => match ret_ty(f.ret, f.line, sd) {
             Err(r) => Model::Refused(r),
             Ok(ret) => match translate_inside(f, all, sd) {
                 Err(r) => Model::Bare(f.name, ps, ret, r),
