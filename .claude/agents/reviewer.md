@@ -11,6 +11,8 @@ Read `CLAUDE.md`, then `docs/policy.md`, then the section "Whole-program develop
 
 ## What to look for, in this order
 
+Use `skills/cplusp-dafny/references/specification-review.md` for specification generation and review. Keep contracts and specification definitions fixed during mutation checks. Record a baseline, an allowed-input witness and the exact outcome for each wrong body. A syntax failure, translation refusal or timeout does not count as the contract rejecting it. Check requirement coverage and intended input classes. Report executable changes separately from annotation changes.
+
 1. Quiet passes. Any input for which the gate says "ok" when it should have refused or reported. This is the worst failure the project can have. Think adversarially about malformed files, missing fields, odd paths, offsets past the end, and anything a bot could write to slip past.
 2. Weak specifications. Try to break each contract and each Verus `ensures` that the change adds or relies on. Write deliberately wrong implementations: return an empty result, return a constant, omit an update, mishandle duplicates, be off by one. Run the prover on each, in a scratch directory. The contract must reject each one. Also show that the intended inputs satisfy the preconditions, with a caller or a witness. A contract that a wrong body satisfies is a finding. These attempts find weak contracts. They do not prove that a contract is complete, so do not claim that.
 3. Correctness bugs the tests do not catch: wrong exit codes, panics, wrong lines, lost findings.

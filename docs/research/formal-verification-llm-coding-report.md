@@ -1,7 +1,7 @@
 ---
 title: "Does formal verification improve LLM coding?"
-subtitle: "Six conclusions, with the evidence beside each claim"
-date: "Evidence checked 8 October 2026"
+subtitle: "Seven conclusions, with the evidence beside each claim"
+date: "Evidence checked 9 October 2026"
 lang: en
 ---
 
@@ -123,6 +123,40 @@ Do not weaken a contract or add an assumption merely to obtain a successful proo
 Report a requirements conflict for review.
 Dafny requires all relevant implementations to verify for a complete program claim. [12][12]
 
+## 7. Reusable skills exist. Their specification impact needs careful attribution.
+
+**Use evaluated methods, then measure the local skill.** KVerus provides installable Verus skills.
+SpecSyn and AutoSpec+ provide evaluated specification workflows.
+Their results measure different outcomes.
+
+| Candidate | Evidence | What it establishes |
+|---|---|---|
+| **KVerus**: specification, repair, review and behavior-audit skills | Earlier ASE 2026 workflow verified **251/313 tasks (80.2%)**, versus **178/313 (56.9%)** for AutoVerus. [13][13] | Better proof generation under the study conditions. The paper assumes correct specifications. It does **not** establish the current specification skill's quality. The evaluated workflow is on the repository's `ase-26` branch. [14][14] |
+| **SpecSyn**: decomposition and mutation refinement | With GPT-5, adding mutation refinement raised average reference-specification coverage **70.57% → 75.91%**. Adding decomposition raised it **63.25% → 75.91%**. [7, Table 2][7] | Direct evidence of stronger generated supporting specifications on 50 C source files. Verification targets are supplied. This is a preprint and does not establish recovery of all intended requirements. |
+| **AutoSpec+**: generate, verify and repair ACSL annotations | ACL 2026 evaluation reports **91.05% pass@5**, versus **79.76% for AutoSpec**, on the comparison suites. [15, Table 3][15] | Improved verification success within five attempts. The system includes model ensembles. This is not an isolated measure of specification completeness. |
+
+**Implication for C+P:** adapt KVerus's separate workflow stages and SpecSyn's mutation checks.
+Use the existing project skill and reviewer roles.
+This adaptation has not yet been evaluated on C+P.
+
+The reviewer should freeze the contract, verify the baseline, and try small wrong implementations.
+For sorting, return an empty sequence or drop duplicates.
+For search, always return false.
+For an update, change an unrelated field.
+Give an allowed input that exposes the wrong result for each mutation.
+Record whether the proof rejects it, the wrong body verifies, or the check is inconclusive.
+A translation refusal, syntax failure or timeout does not show that the contract catches the bug.
+
+Also check that preconditions admit intended inputs.
+Compare executable behavior before and after annotations.
+Keep requirements review independent of implementation inspection.
+Code-derived contracts can accurately describe an existing bug.
+Neither successful verification nor rejection of a finite mutation set proves specification completeness.
+
+See [the skill's specification-review workflow](../../skills/cplusp-dafny/references/specification-review.md).
+For the pilot in section 5, add missed requirements and wrong variants that still verify to the measurements.
+Keep evaluation mutations separate from the ones used to refine the specification.
+
 ## Sources
 
 1. **SWE-Proof** (September 2026 preprint, v2). [Tables 2–3 and Section 5](https://arxiv.org/html/2609.21190v2).
@@ -138,6 +172,9 @@ Dafny requires all relevant implementations to verify for a complete program cla
 10. **SPARK package contracts**. [State abstraction and initialization](https://docs.adacore.com/spark2014-docs/html/ug/en/source/package_contracts.html).
 11. **SPARK team workflows**. [Continuous analysis and assumption management](https://docs.adacore.com/spark2014-docs/html/ug/en/source/how_to_use_gnatprove_in_a_team.html).
 12. **Dafny documentation**. [Modules and refinement](https://dafny.org/dafny/OnlineTutorial/Modules), [complete verification and assumptions](https://dafny.org/latest/DafnyRef/DafnyRef.html).
+13. **KVerus** (ASE 2026, Industry Track). [Table 1 and Section 6.1: proof-generation results and assumed specification correctness](https://arxiv.org/html/2605.03822v1).
+14. **KVerus repository**. [Installable skills and the evaluated `ase-26` workflow](https://github.com/asterinas/KVerus), [specification skill](https://github.com/asterinas/KVerus/blob/main/skills/kverus-spec/SKILL.md).
+15. **AutoSpec+** (ACL 2026 System Demonstrations). [Tables 2–3 and Section 5: specification-generation evaluation](https://aclanthology.org/2026.acl-demo.66.pdf), [runnable tool](https://github.com/Xidian-ICTT-GZ/AutoSpec).
 
 *This brief retains the earlier review's strongest evidence. Results come from distinct benchmarks. This report gives no pooled effect estimate.*
 
@@ -153,3 +190,6 @@ Dafny requires all relevant implementations to verify for a complete program cla
 [10]: https://docs.adacore.com/spark2014-docs/html/ug/en/source/package_contracts.html
 [11]: https://docs.adacore.com/spark2014-docs/html/ug/en/source/how_to_use_gnatprove_in_a_team.html
 [12]: https://dafny.org/latest/DafnyRef/DafnyRef.html
+[13]: https://arxiv.org/html/2605.03822v1
+[14]: https://github.com/asterinas/KVerus
+[15]: https://aclanthology.org/2026.acl-demo.66.pdf
