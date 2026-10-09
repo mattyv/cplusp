@@ -1320,3 +1320,83 @@ fn the_parser_reads_division_and_remainder_with_multiplication() {
     let want = Expr::Bin(BinOp::Add, b(Expr::Name(A)), b(Expr::Bin(BinOp::Div, b(Expr::Name(B)), b(Expr::Name(X)))));
     assert_eq!(parse_contract(&toks, 3), Ok(want));
 }
+
+const THIS: u32 = 130;
+const CN: u32 = 131;
+const COUNTER: u32 = 132;
+
+/// `struct Counter { int32_t n_; }` as the table of the file.
+fn counter_table() -> Structs {
+    Structs::Cons(COUNTER, 4, Params::Cons(CN, Ty::I32, Box::new(Params::Nil)), Box::new(Structs::Nil))
+}
+
+#[test]
+fn a_const_member_function_reads_its_object_as_the_parameter_this() {
+    // int32_t Counter::next() const with requires n_ < 1000, ensures result == n_ + 1, return n_ + 1
+    let this = Params::Cons(THIS, Ty::This(COUNTER), Box::new(Params::Nil));
+    let req = Expr::Bin(BinOp::Lt, b(Expr::Name(CN)), b(Expr::Int(1000)));
+    let ens = Expr::Bin(BinOp::Eq, b(Expr::Result), b(Expr::Bin(BinOp::Add, b(Expr::Name(CN)), b(Expr::Int(1)))));
+    let field = Expr::Cast(CastKind::Read, b(Expr::Field(b(Expr::Var(THIS, Ty::This(COUNTER))), CN)));
+    let f = Function {
+        name: SAT,
+        line: 9,
+        params: this,
+        ret: Ty::I32,
+        conds: Conds::Cons(CondKind::Requires, req, 7, names(&[]), Box::new(Conds::Cons(CondKind::Ensures, ens, 8, names(&[]), Box::new(Conds::Nil)))),
+        body: one(Stmt::Return(Expr::Bin(BinOp::Add, b(field), b(Expr::Lit(1, Ty::I32))), 10)),
+    };
+    let Model::Full(m) = translate_function(&f, &Fns::Nil, &counter_table()) else { panic!("a full model") };
+    // The object is a value of the datatype.
+    assert_eq!(m.params, DParams::Cons(THIS, DTy::Struct(COUNTER), Box::new(DParams::Nil)));
+    // A bare field name in a contract is the field of this, read as an exact integer.
+    let n = || Box::new(DExpr::AsInt(Box::new(DExpr::Field(Box::new(DExpr::Var(THIS)), CN))));
+    assert_eq!(strip_conds(m.requires), DConds::Cons(DExpr::Bin(BinOp::Lt, n(), Box::new(DExpr::Lit(1000))), 0, Box::new(DConds::Nil)));
+    let want = DExpr::Bin(BinOp::Eq, Box::new(DExpr::AsInt(Box::new(DExpr::Result))), Box::new(DExpr::Bin(BinOp::Add, n(), Box::new(DExpr::Lit(1)))));
+    assert_eq!(strip_conds(m.ensures), DConds::Cons(want, 0, Box::new(DConds::Nil)));
+    let body = DExpr::Bin(BinOp::Add, Box::new(DExpr::Field(Box::new(DExpr::Var(THIS)), CN)), Box::new(lit32(1)));
+    assert_eq!(strip(m.body), DStmts::Cons(Box::new(DStmt::Return(body)), 0, Box::new(DStmts::Nil)));
+}
+
+#[test]
+fn a_parameter_wins_over_a_field_and_a_name_that_is_neither_is_refused() {
+    // int32_t Counter::shadow(int32_t n_) const with ensures result == n_: the parameter, as in C++
+    let ps = Params::Cons(THIS, Ty::This(COUNTER), Box::new(Params::Cons(CN, Ty::I32, Box::new(Params::Nil))));
+    let ens = Expr::Bin(BinOp::Eq, b(Expr::Result), b(Expr::Name(CN)));
+    let f = Function {
+        name: SAT,
+        line: 9,
+        params: ps,
+        ret: Ty::I32,
+        conds: Conds::Cons(CondKind::Ensures, ens, 8, names(&[CN]), Box::new(Conds::Nil)),
+        body: one(Stmt::Return(read(CN, Ty::I32), 10)),
+    };
+    let Model::Full(m) = translate_function(&f, &Fns::Nil, &counter_table()) else { panic!("a full model") };
+    let want = DExpr::Bin(BinOp::Eq, Box::new(DExpr::AsInt(Box::new(DExpr::Result))), Box::new(DExpr::AsInt(Box::new(DExpr::Var(CN)))));
+    assert_eq!(strip_conds(m.ensures), DConds::Cons(want, 0, Box::new(DConds::Nil)));
+    // ensures result == m_, where m_ is no parameter and no field of Counter
+    let f = Function {
+        name: SAT,
+        line: 9,
+        params: Params::Cons(THIS, Ty::This(COUNTER), Box::new(Params::Nil)),
+        ret: Ty::I32,
+        conds: Conds::Cons(CondKind::Ensures, Expr::Bin(BinOp::Eq, b(Expr::Result), b(Expr::Name(99))), 8, names(&[]), Box::new(Conds::Nil)),
+        body: one(Stmt::Return(Expr::Lit(0, Ty::I32), 10)),
+    };
+    assert_eq!(bare_refusal(translate_function(&f, &Fns::Nil, &counter_table())), Refusal::Name(99, 8));
+    // A free function has no this, so a field name alone is no parameter there.
+    let f = Function {
+        name: SAT,
+        line: 9,
+        params: Params::Cons(A, Ty::Struct(COUNTER), Box::new(Params::Nil)),
+        ret: Ty::I32,
+        conds: Conds::Cons(CondKind::Ensures, Expr::Bin(BinOp::Eq, b(Expr::Result), b(Expr::Name(CN))), 8, names(&[A]), Box::new(Conds::Nil)),
+        body: one(Stmt::Return(Expr::Lit(0, Ty::I32), 10)),
+    };
+    assert_eq!(bare_refusal(translate_function(&f, &Fns::Nil, &counter_table())), Refusal::Name(CN, 8));
+}
+
+#[test]
+fn the_object_is_a_parameter_and_no_local_or_result() {
+    assert_eq!(translate_ty(Ty::This(COUNTER), 3), Ok(DTy::Struct(COUNTER)));
+    assert_eq!(translate_value_ty(Ty::This(COUNTER), 3, &counter_table()), Err(Refusal::Syntax(3)));
+}

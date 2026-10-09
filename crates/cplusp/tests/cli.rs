@@ -2884,6 +2884,42 @@ fn prove_names_a_division_that_may_fail() {
     assert_eq!(failed.len(), 4, "{text}");
 }
 
+/// const member functions prove, with the object as a parameter this by value, bare field names in their contracts, a call of a
+/// member function inside another and from a free function, and a private field, decision 0089 steps 1 and 2.
+#[test]
+fn const_member_functions_prove() {
+    let Some(dafny) = dafny() else { return };
+    if !clang_tidy_available() {
+        return;
+    }
+    let o = prove("model-method.cpp", &[], &dafny);
+    let text = stdout(&o);
+    assert_eq!(o.status.code(), Some(0), "stdout: {text} stderr: {}", stderr(&o));
+    assert_eq!(text.lines().last(), Some("ok: proved"), "{text}");
+}
+
+/// A member function that is not const, a static member function, and a contract name that is no parameter and no field, are each
+/// refused at their lines, and the rest of the struct still translates, decision 0089.
+#[test]
+fn member_functions_with_no_rule_are_refused_at_their_lines() {
+    if !clang_tidy_available() {
+        return;
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let (o, _) = model("model-method-refuse.cpp", dir.path());
+    let text = stdout(&o);
+    assert_eq!(o.status.code(), Some(1), "stdout: {text} stderr: {}", stderr(&o));
+    let refusals: Vec<&str> = text.lines().filter(|l| l.starts_with("Not provable: ")).collect();
+    for want in [
+        "model-method-refuse.cpp:7: CXXMethodDecl: the translator has no rule for it yet.",
+        "model-method-refuse.cpp:12: CXXMethodDecl: the translator has no rule for it yet.",
+        "model-method-refuse.cpp:16: m_ in the contract is no parameter.",
+    ] {
+        assert!(refusals.iter().any(|l| l.ends_with(want)), "{want}: {text}");
+    }
+    assert_eq!(refusals.len(), 3, "{text}");
+}
+
 /// Pull `"key":"value"` or `"key":123` out of one JSON line without a JSON library.
 fn field(line: &str, key: &str) -> String {
     let needle = format!("\"{key}\":");
