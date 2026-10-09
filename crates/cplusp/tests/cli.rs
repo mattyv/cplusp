@@ -3231,3 +3231,59 @@ fn prove_refuses_a_forall_statement_with_no_body_in_the_companion_file() {
     assert!(text.lines().any(|l| l.starts_with("Not provable: ") && l.ends_with(want)), "{want}: {text}");
     assert!(!text.contains("ok: proved"), "{text}");
 }
+
+/// A trusted function is a method with its contract and no body. Its callers prove from the contract, and prove names each
+/// trusted function with its reason before the verdict, decision 0102.
+#[test]
+fn trusted_functions_are_contracts_that_prove_names() {
+    let Some(dafny) = dafny() else { return };
+    if !clang_tidy_available() {
+        return;
+    }
+    let o = prove("model-trusted.cpp", &[], &dafny);
+    let text = stdout(&o);
+    assert_eq!(o.status.code(), Some(0), "stdout: {text} stderr: {}", stderr(&o));
+    assert_eq!(text.lines().last(), Some("ok: proved"), "{text}");
+    let trusted: Vec<&str> = text.lines().filter(|l| l.starts_with("Trusted: ")).collect();
+    for want in [
+        "model-trusted.cpp:7: read_status: reads a hardware status register",
+        "model-trusted.cpp:18: increment: a body that the translator has no rule for",
+    ] {
+        assert!(trusted.iter().any(|l| l.ends_with(want)), "{want}: {text}");
+    }
+    assert_eq!(trusted.len(), 2, "{text}");
+}
+
+/// A caller that needs more than the contract of a trusted function, or that misses its requires line, is not proved, decision
+/// 0102.
+#[test]
+fn prove_names_a_caller_that_needs_more_than_a_trusted_contract() {
+    let Some(dafny) = dafny() else { return };
+    if !clang_tidy_available() {
+        return;
+    }
+    let o = prove("model-trusted-wrong.cpp", &[], &dafny);
+    let text = stdout(&o);
+    assert_eq!(o.status.code(), Some(1), "stdout: {text} stderr: {}", stderr(&o));
+    let failed: Vec<&str> = text.lines().filter(|l| l.starts_with("Not proved: ")).collect();
+    for want in ["model-trusted-wrong.cpp:12: the ensures line may not hold on this return.", "model-trusted-wrong.cpp:21: a requires line of the callee may not hold."] {
+        assert!(failed.iter().any(|l| l.ends_with(want)), "{want}: {text}");
+    }
+    assert_eq!(failed.len(), 2, "{text}");
+}
+
+/// A function with no body and no marker has no method, so a call of it is refused at its line, decision 0102.
+#[test]
+fn a_call_of_a_function_with_no_body_and_no_marker_is_refused() {
+    if !clang_tidy_available() {
+        return;
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let (o, _) = model("model-trusted-refuse.cpp", dir.path());
+    let text = stdout(&o);
+    assert_eq!(o.status.code(), Some(1), "stdout: {text} stderr: {}", stderr(&o));
+    let refusals: Vec<&str> = text.lines().filter(|l| l.starts_with("Not provable: ")).collect();
+    let want = "model-trusted-refuse.cpp:8: a call to read_status, which has no model in view.";
+    assert!(refusals.iter().any(|l| l.ends_with(want)), "{want}: {text}");
+    assert_eq!(refusals.len(), 1, "{text}");
+}

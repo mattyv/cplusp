@@ -107,3 +107,4 @@ Status is `decided`, `proposed` (the default until someone objects or the thin s
 | [0099](0099-assert-and-apply-lines-in-a-body.md) | Assert and apply lines in a body. A contract in a body reads the object as the body has it. A companion file may hold a lemma with a body | decided |
 | [0100](0100-a-bound-name-is-no-function.md) | A call of a name that a quantifier binds is refused | decided |
 | [0101](0101-a-forall-statement-with-no-body-is-an-axiom.md) | A forall statement with no body in a lemma is an axiom. Assert lines stay in their block. Names out of scope name their line | decided |
+| [0102](0102-a-trusted-function-in-the-model.md) | A trusted function is a method with its contract and no body. prove names each one with its reason | decided |
