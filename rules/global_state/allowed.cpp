@@ -203,3 +203,21 @@ struct Rattle : Chime {
 void rattle() {
   Rattle r;
 }
+
+int32_t level = 0;
+
+// A name on the modifies line that names a parameter is that parameter, as in C++ scope, decision 0111. The global with the same name
+// does not change, so the caller lists nothing.
+//@ requires level < 100
+//@ modifies level
+//@ ensures level == old(level) + 1
+void raise(int32_t& level) {
+  level += 1;
+}
+
+//@ ensures result == 1
+int32_t raised() {
+  int32_t c = 0;
+  raise(c);
+  return c;
+}
