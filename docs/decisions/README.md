@@ -101,3 +101,4 @@ Status is `decided`, `proposed` (the default until someone objects or the thin s
 | [0093](0093-test-the-skill-as-an-application-development-process.md) | Test the skill as an application development process | decided |
 | [0094](0094-a-constructor-is-a-method-that-gives-the-value.md) | A constructor with only a member init list is a method that gives the value it builds | decided |
 | [0095](0095-the-arguments-of-a-member-function-in-a-contract.md) | Arguments of a member function in a contract pass as its parameter types. A member is pure only when its contract has a model. Overloads are left out | decided |
+| [0096](0096-a-member-function-that-writes-its-object.md) | A member function that writes its object takes it in and gives it back. Field writes, compound assignment, void | decided |
