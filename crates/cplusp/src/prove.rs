@@ -83,6 +83,9 @@ fn counts(line: &str) -> Option<((u64, u64, u64), Option<Unread>)> {
 /// The type between the quotes at the end of a message, as C++ writes it.
 fn quoted_type(message: &str) -> Option<&'static str> {
     Some(match message.strip_suffix('\'')?.rsplit_once('\'')?.1 {
+        "int8" => "int8_t",
+        "int16" => "int16_t",
+        "uint16" => "uint16_t",
         "int32" => "int32_t",
         "int64" => "int64_t",
         "uint8" => "uint8_t",
@@ -217,8 +220,13 @@ pub fn run(t: &Translation, limit: u32, refused: bool, source: &str, shown: &dyn
         // The only Dafny functions besides the prelude are the member functions, so a related requires line of the contract is one of theirs, decision 0095.
         let member = message == "function precondition could not be proved"
             && e.related.iter().filter_map(|r| here(*r)).any(|l| map.contracts.get(&l.place).is_some_and(|(word, _)| word == "requires"));
+        // A call of shr whose `requires 0 <= n < w` of the prelude fails is a shift amount that may be too wide, decision 0106.
+        let shift = message == "function precondition could not be proved"
+            && e.related.iter().any(|r| !map.companion.contains(&r.wrapping_sub(1)) && t.dafny.lines().nth(r.wrapping_sub(1)) == Some("  requires 0 <= n < w"));
         let said = if zero {
             "the divisor may be zero.".to_string()
+        } else if shift {
+            "the shift amount may be negative or not below the width of the type.".to_string()
         } else if member {
             "a requires line of the member function may not hold here.".to_string()
         } else {

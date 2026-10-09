@@ -3845,6 +3845,7 @@ public:
                                                   : nullptr;
     llvm::json::Array Params, Conds;
     Enclosing = FD;
+    llvm::json::Value Hidden = hiddenConstants(FD);
     if (!Opaque) {
       // A member function takes its object as a parameter `this` by value, first, decision 0089. Its contract lines name it first too.
       // One that is not const writes its object and gives it back, decision 0096.
@@ -3869,6 +3870,7 @@ public:
                                 {"params", std::move(Params)},
                                 {"ret", thisType(Constructor->getParent())},
                                 {"trusted", TrustedJson},
+                                {"hidden", std::move(Hidden)},
                                 {"conds", std::move(Conds)},
                                 {"body", Trusted ? llvm::json::Array{} : constructorBody(Constructor)}};
     return llvm::json::Object{{"name", FD->getNameAsString()},
@@ -3878,6 +3880,7 @@ public:
                               {"params", std::move(Params)},
                               {"ret", Opaque ? tag("Other", Opaque) : FD->getReturnType()->isVoidType() ? llvm::json::Value("Void") : type(FD->getReturnType())},
                               {"trusted", TrustedJson},
+                              {"hidden", std::move(Hidden)},
                               {"conds", std::move(Conds)},
                               {"body", Opaque ? llvm::json::Array{tag("Unknown", llvm::json::Array{Opaque, number(line(FD->getLocation()))})}
                                        : Trusted ? llvm::json::Array{}
@@ -3885,6 +3888,84 @@ public:
   }
 
   std::string file(SourceLocation At) const { return SM.getFilename(SM.getFileLoc(At)).str(); }
+
+  // The value of a named constant, decision 0106: a `constexpr` variable of an integer type, declared at the scope of the file. Null when
+  // the variable is none. A namespace is no scope of the file. A constant of a namespace or of a class can hide one of the file from a
+  // function, so `function` writes the names that it hides, decision 0107.
+  std::optional<llvm::APSInt> constant(const ValueDecl *D) const {
+    const auto *Var = dyn_cast<VarDecl>(D);
+    if (!Var || !Var->isConstexpr() || !Var->getDeclContext()->isTranslationUnit() || isa<VarTemplateSpecializationDecl>(Var) || Var->isTemplated())
+      return std::nullopt;
+    const QualType T = Var->getType().getCanonicalType().getUnqualifiedType();
+    const char *S = scalar(T) ? scalar(T) : smallScalar(T);
+    const APValue *Value = S && StringRef(S) != "Bool" ? Var->evaluateValue() : nullptr;
+    if (!Value || !Value->isInt())
+      return std::nullopt;
+    return Value->getInt();
+  }
+  // Whether a scope declares a name, or a using-directive of the scope brings one in, decision 0107. A function holds its locals in its list of
+  // declarations, not in its table of names, so its list is read. `Seen` stops a cycle of directives. The table of the translation unit holds the
+  // constants of the file themselves, so `Own` is false for it: only its directives count.
+  // ponytail: a function's locals, and the later declarations of a namespace, hide the name from the whole function. This refuses some correct
+  // programs. Upgrade: look up from the point of the declaration.
+  static bool declares(const DeclContext *DC, DeclarationName Name, std::set<const DeclContext *> &Seen, bool Own = true) {
+    DC = DC->getPrimaryContext();
+    if (!Seen.insert(DC).second)
+      return false;
+    if (isa<FunctionDecl>(DC)) {
+      for (const Decl *D : DC->decls()) {
+        if (const auto *Named = dyn_cast<NamedDecl>(D); Named && Named->getDeclName() == Name)
+          return true;
+      }
+      // ponytail: a using-directive in a function body is not looked through. The gate bans it in verified and trusted code. Upgrade: find
+      // each UsingDirectiveDecl in the DeclStmts of the body.
+      return false;
+    }
+    if (Own && !DC->lookup(Name).empty())
+      return true;
+    for (const UsingDirectiveDecl *Using : DC->using_directives())
+      if (Using->getNominatedNamespace() && declares(Using->getNominatedNamespace(), Name, Seen))
+        return true;
+    return false;
+  }
+  // The names of the constants of the file that C++ does not find from the function, decision 0107. Unqualified lookup goes out from the function
+  // through its class, the bases of the class, the functions and namespaces around it, and the using-directives of each, to the file. A name that one
+  // of them declares hides the constant of the file, and so does a directive of the file that brings in the same name: it has two meanings then.
+  llvm::json::Array hiddenConstants(const FunctionDecl *FD) const {
+    llvm::json::Array Out;
+    for (const Decl *D : Context.getTranslationUnitDecl()->decls()) {
+      const auto *Var = dyn_cast<VarDecl>(D);
+      if (!Var || !Var->isConstexpr() || !constant(Var))
+        continue;
+      const DeclarationName Name = Var->getDeclName();
+      bool Hidden = false;
+      for (const DeclContext *DC = FD->getDeclContext(); DC && !DC->isTranslationUnit() && !Hidden; DC = DC->getParent()) {
+        std::set<const DeclContext *> Seen;
+        Hidden = declares(DC, Name, Seen);
+        if (const auto *RD = dyn_cast<CXXRecordDecl>(DC); RD && !Hidden && RD->hasDefinition())
+          Hidden = !RD->forallBases([&](const CXXRecordDecl *Base) {
+            std::set<const DeclContext *> BaseSeen;
+            return !declares(Base, Name, BaseSeen);
+          });
+      }
+      std::set<const DeclContext *> Seen;
+      // An inline namespace puts its names in the table of its parent and makes no directive, so a second declaration of the name in the table of the
+      // file is one of an inline namespace.
+      const DeclContext::lookup_result AtFile = Context.getTranslationUnitDecl()->lookup(Name);
+      if (Hidden || std::distance(AtFile.begin(), AtFile.end()) > 1 || declares(Context.getTranslationUnitDecl(), Name, Seen, false))
+        Out.push_back(Var->getNameAsString());
+    }
+    return Out;
+  }
+  // The line of the tree for a named constant, or null.
+  llvm::json::Value constantLine(const VarDecl *Var) const {
+    const std::optional<llvm::APSInt> Value = constant(Var);
+    if (!Value)
+      return nullptr;
+    llvm::SmallString<32> Text;
+    Value->toString(Text);
+    return llvm::json::Object{{"constant", Var->getNameAsString()}, {"value", std::string(Text)}};
+  }
 
 private:
   ASTContext &Context;
@@ -4004,6 +4085,28 @@ private:
         return Bits == 64 ? "U64" : nullptr;
       case BuiltinType::Bool:
         return "Bool";
+      default:
+        return nullptr;
+      }
+    }
+    return nullptr;
+  }
+
+  // The small integer types of decision 0106: `int8_t`, `int16_t` and `uint16_t`, or null. They are types of the subset, but no element of a
+  // sequence, an optional or a field, so `scalar` does not name them.
+  const char *smallScalar(QualType T) const {
+    const QualType Canon = T.getCanonicalType();
+    if (Canon.hasQualifiers())
+      return nullptr;
+    if (const auto *Builtin = dyn_cast<BuiltinType>(Canon.getTypePtr())) {
+      const uint64_t Bits = Context.getTypeSize(Canon);
+      switch (Builtin->getKind()) {
+      case BuiltinType::SChar:
+        return Bits == 8 ? "I8" : nullptr;
+      case BuiltinType::Short:
+        return Bits == 16 ? "I16" : nullptr;
+      case BuiltinType::UShort:
+        return Bits == 16 ? "U16" : nullptr;
       default:
         return nullptr;
       }
@@ -4178,6 +4281,8 @@ private:
   llvm::json::Value type(QualType T, bool Field = false) const {
     if (const char *S = scalar(T))
       return S;
+    if (const char *S = smallScalar(T))
+      return S;
     // Decision 0074: a struct is by value or by const lvalue reference. Any other reference stays `Other`.
     const bool Writable = T->isReferenceType() && !(T->isLValueReferenceType() && T->getPointeeType().isConstQualified());
     if (const CXXRecordDecl *RD = Writable ? nullptr : plainStruct(T)) {
@@ -4337,7 +4442,36 @@ private:
       const ValueDecl *D = Ref->getDecl();
       if (isa<ParmVarDecl>(D) || (isa<VarDecl>(D) && cast<VarDecl>(D)->hasLocalStorage()))
         return tag("Var", llvm::json::Array{D->getNameAsString(), type(D->getType())});
+      // A named constant is its value, decision 0106. A negative one is the negation of a literal, as `-5` is.
+      if (const std::optional<llvm::APSInt> Value = constant(D)) {
+        // The magnitude of a negative value, taken one bit wider so that the minimum of a type does not overflow.
+        llvm::APSInt Wide = Value->extend(Value->getBitWidth() + 1);
+        if (Value->isNegative())
+          Wide = -Wide;
+        if (Wide.getActiveBits() <= 64) {
+          const llvm::json::Value Own = type(D->getType().getCanonicalType().getUnqualifiedType());
+          if (!Value->isNegative())
+            return tag("Lit", llvm::json::Array{number(Wide.getZExtValue()), Own});
+          // A negative value is computed in int, or in long for int64_t, and converted to its type. The minimum of int and of long is
+          // the negation of the maximum, less 1, so that no literal is too large.
+          const bool Long = Value->getBitWidth() > 32;
+          const char *Computed = Long ? "I64" : "I32";
+          const uint64_t Maximum = Long ? INT64_MAX : INT32_MAX;
+          llvm::json::Value Negative = Wide.getZExtValue() <= Maximum
+                                           ? tag("Neg", tag("Lit", llvm::json::Array{number(Wide.getZExtValue()), Computed}))
+                                           : tag("Bin", llvm::json::Array{"Sub", tag("Neg", tag("Lit", llvm::json::Array{number(Maximum), Computed})),
+                                                                          tag("Lit", llvm::json::Array{number(1), Computed})});
+          if (StringRef(Computed) == Own.getAsString().value_or(""))
+            return Negative;
+          return tag("Cast", llvm::json::Array{tag("Integral", llvm::json::Array{Computed, Own}), std::move(Negative)});
+        }
+      }
     }
+    // A character is an integer once the compiler has converted it, decision 0106. An ASCII character only: the sign of `char` plays no part.
+    if (const auto *Convert = dyn_cast<ImplicitCastExpr>(E); Convert && Convert->getCastKind() == CK_IntegralCast)
+      if (const auto *Char = dyn_cast<CharacterLiteral>(Convert->getSubExpr()->IgnoreParens());
+          Char && Char->getKind() == CharacterLiteralKind::Ascii && Char->getValue() < 0x80)
+        return tag("Lit", llvm::json::Array{number(Char->getValue()), type(Convert->getType())});
     if (const auto *Binary = dyn_cast<BinaryOperator>(E)) {
       const char *Op = nullptr;
       switch (Binary->getOpcode()) {
@@ -4358,6 +4492,9 @@ private:
       if (!Op && (Binary->getOpcode() == BO_Div || Binary->getOpcode() == BO_Rem) && Binary->getType()->isIntegerType())
         return tag("Divide", llvm::json::Array{Binary->getOpcode() == BO_Div ? "Div" : "Rem", expr(Binary->getLHS(), Near), expr(Binary->getRHS(), Near),
                                                type(Binary->getType())});
+      // A right shift carries the type of its result, decision 0106. A left shift has no rule.
+      if (!Op && Binary->getOpcode() == BO_Shr)
+        return tag("Shr", llvm::json::Array{expr(Binary->getLHS(), Near), expr(Binary->getRHS(), Near), type(Binary->getType())});
       if (!Op)
         return unknown(E, describe(E), Near);
       return tag("Bin", llvm::json::Array{Op, expr(Binary->getLHS(), Near), expr(Binary->getRHS(), Near)});
@@ -4518,10 +4655,18 @@ public:
   void registerMatchers(MatchFinder *Finder) override {
     Finder->addMatcher(
         functionDecl(unless(isImplicit()), unless(isTemplateInstantiation()), unless(isExpansionInSystemHeader())).bind("fn"), this);
+    Finder->addMatcher(varDecl(isConstexpr(), unless(isExpansionInSystemHeader())).bind("constant"), this);
     Finder->addMatcher(translationUnitDecl(), this);
   }
   void check(const MatchFinder::MatchResult &Result) override {
     Context = Result.Context;
+    // The named constants of the file, decision 0106. A contract reads them by name.
+    if (const auto *Var = Result.Nodes.getNodeAs<VarDecl>("constant")) {
+      llvm::json::Value Line = TreeWriter(*Context, Claimed, Structs).constantLine(Var);
+      if (Line.kind() != llvm::json::Value::Null)
+        append(Line);
+      return;
+    }
     const auto *FD = Result.Nodes.getNodeAs<FunctionDecl>("fn");
     if (!FD || FD->isDeleted())
       return;

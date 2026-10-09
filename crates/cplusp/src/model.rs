@@ -32,6 +32,9 @@ enum JTy {
     U8,
     U32,
     U64,
+    I8,
+    I16,
+    U16,
     Bool,
     Seq(JScalar, Option<u64>),
     Struct(String),
@@ -75,6 +78,7 @@ enum JExpr {
     Var(String, JTy),
     Bin(JOp, Box<JExpr>, Box<JExpr>),
     Divide(JOp, Box<JExpr>, Box<JExpr>, JTy),
+    Shr(Box<JExpr>, Box<JExpr>, JTy),
     Not(Box<JExpr>),
     Neg(Box<JExpr>),
     Cast(JCast, Box<JExpr>),
@@ -134,6 +138,11 @@ enum Item {
         #[serde(default)]
         word: String,
     },
+    /// A named constant of the file, decision 0106: its name and its value as decimal text.
+    Constant {
+        constant: String,
+        value: String,
+    },
     Struct(JStruct),
     Function(JFunction),
 }
@@ -163,6 +172,9 @@ struct JFunction {
     /// decisions 0102 and 0103.
     #[serde(default)]
     trusted: Option<(String, String, u32)>,
+    /// The constants of the file that C++ does not find from the function, decision 0107. They hide no constant from `shadow`, they join it.
+    #[serde(default)]
+    hidden: Vec<String>,
     conds: Vec<JCond>,
     body: Vec<JStmt>,
 }
@@ -204,6 +216,10 @@ struct Names {
     functors: Vec<String>,
     /// The names of the fields of a struct type, by the key of each struct.
     struct_fields: HashMap<String, Vec<String>>,
+    /// The named constants of the file, as (name, value), decision 0106. A contract reads such a name as its value.
+    constants: Vec<(String, i128)>,
+    /// The names of the parameters and locals of the function that is being converted. They hide a constant of the same name.
+    shadow: Vec<String>,
 }
 
 impl Names {
@@ -251,6 +267,9 @@ fn ty(t: JTy, names: &mut Names) -> Ty {
         JTy::U8 => Ty::U8,
         JTy::U32 => Ty::U32,
         JTy::U64 => Ty::U64,
+        JTy::I8 => Ty::I8,
+        JTy::I16 => Ty::I16,
+        JTy::U16 => Ty::U16,
         JTy::Bool => Ty::Bool,
         JTy::Seq(s, extent) => Ty::Seq(scalar(s, names), extent.map_or(Extent::Dynamic, Extent::Fixed)),
         JTy::Opt(s) => Ty::Opt(scalar(s, names)),
@@ -287,6 +306,7 @@ fn expr(e: JExpr, names: &mut Names) -> Expr {
         JExpr::Var(v, t) => Expr::Var(names.id(&v), ty(t, names)),
         JExpr::Bin(o, a, b) => Expr::Bin(op(o), Box::new(expr(*a, names)), Box::new(expr(*b, names))),
         JExpr::Divide(o, a, b, t) => Expr::Divide(op(o), Box::new(expr(*a, names)), Box::new(expr(*b, names)), ty(t, names)),
+        JExpr::Shr(a, b, t) => Expr::Shr(Box::new(expr(*a, names)), Box::new(expr(*b, names)), ty(t, names)),
         JExpr::Not(a) => Expr::Not(Box::new(expr(*a, names))),
         JExpr::Neg(a) => Expr::Neg(Box::new(expr(*a, names))),
         JExpr::Cast(k, a) => {
@@ -393,7 +413,8 @@ fn body_line(c: JCond, apply: bool, names: &mut Names) -> Stmt {
         (None, c.text.as_str())
     };
     let mut toks: Vec<Tok> = head.into_iter().flat_map(|h| [Tok::Ident(names.id(h)), Tok::LParen]).collect();
-    toks.extend(lex(text, line, names));
+    let lexed = lex(text, line, names);
+    toks.extend(fold_constants(lexed, names));
     // A call to an undeclared name is refused by `sentence` at this line.
     if names.bad_calls.contains_key(&line) {
         return syntax(line, None, names);
@@ -497,6 +518,10 @@ fn lex(text: &str, line: u32, names: &mut Names) -> Vec<Tok> {
             let end = 1 + rest[1..].find(|ch: char| !(ch.is_ascii_alphanumeric() || ch == '_')).unwrap_or(rest.len() - 1);
             toks.push(Tok::Field(names.id(&rest[1..end])));
             rest = &rest[end..];
+        } else if let Some(code) = char_literal(rest) {
+            // A character is its code, decision 0106. A character with an escape stays `'` below: the contract refuses it.
+            toks.push(Tok::Int(code));
+            rest = &rest[3..];
         } else if let Some((s, o)) = OPS.iter().find(|(s, _)| rest.starts_with(s)) {
             toks.push(Tok::Op(*o));
             rest = &rest[s.len()..];
@@ -516,6 +541,64 @@ fn lex(text: &str, line: u32, names: &mut Names) -> Vec<Tok> {
         }
     }
     toks
+}
+
+/// The code of `'c'` at the start of the text, for one printable ASCII character that is no quote and no backslash, decision 0106.
+fn char_literal(text: &str) -> Option<u64> {
+    match text.as_bytes() {
+        [b'\'', c @ b' '..=b'~', b'\'', ..] if *c != b'\'' && *c != b'\\' => Some(u64::from(*c)),
+        _ => None,
+    }
+}
+
+/// The names that a quantifier binds in the tokens: those after `forall` or `exists`, parted by commas.
+fn bound_names(toks: &[Tok]) -> Vec<u32> {
+    let mut bound = Vec::new();
+    for (i, t) in toks.iter().enumerate() {
+        if matches!(t, Tok::Forall | Tok::Exists) {
+            let mut at = i + 1;
+            while let Some(Tok::Ident(n)) = toks.get(at) {
+                bound.push(*n);
+                at += 1;
+                if toks.get(at) != Some(&Tok::Comma) {
+                    break;
+                }
+                at += 1;
+            }
+        }
+    }
+    bound
+}
+
+/// A name that is a named constant of the file reads as its value, decision 0106. A parameter, a local or a name that a quantifier binds hides the
+/// constant. So does a name that is called or follows `::`.
+// ponytail: a name bound by a quantifier hides the constant on the whole line. Upgrade: scope the binder.
+fn fold_constants(toks: Vec<Tok>, names: &Names) -> Vec<Tok> {
+    if names.constants.is_empty() {
+        return toks;
+    }
+    let bound = bound_names(&toks);
+    let mut out = Vec::with_capacity(toks.len());
+    for (i, t) in toks.iter().enumerate() {
+        let value = match t {
+            Tok::Ident(n) if !bound.contains(n) && toks.get(i + 1) != Some(&Tok::LParen) && (i == 0 || toks[i - 1] != Tok::ColonColon) && toks.get(i + 1) != Some(&Tok::ColonColon) => {
+                let name = names.text(*n);
+                names.constants.iter().find(|(c, _)| c == name).filter(|_| !names.shadow.iter().any(|s| s == name)).map(|(_, v)| *v)
+            }
+            _ => None,
+        };
+        match value.map(|v| (v < 0, u64::try_from(v.unsigned_abs()))) {
+            Some((negative, Ok(n))) => {
+                if negative {
+                    out.extend([Tok::LParen, Tok::Op(BinOp::Sub), Tok::Int(n), Tok::RParen]);
+                } else {
+                    out.push(Tok::Int(n));
+                }
+            }
+            _ => out.push(*t),
+        }
+    }
+    out
 }
 
 /// The names of the parameters of a declaration, in order. A parameter with no name is `'N` by its place, as in `function`.
@@ -545,6 +628,7 @@ fn conds(v: Vec<JCond>, names: &mut Names) -> Conds {
                         _ => CondKind::Decreases,
                     };
                     let toks = lex(&c.text, line, names);
+                    let toks = fold_constants(toks, names);
                     // A call to an undeclared name is refused by `sentence` at this line, so the core refuses the line as a form it cannot read.
                     if names.bad_calls.contains_key(&line) {
                         (CondKind::Bad(Refusal::Syntax(line)), Expr::Int(0))
@@ -577,7 +661,7 @@ const BANNED: &[&str] = &[
 ];
 
 /// The names of the prelude. A companion file may not declare them, nor a name with a prefix of the model, decision 0083.
-const MODEL_NAMES: &[&str] = &["Option", "Some", "None", "Vec", "value", "int32", "int64", "uint8", "uint32", "uint64"];
+const MODEL_NAMES: &[&str] = &["Option", "Some", "None", "Vec", "value", "int8", "int16", "uint16", "int32", "int64", "uint8", "uint32", "uint64", "shr"];
 
 /// The sentence for a word of a companion file that is not allowed.
 fn only_functions(word: &str) -> String {
@@ -703,7 +787,7 @@ fn scan_companion(text: &str) -> (Vec<(u32, String)>, Vec<Declared>) {
 fn expr_names<'a>(e: &'a JExpr, out: &mut Vec<&'a str>) {
     match e {
         JExpr::Var(v, _) => out.push(v),
-        JExpr::Bin(_, a, b) | JExpr::Divide(_, a, b, _) | JExpr::Index(a, b) | JExpr::Subspan(a, b) => {
+        JExpr::Bin(_, a, b) | JExpr::Divide(_, a, b, _) | JExpr::Shr(a, b, _) | JExpr::Index(a, b) | JExpr::Subspan(a, b) => {
             expr_names(a, out);
             expr_names(b, out);
         }
@@ -781,6 +865,10 @@ fn unreadable_struct_name(st: &JStruct) -> Option<&str> {
 fn function(f: JFunction, names: &mut Names) -> Function {
     let name = names.id(&f.key);
     names.file = f.file;
+    names.shadow = f.params.iter().map(|(n, _)| n.clone()).chain(f.hidden.iter().cloned()).collect();
+    let mut used = Vec::new();
+    f.body.iter().for_each(|s| stmt_names(s, &mut used));
+    names.shadow.extend(used.into_iter().map(str::to_string));
     // The names that a contract may call as a functor, decision 0098.
     names.functors = f.params.iter().filter(|(_, t)| matches!(t, JTy::Struct(_))).map(|(n, _)| n.clone()).collect();
     if let (Some((_, JTy::This(k) | JTy::ThisMut(k))), _) | (_, JTy::This(k)) = (f.params.first(), &f.ret) {
@@ -806,7 +894,10 @@ fn function(f: JFunction, names: &mut Names) -> Function {
 
 // ------------------------------------------------------------------ the Dafny text
 
-pub const PRELUDE: &str = r"newtype int32 = x: int | -0x8000_0000 <= x < 0x8000_0000
+pub const PRELUDE: &str = r"newtype int8 = x: int | -0x80 <= x < 0x80
+newtype int16 = x: int | -0x8000 <= x < 0x8000
+newtype uint16 = x: int | 0 <= x < 0x1_0000
+newtype int32 = x: int | -0x8000_0000 <= x < 0x8000_0000
 newtype int64 = x: int | -0x8000_0000_0000_0000 <= x < 0x8000_0000_0000_0000
 newtype uint8 = x: int | 0 <= x < 0x100
 newtype uint32 = x: int | 0 <= x < 0x1_0000_0000
@@ -841,6 +932,17 @@ function trunc_rem(a: int, b: int): int
 }
 ";
 
+/// The model of `a >> n`, decision 0106. It follows the methods when one of them shifts, so a file with no shift has no `decreases` line of its own.
+pub const SHR: &str = r"function shr(a: int, n: int, w: int): int
+  requires 0 <= n < w
+  ensures a >= 0 ==> 0 <= shr(a, n, w) <= a
+  ensures a < 0 ==> a <= shr(a, n, w) < 0
+  decreases n
+{
+  if n == 0 then a else shr(a, n - 1, w) / 2
+}
+";
+
 fn dscalar(s: Scalar, names: &Names) -> String {
     match s {
         Scalar::I32 => "int32".to_string(),
@@ -860,6 +962,9 @@ fn dty(t: DTy, names: &Names) -> String {
         DTy::UInt8 => "uint8".to_string(),
         DTy::UInt32 => "uint32".to_string(),
         DTy::UInt64 => "uint64".to_string(),
+        DTy::Int8 => "int8".to_string(),
+        DTy::Int16 => "int16".to_string(),
+        DTy::UInt16 => "uint16".to_string(),
         DTy::Bool => "bool".to_string(),
         DTy::Seq(s) => format!("Vec<{}>", dscalar(s, names)),
         DTy::Struct(k) => names.datatypes[&k].clone(),
@@ -944,6 +1049,7 @@ fn dexpr(e: &DExpr, names: &Names) -> String {
             let (a, b, t) = (dexpr(a, names), dexpr(b, names), dty(*t, names));
             format!("(var q' := (trunc_div({a}, {b}) as {t}); (trunc_rem({a}, {b}) as {t}))")
         }
+        DExpr::ShrIn(a, n, t, w) => format!("(shr({}, {}, {w}) as {})", dexpr(a, names), dexpr(n, names), dty(*t, names)),
         DExpr::Ite(c, a, b) => format!("(if {} then {} else {})", dexpr(c, names), dexpr(a, names), dexpr(b, names)),
         DExpr::Chain(o1, o2, a, b, c) => format!("({} {} {} {} {})", dexpr(a, names), dop(*o1), dexpr(b, names), dop(*o2), dexpr(c, names)),
         // The prefix `v_'t` keeps a temporary apart from C++ names, companion names and the dropped values `v_'r`.
@@ -1306,6 +1412,7 @@ pub fn translate(lines: &str, companion: Option<(&str, &str)>) -> Result<Transla
                 let said = if word == "assert" || word == "apply" { "an assert or apply line needs a statement below it in its block." } else { "a contract line that belongs to no function." };
                 refusals.push((file, orphan, said.to_string()));
             }
+            Item::Constant { constant, value } => names.constants.extend(value.parse().ok().map(|v| (constant, v))),
             Item::Struct(st) => structs.push(st),
             Item::Function(_) if unreadable_keys.iter().any(|k| l.contains(k.as_str())) => {}
             Item::Function(f) => match unreadable_name(&f) {
@@ -1426,6 +1533,11 @@ pub fn translate(lines: &str, companion: Option<(&str, &str)>) -> Result<Transla
         };
         refused_at.extend(refused.map(|r| sentence(r, &names)));
         models = *rest;
+    }
+    // ponytail: a method that names `shr` is a method that shifts. Upgrade: a flag that the printer sets.
+    if p.out.contains("shr(") {
+        p.out.push_str(SHR);
+        p.lines.extend(SHR.lines().map(|_| None));
     }
     // The companion file follows the methods, so none of its comments reaches a method, decision 0083.
     let start = p.lines.len();
