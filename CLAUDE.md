@@ -44,6 +44,10 @@ The ponytail ladder applies to every change. Stop at the first rung that holds:
 
 Fewest files. No interface with one implementation, no config for a value that never changes, no scaffolding for later. Mark a deliberate corner cut with a `ponytail:` comment that names the ceiling and the upgrade path. Never lazy about understanding the problem first. Never lazy about the two things this repo exists for: the failing test comes first, and the proof is part of the deliverable.
 
+## Talking to the user
+
+The user vibe codes. The user does not read the code. Follow `.claude/skills/vibe-coding/SKILL.md` in each message to the user: say what changed in behaviour and what is next, in plain words. Make the technical choices yourself, and ask only questions that change scope, cost or direction. The coder and the reviewer report to you in full detail, as before.
+
 ## Messages
 
 Everything the bot reads follows Simplified Technical English: short sentences, one meaning per word, no semicolons. The prefixes are fixed: `Not provable:` from the gate, `Not proved:` from the prover. Lint the docs with `ste-lint.py` from the asd-ste100 skill before committing them.
