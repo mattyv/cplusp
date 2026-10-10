@@ -58,13 +58,13 @@ const MARKERS: &str = "cplusp-markers";
 /// The checks of the plugin whose message starts with the id of a rule: `{rule}: {sentence}`, or the bare id. The gate maps a finding
 /// to its rule by that id and puts the sentence after the message of the rule. Every other check maps by its own name.
 // ponytail: a hand-kept list. Upgrade: a prefix on the check name.
-const RULE_FIRST: &[&str] = &[MATCHER, ALLOWLIST, "cplusp-unlisted-state"];
+const RULE_FIRST: &[&str] = &[MATCHER, ALLOWLIST, "cplusp-unlisted-state", "cplusp-raw-copy"];
 
 /// Checks that the clang-tidy plugin will add. The policy may name them today.
 // ponytail: a hand-kept list. Upgrade: load the plugin and read its `--list-checks`.
 const PLANNED_CHECKS: &[&str] = &[
     MATCHER, "cplusp-mutable", "cplusp-multiple-inheritance", "cplusp-iterator-arithmetic", "cplusp-impure-operator", "cplusp-lambda-limits",
-    "cplusp-evaluation-order", "cplusp-inexact-literal", "cplusp-aliasing", "cplusp-const-handle", "cplusp-allowlist", "cplusp-unlisted-state",
+    "cplusp-evaluation-order", "cplusp-inexact-literal", "cplusp-raw-copy", "cplusp-aliasing", "cplusp-const-handle", "cplusp-allowlist", "cplusp-unlisted-state",
     "cplusp-indirect-call", LINE_DIRECTIVE, PRAGMA,
 ];
 
