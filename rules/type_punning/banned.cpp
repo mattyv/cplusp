@@ -313,3 +313,20 @@ CPLUSP_TRUSTED("loads a bool from bytes")
 Flagged load_flag(const uint8_t* p) {
   return load<Flagged>(p);
 }
+
+// A functional cast can take const away too, and a write through bytes can reach an incomplete type, decision 0120.
+using BytePointer = uint8_t*;
+
+CPLUSP_TRUSTED("writes a byte into a bool through a functional cast")
+//@ ensures true
+bool write_functional(uint8_t b) {
+  Flagged f{false};
+  *BytePointer(reinterpret_cast<const uint8_t*>(&f.on)) = b;  // BANNED
+  return f.on;
+}
+
+CPLUSP_TRUSTED("writes a byte into an incomplete type")
+//@ ensures true
+void write_fwd(Fwd* q, uint8_t b) {
+  *reinterpret_cast<uint8_t*>(q) = b;  // BANNED
+}

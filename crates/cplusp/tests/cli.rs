@@ -3626,6 +3626,8 @@ fn a_raw_copy_says_why_it_is_refused() {
         (260, "The copy writes to a place of unknown type."),
         (276, "The copy writes a type that holds a pointer, a reference, an enum or a bool."),
         (297, "The copy reads a place of unknown type into a type that is not bytes."),
+        (324, "The copy writes to a place of unknown type."),
+        (331, "The copy writes to a place of unknown type."),
     ];
     for (line, want) in wants {
         let at = format!("banned.cpp:{line}: ");
