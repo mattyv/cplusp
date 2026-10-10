@@ -2,6 +2,7 @@
 #include <bit>
 #include <cstddef>
 #include <cstdint>
+#include <cstring>
 #include "../../include/cplusp.h"
 
 // Any object can be read as bytes, also in trusted code. uint8_t is unsigned char.
@@ -46,4 +47,38 @@ CPLUSP_TRUSTED("reads the address of a word")
 //@ ensures true
 uintptr_t address(const uint32_t& w) {
   return std::bit_cast<uintptr_t>(&w);
+}
+
+// The std::byte of the system header holds no bad value, decision 0119.
+std::array<std::byte, 4> as_bytes(uint32_t u) {
+  return std::bit_cast<std::array<std::byte, 4>>(u);
+}
+
+// Bytes of a padded struct can go into a buffer of bytes.
+struct Padded {
+  uint8_t a;
+  uint32_t b;
+};
+
+std::array<uint8_t, 8> raw(const Padded& p) {
+  return std::bit_cast<std::array<uint8_t, 8>>(p);
+}
+
+// A raw copy into plain integer data makes a value, and a read through const bytes changes nothing, decision 0119.
+CPLUSP_TRUSTED("copies bytes into two integers")
+//@ ensures true
+Two from_bytes(const std::array<uint8_t, 8>& b) {
+  Two t{0, 0};
+  std::memcpy(&t, &b, sizeof t);
+  return t;
+}
+
+struct Flag {
+  bool on;
+};
+
+CPLUSP_TRUSTED("reads the byte of a bool")
+//@ ensures true
+uint8_t flag_byte(const Flag& f) {
+  return *reinterpret_cast<const uint8_t*>(&f.on);
 }

@@ -1,6 +1,8 @@
 #include <array>
 #include <bit>
 #include <cstdint>
+#include <cstring>
+#include <experimental/simd>
 #include <memory>
 #include <span>
 #include "../../include/cplusp.h"
@@ -123,4 +125,69 @@ CPLUSP_TRUSTED("makes pointers from a number")
 //@ ensures true
 int32_t via_array(uint64_t bits) {
   return *std::bit_cast<std::array<const int32_t*, 1>>(bits)[0];  // BANNED also: raw_pointer
+}
+
+// The library makes the same bit cast as std::bit_cast, decision 0119.
+CPLUSP_TRUSTED("reads a double through a span made by a bit cast of the library")
+//@ ensures true
+int32_t lib_span(const double& d) {
+  return std::experimental::__bit_cast<std::span<const int32_t, 1>>(&d)[0];  // BANNED
+}
+
+CPLUSP_TRUSTED("makes a bool from a byte with the library")
+//@ ensures true
+bool lib_flag(uint8_t b) {
+  return std::experimental::__bit_cast<bool>(b);  // BANNED
+}
+
+// The padding of the source has no value, [bit.cast] paragraph 2, decision 0119.
+struct Padded {
+  uint8_t a;
+  uint32_t b;
+};
+
+CPLUSP_TRUSTED("packs a padded struct")
+//@ ensures true
+uint64_t packed(const Padded& p) {
+  return std::bit_cast<uint64_t>(p);  // BANNED
+}
+
+// A raw copy into a bool, an enum or a pointer makes a bad value, decision 0119.
+CPLUSP_TRUSTED("copies a byte into a bool")
+//@ ensures true
+bool copy_flag(uint8_t b) {
+  Flagged f{false};
+  std::memcpy(&f, &b, 1);  // BANNED
+  return f.on;
+}
+
+CPLUSP_TRUSTED("clears a boxed kind")
+//@ ensures true
+Boxed clear_boxed() {
+  Boxed x{Kind::Small};
+  std::memset(&x, 7, sizeof x);  // BANNED
+  return x;
+}
+
+CPLUSP_TRUSTED("copies a number into a span")
+//@ ensures true
+int32_t copy_span(std::span<const int32_t> s, uint64_t bits) {
+  std::memmove(&s, &bits, sizeof bits);  // BANNED
+  return s[0];
+}
+
+// A write through a pointer to bytes that is not const, decision 0119.
+CPLUSP_TRUSTED("writes a byte into a bool")
+//@ ensures true
+bool write_flag(uint8_t b) {
+  Flagged f{false};
+  *reinterpret_cast<uint8_t*>(&f.on) = b;  // BANNED
+  return f.on;
+}
+
+// The gate cannot know the type behind void*, so the row fails closed, decision 0119.
+CPLUSP_TRUSTED("copies bytes to an unknown place")
+//@ ensures true
+void copy_unknown(void* dst, const uint8_t& b) {
+  std::memcpy(dst, &b, 1);  // BANNED
 }

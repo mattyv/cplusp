@@ -123,3 +123,4 @@ Status is `decided`, `proposed` (the default until someone objects or the thin s
 | [0116](0116-a-read-through-another-type-is-banned.md) | A gate row bans each cast that changes the type a pointer or reference points to, except to bytes, in all code | decided |
 | [0117](0117-more-forms-of-a-pun.md) | type_punning also bans a cast from an integer, a bit cast with a class or pointer, the shared_ptr casts, function pointer casts, and a false std::byte | decided |
 | [0118](0118-a-bit-cast-is-banned-only-where-it-can-make-a-bad-value.md) | A bit cast is banned only when its result holds a pointer, an enum or a bool, at any depth | decided |
+| [0119](0119-a-raw-copy-is-banned-where-it-can-make-a-bad-value.md) | A raw copy of bytes is banned where it can make a bad pointer, reference, enum or bool, or reads padding, in all code | decided |
