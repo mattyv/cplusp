@@ -124,3 +124,4 @@ Status is `decided`, `proposed` (the default until someone objects or the thin s
 | [0117](0117-more-forms-of-a-pun.md) | type_punning also bans a cast from an integer, a bit cast with a class or pointer, the shared_ptr casts, function pointer casts, and a false std::byte | decided |
 | [0118](0118-a-bit-cast-is-banned-only-where-it-can-make-a-bad-value.md) | A bit cast is banned only when its result holds a pointer, an enum or a bool, at any depth | decided |
 | [0119](0119-a-raw-copy-is-banned-where-it-can-make-a-bad-value.md) | A raw copy of bytes is banned where it can make a bad pointer, reference, enum or bool, or reads padding, in all code | decided |
+| [0120](0120-the-last-forms-of-a-raw-copy.md) | type_punning also bans a pointer to bytes from an integer or a const_cast, as_writable_bytes, more copy functions, virtual classes and incomplete types. Library reads through void* stay a documented gap | decided |

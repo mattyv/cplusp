@@ -82,3 +82,29 @@ CPLUSP_TRUSTED("reads the byte of a bool")
 uint8_t flag_byte(const Flag& f) {
   return *reinterpret_cast<const uint8_t*>(&f.on);
 }
+
+// A template is judged at each instance. An instance that copies into plain integers is allowed, decision 0120.
+//@ ensures true
+template <class T>
+CPLUSP_TRUSTED("loads a value from bytes")
+T load(const uint8_t* p) {
+  T t{};
+  std::memcpy(&t, p, sizeof t);
+  return t;
+}
+
+CPLUSP_TRUSTED("loads two integers")
+//@ ensures true
+Two load_two(const uint8_t* p) {
+  return load<Two>(p);
+}
+
+// An empty base takes no bits, so it is no padding, decision 0120.
+struct Empty {};
+struct WithEmptyBase : Empty {
+  uint32_t x;
+};
+
+uint32_t word(const WithEmptyBase& w) {
+  return std::bit_cast<uint32_t>(w);
+}

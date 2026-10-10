@@ -3609,3 +3609,26 @@ fn a_byte_that_the_file_declares_is_no_view_as_bytes() {
     let expected: BTreeSet<(String, usize)> = [("type_punning".to_string(), 12)].into_iter().collect();
     assert_eq!(reported, expected, "{out}");
 }
+
+/// A raw copy tells the bot why the gate refuses it, decision 0120. The sentence of the plugin follows the message of the row.
+#[test]
+fn a_raw_copy_says_why_it_is_refused() {
+    if !clang_tidy_available() {
+        return;
+    }
+    let banned = root().join("rules/type_punning/banned.cpp");
+    let o = gated(&[banned.to_str().unwrap(), "--", "-std=c++23", "-ffp-contract=off"]);
+    let out = stdout(&o);
+    let wants = [
+        (154, "The copy reads padding into a type that is not bytes."),
+        (162, "The copy writes a type that holds a pointer, a reference, an enum or a bool."),
+        (194, "The copy writes to a place of unknown type."),
+        (260, "The copy writes to a place of unknown type."),
+        (276, "The copy writes a type that holds a pointer, a reference, an enum or a bool."),
+        (297, "The copy reads a place of unknown type into a type that is not bytes."),
+    ];
+    for (line, want) in wants {
+        let at = format!("banned.cpp:{line}: ");
+        assert!(out.lines().any(|l| l.contains(&at) && l.ends_with(&format!("Use std::bit_cast for the bits of a value, or a pointer to bytes. {want}"))), "{line}: {out}");
+    }
+}

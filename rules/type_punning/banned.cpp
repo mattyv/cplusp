@@ -1,10 +1,12 @@
 #include <array>
 #include <bit>
+#include <cstddef>
 #include <cstdint>
 #include <cstring>
 #include <experimental/simd>
 #include <memory>
 #include <span>
+#include <strings.h>
 #include "../../include/cplusp.h"
 
 struct A {
@@ -190,4 +192,124 @@ CPLUSP_TRUSTED("copies bytes to an unknown place")
 //@ ensures true
 void copy_unknown(void* dst, const uint8_t& b) {
   std::memcpy(dst, &b, 1);  // BANNED
+}
+
+// A pointer from an integer, a cast that takes const away, and the library view of bytes reach the same bool, decision 0120.
+CPLUSP_TRUSTED("writes a byte into a bool through an integer")
+//@ ensures true
+bool write_by_address(uint8_t b) {
+  Flagged f{false};
+  *reinterpret_cast<uint8_t*>(std::bit_cast<uintptr_t>(&f.on)) = b;  // BANNED
+  return f.on;
+}
+
+CPLUSP_TRUSTED("writes a byte into a bool through a const_cast")
+//@ ensures true
+bool write_unconst(uint8_t b) {
+  Flagged f{false};
+  *const_cast<uint8_t*>(reinterpret_cast<const uint8_t*>(&f.on)) = b;  // BANNED
+  return f.on;
+}
+
+CPLUSP_TRUSTED("writes a byte into a bool through as_writable_bytes")
+//@ ensures true
+bool write_view(uint8_t b) {
+  Flagged f{false};
+  std::as_writable_bytes(std::span<bool, 1>(&f.on, 1))[0] = static_cast<std::byte>(b);  // BANNED
+  return f.on;
+}
+
+// More functions of the C library copy raw bytes, decision 0120.
+CPLUSP_TRUSTED("bcopy into a bool")
+//@ ensures true
+bool bcopy_flag(uint8_t b) {
+  Flagged f{false};
+  bcopy(&b, &f, 1);  // BANNED
+  return f.on;
+}
+
+CPLUSP_TRUSTED("bzero of a bool")
+//@ ensures true
+bool bzero_flag() {
+  Flagged f{true};
+  bzero(&f, 1);  // BANNED
+  return f.on;
+}
+
+CPLUSP_TRUSTED("mempcpy into a bool")
+//@ ensures true
+bool mempcpy_flag(uint8_t b) {
+  Flagged f{false};
+  static_cast<void>(mempcpy(&f, &b, 1));  // BANNED
+  return f.on;
+}
+
+CPLUSP_TRUSTED("memccpy into a bool")
+//@ ensures true
+bool memccpy_flag(uint8_t b) {
+  Flagged f{false};
+  static_cast<void>(memccpy(&f, &b, 0, 1));  // BANNED
+  return f.on;
+}
+
+// The gate cannot follow a pointer to a copy function, so the row fails closed at the name, decision 0120.
+CPLUSP_TRUSTED("memcpy through a pointer into a bool")
+//@ ensures true
+bool copy_by_pointer(uint8_t b) {
+  Flagged f{false};
+  auto copy = std::memcpy;  // BANNED
+  static_cast<void>(copy(&f, &b, 1));
+  return f.on;
+}
+
+// A class with virtual functions holds a hidden pointer, decision 0120.
+struct Shape {
+  virtual ~Shape() = default;
+  virtual int32_t area() const { return side; }
+  int32_t side = 0;
+};
+
+CPLUSP_TRUSTED("copies bytes into a polymorphic object")
+//@ ensures true
+int32_t copy_shape(const uint8_t* src) {
+  Shape s{};
+  std::memcpy(&s, src, sizeof s);  // BANNED
+  return s.area();
+}
+
+// The gate cannot know the fields of an incomplete type, so the row fails closed, decision 0120.
+struct Fwd;
+struct Two {
+  int32_t a;
+  int32_t b;
+};
+
+CPLUSP_TRUSTED("copies bytes into an incomplete type")
+//@ ensures true
+void copy_to_fwd(Fwd* dst, const uint8_t* src) {
+  std::memcpy(dst, src, 4);  // BANNED
+}
+
+CPLUSP_TRUSTED("copies an incomplete type into two integers")
+//@ ensures true
+Two copy_from_fwd(const Fwd* src) {
+  Two t{0, 0};
+  std::memcpy(&t, src, sizeof t);  // BANNED
+  return t;
+}
+
+// The row judges each instance of a template, decision 0120.
+//@ ensures true
+template <class T>
+CPLUSP_TRUSTED("loads a value from bytes")
+T load(const uint8_t* p) {
+  T t{};
+  std::memcpy(&t, p, sizeof t);  // BANNED
+  return t;
+}
+
+CPLUSP_TRUSTED("loads a bool from bytes")
+//@ ensures true
+Flagged load_flag(const uint8_t* p) {
+  return load<Flagged>(p);
 }
