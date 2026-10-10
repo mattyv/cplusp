@@ -1,3 +1,4 @@
+#include <array>
 #include <bit>
 #include <cstdint>
 #include <memory>
@@ -86,4 +87,40 @@ CPLUSP_TRUSTED("calls a function as another type")
 //@ ensures true
 int64_t call_other(int64_t x) {
   return reinterpret_cast<int64_t (*)(int64_t)>(&twice)(x);  // BANNED
+}
+
+// A bit cast to a type that holds an enum or a bool can make a value that is not one, decision 0118.
+enum class Kind : uint8_t { Small, Large };
+
+struct Boxed {
+  Kind k;
+};
+
+struct Flagged {
+  bool on;
+};
+
+CPLUSP_TRUSTED("makes a boxed kind from a byte")
+//@ ensures true
+Boxed boxed(uint8_t b) {
+  return std::bit_cast<Boxed>(b);  // BANNED
+}
+
+CPLUSP_TRUSTED("makes a bool from a byte")
+//@ ensures true
+bool flag(uint8_t b) {
+  return std::bit_cast<bool>(b);  // BANNED
+}
+
+CPLUSP_TRUSTED("makes a flagged struct from a byte")
+//@ ensures true
+Flagged flagged(uint8_t b) {
+  return std::bit_cast<Flagged>(b);  // BANNED
+}
+
+// An array of pointers holds pointers.
+CPLUSP_TRUSTED("makes pointers from a number")
+//@ ensures true
+int32_t via_array(uint64_t bits) {
+  return *std::bit_cast<std::array<const int32_t*, 1>>(bits)[0];  // BANNED also: raw_pointer
 }

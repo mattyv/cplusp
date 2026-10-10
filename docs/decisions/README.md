@@ -122,3 +122,4 @@ Status is `decided`, `proposed` (the default until someone objects or the thin s
 | [0115](0115-why-an-order-of-enums-has-no-rule.md) | The true reason that an order of enums has no rule. enum_cast also bans casts from enums, to pointers, and the address of bit_cast | decided |
 | [0116](0116-a-read-through-another-type-is-banned.md) | A gate row bans each cast that changes the type a pointer or reference points to, except to bytes, in all code | decided |
 | [0117](0117-more-forms-of-a-pun.md) | type_punning also bans a cast from an integer, a bit cast with a class or pointer, the shared_ptr casts, function pointer casts, and a false std::byte | decided |
+| [0118](0118-a-bit-cast-is-banned-only-where-it-can-make-a-bad-value.md) | A bit cast is banned only when its result holds a pointer, an enum or a bool, at any depth | decided |
