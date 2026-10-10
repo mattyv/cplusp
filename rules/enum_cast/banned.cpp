@@ -13,7 +13,7 @@ Kind by_brace(uint8_t b) {
 }
 
 Kind by_bits(uint8_t b) {
-  return std::bit_cast<Kind>(b);  // BANNED
+  return std::bit_cast<Kind>(b);  // BANNED also: type_punning
 }
 
 // The row holds in trusted code too, because a verified caller assumes each value is an enumerator.
@@ -47,6 +47,6 @@ Kind by_void(const uint8_t& b) {
 CPLUSP_TRUSTED("bit casts through a pointer")
 //@ ensures true
 Kind by_address(uint8_t b) {
-  auto p = &std::bit_cast<Kind, uint8_t>;  // BANNED
+  auto p = &std::bit_cast<Kind, uint8_t>;  // BANNED also: type_punning
   return p(b);
 }
