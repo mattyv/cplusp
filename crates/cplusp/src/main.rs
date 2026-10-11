@@ -11,6 +11,7 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, ExitCode, Stdio};
 
 use anyhow::{anyhow, bail, Context, Result};
+use cplusp_core::flags::FlagFault;
 use clap::{Args, Parser, Subcommand};
 use cplusp_core::{
     apply_overrides, emit, is_active, keep_finding, kind_at, rule_by_id, rule_for_check, validate, CheckOption, CheckRef, Config, Decision,
@@ -460,70 +461,31 @@ fn doc(loaded: &Loaded) {
 
 // ------------------------------------------------------------------ build flags
 
-/// Flags that change floating-point results. The float model is a real after one IEEE 754 rounding.
-const FLOAT_FLAGS: &[&str] = &[
-    "-ffast-math", "-Ofast", "-funsafe-math-optimizations", "-ffinite-math-only", "-fassociative-math",
-    "-freciprocal-math", "-fno-signed-zeros", "-fno-honor-nans", "-fno-honor-infinities", "-ffp-model=fast", "-mfpmath=387", "-m32",
-];
-
-/// Flags that make the compiler print something else than its diagnostics, run another tool, or read state that the gate does not see.
-/// A precompiled header and a module hold text that no scan of the source reaches. `-Xclang` hands the compiler any flag at all.
-/// The gate reads what the compiler reports.
-const CHANGES_WHAT_THE_COMPILER_REPORTS: &[&str] =
-    &["-E", "-P", "-M", "-MM", "-MV", "-dM", "-dD", "-dI", "-###", "-fdriver-only", "-Xpreprocessor", "-Xclang", "-include-pch"];
-
-/// The `-std` values at C++23 or later. The baseline is decision 0022.
-const STD_VALUES: &[&str] = &["c++23", "c++2b", "c++26", "c++2c", "gnu++23", "gnu++2b", "gnu++26", "gnu++2c"];
-
-/// What a flag sets contraction to. `-ffp-model=precise` is `on` and `-ffp-model=strict` is `off`.
-fn contraction(f: &str) -> Option<&str> {
-    match f {
-        "-ffp-model=precise" => Some("on"),
-        "-ffp-model=strict" => Some("off"),
-        _ => f.strip_prefix("-ffp-contract="),
+/// The sentence for a refused flag, decision 0128.
+fn flag_reason(fault: FlagFault) -> &'static str {
+    match fault {
+        FlagFault::Float => "It changes floating-point results, and the proofs assume IEEE 754 round to nearest.",
+        FlagFault::Std => "The proofs assume C++23 or later.",
+        FlagFault::Reads => "It changes what the compiler reads or reports, and the gate runs the compiler itself.",
+        FlagFault::ResponseFile => "The gate cannot read a response file.",
+        FlagFault::ConfigFile => "The gate cannot read a config file.",
+        FlagFault::HidesAll => "It hides the compiler warnings the policy names.",
+        FlagFault::HidesRow => "It hides a compiler warning the policy names.",
     }
 }
 
-/// The value of `-std=X`. `--std=X` is the same flag.
-fn std_value(f: &str) -> Option<&str> {
-    f.strip_prefix("-std=").or_else(|| f.strip_prefix("--std="))
-}
-
-/// One message for each trailing flag the proofs cannot follow, and for each flag the gate needs and does not find.
+/// One message for each trailing flag the proofs cannot follow, and for each flag the gate needs and does not find. The core judges the flags,
+/// decision 0128, and the shell writes the sentences.
 /// `checks` is the check list of the generated config, so a `-Wno-{name}` is judged against the rows the policy enables.
-// ponytail: the flags are matched as written. A flag behind `-Xclang` passes.
-// Upgrade: ask the compiler for its final flags.
+// ponytail: the flags are matched as written. Upgrade: ask the compiler for its final flags.
 fn refused_flags(flags: &[String], checks: &[String]) -> Vec<String> {
-    let mut refused = Vec::new();
-    // The last flag that sets contraction is the one the compiler follows.
-    let last_contract = flags.iter().rposition(|f| contraction(f).is_some());
-    for (i, f) in flags.iter().enumerate() {
-        let contracts = Some(i) == last_contract && contraction(f) != Some("off");
-        let denormals = f.starts_with("-fdenormal-fp-math=") && f != "-fdenormal-fp-math=ieee";
-        let eval = f.starts_with("-ffp-eval-method=") && f != "-ffp-eval-method=source";
-        let why = if contracts || denormals || eval || FLOAT_FLAGS.contains(&f.as_str()) {
-            "It changes floating-point results, and the proofs assume IEEE 754 round to nearest."
-        } else if std_value(f).is_some_and(|v| !STD_VALUES.contains(&v)) {
-            "The proofs assume C++23 or later."
-        } else if CHANGES_WHAT_THE_COMPILER_REPORTS.contains(&f.as_str()) || f.starts_with("-Wp,") || f.starts_with("-fmodule") {
-            "It changes what the compiler reads or reports, and the gate runs the compiler itself."
-        } else if f.starts_with('@') {
-            "The gate cannot read a response file."
-        } else if f == "--config" || f.starts_with("--config=") {
-            "The gate cannot read a config file."
-        } else if f == "-w" || f == "-Wno-everything" {
-            "It hides the compiler warnings the policy names."
-        } else if f.strip_prefix("-Wno-").is_some_and(|n| checks.iter().any(|c| c.strip_prefix(DIAGNOSTIC) == Some(n))) {
-            "It hides a compiler warning the policy names."
-        } else {
-            continue;
-        };
-        refused.push(format!("{f}: not allowed with the gate. {why}"));
-    }
-    if !flags.iter().any(|f| std_value(f).is_some()) {
+    let bytes = |list: &[String]| list.iter().map(|s| s.as_bytes().to_vec()).collect::<Vec<Vec<u8>>>();
+    let check = cplusp_core::flags::check_flags(&bytes(flags), &bytes(checks));
+    let mut refused: Vec<String> = check.faults.into_iter().map(|(i, fault)| format!("{}: not allowed with the gate. {}", flags[i], flag_reason(fault))).collect();
+    if check.no_std {
         refused.push("no -std flag: the gate needs -std=c++23 or later, because the proofs assume C++23.".to_string());
     }
-    if !flags.iter().any(|f| contraction(f) == Some("off")) {
+    if check.no_contract_off {
         refused.push("no -ffp-contract=off: the gate needs it, because the proofs assume no fused multiply-add.".to_string());
     }
     refused
