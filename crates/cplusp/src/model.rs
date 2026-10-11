@@ -718,7 +718,7 @@ fn conds(v: Vec<JCond>, names: &mut Names) -> Conds {
             items.push((kind, e, line, param_names(c.params.clone(), names)));
         }
     }
-    items.into_iter().rev().fold(Conds::Nil, |rest, (k, e, l, p)| Conds::Cons(k, e, l, p, Box::new(rest)))
+    items.into_iter().rev().fold(Conds::Nil, |rest, (k, e, l, p)| Conds::Cons((k, e, l, p), Box::new(rest)))
 }
 
 // ------------------------------------------------------------------ the companion file
@@ -1648,8 +1648,8 @@ pub fn translate(lines: &str, companion: Option<(&str, &str)>) -> Result<Transla
         names.file = st.file;
         let fields = st.fields.into_iter().rev().fold(Params::Nil, |rest, (n, t)| Params::Cons((names.id(&n), ty(t, &mut names)), Box::new(rest)));
         // The core marks which members are pure and their types, so the shell writes `None`.
-        let members = st.members.into_iter().rev().fold(Members::Nil, |rest, (n, k)| Members::Cons(names.id(&n), names.id(&k), None, Box::new(rest)));
-        table = Structs::Cons(key, place, fields, members, Box::new(table));
+        let members = st.members.into_iter().rev().fold(Members::Nil, |rest, (n, k)| Members::Cons((names.id(&n), (names.id(&k), None)), Box::new(rest)));
+        table = Structs::Cons((key, (place, fields, members)), Box::new(table));
     }
     let count = funcs.len();
     let fns = funcs.into_iter().rev().map(|f| function(f, &mut names)).fold(Fns::Nil, |rest, f| Fns::Cons(Box::new(f), Box::new(rest)));

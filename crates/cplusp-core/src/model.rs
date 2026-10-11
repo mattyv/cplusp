@@ -55,6 +55,25 @@ pub fn get<V: Copy>(l: &List<(u32, V)>, k: u32) -> (r: Option<V>)
     }
 }
 
+/// The value of the first pair with the key `k`, by reference.
+pub fn get_ref<V>(l: &List<(u32, V)>, k: u32) -> (r: Option<&V>)
+    ensures
+        match r {
+            Some(v) => spec_get(*l, k) == Some(*v),
+            None => spec_get(*l, k) is None,
+        },
+    decreases l,
+{
+    match l {
+        List::Nil => None,
+        List::Cons((n, v), rest) => if *n == k {
+            Some(v)
+        } else {
+            get_ref(rest, k)
+        },
+    }
+}
+
 /// `k` is in the list.
 pub open spec fn spec_has(l: List<u32>, k: u32) -> bool
     decreases l,
@@ -94,6 +113,18 @@ pub fn keys<V>(l: &List<(u32, V)>) -> (r: List<u32>)
     match l {
         List::Nil => List::Nil,
         List::Cons((n, _), rest) => List::Cons(*n, Box::new(keys(rest))),
+    }
+}
+
+/// A copy of a list of plain items.
+pub fn copy<T: Copy>(l: &List<T>) -> (r: List<T>)
+    ensures
+        r == *l,
+    decreases l,
+{
+    match l {
+        List::Nil => List::Nil,
+        List::Cons(x, rest) => List::Cons(*x, Box::new(copy(rest))),
     }
 }
 
@@ -239,11 +270,7 @@ pub enum Expr {
     Unknown(u32, u32),
 }
 
-#[derive(PartialEq, Eq, Debug)]
-pub enum Args {
-    Nil,
-    Cons(Box<Expr>, Box<Args>),
-}
+pub type Args = List<Box<Expr>>;
 
 /// A statement of the body, with its line. `Local` declares a name of a type with a start value. `Assign` writes a name. `Step`
 /// adds one to a name of a type, or takes one away when its flag is false. `While` is a condition, the contract lines above the loop
@@ -307,11 +334,7 @@ pub type Names = List<u32>;
 
 /// A contract line: what it says, its expression, its line, and the names of the parameters of the declaration it stands on,
 /// decision 0060.
-#[derive(PartialEq, Eq, Debug)]
-pub enum Conds {
-    Nil,
-    Cons(CondKind, Expr, u32, Names, Box<Conds>),
-}
+pub type Conds = List<(CondKind, Expr, u32, Names)>;
 
 /// One function: its key, its parameters, its return type, its contract and its body. The key names the function apart from every
 /// other, overloads included. `line` is the line of its name. `trusted` holds when the function has the marker `CPLUSP_TRUSTED`, so
@@ -328,19 +351,11 @@ pub struct Function {
 }
 
 /// The structs of one file: the key, the line, the fields and the member functions of each, decisions 0073 and 0090.
-#[derive(PartialEq, Eq, Debug)]
-pub enum Structs {
-    Nil,
-    Cons(u32, u32, Params, Members, Box<Structs>),
-}
+pub type Structs = List<(u32, (u32, Params, Members))>;
 
 /// The member functions of a struct: the id of each name, the key of its function, and its return type and parameters when it is
 /// pure, decisions 0090 and 0095. The unit computes which are pure from the functions themselves, `spec_mark`.
-#[derive(PartialEq, Eq, Debug)]
-pub enum Members {
-    Nil,
-    Cons(u32, u32, Option<(Ty, Params)>, Box<Members>),
-}
+pub type Members = List<(u32, (u32, Option<(Ty, Params)>))>;
 
 /// The model of each struct of a file: its key and Dafny fields, or the refusal.
 #[derive(PartialEq, Eq, Debug)]
@@ -350,11 +365,7 @@ pub enum StructModels {
 }
 
 /// The functions of one file.
-#[derive(PartialEq, Eq, Debug)]
-pub enum Fns {
-    Nil,
-    Cons(Box<Function>, Box<Fns>),
-}
+pub type Fns = List<Box<Function>>;
 
 // ------------------------------------------------------------------ the Dafny side
 
@@ -661,16 +672,10 @@ pub open spec fn spec_value_ty(t: Ty, line: u32, sd: Structs) -> Result<DTy, Ref
 }
 
 /// The fields of the struct `k` in the table of the file.
-pub open spec fn spec_fields_of(sd: Structs, k: u32) -> Option<Params>
-    decreases sd,
-{
-    match sd {
-        Structs::Nil => None,
-        Structs::Cons(key, _, fields, _, rest) => if key == k {
-            Some(fields)
-        } else {
-            spec_fields_of(*rest, k)
-        },
+pub open spec fn spec_fields_of(sd: Structs, k: u32) -> Option<Params> {
+    match spec_get(sd, k) {
+        Some((_, fields, _)) => Some(fields),
+        None => None,
     }
 }
 
@@ -785,7 +790,7 @@ pub open spec fn spec_integral(from: Ty, to: Ty, d: DExpr, line: u32) -> Result<
 
 /// An expression of code where a call has no place, such as a loop condition, decision 0104.
 pub open spec fn spec_code(e: Expr, line: u32) -> Result<DExpr, Refusal> {
-    match spec_lift(e, Fns::Nil, line, Structs::Nil, 0, false) {
+    match spec_lift(e, List::Nil, line, List::Nil, 0, false) {
         Ok((_, d, _)) => Ok(d),
         Err(r) => Err(r),
     }
@@ -981,8 +986,8 @@ pub open spec fn spec_lift_args(args: Args, all: Fns, line: u32, sd: Structs, n:
     decreases args,
 {
     match args {
-        Args::Nil => Ok((DCalls::Nil, DArgs::Nil, n)),
-        Args::Cons(a, rest) => match spec_lift(*a, all, line, sd, n, open) {
+        List::Nil => Ok((DCalls::Nil, DArgs::Nil, n)),
+        List::Cons(a, rest) => match spec_lift(*a, all, line, sd, n, open) {
             Err(r) => Err(r),
             Ok((ca, da, n1)) => match spec_lift_args(*rest, all, line, sd, n1, open) {
                 Err(r) => Err(r),
@@ -1289,8 +1294,8 @@ pub open spec fn spec_contract_args(args: Args, decl: Names, ps: Params, ret: Op
     decreases args, 2nat,
 {
     match args {
-        Args::Nil => Ok(DArgs::Nil),
-        Args::Cons(a, rest) => match spec_contract(*a, decl, ps, ret, bound, line, sd) {
+        List::Nil => Ok(DArgs::Nil),
+        List::Cons(a, rest) => match spec_contract(*a, decl, ps, ret, bound, line, sd) {
             Ok(da) => match spec_contract_args(*rest, decl, ps, ret, bound, line, sd) {
                 Ok(dr) => Ok(DArgs::Cons(da, Box::new(dr))),
                 Err(r) => Err(r),
@@ -1301,16 +1306,10 @@ pub open spec fn spec_contract_args(args: Args, decl: Names, ps: Params, ret: Op
 }
 
 /// The type of the field `f` of the struct `k` in the table of the file.
-pub open spec fn spec_field_ty(sd: Structs, k: u32, f: u32) -> Option<Ty>
-    decreases sd,
-{
-    match sd {
-        Structs::Nil => None,
-        Structs::Cons(key, _, fields, _, rest) => if key == k {
-            spec_get(fields, f)
-        } else {
-            spec_field_ty(*rest, k, f)
-        },
+pub open spec fn spec_field_ty(sd: Structs, k: u32, f: u32) -> Option<Ty> {
+    match spec_fields_of(sd, k) {
+        Some(fields) => spec_get(fields, f),
+        None => None,
     }
 }
 
@@ -1556,8 +1555,8 @@ pub open spec fn spec_bad_modifies(ps: Params, cs: Conds) -> Option<Refusal>
     decreases cs,
 {
     match cs {
-        Conds::Nil => None,
-        Conds::Cons(k, e, l, decl, rest) => if k == CondKind::Modifies {
+        List::Nil => None,
+        List::Cons((k, e, l, decl), rest) => if k == CondKind::Modifies {
             match e {
                 Expr::Name(n) => match spec_rebind(decl, ps, n) {
                     Some((_, Ty::Mut(_))) => spec_bad_modifies(ps, *rest),
@@ -1576,8 +1575,8 @@ pub open spec fn spec_lists(ps: Params, cs: Conds, p: u32) -> bool
     decreases cs,
 {
     match cs {
-        Conds::Nil => false,
-        Conds::Cons(k, e, _, decl, rest) => (k == CondKind::Modifies && match e {
+        List::Nil => false,
+        List::Cons((k, e, _, decl), rest) => (k == CondKind::Modifies && match e {
             Expr::Name(n) => match spec_rebind(decl, ps, n) {
                 Some((q, _)) => q == p,
                 None => false,
@@ -1748,8 +1747,8 @@ pub open spec fn spec_callable(fs: Fns, key: u32, sd: Structs) -> bool
     decreases fs,
 {
     match fs {
-        Fns::Nil => false,
-        Fns::Cons(f, rest) => (f.name == key && has_signature(*f, sd)) || spec_callable(*rest, key, sd),
+        List::Nil => false,
+        List::Cons(f, rest) => (f.name == key && has_signature(*f, sd)) || spec_callable(*rest, key, sd),
     }
 }
 
@@ -1790,8 +1789,8 @@ pub open spec fn spec_loop_conds(cs: Conds, want: CondKind, env: Params, sd: Str
     decreases cs,
 {
     match cs {
-        Conds::Nil => Ok(DConds::Nil),
-        Conds::Cons(k, e, l, _, rest) => match k {
+        List::Nil => Ok(DConds::Nil),
+        List::Cons((k, e, l, _), rest) => match k {
             CondKind::Other(w) => Err(Refusal::Construct(w, l)),
             CondKind::Bad(r) => Err(r),
             CondKind::Requires => Err(Refusal::Misplaced(l)),
@@ -1860,8 +1859,8 @@ pub open spec fn spec_writebacks(args: Args, cps: Params, ps: Params, line: u32)
     decreases args,
 {
     match args {
-        Args::Nil => Ok(Objs::Nil),
-        Args::Cons(a, rest) => match cps {
+        List::Nil => Ok(Objs::Nil),
+        List::Cons(a, rest) => match cps {
             List::Nil => Err(Refusal::Syntax(line)),
             List::Cons((_, t), crest) => if spec_written(t) {
                 match spec_target(*a, ps, line) {
@@ -2172,8 +2171,8 @@ pub open spec fn spec_has_result_args(args: Args) -> bool
     decreases args,
 {
     match args {
-        Args::Nil => false,
-        Args::Cons(a, rest) => spec_has_result(*a) || spec_has_result_args(*rest),
+        List::Nil => false,
+        List::Cons(a, rest) => spec_has_result(*a) || spec_has_result_args(*rest),
     }
 }
 
@@ -2184,8 +2183,8 @@ pub open spec fn spec_conds(cs: Conds, want: CondKind, ps: Params, ret: Ty, sd: 
     decreases cs,
 {
     match cs {
-        Conds::Nil => Ok(DConds::Nil),
-        Conds::Cons(k, e, l, decl, rest) => match k {
+        List::Nil => Ok(DConds::Nil),
+        List::Cons((k, e, l, decl), rest) => match k {
             CondKind::Other(w) => Err(Refusal::Construct(w, l)),
             CondKind::Bad(r) => Err(r),
             CondKind::Invariant => Err(Refusal::Misplaced(l)),
@@ -2462,29 +2461,10 @@ pub open spec fn spec_linked(f: Function, ens: DConds, pure: Option<DExpr>) -> D
 }
 
 /// The member `name` of the struct `k`: the key of its function, and its return type when it is pure.
-pub open spec fn spec_member(sd: Structs, k: u32, name: u32) -> Option<(u32, Option<(Ty, Params)>)>
-    decreases sd,
-{
-    match sd {
-        Structs::Nil => None,
-        Structs::Cons(key, _, _, ms, rest) => if key == k {
-            spec_member_of(ms, name)
-        } else {
-            spec_member(*rest, k, name)
-        },
-    }
-}
-
-pub open spec fn spec_member_of(ms: Members, name: u32) -> Option<(u32, Option<(Ty, Params)>)>
-    decreases ms,
-{
-    match ms {
-        Members::Nil => None,
-        Members::Cons(n, key, t, rest) => if n == name {
-            Some((key, t))
-        } else {
-            spec_member_of(*rest, name)
-        },
+pub open spec fn spec_member(sd: Structs, k: u32, name: u32) -> Option<(u32, Option<(Ty, Params)>)> {
+    match spec_get(sd, k) {
+        Some((_, _, ms)) => spec_get(ms, name),
+        None => None,
     }
 }
 
@@ -2504,8 +2484,8 @@ pub open spec fn spec_find(fs: Fns, key: u32) -> Option<Function>
     decreases fs,
 {
     match fs {
-        Fns::Nil => None,
-        Fns::Cons(f, rest) => if f.name == key {
+        List::Nil => None,
+        List::Cons(f, rest) => if f.name == key {
             Some(*f)
         } else {
             spec_find(*rest, key)
@@ -2545,13 +2525,8 @@ pub open spec fn spec_mark_members(ms: Members, all: Fns, sd: Structs, strict: b
     decreases ms,
 {
     match ms {
-        Members::Nil => Members::Nil,
-        Members::Cons(n, key, _, rest) => Members::Cons(
-            n,
-            key,
-            spec_pure_ret(all, key, sd, strict),
-            Box::new(spec_mark_members(*rest, all, sd, strict)),
-        ),
+        List::Nil => List::Nil,
+        List::Cons((n, (key, _)), rest) => List::Cons((n, (key, spec_pure_ret(all, key, sd, strict))), Box::new(spec_mark_members(*rest, all, sd, strict))),
     }
 }
 
@@ -2561,14 +2536,8 @@ pub open spec fn spec_mark(t: Structs, all: Fns, sd: Structs, strict: bool) -> S
     decreases t,
 {
     match t {
-        Structs::Nil => Structs::Nil,
-        Structs::Cons(k, l, fields, ms, rest) => Structs::Cons(
-            k,
-            l,
-            fields,
-            spec_mark_members(ms, all, sd, strict),
-            Box::new(spec_mark(*rest, all, sd, strict)),
-        ),
+        List::Nil => List::Nil,
+        List::Cons((k, (l, fields, ms)), rest) => List::Cons((k, (l, fields, spec_mark_members(ms, all, sd, strict))), Box::new(spec_mark(*rest, all, sd, strict))),
     }
 }
 
@@ -2671,8 +2640,8 @@ pub open spec fn spec_structs(sd: Structs) -> StructModels
     decreases sd,
 {
     match sd {
-        Structs::Nil => StructModels::Nil,
-        Structs::Cons(k, l, fields, _, rest) => StructModels::Cons(
+        List::Nil => StructModels::Nil,
+        List::Cons((k, (l, fields, _)), rest) => StructModels::Cons(
             match spec_fields(fields, l) {
                 Ok(df) => Ok((k, df)),
                 Err(r) => Err(r),
@@ -2687,8 +2656,8 @@ pub open spec fn spec_unit(fs: Fns, all: Fns, sd: Structs) -> Models
     decreases fs,
 {
     match fs {
-        Fns::Nil => Models::Nil,
-        Fns::Cons(f, rest) => Models::Cons(spec_function(*f, all, sd), Box::new(spec_unit(*rest, all, sd))),
+        List::Nil => Models::Nil,
+        List::Cons(f, rest) => Models::Cons(spec_function(*f, all, sd), Box::new(spec_unit(*rest, all, sd))),
     }
 }
 
@@ -2736,8 +2705,8 @@ pub open spec fn unknown_args(args: Args) -> bool
     decreases args,
 {
     match args {
-        Args::Nil => false,
-        Args::Cons(a, rest) => unknown_expr(*a) || unknown_args(*rest),
+        List::Nil => false,
+        List::Cons(a, rest) => unknown_expr(*a) || unknown_args(*rest),
     }
 }
 
@@ -2787,7 +2756,7 @@ pub proof fn lemma_unknown_code_is_refused(e: Expr, line: u32)
     ensures
         spec_code(e, line).is_err(),
 {
-    lemma_unknown_lift_is_refused(e, Fns::Nil, line, Structs::Nil, 0, false);
+    lemma_unknown_lift_is_refused(e, List::Nil, line, List::Nil, 0, false);
 }
 
 pub proof fn lemma_unknown_local_call_is_refused(
@@ -3305,13 +3274,13 @@ pub proof fn lemma_lift_args_resolves(args: Args, all: Fns, line: u32, sd: Struc
     decreases args,
 {
     match args {
-        Args::Cons(a, rest) => {
+        List::Cons(a, rest) => {
             lemma_lift_resolves(*a, all, line, sd, n, open);
             let n1 = spec_lift(*a, all, line, sd, n, open).unwrap().2;
             lemma_lift_args_resolves(*rest, all, line, sd, n1, open);
             lemma_append_resolves(spec_lift(*a, all, line, sd, n, open).unwrap().0, spec_lift_args(*rest, all, line, sd, n1, open).unwrap().0, all, sd);
         },
-        Args::Nil => {},
+        List::Nil => {},
     }
 }
 
@@ -3398,14 +3367,14 @@ pub proof fn lemma_unknown_lift_args_is_refused(args: Args, all: Fns, line: u32,
     decreases args,
 {
     match args {
-        Args::Cons(a, rest) => {
+        List::Cons(a, rest) => {
             if unknown_expr(*a) {
                 lemma_unknown_lift_is_refused(*a, all, line, sd, n, open);
             } else if spec_lift(*a, all, line, sd, n, open).is_ok() {
                 lemma_unknown_lift_args_is_refused(*rest, all, line, sd, spec_lift(*a, all, line, sd, n, open).unwrap().2, open);
             }
         },
-        Args::Nil => {},
+        List::Nil => {},
     }
 }
 
@@ -3469,11 +3438,11 @@ pub proof fn lemma_closed_args_run_no_call(args: Args, all: Fns, line: u32, sd: 
     decreases args,
 {
     match args {
-        Args::Cons(a, rest) => {
+        List::Cons(a, rest) => {
             lemma_closed_runs_no_call(*a, all, line, sd, n);
             lemma_closed_args_run_no_call(*rest, all, line, sd, spec_lift(*a, all, line, sd, n, false).unwrap().2);
         },
-        Args::Nil => {},
+        List::Nil => {},
     }
 }
 
@@ -3597,7 +3566,7 @@ pub proof fn lemma_resolves_local(s: Stmt, all: Fns, env: Params, ps: Params, sd
     let l = s->Local_3;
     lemma_value_resolves(e, all, l, sd);
     if let Expr::Call(k, nm, args, at) = e {
-        if let Args::Cons(_, rest) = *args {
+        if let List::Cons(_, rest) = *args {
             if spec_call_lift(k, nm, *rest, at, all, l, sd).is_ok() {
                 lemma_call_lift_resolves(k, nm, *rest, at, all, l, sd);
             }
@@ -3620,7 +3589,7 @@ pub proof fn lemma_resolves_call(s: Stmt, all: Fns, env: Params, ps: Params, sd:
     if spec_call_lift(k, nm, args, l, all, l, sd).is_ok() {
         lemma_call_lift_resolves(k, nm, args, l, all, l, sd);
     }
-    if let Args::Cons(_, rest) = args {
+    if let List::Cons(_, rest) = args {
         if spec_call_lift(k, nm, *rest, l, all, l, sd).is_ok() {
             lemma_call_lift_resolves(k, nm, *rest, l, all, l, sd);
         }
@@ -3712,12 +3681,12 @@ pub proof fn lemma_callable_has_method(fs: Fns, all: Fns, key: u32, sd: Structs)
     decreases fs,
 {
     match fs {
-        Fns::Cons(f, rest) => {
+        List::Cons(f, rest) => {
             if !(f.name == key && has_signature(*f, sd)) {
                 lemma_callable_has_method(*rest, all, key, sd);
             }
         },
-        Fns::Nil => {},
+        List::Nil => {},
     }
 }
 
@@ -3814,15 +3783,10 @@ pub fn fields_of(sd: &Structs, k: u32) -> (r: Option<&Params>)
             Some(p) => spec_fields_of(*sd, k) == Some(*p),
             None => spec_fields_of(*sd, k) is None,
         },
-    decreases sd,
 {
-    match sd {
-        Structs::Nil => None,
-        Structs::Cons(key, _, fields, _, rest) => if *key == k {
-            Some(fields)
-        } else {
-            fields_of(rest, k)
-        },
+    match get_ref(sd, k) {
+        Some((_, fields, _)) => Some(fields),
+        None => None,
     }
 }
 
@@ -3913,7 +3877,7 @@ pub fn translate_code(e: &Expr, line: u32) -> (r: Result<DExpr, Refusal>)
     ensures
         r == spec_code(*e, line),
 {
-    match lift(e, &Fns::Nil, line, &Structs::Nil, 0, false) {
+    match lift(e, &List::Nil, line, &List::Nil, 0, false) {
         Ok((_, d, _)) => Ok(d),
         Err(r) => Err(r),
     }
@@ -4112,8 +4076,8 @@ pub fn lift_args(args: &Args, all: &Fns, line: u32, sd: &Structs, n: u32, open: 
     decreases args,
 {
     match args {
-        Args::Nil => Ok((DCalls::Nil, DArgs::Nil, n)),
-        Args::Cons(a, rest) => match lift(a, all, line, sd, n, open) {
+        List::Nil => Ok((DCalls::Nil, DArgs::Nil, n)),
+        List::Cons(a, rest) => match lift(a, all, line, sd, n, open) {
             Err(r) => Err(r),
             Ok((ca, da, n1)) => match lift_args(rest, all, line, sd, n1, open) {
                 Err(r) => Err(r),
@@ -4326,14 +4290,14 @@ pub fn translate_contract(e: &Expr, decl: &Names, ps: &Params, ret: Option<Ty>, 
             Err(r) => Err(r),
         },
         Expr::Forall(j, body) => {
-            let inner = List::Cons(*j, Box::new(copy_names(bound)));
+            let inner = List::Cons(*j, Box::new(copy(bound)));
             match translate_contract(body, decl, ps, ret, &inner, line, sd) {
                 Ok(db) => Ok(DExpr::Forall(*j, Box::new(db))),
                 Err(r) => Err(r),
             }
         },
         Expr::Exists(j, body) => {
-            let inner = List::Cons(*j, Box::new(copy_names(bound)));
+            let inner = List::Cons(*j, Box::new(copy(bound)));
             match translate_contract(body, decl, ps, ret, &inner, line, sd) {
                 Ok(db) => Ok(DExpr::Exists(*j, Box::new(db))),
                 Err(r) => Err(r),
@@ -4444,8 +4408,8 @@ pub fn translate_contract_args(args: &Args, decl: &Names, ps: &Params, ret: Opti
     decreases args, 2nat,
 {
     match args {
-        Args::Nil => Ok(DArgs::Nil),
-        Args::Cons(a, rest) => match translate_contract(a, decl, ps, ret, bound, line, sd) {
+        List::Nil => Ok(DArgs::Nil),
+        List::Cons(a, rest) => match translate_contract(a, decl, ps, ret, bound, line, sd) {
             Ok(da) => match translate_contract_args(rest, decl, ps, ret, bound, line, sd) {
                 Ok(dr) => Ok(DArgs::Cons(da, Box::new(dr))),
                 Err(r) => Err(r),
@@ -4458,15 +4422,10 @@ pub fn translate_contract_args(args: &Args, decl: &Names, ps: &Params, ret: Opti
 pub fn field_ty(sd: &Structs, k: u32, f: u32) -> (r: Option<Ty>)
     ensures
         r == spec_field_ty(*sd, k, f),
-    decreases sd,
 {
-    match sd {
-        Structs::Nil => None,
-        Structs::Cons(key, _, fields, _, rest) => if *key == k {
-            get(fields, f)
-        } else {
-            field_ty(rest, k, f)
-        },
+    match fields_of(sd, k) {
+        Some(fields) => get(fields, f),
+        None => None,
     }
 }
 
@@ -4731,8 +4690,8 @@ pub fn bad_modifies(ps: &Params, cs: &Conds) -> (r: Option<Refusal>)
     decreases cs,
 {
     match cs {
-        Conds::Nil => None,
-        Conds::Cons(k, e, l, decl, rest) => if *k == CondKind::Modifies {
+        List::Nil => None,
+        List::Cons((k, e, l, decl), rest) => if *k == CondKind::Modifies {
             match e {
                 Expr::Name(n) => match rebind(decl, ps, *n) {
                     Some((_, Ty::Mut(_))) => bad_modifies(ps, rest),
@@ -4752,8 +4711,8 @@ pub fn lists(ps: &Params, cs: &Conds, p: u32) -> (r: bool)
     decreases cs,
 {
     match cs {
-        Conds::Nil => false,
-        Conds::Cons(k, e, _, decl, rest) => {
+        List::Nil => false,
+        List::Cons((k, e, _, decl), rest) => {
             let here = *k == CondKind::Modifies && match e {
                 Expr::Name(n) => match rebind(decl, ps, *n) {
                     Some((q, _)) => q == p,
@@ -4857,7 +4816,7 @@ pub fn view_ps(ps: &Params, k: CondKind) -> (r: Params)
     if k == CondKind::Ensures {
         after(ps)
     } else {
-        copy_params(ps)
+        copy(ps)
     }
 }
 
@@ -4886,17 +4845,6 @@ pub fn ret_ty(t: Ty, line: u32, sd: &Structs) -> (r: Result<DTy, Refusal>)
         },
         Ty::Void => Ok(DTy::Void),
         _ => translate_value_ty(t, line, sd),
-    }
-}
-
-pub fn copy_names(ns: &Names) -> (r: Names)
-    ensures
-        r == *ns,
-    decreases ns,
-{
-    match ns {
-        List::Nil => List::Nil,
-        List::Cons(n, rest) => List::Cons(*n, Box::new(copy_names(rest))),
     }
 }
 
@@ -4956,19 +4904,8 @@ pub fn callable(fs: &Fns, key: u32, sd: &Structs) -> (r: bool)
     decreases fs,
 {
     match fs {
-        Fns::Nil => false,
-        Fns::Cons(f, rest) => (f.name == key && signature(f, sd)) || callable(rest, key, sd),
-    }
-}
-
-pub fn copy_params(ps: &Params) -> (r: Params)
-    ensures
-        r == *ps,
-    decreases ps,
-{
-    match ps {
-        List::Nil => List::Nil,
-        List::Cons((n, t), rest) => List::Cons((*n, *t), Box::new(copy_params(rest))),
+        List::Nil => false,
+        List::Cons(f, rest) => (f.name == key && signature(f, sd)) || callable(rest, key, sd),
     }
 }
 
@@ -5000,8 +4937,8 @@ pub fn scope(s: &Stmt, env: &Params) -> (r: Params)
         r == spec_scope(*s, *env),
 {
     match s {
-        Stmt::Local(n, t, _, _) => List::Cons((*n, *t), Box::new(copy_params(env))),
-        _ => copy_params(env),
+        Stmt::Local(n, t, _, _) => List::Cons((*n, *t), Box::new(copy(env))),
+        _ => copy(env),
     }
 }
 
@@ -5011,8 +4948,8 @@ pub fn translate_loop_conds(cs: &Conds, want: CondKind, env: &Params, sd: &Struc
     decreases cs,
 {
     match cs {
-        Conds::Nil => Ok(DConds::Nil),
-        Conds::Cons(k, e, l, _, rest) => match k {
+        List::Nil => Ok(DConds::Nil),
+        List::Cons((k, e, l, _), rest) => match k {
             CondKind::Other(w) => Err(Refusal::Construct(*w, *l)),
             CondKind::Bad(r) => Err(*r),
             CondKind::Requires => Err(Refusal::Misplaced(*l)),
@@ -5092,8 +5029,8 @@ pub fn writebacks(args: &Args, cps: &Params, ps: &Params, line: u32) -> (r: Resu
     decreases args,
 {
     match args {
-        Args::Nil => Ok(Objs::Nil),
-        Args::Cons(a, rest) => match cps {
+        List::Nil => Ok(Objs::Nil),
+        List::Cons(a, rest) => match cps {
             List::Nil => Err(Refusal::Syntax(line)),
             List::Cons((_, t), crest) => if written(*t) {
                 match target(a, ps, line) {
@@ -5408,8 +5345,8 @@ pub fn has_result_args(args: &Args) -> (r: bool)
     decreases args,
 {
     match args {
-        Args::Nil => false,
-        Args::Cons(a, rest) => has_result(a) || has_result_args(rest),
+        List::Nil => false,
+        List::Cons(a, rest) => has_result(a) || has_result_args(rest),
     }
 }
 
@@ -5419,8 +5356,8 @@ pub fn translate_conds(cs: &Conds, want: CondKind, ps: &Params, ret: Ty, sd: &St
     decreases cs,
 {
     match cs {
-        Conds::Nil => Ok(DConds::Nil),
-        Conds::Cons(k, e, l, decl, rest) => match k {
+        List::Nil => Ok(DConds::Nil),
+        List::Cons((k, e, l, decl), rest) => match k {
             CondKind::Other(w) => Err(Refusal::Construct(*w, *l)),
             CondKind::Bad(r) => Err(*r),
             CondKind::Invariant => Err(Refusal::Misplaced(*l)),
@@ -5802,33 +5739,21 @@ pub fn linked(f: &Function, ens: DConds, pure: &Option<DExpr>) -> (r: DConds)
 pub fn member(sd: &Structs, k: u32, name: u32) -> (r: Option<(u32, Option<(Ty, Params)>)>)
     ensures
         r == spec_member(*sd, k, name),
-    decreases sd,
 {
-    match sd {
-        Structs::Nil => None,
-        Structs::Cons(key, _, _, ms, rest) => if *key == k {
-            member_of(ms, name)
-        } else {
-            member(rest, k, name)
-        },
+    match get_ref(sd, k) {
+        Some((_, _, ms)) => member_of(ms, name),
+        None => None,
     }
 }
 
 pub fn member_of(ms: &Members, name: u32) -> (r: Option<(u32, Option<(Ty, Params)>)>)
     ensures
-        r == spec_member_of(*ms, name),
-    decreases ms,
+        r == spec_get(*ms, name),
 {
-    match ms {
-        Members::Nil => None,
-        Members::Cons(n, key, t, rest) => if *n == name {
-            match t {
-                Some((rt, mps)) => Some((*key, Some((*rt, copy_params(mps))))),
-                None => Some((*key, None)),
-            }
-        } else {
-            member_of(rest, name)
-        },
+    match get_ref(ms, name) {
+        Some((key, Some((rt, mps)))) => Some((*key, Some((*rt, copy(mps))))),
+        Some((key, None)) => Some((*key, None)),
+        None => None,
     }
 }
 
@@ -5854,8 +5779,8 @@ pub fn find(fs: &Fns, key: u32) -> (r: Option<&Function>)
     decreases fs,
 {
     match fs {
-        Fns::Nil => None,
-        Fns::Cons(f, rest) => if f.name == key {
+        List::Nil => None,
+        List::Cons(f, rest) => if f.name == key {
             Some(&**f)
         } else {
             find(rest, key)
@@ -5873,7 +5798,7 @@ pub fn pure_ret(all: &Fns, key: u32, sd: &Structs, strict: bool) -> (r: Option<(
         } else if strict {
             match translate_inside(f, all, sd) {
                 Ok((_, _, _, body)) => match pure_body(&f.params, &body) {
-                    Some(_) => Some((f.ret, copy_params(&f.params))),
+                    Some(_) => Some((f.ret, copy(&f.params))),
                     None => None,
                 },
                 Err(_) => None,
@@ -5881,7 +5806,7 @@ pub fn pure_ret(all: &Fns, key: u32, sd: &Structs, strict: bool) -> (r: Option<(
         } else {
             match translate_stmts(&f.body, all, &f.params, &f.params, sd) {
                 Ok(body) => match pure_body(&f.params, &body) {
-                    Some(_) => Some((f.ret, copy_params(&f.params))),
+                    Some(_) => Some((f.ret, copy(&f.params))),
                     None => None,
                 },
                 Err(_) => None,
@@ -5897,8 +5822,8 @@ pub fn mark_members(ms: &Members, all: &Fns, sd: &Structs, strict: bool) -> (r: 
     decreases ms,
 {
     match ms {
-        Members::Nil => Members::Nil,
-        Members::Cons(n, key, _, rest) => Members::Cons(*n, *key, pure_ret(all, *key, sd, strict), Box::new(mark_members(rest, all, sd, strict))),
+        List::Nil => List::Nil,
+        List::Cons((n, (key, _)), rest) => List::Cons((*n, (*key, pure_ret(all, *key, sd, strict))), Box::new(mark_members(rest, all, sd, strict))),
     }
 }
 
@@ -5908,14 +5833,8 @@ pub fn mark(t: &Structs, all: &Fns, sd: &Structs, strict: bool) -> (r: Structs)
     decreases t,
 {
     match t {
-        Structs::Nil => Structs::Nil,
-        Structs::Cons(k, l, fields, ms, rest) => Structs::Cons(
-            *k,
-            *l,
-            copy_params(fields),
-            mark_members(ms, all, sd, strict),
-            Box::new(mark(rest, all, sd, strict)),
-        ),
+        List::Nil => List::Nil,
+        List::Cons((k, (l, fields, ms)), rest) => List::Cons((*k, (*l, copy(fields), mark_members(ms, all, sd, strict))), Box::new(mark(rest, all, sd, strict))),
     }
 }
 
@@ -5941,7 +5860,7 @@ pub fn tail(ps: &Params) -> (r: Params)
         r == spec_tail(*ps),
 {
     match ps {
-        List::Cons((_, _), rest) => copy_params(rest),
+        List::Cons((_, _), rest) => copy(rest),
         List::Nil => List::Nil,
     }
 }
@@ -6009,8 +5928,8 @@ fn translate_each(fs: &Fns, all: &Fns, sd: &Structs) -> (r: Models)
     decreases fs,
 {
     match fs {
-        Fns::Nil => Models::Nil,
-        Fns::Cons(f, rest) => Models::Cons(translate_function(f, all, sd), Box::new(translate_each(rest, all, sd))),
+        List::Nil => Models::Nil,
+        List::Cons(f, rest) => Models::Cons(translate_function(f, all, sd), Box::new(translate_each(rest, all, sd))),
     }
 }
 
@@ -6038,8 +5957,8 @@ pub fn translate_structs(sd: &Structs) -> (r: StructModels)
     decreases sd,
 {
     match sd {
-        Structs::Nil => StructModels::Nil,
-        Structs::Cons(k, l, fields, _, rest) => {
+        List::Nil => StructModels::Nil,
+        List::Cons((k, (l, fields, _)), rest) => {
             let m = match translate_fields(fields, *l) {
                 Ok(df) => Ok((*k, df)),
                 Err(r) => Err(r),
@@ -6380,8 +6299,8 @@ fn parse_postfix(toks: &Vec<Tok>, pos: usize, line: u32) -> (r: Result<(Expr, us
             p = p + 1;
         } else if let Tok::Field(f) = toks[p] {
             if toks.len() - p > 2 && toks[p + 1] == Tok::LParen && toks[p + 2] == Tok::RParen {
-                assert(!unknown_args(Args::Nil));
-                a = Expr::MApply(Box::new(a), f, Box::new(Args::Nil));
+                assert(!unknown_args(List::Nil));
+                a = Expr::MApply(Box::new(a), f, Box::new(List::Nil));
                 p = p + 3;
             } else if toks.len() - p > 1 && toks[p + 1] == Tok::LParen {
                 match parse_args(toks, p + 2, line) {
@@ -6500,11 +6419,11 @@ fn parse_args(toks: &Vec<Tok>, pos: usize, line: u32) -> (r: Result<(Args, usize
 {
     match parse_implies(toks, pos, line) {
         Ok((a, p)) => if p < toks.len() && toks[p] == Tok::RParen {
-            assert(!unknown_args(Args::Nil));
-            Ok((Args::Cons(Box::new(a), Box::new(Args::Nil)), p + 1))
+            assert(!unknown_args(List::Nil));
+            Ok((List::Cons(Box::new(a), Box::new(List::Nil)), p + 1))
         } else if p < toks.len() && toks[p] == Tok::Comma {
             match parse_args(toks, p + 1, line) {
-                Ok((rest, q)) => Ok((Args::Cons(Box::new(a), Box::new(rest)), q)),
+                Ok((rest, q)) => Ok((List::Cons(Box::new(a), Box::new(rest)), q)),
                 Err(e) => Err(e),
             }
         } else {
@@ -6528,8 +6447,8 @@ fn parse_atom(toks: &Vec<Tok>, pos: usize, line: u32) -> (r: Result<(Expr, usize
         Tok::Int(n) => Ok((Expr::Int(n), pos + 1)),
         Tok::Bool(b) => Ok((Expr::Bool(b), pos + 1)),
         Tok::Ident(n) => if toks.len() - pos > 2 && toks[pos + 1] == Tok::LParen && toks[pos + 2] == Tok::RParen {
-            assert(!unknown_args(Args::Nil));
-            Ok((Expr::Apply(n, Box::new(Args::Nil)), pos + 3))
+            assert(!unknown_args(List::Nil));
+            Ok((Expr::Apply(n, Box::new(List::Nil)), pos + 3))
         } else if toks.len() - pos > 1 && toks[pos + 1] == Tok::LParen {
             match parse_args(toks, pos + 2, line) {
                 Ok((args, p)) => Ok((Expr::Apply(n, Box::new(args)), p)),

@@ -112,19 +112,7 @@ fn a_token_with_no_rule_is_refused_by_its_kind_wherever_it_is() {
 #[test]
 fn clamp_translates_to_a_method_whose_contract_reads_exact_integers() {
     // requires lo <= hi; ensures x < lo ==> result == lo; if (x < lo) { return lo; } return x;
-    let conds = Conds::Cons(
-        CondKind::Requires,
-        Expr::Bin(BinOp::Le, b(Expr::Name(LO)), b(Expr::Name(HI))),
-        21,
-        names(&[X, LO, HI]),
-        Box::new(Conds::Cons(
-            CondKind::Ensures,
-            Expr::Bin(BinOp::Implies, b(Expr::Bin(BinOp::Lt, b(Expr::Name(X)), b(Expr::Name(LO)))), b(Expr::Bin(BinOp::Eq, b(Expr::Result), b(Expr::Name(LO))))),
-            22,
-            names(&[X, LO, HI]),
-            Box::new(Conds::Nil),
-        )),
-    );
+    let conds = List::Cons((CondKind::Requires, Expr::Bin(BinOp::Le, b(Expr::Name(LO)), b(Expr::Name(HI))), 21, names(&[X, LO, HI])), Box::new(List::Cons((CondKind::Ensures, Expr::Bin(BinOp::Implies, b(Expr::Bin(BinOp::Lt, b(Expr::Name(X)), b(Expr::Name(LO)))), b(Expr::Bin(BinOp::Eq, b(Expr::Result), b(Expr::Name(LO))))), 22, names(&[X, LO, HI])), Box::new(List::Nil))));
     let body = Stmts::Cons(
         Box::new(Stmt::If(
             Expr::Bin(BinOp::Lt, b(var(X)), b(var(LO))),
@@ -135,7 +123,7 @@ fn clamp_translates_to_a_method_whose_contract_reads_exact_integers() {
         Box::new(Stmts::Cons(Box::new(Stmt::Return(var(X), 30)), Box::new(Stmts::Nil))),
     );
     let f = Function { name: CLAMP, line: 26, params: params(), ret: Ty::I32, trusted: false, conds, body };
-    let Model::Full(m) = translate_function(&f, &Fns::Nil, &Structs::Nil) else { panic!("clamp has a full model") };
+    let Model::Full(m) = translate_function(&f, &List::Nil, &List::Nil) else { panic!("clamp has a full model") };
     let as_int = |n: u32| DExpr::AsInt(Box::new(DExpr::Var(n)));
     assert_eq!(strip_conds(m.requires), DConds::Cons(DExpr::Bin(BinOp::Le, Box::new(as_int(LO)), Box::new(as_int(HI))), 0, Box::new(DConds::Nil)));
     assert_eq!(
@@ -169,7 +157,7 @@ fn one(s: Stmt) -> Stmts {
 }
 
 fn fns(v: Vec<Function>) -> Fns {
-    v.into_iter().rev().fold(Fns::Nil, |rest, f| Fns::Cons(Box::new(f), Box::new(rest)))
+    v.into_iter().rev().fold(List::Nil, |rest, f| List::Cons(Box::new(f), Box::new(rest)))
 }
 
 fn read(n: u32, t: Ty) -> Expr {
@@ -179,16 +167,16 @@ fn read(n: u32, t: Ty) -> Expr {
 /// `int32_t saturating_add(int32_t a, int32_t b)`, with a body of `body`.
 fn sat(body: Stmts) -> Function {
     let ps = List::Cons((A, Ty::I32), Box::new(List::Cons((B, Ty::I32), Box::new(List::Nil))));
-    Function { name: SAT, line: 10, params: ps, ret: Ty::I32, trusted: false, conds: Conds::Nil, body }
+    Function { name: SAT, line: 10, params: ps, ret: Ty::I32, trusted: false, conds: List::Nil, body }
 }
 
 /// `int32_t successor(int32_t x) { return <e>; }`
 fn succ(e: Expr) -> Function {
-    Function { name: SUCC, line: 37, params: List::Cons((X, Ty::I32), Box::new(List::Nil)), ret: Ty::I32, trusted: false, conds: Conds::Nil, body: one(Stmt::Return(e, 38)) }
+    Function { name: SUCC, line: 37, params: List::Cons((X, Ty::I32), Box::new(List::Nil)), ret: Ty::I32, trusted: false, conds: List::Nil, body: one(Stmt::Return(e, 38)) }
 }
 
 fn call(key: u32, args: Vec<Expr>, line: u32) -> Expr {
-    let args = args.into_iter().rev().fold(Args::Nil, |rest, e| Args::Cons(Box::new(e), Box::new(rest)));
+    let args = args.into_iter().rev().fold(List::Nil, |rest, e| List::Cons(Box::new(e), Box::new(rest)));
     Expr::Call(key, SAT_NAME, Box::new(args), line)
 }
 
@@ -207,7 +195,7 @@ fn a_local_and_integral_casts_translate_to_dafny_casts_that_dafny_checks() {
     let sum = Expr::Bin(BinOp::Add, b(Expr::Cast(CastKind::NoOp, b(Expr::Brace(b(widen(A)))))), b(widen(B)));
     let back = Expr::Cast(CastKind::NoOp, b(Expr::Cast(CastKind::Integral(Ty::I64, Ty::I32), b(read(SUM, Ty::I64)))));
     let body = Stmts::Cons(Box::new(Stmt::Local(SUM, Ty::I64, sum, 11)), Box::new(one(Stmt::Return(back, 18))));
-    let Model::Full(m) = translate_function(&sat(body), &Fns::Nil, &Structs::Nil) else { panic!("saturating_add has a full model") };
+    let Model::Full(m) = translate_function(&sat(body), &List::Nil, &List::Nil) else { panic!("saturating_add has a full model") };
     let conv = |t: DTy, d: DExpr| DExpr::Conv(t, Box::new(d));
     let dsum = DExpr::Bin(BinOp::Add, Box::new(conv(DTy::Int64, DExpr::Var(A))), Box::new(conv(DTy::Int64, DExpr::Var(B))));
     assert_eq!(
@@ -223,14 +211,14 @@ fn a_local_and_integral_casts_translate_to_dafny_casts_that_dafny_checks() {
 fn a_call_that_stands_alone_names_the_method_of_its_callee() {
     // successor: return saturating_add(x, 1); and a local whose start value is the call.
     let all = fns(vec![sat(one(Stmt::Return(Expr::Lit(0, Ty::I32), 15))), succ(call(SAT, vec![read(X, Ty::I32), Expr::Lit(1, Ty::I32)], 38))]);
-    let Models::Cons(_, rest) = translate_unit(&all, &Structs::Nil) else { panic!("two models") };
+    let Models::Cons(_, rest) = translate_unit(&all, &List::Nil) else { panic!("two models") };
     let Models::Cons(Model::Full(m), _) = *rest else { panic!("successor has a full model") };
     let args = DArgs::Cons(DExpr::Var(X), Box::new(DArgs::Cons(lit32(1), Box::new(DArgs::Nil))));
     assert_eq!(strip(m.body), DStmts::Cons(Box::new(DStmt::ReturnCall(SAT, args)), 0, Box::new(DStmts::Nil)));
 
     let local = Stmt::Local(A, Ty::I32, call(SAT, vec![Expr::Lit(1, Ty::I32), Expr::Lit(2, Ty::I32)], 39), 39);
     let f = Function { body: Stmts::Cons(Box::new(local), Box::new(one(Stmt::Return(read(A, Ty::I32), 40)))), ..succ(Expr::Lit(0, Ty::I32)) };
-    let Model::Full(m) = translate_function(&f, &all, &Structs::Nil) else { panic!("a local from a call has a full model") };
+    let Model::Full(m) = translate_function(&f, &all, &List::Nil) else { panic!("a local from a call has a full model") };
     let DStmts::Cons(first, _, _) = m.body else { panic!("a body") };
     let args = DArgs::Cons(lit32(1), Box::new(DArgs::Cons(lit32(2), Box::new(DArgs::Nil))));
     assert_eq!(*first, DStmt::LocalCall(A, DTy::Int32, SAT, args));
@@ -244,12 +232,12 @@ fn a_call_inside_an_expression_runs_before_its_statement() {
     let run = |t: u32, a: DArgs, rest: DCalls| DCalls::Cons(t, DTy::Int32, SAT, a, Box::new(rest));
     // return sat(1, 2) + 1;
     let plus = Expr::Bin(BinOp::Add, b(c(38)), b(Expr::Lit(1, Ty::I32)));
-    let Model::Full(m) = translate_function(&succ(plus), &all, &Structs::Nil) else { panic!("a full model") };
+    let Model::Full(m) = translate_function(&succ(plus), &all, &List::Nil) else { panic!("a full model") };
     let want = DStmt::Pre(run(0, args(), DCalls::Nil), Box::new(DStmt::Return(DExpr::Bin(BinOp::Add, Box::new(DExpr::Temp(0)), Box::new(lit32(1))))));
     assert_eq!(strip(m.body), DStmts::Cons(Box::new(want), 0, Box::new(DStmts::Nil)));
     // return sat(sat(1, 2), 2); the inner call runs first.
     let nested = call(SAT, vec![c(39), Expr::Lit(2, Ty::I32)], 39);
-    let Model::Full(m) = translate_function(&succ(nested), &all, &Structs::Nil) else { panic!("a full model") };
+    let Model::Full(m) = translate_function(&succ(nested), &all, &List::Nil) else { panic!("a full model") };
     let outer = DArgs::Cons(DExpr::Temp(0), Box::new(DArgs::Cons(lit32(2), Box::new(DArgs::Nil))));
     let want = DStmt::Pre(run(0, args(), DCalls::Nil), Box::new(DStmt::ReturnCall(SAT, outer)));
     assert_eq!(strip(m.body), DStmts::Cons(Box::new(want), 0, Box::new(DStmts::Nil)));
@@ -257,7 +245,7 @@ fn a_call_inside_an_expression_runs_before_its_statement() {
     let two = Expr::Bin(BinOp::Gt, b(Expr::Bin(BinOp::Add, b(c(40)), b(c(40)))), b(Expr::Lit(0, Ty::I32)));
     let body = Stmts::Cons(Box::new(Stmt::If(two, Box::new(Stmts::Nil), Box::new(Stmts::Nil), 40)), Box::new(one(Stmt::Return(Expr::Lit(0, Ty::I32), 41))));
     let f = Function { body, ..succ(Expr::Lit(0, Ty::I32)) };
-    let Model::Full(m) = translate_function(&f, &all, &Structs::Nil) else { panic!("a full model") };
+    let Model::Full(m) = translate_function(&f, &all, &List::Nil) else { panic!("a full model") };
     let DStmts::Cons(first, _, _) = strip(m.body) else { panic!("a body") };
     let cond = DExpr::Bin(BinOp::Gt, Box::new(DExpr::Bin(BinOp::Add, Box::new(DExpr::Temp(0)), Box::new(DExpr::Temp(1)))), Box::new(lit32(0)));
     let want = DStmt::Pre(run(0, args(), run(1, args(), DCalls::Nil)), Box::new(DStmt::If(cond, Box::new(DStmts::Nil), Box::new(DStmts::Nil))));
@@ -273,24 +261,24 @@ fn a_call_that_cpp_may_not_evaluate_once_is_refused_at_its_line() {
     // if (true && sat(1, 2) > 0) {}: the right of && may not run.
     let and = Expr::Bin(BinOp::And, b(Expr::Bool(true)), b(positive(42)));
     let f = with(Stmt::If(and, Box::new(Stmts::Nil), Box::new(Stmts::Nil), 42));
-    assert_eq!(bare_refusal(translate_function(&f, &all, &Structs::Nil)), Refusal::Place(42));
+    assert_eq!(bare_refusal(translate_function(&f, &all, &List::Nil)), Refusal::Place(42));
     // return true ? sat(1, 2) : 0; a branch may not run.
     let branch = Expr::Cond(b(Expr::Bool(true)), b(c(44)), b(Expr::Lit(0, Ty::I32)));
-    assert_eq!(bare_refusal(translate_function(&succ(branch), &all, &Structs::Nil)), Refusal::Place(44));
+    assert_eq!(bare_refusal(translate_function(&succ(branch), &all, &List::Nil)), Refusal::Place(44));
     // while (sat(1, 2) > 0) {}: a loop condition runs again at each turn.
-    let f = with(Stmt::While(positive(46), Box::new(Conds::Nil), Box::new(Stmts::Nil), 46));
-    assert_eq!(bare_refusal(translate_function(&f, &all, &Structs::Nil)), Refusal::Place(46));
+    let f = with(Stmt::While(positive(46), Box::new(List::Nil), Box::new(Stmts::Nil), 46));
+    assert_eq!(bare_refusal(translate_function(&f, &all, &List::Nil)), Refusal::Place(46));
 }
 
 #[test]
 fn a_call_to_a_function_with_no_method_is_refused_by_the_callee_name() {
     let to_sat = succ(call(SAT, vec![Expr::Lit(1, Ty::I32), Expr::Lit(2, Ty::I32)], 38));
     // No such function in the unit.
-    assert_eq!(bare_refusal(translate_function(&to_sat, &Fns::Nil, &Structs::Nil)), Refusal::Callee(SAT_NAME, 38));
+    assert_eq!(bare_refusal(translate_function(&to_sat, &List::Nil, &List::Nil)), Refusal::Callee(SAT_NAME, 38));
     // The callee is in the unit, but its signature is not in the subset, so it has no method.
     let odd = Function { ret: Ty::Other(OTHER_TYPE), ..sat(Stmts::Nil) };
     let all = fns(vec![odd, to_sat]);
-    let Models::Cons(first, rest) = translate_unit(&all, &Structs::Nil) else { panic!("two models") };
+    let Models::Cons(first, rest) = translate_unit(&all, &List::Nil) else { panic!("two models") };
     assert_eq!(first, Model::Refused(Refusal::Construct(OTHER_TYPE, 10)));
     let Models::Cons(second, _) = *rest else { panic!("two models") };
     assert_eq!(bare_refusal(second), Refusal::Callee(SAT_NAME, 38));
@@ -298,10 +286,10 @@ fn a_call_to_a_function_with_no_method_is_refused_by_the_callee_name() {
 
 #[test]
 fn a_callee_whose_body_is_refused_keeps_a_method_with_no_contract() {
-    let conds = Conds::Cons(CondKind::Ensures, Expr::Bin(BinOp::Eq, b(Expr::Result), b(Expr::Int(0))), 9, names(&[A, B]), Box::new(Conds::Nil));
+    let conds = List::Cons((CondKind::Ensures, Expr::Bin(BinOp::Eq, b(Expr::Result), b(Expr::Int(0))), 9, names(&[A, B])), Box::new(List::Nil));
     let refused = Function { conds, ..sat(one(Stmt::Return(Expr::Unknown(CALL_EXPR, 11), 11))) };
     let all = fns(vec![refused, succ(call(SAT, vec![Expr::Lit(1, Ty::I32), Expr::Lit(2, Ty::I32)], 38))]);
-    let Models::Cons(first, rest) = translate_unit(&all, &Structs::Nil) else { panic!("two models") };
+    let Models::Cons(first, rest) = translate_unit(&all, &List::Nil) else { panic!("two models") };
     let Model::Bare(name, params, ret, r) = first else { panic!("a bare model: {first:?}") };
     assert_eq!((name, ret, r), (SAT, DTy::Int32, Refusal::Construct(CALL_EXPR, 11)));
     assert_eq!(params, DParams::Cons(A, DTy::Int32, Box::new(DParams::Cons(B, DTy::Int32, Box::new(DParams::Nil)))));
@@ -310,53 +298,53 @@ fn a_callee_whose_body_is_refused_keeps_a_method_with_no_contract() {
 
 #[test]
 fn a_contract_line_the_shell_could_not_read_keeps_the_signature() {
-    let conds = Conds::Cons(CondKind::Bad(Refusal::Syntax(9)), Expr::Int(0), 9, List::Nil, Box::new(Conds::Nil));
+    let conds = List::Cons((CondKind::Bad(Refusal::Syntax(9)), Expr::Int(0), 9, List::Nil), Box::new(List::Nil));
     let f = Function { conds, ..sat(one(Stmt::Return(Expr::Lit(0, Ty::I32), 15))) };
-    assert_eq!(bare_refusal(translate_function(&f, &Fns::Nil, &Structs::Nil)), Refusal::Syntax(9));
-    let conds = Conds::Cons(CondKind::Bad(Refusal::Backslash(8)), Expr::Int(0), 8, List::Nil, Box::new(Conds::Nil));
+    assert_eq!(bare_refusal(translate_function(&f, &List::Nil, &List::Nil)), Refusal::Syntax(9));
+    let conds = List::Cons((CondKind::Bad(Refusal::Backslash(8)), Expr::Int(0), 8, List::Nil), Box::new(List::Nil));
     let f = Function { conds, ..sat(one(Stmt::Return(Expr::Lit(0, Ty::I32), 15))) };
-    assert_eq!(bare_refusal(translate_function(&f, &Fns::Nil, &Structs::Nil)), Refusal::Backslash(8));
+    assert_eq!(bare_refusal(translate_function(&f, &List::Nil, &List::Nil)), Refusal::Backslash(8));
 }
 
 #[test]
 fn each_name_is_declared_once_in_a_function() {
     // int32_t a = 1; in a function with a parameter a.
     let f = sat(Stmts::Cons(Box::new(Stmt::Local(A, Ty::I32, Expr::Lit(1, Ty::I32), 12)), Box::new(one(Stmt::Return(Expr::Lit(0, Ty::I32), 15)))));
-    assert_eq!(bare_refusal(translate_function(&f, &Fns::Nil, &Structs::Nil)), Refusal::Twice(A, 12));
+    assert_eq!(bare_refusal(translate_function(&f, &List::Nil, &List::Nil)), Refusal::Twice(A, 12));
     // int32_t sum = 1; if (..) { int32_t sum = 2; }
     let inner = Stmt::If(Expr::Bin(BinOp::Lt, b(read(A, Ty::I32)), b(Expr::Lit(0, Ty::I32))), Box::new(one(Stmt::Local(SUM, Ty::I64, Expr::Lit(2, Ty::I32), 14))), Box::new(Stmts::Nil), 14);
     let body = Stmts::Cons(Box::new(Stmt::Local(SUM, Ty::I64, Expr::Lit(1, Ty::I32), 13)), Box::new(Stmts::Cons(Box::new(inner), Box::new(one(Stmt::Return(Expr::Lit(0, Ty::I32), 15))))));
-    assert_eq!(bare_refusal(translate_function(&sat(body), &Fns::Nil, &Structs::Nil)), Refusal::Twice(SUM, 14));
+    assert_eq!(bare_refusal(translate_function(&sat(body), &List::Nil, &List::Nil)), Refusal::Twice(SUM, 14));
 }
 
 #[test]
 fn a_conversion_between_bool_and_a_number_is_refused() {
     let to_bool = Expr::Cast(CastKind::Integral(Ty::Bool, Ty::I32), b(Expr::Var(A, Ty::Bool)));
     // A refusal inside an expression is at the line of its statement.
-    assert_eq!(bare_refusal(translate_function(&sat(one(Stmt::Return(to_bool, 12))), &Fns::Nil, &Structs::Nil)), Refusal::Convert(12));
+    assert_eq!(bare_refusal(translate_function(&sat(one(Stmt::Return(to_bool, 12))), &List::Nil, &List::Nil)), Refusal::Convert(12));
     // A type with no rule inside a cast is refused by that type, before the bool rule.
     let odd = Expr::Cast(CastKind::Integral(Ty::Other(OTHER_TYPE), Ty::I32), b(Expr::Var(A, Ty::I32)));
-    assert_eq!(bare_refusal(translate_function(&sat(one(Stmt::Return(odd, 13))), &Fns::Nil, &Structs::Nil)), Refusal::Construct(OTHER_TYPE, 13));
+    assert_eq!(bare_refusal(translate_function(&sat(one(Stmt::Return(odd, 13))), &List::Nil, &List::Nil)), Refusal::Construct(OTHER_TYPE, 13));
 }
 
 #[test]
 fn a_node_with_no_rule_is_refused_with_its_kind_and_line() {
     let body = Stmts::Cons(Box::new(Stmt::Return(Expr::Unknown(CALL_EXPR, 38), 38)), Box::new(Stmts::Nil));
-    let f = Function { name: CLAMP, line: 37, params: params(), ret: Ty::I32, trusted: false, conds: Conds::Nil, body };
-    assert_eq!(bare_refusal(translate_function(&f, &Fns::Nil, &Structs::Nil)), Refusal::Construct(CALL_EXPR, 38));
+    let f = Function { name: CLAMP, line: 37, params: params(), ret: Ty::I32, trusted: false, conds: List::Nil, body };
+    assert_eq!(bare_refusal(translate_function(&f, &List::Nil, &List::Nil)), Refusal::Construct(CALL_EXPR, 38));
 }
 
 #[test]
 fn a_contract_name_that_is_no_parameter_is_refused() {
-    let conds = Conds::Cons(CondKind::Ensures, Expr::Bin(BinOp::Eq, b(Expr::Result), b(Expr::Name(99))), 5, names(&[X, LO, HI]), Box::new(Conds::Nil));
+    let conds = List::Cons((CondKind::Ensures, Expr::Bin(BinOp::Eq, b(Expr::Result), b(Expr::Name(99))), 5, names(&[X, LO, HI])), Box::new(List::Nil));
     let f = Function { name: CLAMP, line: 6, params: params(), ret: Ty::I32, trusted: false, conds, body: Stmts::Nil };
-    assert_eq!(bare_refusal(translate_function(&f, &Fns::Nil, &Structs::Nil)), Refusal::Name(99, 5));
+    assert_eq!(bare_refusal(translate_function(&f, &List::Nil, &List::Nil)), Refusal::Name(99, 5));
 }
 
 #[test]
 fn a_signature_outside_the_subset_has_no_method() {
     let f = Function { ret: Ty::Other(OTHER_TYPE), ..sat(Stmts::Nil) };
-    assert_eq!(translate_function(&f, &Fns::Nil, &Structs::Nil), Model::Refused(Refusal::Construct(OTHER_TYPE, 10)));
+    assert_eq!(translate_function(&f, &List::Nil, &List::Nil), Model::Refused(Refusal::Construct(OTHER_TYPE, 10)));
 }
 
 #[test]
@@ -364,48 +352,48 @@ fn a_literal_of_a_type_outside_the_subset_is_refused() {
     // return -1u < 1u; C++ wraps the negation, so a literal that lost its type would give the wrong result.
     let unsigned = |n: u64| Expr::Lit(n, Ty::Other(OTHER_TYPE));
     let e = Expr::Bin(BinOp::Lt, b(Expr::Neg(b(unsigned(1)))), b(unsigned(1)));
-    assert_eq!(bare_refusal(translate_function(&sat(one(Stmt::Return(e, 6))), &Fns::Nil, &Structs::Nil)), Refusal::Construct(OTHER_TYPE, 6));
+    assert_eq!(bare_refusal(translate_function(&sat(one(Stmt::Return(e, 6))), &List::Nil, &List::Nil)), Refusal::Construct(OTHER_TYPE, 6));
 }
 
 #[test]
 fn a_contract_reads_the_parameters_of_its_declaration_by_place() {
     // int32_t sat(int32_t p, int32_t q) with ensures result == p - q, and the definition sat(int32_t a, int32_t b).
     let ens = Expr::Bin(BinOp::Eq, b(Expr::Result), b(Expr::Bin(BinOp::Sub, b(Expr::Name(P)), b(Expr::Name(Q)))));
-    let conds = Conds::Cons(CondKind::Ensures, ens, 9, names(&[P, Q]), Box::new(Conds::Nil));
+    let conds = List::Cons((CondKind::Ensures, ens, 9, names(&[P, Q])), Box::new(List::Nil));
     let f = Function { conds, ..sat(one(Stmt::Return(Expr::Lit(0, Ty::I32), 15))) };
-    let Model::Full(m) = translate_function(&f, &Fns::Nil, &Structs::Nil) else { panic!("a full model") };
+    let Model::Full(m) = translate_function(&f, &List::Nil, &List::Nil) else { panic!("a full model") };
     let as_int = |d: DExpr| Box::new(DExpr::AsInt(Box::new(d)));
     let want = DExpr::Bin(BinOp::Eq, as_int(DExpr::Result), Box::new(DExpr::Bin(BinOp::Sub, as_int(DExpr::Var(A)), as_int(DExpr::Var(B)))));
     assert_eq!(strip_conds(m.ensures), DConds::Cons(want, 0, Box::new(DConds::Nil)));
     // The declaration says (b, a). Its `a` is the definition's second parameter, `b`, and its `b` is the first, `a`.
     let ens = Expr::Bin(BinOp::Eq, b(Expr::Result), b(Expr::Bin(BinOp::Sub, b(Expr::Name(A)), b(Expr::Name(B)))));
-    let conds = Conds::Cons(CondKind::Ensures, ens, 9, names(&[B, A]), Box::new(Conds::Nil));
+    let conds = List::Cons((CondKind::Ensures, ens, 9, names(&[B, A])), Box::new(List::Nil));
     let f = Function { conds, ..sat(one(Stmt::Return(Expr::Lit(0, Ty::I32), 15))) };
-    let Model::Full(m) = translate_function(&f, &Fns::Nil, &Structs::Nil) else { panic!("a full model") };
+    let Model::Full(m) = translate_function(&f, &List::Nil, &List::Nil) else { panic!("a full model") };
     let want = DExpr::Bin(BinOp::Eq, as_int(DExpr::Result), Box::new(DExpr::Bin(BinOp::Sub, as_int(DExpr::Var(B)), as_int(DExpr::Var(A)))));
     assert_eq!(strip_conds(m.ensures), DConds::Cons(want, 0, Box::new(DConds::Nil)));
     // A name of the definition that the declaration does not have is no parameter of the contract.
-    let conds = Conds::Cons(CondKind::Ensures, Expr::Bin(BinOp::Eq, b(Expr::Result), b(Expr::Name(A))), 9, names(&[P, Q]), Box::new(Conds::Nil));
+    let conds = List::Cons((CondKind::Ensures, Expr::Bin(BinOp::Eq, b(Expr::Result), b(Expr::Name(A))), 9, names(&[P, Q])), Box::new(List::Nil));
     let f = Function { conds, ..sat(one(Stmt::Return(Expr::Lit(0, Ty::I32), 15))) };
-    assert_eq!(bare_refusal(translate_function(&f, &Fns::Nil, &Structs::Nil)), Refusal::Name(A, 9));
+    assert_eq!(bare_refusal(translate_function(&f, &List::Nil, &List::Nil)), Refusal::Name(A, 9));
 }
 
 /// `int32_t n` alone, with a body.
 fn with_n(body: Stmts) -> Function {
-    Function { name: SAT, line: 3, params: List::Cons((X, Ty::I32), Box::new(List::Nil)), ret: Ty::I32, trusted: false, conds: Conds::Nil, body }
+    Function { name: SAT, line: 3, params: List::Cons((X, Ty::I32), Box::new(List::Nil)), ret: Ty::I32, trusted: false, conds: List::Nil, body }
 }
 
 fn conds(v: Vec<(CondKind, Expr, u32)>) -> Conds {
-    v.into_iter().rev().fold(Conds::Nil, |rest, (k, e, l)| Conds::Cons(k, e, l, List::Nil, Box::new(rest)))
+    v.into_iter().rev().fold(List::Nil, |rest, (k, e, l)| List::Cons((k, e, l, List::Nil), Box::new(rest)))
 }
 
 #[test]
 fn a_literal_of_code_carries_its_type_into_dafny() {
-    let m = translate_function(&with_n(one(Stmt::Return(Expr::Lit(7, Ty::I32), 4))), &Fns::Nil, &Structs::Nil);
+    let m = translate_function(&with_n(one(Stmt::Return(Expr::Lit(7, Ty::I32), 4))), &List::Nil, &List::Nil);
     let Model::Full(m) = m else { panic!("a full model") };
     assert_eq!(strip(m.body), DStmts::Cons(Box::new(DStmt::Return(lit32(7))), 0, Box::new(DStmts::Nil)));
     // The unsigned types of decision 0061.
-    let m = translate_function(&with_n(one(Stmt::Return(Expr::Lit(7, Ty::U64), 4))), &Fns::Nil, &Structs::Nil);
+    let m = translate_function(&with_n(one(Stmt::Return(Expr::Lit(7, Ty::U64), 4))), &List::Nil, &List::Nil);
     let Model::Full(m) = m else { panic!("a full model") };
     assert_eq!(strip(m.body), DStmts::Cons(Box::new(DStmt::Return(DExpr::Conv(DTy::UInt64, Box::new(DExpr::Lit(7))))), 0, Box::new(DStmts::Nil)));
 }
@@ -428,7 +416,7 @@ fn a_for_loop_is_its_start_then_a_while_that_ends_with_its_step() {
         Box::new(Stmt::Local(acc, Ty::I32, Expr::Lit(0, Ty::I32), 4)),
         Box::new(Stmts::Cons(Box::new(lp), Box::new(one(Stmt::Return(read(acc, Ty::I32), 10))))),
     );
-    let Model::Full(m) = translate_function(&with_n(body), &Fns::Nil, &Structs::Nil) else { panic!("a full model") };
+    let Model::Full(m) = translate_function(&with_n(body), &List::Nil, &List::Nil) else { panic!("a full model") };
     let DStmts::Cons(_, _, rest) = m.body else { panic!("a body") };
     let DStmts::Cons(lp, _, _) = *rest else { panic!("a loop") };
     let as_int = |n: u32| Box::new(DExpr::AsInt(Box::new(DExpr::Var(n))));
@@ -458,7 +446,7 @@ fn a_while_loop_reads_its_contract_over_parameters_and_locals() {
     ]);
     let lp = Stmt::While(Expr::Bin(BinOp::Gt, b(read(k, Ty::I32)), b(Expr::Lit(0, Ty::I32))), Box::new(lc), Box::new(one(Stmt::Step(k, Ty::I32, false, 8))), 7);
     let body = Stmts::Cons(Box::new(Stmt::Local(k, Ty::I32, read(X, Ty::I32), 4)), Box::new(Stmts::Cons(Box::new(lp), Box::new(one(Stmt::Return(read(k, Ty::I32), 10))))));
-    let Model::Full(m) = translate_function(&with_n(body), &Fns::Nil, &Structs::Nil) else { panic!("a full model") };
+    let Model::Full(m) = translate_function(&with_n(body), &List::Nil, &List::Nil) else { panic!("a full model") };
     let DStmts::Cons(_, _, rest) = m.body else { panic!("a body") };
     let DStmts::Cons(lp, _, _) = *rest else { panic!("a loop") };
     let kk = || Box::new(DExpr::AsInt(Box::new(DExpr::Var(k))));
@@ -474,9 +462,9 @@ fn a_while_loop_reads_its_contract_over_parameters_and_locals() {
 #[test]
 fn a_write_to_a_parameter_is_refused() {
     let body = Stmts::Cons(Box::new(Stmt::Assign(X, Expr::Lit(1, Ty::I32), 5)), Box::new(one(Stmt::Return(read(X, Ty::I32), 6))));
-    assert_eq!(bare_refusal(translate_function(&with_n(body), &Fns::Nil, &Structs::Nil)), Refusal::WriteParam(X, 5));
+    assert_eq!(bare_refusal(translate_function(&with_n(body), &List::Nil, &List::Nil)), Refusal::WriteParam(X, 5));
     let body = Stmts::Cons(Box::new(Stmt::Step(X, Ty::I32, true, 5)), Box::new(one(Stmt::Return(read(X, Ty::I32), 6))));
-    assert_eq!(bare_refusal(translate_function(&with_n(body), &Fns::Nil, &Structs::Nil)), Refusal::WriteParam(X, 5));
+    assert_eq!(bare_refusal(translate_function(&with_n(body), &List::Nil, &List::Nil)), Refusal::WriteParam(X, 5));
 }
 
 #[test]
@@ -484,27 +472,27 @@ fn a_loop_contract_names_only_variables_and_never_result() {
     let lp = |lc: Conds| Stmt::While(Expr::Lit(1, Ty::Bool), Box::new(lc), Box::new(Stmts::Nil), 7);
     let f = |lc: Conds| with_n(Stmts::Cons(Box::new(lp(lc)), Box::new(one(Stmt::Return(Expr::Lit(0, Ty::I32), 9)))));
     let unbound = conds(vec![(CondKind::Invariant, Expr::Bin(BinOp::Le, b(Expr::Name(X)), b(Expr::Name(99))), 6)]);
-    assert_eq!(bare_refusal(translate_function(&f(unbound), &Fns::Nil, &Structs::Nil)), Refusal::NoVar(99, 6));
+    assert_eq!(bare_refusal(translate_function(&f(unbound), &List::Nil, &List::Nil)), Refusal::NoVar(99, 6));
     let result = conds(vec![(CondKind::Invariant, Expr::Bin(BinOp::Eq, b(Expr::Result), b(Expr::Int(0))), 6)]);
-    assert_eq!(bare_refusal(translate_function(&f(result), &Fns::Nil, &Structs::Nil)), Refusal::Syntax(6));
+    assert_eq!(bare_refusal(translate_function(&f(result), &List::Nil, &List::Nil)), Refusal::Syntax(6));
     let ensures = conds(vec![(CondKind::Ensures, Expr::Name(X), 6)]);
-    assert_eq!(bare_refusal(translate_function(&f(ensures), &Fns::Nil, &Structs::Nil)), Refusal::Misplaced(6));
+    assert_eq!(bare_refusal(translate_function(&f(ensures), &List::Nil, &List::Nil)), Refusal::Misplaced(6));
 }
 
 #[test]
 fn a_loop_contract_line_above_a_function_is_refused() {
     let fc = conds(vec![(CondKind::Invariant, Expr::Bin(BinOp::Lt, b(Expr::Int(0)), b(Expr::Name(X))), 2)]);
     let f = Function { trusted: false, conds: fc, ..with_n(one(Stmt::Return(Expr::Lit(0, Ty::I32), 4))) };
-    assert_eq!(bare_refusal(translate_function(&f, &Fns::Nil, &Structs::Nil)), Refusal::Misplaced(2));
+    assert_eq!(bare_refusal(translate_function(&f, &List::Nil, &List::Nil)), Refusal::Misplaced(2));
 }
 
 #[test]
 fn a_name_declared_in_a_loop_counts_for_declared_once() {
     // int32_t i = 0; for (int32_t i = 0; ...) — the start of the for declares i a second time.
     let start = Stmt::Local(SUM, Ty::I32, Expr::Lit(0, Ty::I32), 6);
-    let lp = Stmt::For(Box::new(start), Expr::Lit(0, Ty::Bool), Box::new(Stmt::Step(SUM, Ty::I32, true, 6)), Box::new(Conds::Nil), Box::new(Stmts::Nil), 6);
+    let lp = Stmt::For(Box::new(start), Expr::Lit(0, Ty::Bool), Box::new(Stmt::Step(SUM, Ty::I32, true, 6)), Box::new(List::Nil), Box::new(Stmts::Nil), 6);
     let body = Stmts::Cons(Box::new(Stmt::Local(SUM, Ty::I32, Expr::Lit(0, Ty::I32), 5)), Box::new(Stmts::Cons(Box::new(lp), Box::new(one(Stmt::Return(Expr::Lit(0, Ty::I32), 7))))));
-    assert_eq!(bare_refusal(translate_function(&with_n(body), &Fns::Nil, &Structs::Nil)), Refusal::Twice(SUM, 6));
+    assert_eq!(bare_refusal(translate_function(&with_n(body), &List::Nil, &List::Nil)), Refusal::Twice(SUM, 6));
 }
 
 #[test]
@@ -515,21 +503,21 @@ fn a_loop_contract_reads_only_the_variables_in_scope_at_the_loop() {
     let body = Stmts::Cons(Box::new(Stmt::Local(t, Ty::I32, Expr::Lit(1, Ty::I32), 7)), Box::new(one(Stmt::Step(i, Ty::I32, true, 8))));
     let lp = Stmt::While(Expr::Bin(BinOp::Lt, b(read(i, Ty::I32)), b(read(X, Ty::I32))), Box::new(lc), Box::new(body), 6);
     let f = with_n(Stmts::Cons(Box::new(Stmt::Local(i, Ty::I32, Expr::Lit(0, Ty::I32), 4)), Box::new(Stmts::Cons(Box::new(lp), Box::new(one(Stmt::Return(read(i, Ty::I32), 10)))))));
-    assert_eq!(bare_refusal(translate_function(&f, &Fns::Nil, &Structs::Nil)), Refusal::NoVar(t, 5));
+    assert_eq!(bare_refusal(translate_function(&f, &List::Nil, &List::Nil)), Refusal::NoVar(t, 5));
     // A local declared after the loop.
     let lc = conds(vec![(CondKind::Invariant, Expr::Bin(BinOp::Eq, b(Expr::Name(t)), b(Expr::Int(1))), 5)]);
     let lp = Stmt::While(Expr::Bin(BinOp::Lt, b(read(i, Ty::I32)), b(read(X, Ty::I32))), Box::new(lc), Box::new(one(Stmt::Step(i, Ty::I32, true, 7))), 6);
     let tail = Stmts::Cons(Box::new(Stmt::Local(t, Ty::I32, Expr::Lit(1, Ty::I32), 9)), Box::new(one(Stmt::Return(read(t, Ty::I32), 10))));
     let f = with_n(Stmts::Cons(Box::new(Stmt::Local(i, Ty::I32, Expr::Lit(0, Ty::I32), 4)), Box::new(Stmts::Cons(Box::new(lp), Box::new(tail)))));
-    assert_eq!(bare_refusal(translate_function(&f, &Fns::Nil, &Structs::Nil)), Refusal::NoVar(t, 5));
+    assert_eq!(bare_refusal(translate_function(&f, &List::Nil, &List::Nil)), Refusal::NoVar(t, 5));
 }
 
 #[test]
 fn bool_literals_and_the_largest_uint64_literal_translate() {
     let f = |e: Expr, ret: Ty| Function { ret, ..with_n(one(Stmt::Return(e, 4))) };
-    let Model::Full(m) = translate_function(&f(Expr::Bool(true), Ty::Bool), &Fns::Nil, &Structs::Nil) else { panic!("a full model") };
+    let Model::Full(m) = translate_function(&f(Expr::Bool(true), Ty::Bool), &List::Nil, &List::Nil) else { panic!("a full model") };
     assert_eq!(strip(m.body), DStmts::Cons(Box::new(DStmt::Return(DExpr::Bool(true))), 0, Box::new(DStmts::Nil)));
-    let Model::Full(m) = translate_function(&f(Expr::Lit(u64::MAX, Ty::U64), Ty::U64), &Fns::Nil, &Structs::Nil) else { panic!("a full model") };
+    let Model::Full(m) = translate_function(&f(Expr::Lit(u64::MAX, Ty::U64), Ty::U64), &List::Nil, &List::Nil) else { panic!("a full model") };
     let want = DExpr::Conv(DTy::UInt64, Box::new(DExpr::Lit(u64::MAX)));
     assert_eq!(strip(m.body), DStmts::Cons(Box::new(DStmt::Return(want)), 0, Box::new(DStmts::Nil)));
     // The parser reads the largest literal of a contract.
@@ -546,7 +534,7 @@ fn a_contract_reads_a_sequence_by_size_index_forall_and_chain() {
         b(Expr::Chain(BinOp::Le, BinOp::Lt, b(Expr::Int(0)), b(Expr::Name(j)), b(Expr::Size(b(Expr::Name(v)))))),
         b(Expr::Bin(BinOp::Ne, b(Expr::Index(b(Expr::Name(v)), b(Expr::Name(j)))), b(Expr::Int(0)))),
     );
-    let conds = Conds::Cons(CondKind::Ensures, Expr::Forall(j, b(body)), 3, names(&[v]), Box::new(Conds::Nil));
+    let conds = List::Cons((CondKind::Ensures, Expr::Forall(j, b(body)), 3, names(&[v])), Box::new(List::Nil));
     let f = Function {
         name: SAT,
         line: 4,
@@ -556,7 +544,7 @@ fn a_contract_reads_a_sequence_by_size_index_forall_and_chain() {
         conds,
         body: one(Stmt::Return(Expr::Bool(true), 5)),
     };
-    let Model::Full(m) = translate_function(&f, &Fns::Nil, &Structs::Nil) else { panic!("a full model") };
+    let Model::Full(m) = translate_function(&f, &List::Nil, &List::Nil) else { panic!("a full model") };
     let len = || Box::new(DExpr::Len(Box::new(DExpr::Var(v))));
     let want = DExpr::Forall(
         j,
@@ -583,8 +571,8 @@ fn code_reads_a_sequence_by_size_and_index() {
     let idx = Expr::Index(b(Expr::Var(v, seq)), b(Expr::Lit(0, Ty::U64)));
     let size = Expr::Size(b(Expr::Var(v, seq)));
     let e = Expr::Bin(BinOp::Lt, b(Expr::Cast(CastKind::Integral(Ty::U8, Ty::U64), b(Expr::Cast(CastKind::Read, b(idx))))), b(size));
-    let f = Function { name: SAT, line: 4, params: List::Cons((v, seq), Box::new(List::Nil)), ret: Ty::Bool, trusted: false, conds: Conds::Nil, body: one(Stmt::Return(e, 5)) };
-    let Model::Full(m) = translate_function(&f, &Fns::Nil, &Structs::Nil) else { panic!("a full model") };
+    let f = Function { name: SAT, line: 4, params: List::Cons((v, seq), Box::new(List::Nil)), ret: Ty::Bool, trusted: false, conds: List::Nil, body: one(Stmt::Return(e, 5)) };
+    let Model::Full(m) = translate_function(&f, &List::Nil, &List::Nil) else { panic!("a full model") };
     let didx = DExpr::Index(Box::new(DExpr::Var(v)), Box::new(DExpr::Conv(DTy::UInt64, Box::new(DExpr::Lit(0)))));
     let dsize = DExpr::Conv(DTy::UInt64, Box::new(DExpr::Len(Box::new(DExpr::Var(v)))));
     let want = DExpr::Bin(BinOp::Lt, Box::new(DExpr::Conv(DTy::UInt64, Box::new(didx))), Box::new(dsize));
@@ -595,20 +583,20 @@ fn code_reads_a_sequence_by_size_and_index() {
 fn a_sequence_is_in_the_subset_only_as_a_parameter() {
     let seq = Ty::Seq(Scalar::I32, Extent::Dynamic);
     let f = Function { ret: seq, ..with_n(Stmts::Nil) };
-    assert_eq!(translate_function(&f, &Fns::Nil, &Structs::Nil), Model::Refused(Refusal::SeqParam(3)));
+    assert_eq!(translate_function(&f, &List::Nil, &List::Nil), Model::Refused(Refusal::SeqParam(3)));
     let local = Stmt::Local(SUM, seq, Expr::Var(X, Ty::I32), 4);
-    assert_eq!(bare_refusal(translate_function(&with_n(one(local)), &Fns::Nil, &Structs::Nil)), Refusal::SeqParam(4));
+    assert_eq!(bare_refusal(translate_function(&with_n(one(local)), &List::Nil, &List::Nil)), Refusal::SeqParam(4));
 }
 
 #[test]
 fn a_chain_of_two_directions_and_an_index_of_a_scalar_are_refused() {
-    let ens = |e: Expr| Conds::Cons(CondKind::Ensures, e, 2, names(&[X]), Box::new(Conds::Nil));
+    let ens = |e: Expr| List::Cons((CondKind::Ensures, e, 2, names(&[X])), Box::new(List::Nil));
     let mixed = Expr::Chain(BinOp::Lt, BinOp::Gt, b(Expr::Int(0)), b(Expr::Name(X)), b(Expr::Int(1)));
     let f = Function { trusted: false, conds: ens(mixed), ..with_n(one(Stmt::Return(Expr::Lit(0, Ty::I32), 4))) };
-    assert_eq!(bare_refusal(translate_function(&f, &Fns::Nil, &Structs::Nil)), Refusal::Syntax(2));
+    assert_eq!(bare_refusal(translate_function(&f, &List::Nil, &List::Nil)), Refusal::Syntax(2));
     let index = Expr::Bin(BinOp::Eq, b(Expr::Result), b(Expr::Index(b(Expr::Name(X)), b(Expr::Int(0)))));
     let f = Function { trusted: false, conds: ens(index), ..with_n(one(Stmt::Return(Expr::Lit(0, Ty::I32), 4))) };
-    assert_eq!(bare_refusal(translate_function(&f, &Fns::Nil, &Structs::Nil)), Refusal::Syntax(2));
+    assert_eq!(bare_refusal(translate_function(&f, &List::Nil, &List::Nil)), Refusal::Syntax(2));
 }
 
 #[test]
@@ -637,13 +625,13 @@ fn the_parser_reads_forall_index_size_and_a_chain() {
 #[test]
 fn each_statement_and_contract_line_keeps_the_place_it_comes_from() {
     // requires lo <= hi at place 21; if (x < lo) at 27 { return lo; at 28 } return x; at 30
-    let conds = Conds::Cons(CondKind::Requires, Expr::Bin(BinOp::Le, b(Expr::Name(LO)), b(Expr::Name(HI))), 21, names(&[X, LO, HI]), Box::new(Conds::Nil));
+    let conds = List::Cons((CondKind::Requires, Expr::Bin(BinOp::Le, b(Expr::Name(LO)), b(Expr::Name(HI))), 21, names(&[X, LO, HI])), Box::new(List::Nil));
     let body = Stmts::Cons(
         Box::new(Stmt::If(Expr::Bin(BinOp::Lt, b(var(X)), b(var(LO))), Box::new(one(Stmt::Return(var(LO), 28))), Box::new(Stmts::Nil), 27)),
         Box::new(one(Stmt::Return(var(X), 30))),
     );
     let f = Function { name: CLAMP, line: 26, params: params(), ret: Ty::I32, trusted: false, conds, body };
-    let Model::Full(m) = translate_function(&f, &Fns::Nil, &Structs::Nil) else { panic!("a full model") };
+    let Model::Full(m) = translate_function(&f, &List::Nil, &List::Nil) else { panic!("a full model") };
     let DConds::Cons(_, req, _) = m.requires else { panic!("a requires line") };
     assert_eq!(req, 21);
     let DStmts::Cons(first, p1, rest) = m.body else { panic!("a body") };
@@ -652,16 +640,16 @@ fn each_statement_and_contract_line_keeps_the_place_it_comes_from() {
     let DStmts::Cons(_, p3, _) = *rest else { panic!("a return") };
     assert_eq!((p1, p2, p3), (27, 28, 30));
     // The length of a span of fixed extent comes from the function's own line.
-    let seq = Function { params: List::Cons((X, Ty::Seq(Scalar::I32, Extent::Fixed(3))), Box::new(List::Nil)), ret: Ty::Bool, trusted: false, conds: Conds::Nil, ..with_n(one(Stmt::Return(Expr::Bool(true), 5))) };
-    let Model::Full(m) = translate_function(&seq, &Fns::Nil, &Structs::Nil) else { panic!("a full model") };
+    let seq = Function { params: List::Cons((X, Ty::Seq(Scalar::I32, Extent::Fixed(3))), Box::new(List::Nil)), ret: Ty::Bool, trusted: false, conds: List::Nil, ..with_n(one(Stmt::Return(Expr::Bool(true), 5))) };
+    let Model::Full(m) = translate_function(&seq, &List::Nil, &List::Nil) else { panic!("a full model") };
     let DConds::Cons(_, at, _) = m.requires else { panic!("the bound") };
     assert_eq!(at, 3);
 }
 
 #[test]
 fn a_span_of_fixed_extent_requires_its_length() {
-    let f = Function { params: List::Cons((X, Ty::Seq(Scalar::I32, Extent::Fixed(3))), Box::new(List::Nil)), ret: Ty::Bool, trusted: false, conds: Conds::Nil, ..with_n(one(Stmt::Return(Expr::Bool(true), 5))) };
-    let Model::Full(m) = translate_function(&f, &Fns::Nil, &Structs::Nil) else { panic!("a full model") };
+    let f = Function { params: List::Cons((X, Ty::Seq(Scalar::I32, Extent::Fixed(3))), Box::new(List::Nil)), ret: Ty::Bool, trusted: false, conds: List::Nil, ..with_n(one(Stmt::Return(Expr::Bool(true), 5))) };
+    let Model::Full(m) = translate_function(&f, &List::Nil, &List::Nil) else { panic!("a full model") };
     let want = DExpr::Bin(BinOp::Eq, Box::new(DExpr::Len(Box::new(DExpr::Var(X)))), Box::new(DExpr::Lit(3)));
     assert_eq!(strip_conds(m.requires), DConds::Cons(want, 0, Box::new(DConds::Nil)));
 }
@@ -671,12 +659,12 @@ fn a_sequence_made_from_a_sequence_keeps_its_value_when_its_length_cannot_change
     let dynamic = Ty::Seq(Scalar::I32, Extent::Dynamic);
     let three = Ty::Seq(Scalar::I32, Extent::Fixed(3));
     let copy = |from: Ty, to: Ty| Expr::Cast(CastKind::Construct, b(Expr::Copy(b(Expr::Var(A, from)), from, to)));
-    let f = |e: Expr| Function { name: SAT, line: 4, params: List::Cons((A, dynamic), Box::new(List::Nil)), ret: Ty::I32, trusted: false, conds: Conds::Nil, body: one(Stmt::Local(B, Ty::I32, Expr::Call(SAT, SAT_NAME, Box::new(Args::Cons(b(e), Box::new(Args::Nil))), 5), 5)) };
+    let f = |e: Expr| Function { name: SAT, line: 4, params: List::Cons((A, dynamic), Box::new(List::Nil)), ret: Ty::I32, trusted: false, conds: List::Nil, body: one(Stmt::Local(B, Ty::I32, Expr::Call(SAT, SAT_NAME, Box::new(List::Cons(b(e), Box::new(List::Nil))), 5), 5)) };
     // The callee of each call is the function itself, so each call resolves.
     let all = |e: Expr| fns(vec![f(e)]);
     // A copy, and a span with no fixed extent made from one with a fixed extent, keep the value.
     for (from, to) in [(dynamic, dynamic), (three, dynamic), (three, three)] {
-        let m = translate_function(&f(copy(from, to)), &all(copy(from, to)), &Structs::Nil);
+        let m = translate_function(&f(copy(from, to)), &all(copy(from, to)), &List::Nil);
         let Model::Full(m) = m else { panic!("a full model for {from:?} to {to:?}: {m:?}") };
         let DStmts::Cons(s, _, _) = m.body else { panic!("a body") };
         let DStmt::LocalCall(_, _, _, DArgs::Cons(arg, _)) = *s else { panic!("a call") };
@@ -684,7 +672,7 @@ fn a_sequence_made_from_a_sequence_keeps_its_value_when_its_length_cannot_change
     }
     // A fixed extent made from another length, or another element type, is refused.
     for (from, to) in [(dynamic, three), (Ty::Seq(Scalar::I32, Extent::Fixed(4)), three), (Ty::Seq(Scalar::U8, Extent::Dynamic), dynamic)] {
-        let m = translate_function(&f(copy(from, to)), &all(copy(from, to)), &Structs::Nil);
+        let m = translate_function(&f(copy(from, to)), &all(copy(from, to)), &List::Nil);
         assert_eq!(bare_refusal(m), Refusal::Extent(5), "{from:?} to {to:?}");
     }
 }
@@ -694,13 +682,13 @@ fn a_decreases_line_above_a_function_is_the_measure_of_its_recursion() {
     // decreases n, over the parameter of with_n, at place 2.
     let fc = conds(vec![(CondKind::Decreases, Expr::Name(X), 2)]);
     let f = Function { trusted: false, conds: fc, ..with_n(one(Stmt::Return(Expr::Lit(0, Ty::I32), 4))) };
-    let f = Function { trusted: false, conds: Conds::Cons(CondKind::Decreases, Expr::Name(X), 2, names(&[X]), Box::new(Conds::Nil)), ..f };
-    let Model::Full(m) = translate_function(&f, &Fns::Nil, &Structs::Nil) else { panic!("a full model") };
+    let f = Function { trusted: false, conds: List::Cons((CondKind::Decreases, Expr::Name(X), 2, names(&[X])), Box::new(List::Nil)), ..f };
+    let Model::Full(m) = translate_function(&f, &List::Nil, &List::Nil) else { panic!("a full model") };
     let want = DExpr::AsInt(Box::new(DExpr::Var(X)));
     assert_eq!(m.decreases, DConds::Cons(want, 2, Box::new(DConds::Nil)));
     // It names no result.
-    let f = Function { trusted: false, conds: Conds::Cons(CondKind::Decreases, Expr::Result, 2, names(&[X]), Box::new(Conds::Nil)), ..with_n(one(Stmt::Return(Expr::Lit(0, Ty::I32), 4))) };
-    assert_eq!(bare_refusal(translate_function(&f, &Fns::Nil, &Structs::Nil)), Refusal::Syntax(2));
+    let f = Function { trusted: false, conds: List::Cons((CondKind::Decreases, Expr::Result, 2, names(&[X])), Box::new(List::Nil)), ..with_n(one(Stmt::Return(Expr::Lit(0, Ty::I32), 4))) };
+    assert_eq!(bare_refusal(translate_function(&f, &List::Nil, &List::Nil)), Refusal::Syntax(2));
 }
 
 const POINT: u32 = 80;
@@ -709,7 +697,7 @@ const FY: u32 = 82;
 
 /// `struct Point { int32_t x; int32_t y; }` as the table of the file.
 fn point_table() -> Structs {
-    Structs::Cons(POINT, 4, List::Cons((FX, Ty::I32), Box::new(List::Cons((FY, Ty::I32), Box::new(List::Nil)))), Members::Nil, Box::new(Structs::Nil))
+    List::Cons((POINT, (4, List::Cons((FX, Ty::I32), Box::new(List::Cons((FY, Ty::I32), Box::new(List::Nil)))), List::Nil)), Box::new(List::Nil))
 }
 
 #[test]
@@ -717,17 +705,17 @@ fn a_struct_of_scalars_is_a_datatype_with_field_reads_and_braced_values() {
     let pt = Ty::Struct(POINT);
     // Point swap(Point p) { return Point{p.y, p.x}; } with ensures result.x == p.y
     let field = |n: u32, f: u32| Expr::Cast(CastKind::Read, b(Expr::Field(b(Expr::Var(n, pt)), f)));
-    let args = Args::Cons(b(field(A, FY)), Box::new(Args::Cons(b(field(A, FX)), Box::new(Args::Nil))));
+    let args = List::Cons(b(field(A, FY)), Box::new(List::Cons(b(field(A, FX)), Box::new(List::Nil))));
     let ens = Expr::Bin(BinOp::Eq, b(Expr::Field(b(Expr::Result), FX)), b(Expr::Field(b(Expr::Name(A)), FY)));
     let f = Function {
         name: SAT,
         line: 10,
         params: List::Cons((A, pt), Box::new(List::Nil)),
         ret: pt,
-        trusted: false, conds: Conds::Cons(CondKind::Ensures, ens, 9, names(&[A]), Box::new(Conds::Nil)),
+        trusted: false, conds: List::Cons((CondKind::Ensures, ens, 9, names(&[A])), Box::new(List::Nil)),
         body: one(Stmt::Return(Expr::Construct(POINT, Box::new(args)), 11)),
     };
-    let Model::Full(m) = translate_function(&f, &Fns::Nil, &point_table()) else { panic!("a full model") };
+    let Model::Full(m) = translate_function(&f, &List::Nil, &point_table()) else { panic!("a full model") };
     let dfield = |d: DExpr, f: u32| DExpr::Field(Box::new(d), f);
     let dargs = DArgs::Cons(dfield(DExpr::Var(A), FY), Box::new(DArgs::Cons(dfield(DExpr::Var(A), FX), Box::new(DArgs::Nil))));
     assert_eq!(strip(m.body), DStmts::Cons(Box::new(DStmt::Return(DExpr::Ctor(POINT, Box::new(dargs)))), 0, Box::new(DStmts::Nil)));
@@ -747,10 +735,10 @@ fn a_field_the_struct_does_not_have_is_refused() {
         line: 10,
         params: List::Cons((A, pt), Box::new(List::Nil)),
         ret: Ty::I32,
-        trusted: false, conds: Conds::Cons(CondKind::Ensures, ens, 9, names(&[A]), Box::new(Conds::Nil)),
+        trusted: false, conds: List::Cons((CondKind::Ensures, ens, 9, names(&[A])), Box::new(List::Nil)),
         body: one(Stmt::Return(Expr::Lit(0, Ty::I32), 11)),
     };
-    assert_eq!(bare_refusal(translate_function(&f, &Fns::Nil, &point_table())), Refusal::NoField(99, 9));
+    assert_eq!(bare_refusal(translate_function(&f, &List::Nil, &point_table())), Refusal::NoField(99, 9));
 }
 
 #[test]
@@ -764,7 +752,7 @@ fn a_struct_has_a_model_when_each_field_is_a_type_of_the_subset() {
     let ok = translate_structs(&point_table());
     assert_eq!(ok, StructModels::Cons(Ok((POINT, DParams::Cons(FX, DTy::Int32, Box::new(DParams::Cons(FY, DTy::Int32, Box::new(DParams::Nil)))))), Box::new(StructModels::Nil)));
     // A field of a type with no rule refuses the struct. A sequence field is in the subset since decision 0076.
-    let other_field = Structs::Cons(POINT, 4, List::Cons((FX, Ty::Other(OTHER_TYPE)), Box::new(List::Nil)), Members::Nil, Box::new(Structs::Nil));
+    let other_field = List::Cons((POINT, (4, List::Cons((FX, Ty::Other(OTHER_TYPE)), Box::new(List::Nil)), List::Nil)), Box::new(List::Nil));
     assert_eq!(translate_structs(&other_field), StructModels::Cons(Err(Refusal::Construct(OTHER_TYPE, 4)), Box::new(StructModels::Nil)));
 }
 
@@ -783,7 +771,7 @@ const FV: u32 = 91;
 
 /// `struct Slot { std::optional<int32_t> value; }` as the table of the file.
 fn slot_table() -> Structs {
-    Structs::Cons(SLOT, 4, List::Cons((FV, Ty::Opt(Scalar::I32)), Box::new(List::Nil)), Members::Nil, Box::new(Structs::Nil))
+    List::Cons((SLOT, (4, List::Cons((FV, Ty::Opt(Scalar::I32)), Box::new(List::Nil)), List::Nil)), Box::new(List::Nil))
 }
 
 #[test]
@@ -794,7 +782,7 @@ fn code_reads_an_optional_and_makes_one_from_a_value_or_nullopt() {
     assert_eq!(translate_code(&Expr::Nullopt, 3), Ok(DExpr::Nothing));
     assert_eq!(translate_code(&Expr::Wrap(b(var(B))), 3), Ok(DExpr::Just(Box::new(DExpr::Var(B)))));
     assert_eq!(translate_ty(Ty::Opt(Scalar::U8), 3), Ok(DTy::Opt(Scalar::U8)));
-    assert_eq!(translate_value_ty(Ty::Opt(Scalar::U8), 3, &Structs::Nil), Ok(DTy::Opt(Scalar::U8)));
+    assert_eq!(translate_value_ty(Ty::Opt(Scalar::U8), 3, &List::Nil), Ok(DTy::Opt(Scalar::U8)));
 }
 
 #[test]
@@ -813,10 +801,10 @@ fn a_contract_reads_an_optional_by_has_value_and_value() {
         line: 10,
         params: List::Cons((A, Ty::I32), Box::new(List::Cons((B, Ty::Struct(SLOT)), Box::new(List::Nil)))),
         ret: opt,
-        trusted: false, conds: Conds::Cons(CondKind::Requires, req, 8, names(&[A, B]), Box::new(Conds::Cons(CondKind::Ensures, ens, 9, names(&[A, B]), Box::new(Conds::Nil)))),
+        trusted: false, conds: List::Cons((CondKind::Requires, req, 8, names(&[A, B])), Box::new(List::Cons((CondKind::Ensures, ens, 9, names(&[A, B])), Box::new(List::Nil)))),
         body: one(Stmt::Return(Expr::Nullopt, 11)),
     };
-    let Model::Full(m) = translate_function(&f, &Fns::Nil, &slot_table()) else { panic!("a full model") };
+    let Model::Full(m) = translate_function(&f, &List::Nil, &slot_table()) else { panic!("a full model") };
     let want_req = DExpr::IsSome(Box::new(DExpr::Field(Box::new(DExpr::Var(B)), FV)));
     // The value of an integer reads as an exact integer.
     let want_ens = DExpr::Bin(
@@ -838,10 +826,10 @@ fn has_value_and_value_of_a_name_that_is_no_optional_are_refused() {
             line: 10,
             params: List::Cons((A, Ty::I32), Box::new(List::Nil)),
             ret: Ty::Bool,
-            trusted: false, conds: Conds::Cons(CondKind::Requires, e, 9, names(&[A]), Box::new(Conds::Nil)),
+            trusted: false, conds: List::Cons((CondKind::Requires, e, 9, names(&[A])), Box::new(List::Nil)),
             body: one(Stmt::Return(Expr::Bool(true), 11)),
         };
-        assert_eq!(bare_refusal(translate_function(&f, &Fns::Nil, &Structs::Nil)), Refusal::Syntax(9));
+        assert_eq!(bare_refusal(translate_function(&f, &List::Nil, &List::Nil)), Refusal::Syntax(9));
     }
 }
 
@@ -878,13 +866,13 @@ fn a_decreases_line_that_reads_result_through_a_field_or_an_optional_is_refused(
     // decreases result.x, decreases result.value(), decreases result.has_value()
     // Each result has the type that the read needs, so only the rule on result refuses the line.
     let reads = [
-        (Expr::Field(b(Expr::Result), FX), Ty::Struct(POINT), Expr::Construct(POINT, Box::new(Args::Cons(b(var(X)), Box::new(Args::Cons(b(var(X)), Box::new(Args::Nil))))))),
+        (Expr::Field(b(Expr::Result), FX), Ty::Struct(POINT), Expr::Construct(POINT, Box::new(List::Cons(b(var(X)), Box::new(List::Cons(b(var(X)), Box::new(List::Nil))))))),
         (Expr::Value(b(Expr::Result)), Ty::Opt(Scalar::I32), Expr::Nullopt),
         (Expr::HasValue(b(Expr::Result)), Ty::Opt(Scalar::I32), Expr::Nullopt),
     ];
     for (e, ret, value) in reads {
-        let f = Function { trusted: false, conds: Conds::Cons(CondKind::Decreases, e, 2, names(&[X]), Box::new(Conds::Nil)), ret, ..with_n(one(Stmt::Return(value, 4))) };
-        assert_eq!(bare_refusal(translate_function(&f, &Fns::Nil, &point_table())), Refusal::Syntax(2));
+        let f = Function { trusted: false, conds: List::Cons((CondKind::Decreases, e, 2, names(&[X])), Box::new(List::Nil)), ret, ..with_n(one(Stmt::Return(value, 4))) };
+        assert_eq!(bare_refusal(translate_function(&f, &List::Nil, &point_table())), Refusal::Syntax(2));
     }
 }
 
@@ -900,7 +888,7 @@ const WN: u32 = 105;
 fn node_table() -> Structs {
     let node = List::Cons((PRE, Ty::Seq(Scalar::U8, Extent::Dynamic)), Box::new(List::Cons((VAL, Ty::Opt(Scalar::I32)), Box::new(List::Cons((CH, Ty::Seq(Scalar::Struct(NODE), Extent::Dynamic)), Box::new(List::Nil))))));
     let wrap = List::Cons((WN, Ty::Struct(NODE)), Box::new(List::Nil));
-    Structs::Cons(NODE, 7, node, Members::Nil, Box::new(Structs::Cons(WRAP, 13, wrap, Members::Nil, Box::new(Structs::Nil))))
+    List::Cons((NODE, (7, node, List::Nil)), Box::new(List::Cons((WRAP, (13, wrap, List::Nil)), Box::new(List::Nil))))
 }
 
 #[test]
@@ -925,24 +913,24 @@ fn a_struct_that_holds_a_sequence_is_refused_as_a_local_or_a_result() {
             line: 14,
             params: param(Ty::Struct(k)),
             ret: Ty::I32,
-            trusted: false, conds: Conds::Nil,
+            trusted: false, conds: List::Nil,
             body: Stmts::Cons(
                 Box::new(Stmt::Local(B, Ty::Struct(k), read(A, Ty::Struct(k)), 15)),
                 Box::new(Stmts::Cons(Box::new(Stmt::Return(Expr::Lit(0, Ty::I32), 16)), Box::new(Stmts::Nil))),
             ),
         };
-        assert_eq!(bare_refusal(translate_function(&f, &Fns::Nil, &node_table())), Refusal::HoldsSeq(15));
+        assert_eq!(bare_refusal(translate_function(&f, &List::Nil, &node_table())), Refusal::HoldsSeq(15));
     }
     // A result of Node: the function has no method, so a call to it is refused at the call.
-    let result = Function { name: SUCC, line: 19, params: param(Ty::Struct(NODE)), ret: Ty::Struct(NODE), trusted: false, conds: Conds::Nil, body: one(Stmt::Return(read(A, Ty::Struct(NODE)), 20)) };
+    let result = Function { name: SUCC, line: 19, params: param(Ty::Struct(NODE)), ret: Ty::Struct(NODE), trusted: false, conds: List::Nil, body: one(Stmt::Return(read(A, Ty::Struct(NODE)), 20)) };
     let caller = Function {
         name: SAT,
         line: 23,
         params: param(Ty::Struct(NODE)),
         ret: Ty::I32,
-        trusted: false, conds: Conds::Nil,
+        trusted: false, conds: List::Nil,
         body: Stmts::Cons(
-            Box::new(Stmt::Local(B, Ty::I32, Expr::Call(SUCC, SAT_NAME, Box::new(Args::Cons(b(read(A, Ty::Struct(NODE))), Box::new(Args::Nil))), 24), 24)),
+            Box::new(Stmt::Local(B, Ty::I32, Expr::Call(SUCC, SAT_NAME, Box::new(List::Cons(b(read(A, Ty::Struct(NODE))), Box::new(List::Nil))), 24), 24)),
             Box::new(Stmts::Cons(Box::new(Stmt::Return(Expr::Lit(0, Ty::I32), 25)), Box::new(Stmts::Nil))),
         ),
     };
@@ -955,8 +943,8 @@ fn a_struct_that_holds_a_sequence_is_refused_as_a_local_or_a_result() {
 
 #[test]
 fn a_struct_that_holds_a_sequence_is_a_parameter_by_value_or_by_reference() {
-    let f = Function { name: SAT, line: 14, params: List::Cons((A, Ty::Struct(NODE)), Box::new(List::Nil)), ret: Ty::I32, trusted: false, conds: Conds::Nil, body: one(Stmt::Return(Expr::Lit(0, Ty::I32), 15)) };
-    let Model::Full(m) = translate_function(&f, &Fns::Nil, &node_table()) else { panic!("a full model") };
+    let f = Function { name: SAT, line: 14, params: List::Cons((A, Ty::Struct(NODE)), Box::new(List::Nil)), ret: Ty::I32, trusted: false, conds: List::Nil, body: one(Stmt::Return(Expr::Lit(0, Ty::I32), 15)) };
+    let Model::Full(m) = translate_function(&f, &List::Nil, &node_table()) else { panic!("a full model") };
     assert_eq!(m.params, DParams::Cons(A, DTy::Struct(NODE), Box::new(DParams::Nil)));
     assert_eq!(m.requires, DConds::Nil);
 }
@@ -993,10 +981,10 @@ fn a_contract_reads_a_sequence_on_a_path() {
         line: 14,
         params: List::Cons((A, Ty::Struct(NODE)), Box::new(List::Nil)),
         ret: Ty::Bool,
-        trusted: false, conds: Conds::Cons(CondKind::Requires, first, 12, names(&[A]), Box::new(Conds::Cons(CondKind::Ensures, Expr::Forall(j, b(body)), 13, names(&[A]), Box::new(Conds::Nil)))),
+        trusted: false, conds: List::Cons((CondKind::Requires, first, 12, names(&[A])), Box::new(List::Cons((CondKind::Ensures, Expr::Forall(j, b(body)), 13, names(&[A])), Box::new(List::Nil)))),
         body: one(Stmt::Return(Expr::Bool(true), 15)),
     };
-    let Model::Full(m) = translate_function(&f, &Fns::Nil, &node_table()) else { panic!("a full model") };
+    let Model::Full(m) = translate_function(&f, &List::Nil, &node_table()) else { panic!("a full model") };
     let dchildren = || Box::new(DExpr::Field(Box::new(DExpr::Var(A)), CH));
     let want = DExpr::Forall(
         j,
@@ -1026,10 +1014,10 @@ fn a_decreases_line_on_a_struct_parameter_is_the_struct_itself() {
         line: 14,
         params: List::Cons((A, Ty::Struct(NODE)), Box::new(List::Nil)),
         ret: Ty::I32,
-        trusted: false, conds: Conds::Cons(CondKind::Decreases, Expr::Name(A), 13, names(&[A]), Box::new(Conds::Nil)),
+        trusted: false, conds: List::Cons((CondKind::Decreases, Expr::Name(A), 13, names(&[A])), Box::new(List::Nil)),
         body: one(Stmt::Return(Expr::Lit(0, Ty::I32), 15)),
     };
-    let Model::Full(m) = translate_function(&f, &Fns::Nil, &node_table()) else { panic!("a full model") };
+    let Model::Full(m) = translate_function(&f, &List::Nil, &node_table()) else { panic!("a full model") };
     assert_eq!(strip_conds(m.decreases), DConds::Cons(DExpr::Var(A), 0, Box::new(DConds::Nil)));
 }
 
@@ -1041,7 +1029,7 @@ fn the_core_refuses_an_optional_of_a_struct_and_a_sequence_of_bool_by_itself() {
         assert_eq!(translate_ty(t, 7), Err(Refusal::Element(7)));
         assert_eq!(translate_value_ty(t, 7, &node_table()), Err(Refusal::Element(7)));
     }
-    let field = Structs::Cons(POINT, 4, List::Cons((FX, Ty::Opt(Scalar::Struct(POINT))), Box::new(List::Nil)), Members::Nil, Box::new(Structs::Nil));
+    let field = List::Cons((POINT, (4, List::Cons((FX, Ty::Opt(Scalar::Struct(POINT))), Box::new(List::Nil)), List::Nil)), Box::new(List::Nil));
     assert_eq!(translate_structs(&field), StructModels::Cons(Err(Refusal::Element(4)), Box::new(StructModels::Nil)));
 }
 
@@ -1067,10 +1055,10 @@ fn a_contract_reads_empty_on_a_path_of_a_sequence() {
         line: 14,
         params: List::Cons((A, Ty::Seq(Scalar::U8, Extent::Dynamic)), Box::new(List::Cons((B, Ty::Struct(NODE)), Box::new(List::Nil)))),
         ret: Ty::Bool,
-        trusted: false, conds: Conds::Cons(CondKind::Requires, req, 12, names(&[A, B]), Box::new(Conds::Cons(CondKind::Ensures, ens, 13, names(&[A, B]), Box::new(Conds::Nil)))),
+        trusted: false, conds: List::Cons((CondKind::Requires, req, 12, names(&[A, B])), Box::new(List::Cons((CondKind::Ensures, ens, 13, names(&[A, B])), Box::new(List::Nil)))),
         body: one(Stmt::Return(Expr::Bool(true), 15)),
     };
-    let Model::Full(m) = translate_function(&f, &Fns::Nil, &node_table()) else { panic!("a full model") };
+    let Model::Full(m) = translate_function(&f, &List::Nil, &node_table()) else { panic!("a full model") };
     let len_is_zero = |d: DExpr| DExpr::Bin(BinOp::Eq, Box::new(DExpr::Len(Box::new(d))), Box::new(DExpr::Lit(0)));
     assert_eq!(strip_conds(m.requires), DConds::Cons(DExpr::Not(Box::new(len_is_zero(DExpr::Var(A)))), 0, Box::new(DConds::Nil)));
     let want = DExpr::Bin(BinOp::Implies, Box::new(DExpr::Result), Box::new(len_is_zero(DExpr::Field(Box::new(DExpr::Var(B)), PRE))));
@@ -1084,10 +1072,10 @@ fn empty_of_a_name_that_is_no_sequence_is_refused() {
         line: 10,
         params: List::Cons((A, Ty::I32), Box::new(List::Nil)),
         ret: Ty::Bool,
-        trusted: false, conds: Conds::Cons(CondKind::Requires, Expr::Empty(b(Expr::Name(A))), 9, names(&[A]), Box::new(Conds::Nil)),
+        trusted: false, conds: List::Cons((CondKind::Requires, Expr::Empty(b(Expr::Name(A))), 9, names(&[A])), Box::new(List::Nil)),
         body: one(Stmt::Return(Expr::Bool(true), 11)),
     };
-    assert_eq!(bare_refusal(translate_function(&f, &Fns::Nil, &Structs::Nil)), Refusal::Syntax(9));
+    assert_eq!(bare_refusal(translate_function(&f, &List::Nil, &List::Nil)), Refusal::Syntax(9));
 }
 
 #[test]
@@ -1106,9 +1094,9 @@ const HEIGHT: u32 = 111;
 fn the_parser_reads_a_call_of_a_specification_function() {
     // Max(a, b) == result, F() and an unclosed call
     let toks = vec![Tok::Ident(MAX), Tok::LParen, Tok::Ident(A), Tok::Comma, Tok::Ident(B), Tok::RParen, Tok::Op(BinOp::Eq), Tok::Result];
-    let args = Args::Cons(b(Expr::Name(A)), Box::new(Args::Cons(b(Expr::Name(B)), Box::new(Args::Nil))));
+    let args = List::Cons(b(Expr::Name(A)), Box::new(List::Cons(b(Expr::Name(B)), Box::new(List::Nil))));
     assert_eq!(parse_contract(&toks, 3), Ok(Expr::Bin(BinOp::Eq, b(Expr::Apply(MAX, Box::new(args))), b(Expr::Result))));
-    assert_eq!(parse_contract(&vec![Tok::Ident(MAX), Tok::LParen, Tok::RParen], 3), Ok(Expr::Apply(MAX, Box::new(Args::Nil))));
+    assert_eq!(parse_contract(&vec![Tok::Ident(MAX), Tok::LParen, Tok::RParen], 3), Ok(Expr::Apply(MAX, Box::new(List::Nil))));
     assert_eq!(parse_contract(&vec![Tok::Ident(MAX), Tok::LParen, Tok::Ident(A)], 3), Err(Refusal::Syntax(3)));
     assert_eq!(parse_contract(&vec![Tok::Ident(MAX), Tok::LParen, Tok::Ident(A), Tok::Comma, Tok::RParen], 3), Err(Refusal::Syntax(3)));
 }
@@ -1119,18 +1107,18 @@ fn a_contract_calls_a_specification_function_with_exact_integers() {
     let ens = Expr::Bin(
         BinOp::Eq,
         b(Expr::Result),
-        b(Expr::Apply(MAX, Box::new(Args::Cons(b(Expr::Name(A)), Box::new(Args::Cons(b(Expr::Name(B)), Box::new(Args::Nil))))))),
+        b(Expr::Apply(MAX, Box::new(List::Cons(b(Expr::Name(A)), Box::new(List::Cons(b(Expr::Name(B)), Box::new(List::Nil))))))),
     );
-    let req = Expr::Bin(BinOp::Le, b(Expr::Apply(HEIGHT, Box::new(Args::Cons(b(Expr::Name(X)), Box::new(Args::Nil))))), b(Expr::Int(1000)));
+    let req = Expr::Bin(BinOp::Le, b(Expr::Apply(HEIGHT, Box::new(List::Cons(b(Expr::Name(X)), Box::new(List::Nil))))), b(Expr::Int(1000)));
     let f = Function {
         name: SAT,
         line: 14,
         params: List::Cons((A, Ty::I32), Box::new(List::Cons((B, Ty::I32), Box::new(List::Cons((X, Ty::Struct(NODE)), Box::new(List::Nil)))))),
         ret: Ty::I32,
-        trusted: false, conds: Conds::Cons(CondKind::Requires, req, 12, names(&[A, B, X]), Box::new(Conds::Cons(CondKind::Ensures, ens, 13, names(&[A, B, X]), Box::new(Conds::Nil)))),
+        trusted: false, conds: List::Cons((CondKind::Requires, req, 12, names(&[A, B, X])), Box::new(List::Cons((CondKind::Ensures, ens, 13, names(&[A, B, X])), Box::new(List::Nil)))),
         body: one(Stmt::Return(Expr::Lit(0, Ty::I32), 15)),
     };
-    let Model::Full(m) = translate_function(&f, &Fns::Nil, &node_table()) else { panic!("a full model") };
+    let Model::Full(m) = translate_function(&f, &List::Nil, &node_table()) else { panic!("a full model") };
     let int = |d: DExpr| DExpr::AsInt(Box::new(d));
     let dargs = DArgs::Cons(int(DExpr::Var(A)), Box::new(DArgs::Cons(int(DExpr::Var(B)), Box::new(DArgs::Nil))));
     let want = DExpr::Bin(BinOp::Eq, Box::new(int(DExpr::Result)), Box::new(DExpr::Apply(MAX, Box::new(dargs))));
@@ -1142,12 +1130,12 @@ fn a_contract_calls_a_specification_function_with_exact_integers() {
 
 #[test]
 fn a_specification_function_has_no_place_in_code_or_with_result_in_a_decreases_line() {
-    let call = || Expr::Apply(MAX, Box::new(Args::Cons(b(var(A)), Box::new(Args::Nil))));
+    let call = || Expr::Apply(MAX, Box::new(List::Cons(b(var(A)), Box::new(List::Nil))));
     assert_eq!(translate_code(&call(), 3), Err(Refusal::Syntax(3)));
     // decreases Height(result) names the result.
-    let dec = Expr::Apply(HEIGHT, Box::new(Args::Cons(b(Expr::Result), Box::new(Args::Nil))));
-    let f = Function { trusted: false, conds: Conds::Cons(CondKind::Decreases, dec, 2, names(&[X]), Box::new(Conds::Nil)), ..with_n(one(Stmt::Return(Expr::Lit(0, Ty::I32), 4))) };
-    assert_eq!(bare_refusal(translate_function(&f, &Fns::Nil, &Structs::Nil)), Refusal::Syntax(2));
+    let dec = Expr::Apply(HEIGHT, Box::new(List::Cons(b(Expr::Result), Box::new(List::Nil))));
+    let f = Function { trusted: false, conds: List::Cons((CondKind::Decreases, dec, 2, names(&[X])), Box::new(List::Nil)), ..with_n(one(Stmt::Return(Expr::Lit(0, Ty::I32), 4))) };
+    assert_eq!(bare_refusal(translate_function(&f, &List::Nil, &List::Nil)), Refusal::Syntax(2));
 }
 
 #[test]
@@ -1177,10 +1165,10 @@ fn exists_binds_an_exact_integer_in_a_contract() {
         line: 14,
         params: List::Cons((X, Ty::Seq(Scalar::I32, Extent::Dynamic)), Box::new(List::Cons((A, Ty::I32), Box::new(List::Nil)))),
         ret: Ty::Bool,
-        trusted: false, conds: Conds::Cons(CondKind::Requires, Expr::Exists(k, b(body)), 13, names(&[X, A]), Box::new(Conds::Nil)),
+        trusted: false, conds: List::Cons((CondKind::Requires, Expr::Exists(k, b(body)), 13, names(&[X, A])), Box::new(List::Nil)),
         body: one(Stmt::Return(Expr::Bool(true), 15)),
     };
-    let Model::Full(m) = translate_function(&f, &Fns::Nil, &Structs::Nil) else { panic!("a full model") };
+    let Model::Full(m) = translate_function(&f, &List::Nil, &List::Nil) else { panic!("a full model") };
     let int = |d: DExpr| Box::new(DExpr::AsInt(Box::new(d)));
     let want = DExpr::Exists(
         k,
@@ -1209,10 +1197,10 @@ fn a_contract_reads_true_and_false() {
         line: 10,
         params: List::Cons((X, Ty::Bool), Box::new(List::Nil)),
         ret: Ty::Bool,
-        trusted: false, conds: Conds::Cons(CondKind::Ensures, e, 9, names(&[X]), Box::new(Conds::Nil)),
+        trusted: false, conds: List::Cons((CondKind::Ensures, e, 9, names(&[X])), Box::new(List::Nil)),
         body: one(Stmt::Return(Expr::Bool(true), 11)),
     };
-    let Model::Full(m) = translate_function(&f, &Fns::Nil, &Structs::Nil) else { panic!("a full model") };
+    let Model::Full(m) = translate_function(&f, &List::Nil, &List::Nil) else { panic!("a full model") };
     let dwant = DExpr::Bin(
         BinOp::Or,
         Box::new(DExpr::Bin(BinOp::Eq, Box::new(DExpr::Result), Box::new(DExpr::Bool(true)))),
@@ -1259,7 +1247,7 @@ fn the_parser_reads_the_three_slices() {
 #[test]
 fn a_contract_reads_a_part_of_a_sequence_and_passes_it_to_a_function() {
     // ensures result == Count(v[i..], x), and v[..2][1] == 1 on a sequence parameter v
-    let call = Expr::Apply(COUNT, Box::new(Args::Cons(b(Expr::Suffix(b(Expr::Name(X)), b(Expr::Name(A)))), Box::new(Args::Cons(b(Expr::Name(B)), Box::new(Args::Nil))))));
+    let call = Expr::Apply(COUNT, Box::new(List::Cons(b(Expr::Suffix(b(Expr::Name(X)), b(Expr::Name(A)))), Box::new(List::Cons(b(Expr::Name(B)), Box::new(List::Nil))))));
     let ens = Expr::Bin(BinOp::Eq, b(Expr::Result), b(call));
     let req = Expr::Bin(BinOp::Eq, b(Expr::Index(b(Expr::Prefix(b(Expr::Name(X)), b(Expr::Int(2)))), b(Expr::Int(1)))), b(Expr::Int(1)));
     let f = Function {
@@ -1267,10 +1255,10 @@ fn a_contract_reads_a_part_of_a_sequence_and_passes_it_to_a_function() {
         line: 14,
         params: List::Cons((X, Ty::Seq(Scalar::I32, Extent::Dynamic)), Box::new(List::Cons((A, Ty::U64), Box::new(List::Cons((B, Ty::I32), Box::new(List::Nil)))))),
         ret: Ty::U64,
-        trusted: false, conds: Conds::Cons(CondKind::Requires, req, 12, names(&[X, A, B]), Box::new(Conds::Cons(CondKind::Ensures, ens, 13, names(&[X, A, B]), Box::new(Conds::Nil)))),
+        trusted: false, conds: List::Cons((CondKind::Requires, req, 12, names(&[X, A, B])), Box::new(List::Cons((CondKind::Ensures, ens, 13, names(&[X, A, B])), Box::new(List::Nil)))),
         body: one(Stmt::Return(Expr::Lit(0, Ty::U64), 15)),
     };
-    let Model::Full(m) = translate_function(&f, &Fns::Nil, &Structs::Nil) else { panic!("a full model") };
+    let Model::Full(m) = translate_function(&f, &List::Nil, &List::Nil) else { panic!("a full model") };
     let int = |d: DExpr| DExpr::AsInt(Box::new(d));
     // A part is a sequence, so it passes as itself. Its bound reads as an exact integer.
     let dargs = DArgs::Cons(DExpr::Drop(Box::new(DExpr::Var(X)), Box::new(int(DExpr::Var(A)))), Box::new(DArgs::Cons(int(DExpr::Var(B)), Box::new(DArgs::Nil))));
@@ -1291,10 +1279,10 @@ fn a_slice_of_a_name_that_is_no_sequence_and_a_slice_in_code_are_refused() {
         line: 10,
         params: List::Cons((A, Ty::I32), Box::new(List::Nil)),
         ret: Ty::Bool,
-        trusted: false, conds: Conds::Cons(CondKind::Requires, Expr::Bin(BinOp::Eq, b(Expr::Size(b(Expr::Suffix(b(Expr::Name(A)), b(Expr::Int(1)))))), b(Expr::Int(0))), 9, names(&[A]), Box::new(Conds::Nil)),
+        trusted: false, conds: List::Cons((CondKind::Requires, Expr::Bin(BinOp::Eq, b(Expr::Size(b(Expr::Suffix(b(Expr::Name(A)), b(Expr::Int(1)))))), b(Expr::Int(0))), 9, names(&[A])), Box::new(List::Nil)),
         body: one(Stmt::Return(Expr::Bool(true), 11)),
     };
-    assert_eq!(bare_refusal(translate_function(&f, &Fns::Nil, &Structs::Nil)), Refusal::Syntax(9));
+    assert_eq!(bare_refusal(translate_function(&f, &List::Nil, &List::Nil)), Refusal::Syntax(9));
     let seq = || b(Expr::Var(X, Ty::Seq(Scalar::I32, Extent::Dynamic)));
     assert_eq!(translate_code(&Expr::Suffix(seq(), b(Expr::Lit(1, Ty::U64))), 3), Err(Refusal::Syntax(3)));
 }
@@ -1328,10 +1316,10 @@ fn a_contract_divides_with_trunc_div_and_trunc_rem() {
         line: 10,
         params: List::Cons((A, Ty::I32), Box::new(List::Cons((B, Ty::I32), Box::new(List::Nil)))),
         ret: Ty::I32,
-        trusted: false, conds: Conds::Cons(CondKind::Ensures, ens, 9, names(&[A, B]), Box::new(Conds::Nil)),
+        trusted: false, conds: List::Cons((CondKind::Ensures, ens, 9, names(&[A, B])), Box::new(List::Nil)),
         body: one(Stmt::Return(Expr::Lit(0, Ty::I32), 11)),
     };
-    let Model::Full(m) = translate_function(&f, &Fns::Nil, &Structs::Nil) else { panic!("a full model") };
+    let Model::Full(m) = translate_function(&f, &List::Nil, &List::Nil) else { panic!("a full model") };
     let int = |d: DExpr| Box::new(DExpr::AsInt(Box::new(d)));
     let want = DExpr::Bin(
         BinOp::And,
@@ -1359,7 +1347,7 @@ const COUNTER: u32 = 132;
 /// `struct Counter { int32_t n_; }` as the table of the file. The names of a member function's declaration start with this, as its
 /// parameters do, so a contract reads each parameter by its place, decision 0060.
 fn counter_table() -> Structs {
-    Structs::Cons(COUNTER, 4, List::Cons((CN, Ty::I32), Box::new(List::Nil)), Members::Nil, Box::new(Structs::Nil))
+    List::Cons((COUNTER, (4, List::Cons((CN, Ty::I32), Box::new(List::Nil)), List::Nil)), Box::new(List::Nil))
 }
 
 #[test]
@@ -1374,10 +1362,10 @@ fn a_const_member_function_reads_its_object_as_the_parameter_this() {
         line: 9,
         params: this,
         ret: Ty::I32,
-        trusted: false, conds: Conds::Cons(CondKind::Requires, req, 7, names(&[THIS]), Box::new(Conds::Cons(CondKind::Ensures, ens, 8, names(&[THIS]), Box::new(Conds::Nil)))),
+        trusted: false, conds: List::Cons((CondKind::Requires, req, 7, names(&[THIS])), Box::new(List::Cons((CondKind::Ensures, ens, 8, names(&[THIS])), Box::new(List::Nil)))),
         body: one(Stmt::Return(Expr::Bin(BinOp::Add, b(field), b(Expr::Lit(1, Ty::I32))), 10)),
     };
-    let Model::Full(m) = translate_function(&f, &Fns::Nil, &counter_table()) else { panic!("a full model") };
+    let Model::Full(m) = translate_function(&f, &List::Nil, &counter_table()) else { panic!("a full model") };
     // The object is a value of the datatype.
     assert_eq!(m.params, DParams::Cons(THIS, DTy::Struct(COUNTER), Box::new(DParams::Nil)));
     // A bare field name in a contract is the field of this, read as an exact integer.
@@ -1401,10 +1389,10 @@ fn a_parameter_wins_over_a_field_and_a_name_that_is_neither_is_refused() {
         line: 9,
         params: ps,
         ret: Ty::I32,
-        trusted: false, conds: Conds::Cons(CondKind::Ensures, ens, 8, names(&[THIS, CN]), Box::new(Conds::Nil)),
+        trusted: false, conds: List::Cons((CondKind::Ensures, ens, 8, names(&[THIS, CN])), Box::new(List::Nil)),
         body: one(Stmt::Return(read(CN, Ty::I32), 10)),
     };
-    let Model::Full(m) = translate_function(&f, &Fns::Nil, &counter_table()) else { panic!("a full model") };
+    let Model::Full(m) = translate_function(&f, &List::Nil, &counter_table()) else { panic!("a full model") };
     let want = DExpr::Bin(BinOp::Eq, Box::new(DExpr::AsInt(Box::new(DExpr::Result))), Box::new(DExpr::AsInt(Box::new(DExpr::Var(CN)))));
     let args = DArgs::Cons(DExpr::Var(THIS), Box::new(DArgs::Cons(DExpr::Var(CN), Box::new(DArgs::Nil))));
     let link = DExpr::Bin(BinOp::Eq, Box::new(DExpr::Result), Box::new(DExpr::FCall(SAT, Box::new(args))));
@@ -1415,20 +1403,20 @@ fn a_parameter_wins_over_a_field_and_a_name_that_is_neither_is_refused() {
         line: 9,
         params: List::Cons((THIS, Ty::This(COUNTER)), Box::new(List::Nil)),
         ret: Ty::I32,
-        trusted: false, conds: Conds::Cons(CondKind::Ensures, Expr::Bin(BinOp::Eq, b(Expr::Result), b(Expr::Name(99))), 8, names(&[THIS]), Box::new(Conds::Nil)),
+        trusted: false, conds: List::Cons((CondKind::Ensures, Expr::Bin(BinOp::Eq, b(Expr::Result), b(Expr::Name(99))), 8, names(&[THIS])), Box::new(List::Nil)),
         body: one(Stmt::Return(Expr::Lit(0, Ty::I32), 10)),
     };
-    assert_eq!(bare_refusal(translate_function(&f, &Fns::Nil, &counter_table())), Refusal::Name(99, 8));
+    assert_eq!(bare_refusal(translate_function(&f, &List::Nil, &counter_table())), Refusal::Name(99, 8));
     // A free function has no this, so a field name alone is no parameter there.
     let f = Function {
         name: SAT,
         line: 9,
         params: List::Cons((A, Ty::Struct(COUNTER)), Box::new(List::Nil)),
         ret: Ty::I32,
-        trusted: false, conds: Conds::Cons(CondKind::Ensures, Expr::Bin(BinOp::Eq, b(Expr::Result), b(Expr::Name(CN))), 8, names(&[A]), Box::new(Conds::Nil)),
+        trusted: false, conds: List::Cons((CondKind::Ensures, Expr::Bin(BinOp::Eq, b(Expr::Result), b(Expr::Name(CN))), 8, names(&[A])), Box::new(List::Nil)),
         body: one(Stmt::Return(Expr::Lit(0, Ty::I32), 10)),
     };
-    assert_eq!(bare_refusal(translate_function(&f, &Fns::Nil, &counter_table())), Refusal::Name(CN, 8));
+    assert_eq!(bare_refusal(translate_function(&f, &List::Nil, &counter_table())), Refusal::Name(CN, 8));
 }
 
 #[test]
@@ -1445,19 +1433,19 @@ const NKEY: u32 = 143;
 /// Counter with its members valid and value. `Some(t)` marks a pure member that gives a `t`, with this as its only parameter.
 fn members_table(valid: Option<Ty>, value: Option<Ty>) -> Structs {
     let pure = |t: Option<Ty>| t.map(|t| (t, List::Cons((THIS, Ty::This(COUNTER)), Box::new(List::Nil))));
-    let ms = Members::Cons(VALID, VKEY, pure(valid), Box::new(Members::Cons(VALUE, NKEY, pure(value), Box::new(Members::Nil))));
-    Structs::Cons(COUNTER, 4, List::Cons((CN, Ty::I32), Box::new(List::Nil)), ms, Box::new(Structs::Nil))
+    let ms = List::Cons((VALID, (VKEY, pure(valid))), Box::new(List::Cons((VALUE, (NKEY, pure(value))), Box::new(List::Nil))));
+    List::Cons((COUNTER, (4, List::Cons((CN, Ty::I32), Box::new(List::Nil)), ms)), Box::new(List::Nil))
 }
 
 /// `int32_t Counter::value() const { return n_; }` with the key NKEY, or with another body.
 fn value_fn(body: Stmts) -> Function {
-    Function { name: NKEY, line: 9, params: List::Cons((THIS, Ty::This(COUNTER)), Box::new(List::Nil)), ret: Ty::I32, trusted: false, conds: Conds::Nil, body }
+    Function { name: NKEY, line: 9, params: List::Cons((THIS, Ty::This(COUNTER)), Box::new(List::Nil)), ret: Ty::I32, trusted: false, conds: List::Nil, body }
 }
 
 #[test]
 fn a_pure_member_function_is_also_a_function_and_its_method_gives_its_value() {
     let field = Expr::Cast(CastKind::Read, b(Expr::Field(b(Expr::Var(THIS, Ty::This(COUNTER))), CN)));
-    let Model::Full(m) = translate_function(&value_fn(one(Stmt::Return(field, 10))), &Fns::Nil, &members_table(None, None)) else { panic!("a full model") };
+    let Model::Full(m) = translate_function(&value_fn(one(Stmt::Return(field, 10))), &List::Nil, &members_table(None, None)) else { panic!("a full model") };
     let dfield = DExpr::Field(Box::new(DExpr::Var(THIS)), CN);
     assert_eq!(m.function, Some(dfield));
     // The method gains ensures result == F(this), at the line of the function.
@@ -1469,11 +1457,11 @@ fn a_pure_member_function_is_also_a_function_and_its_method_gives_its_value() {
 fn a_member_function_with_a_local_or_a_call_is_not_pure_and_a_free_function_never_is() {
     let field = || Expr::Cast(CastKind::Read, b(Expr::Field(b(Expr::Var(THIS, Ty::This(COUNTER))), CN)));
     let body = Stmts::Cons(Box::new(Stmt::Local(A, Ty::I32, field(), 10)), Box::new(one(Stmt::Return(read(A, Ty::I32), 11))));
-    let Model::Full(m) = translate_function(&value_fn(body), &Fns::Nil, &members_table(None, None)) else { panic!("a full model") };
+    let Model::Full(m) = translate_function(&value_fn(body), &List::Nil, &members_table(None, None)) else { panic!("a full model") };
     assert_eq!(m.function, None);
     assert_eq!(m.ensures, DConds::Nil);
-    let free = Function { name: SAT, line: 3, params: List::Cons((X, Ty::I32), Box::new(List::Nil)), ret: Ty::I32, trusted: false, conds: Conds::Nil, body: one(Stmt::Return(read(X, Ty::I32), 4)) };
-    let Model::Full(m) = translate_function(&free, &Fns::Nil, &Structs::Nil) else { panic!("a full model") };
+    let free = Function { name: SAT, line: 3, params: List::Cons((X, Ty::I32), Box::new(List::Nil)), ret: Ty::I32, trusted: false, conds: List::Nil, body: one(Stmt::Return(read(X, Ty::I32), 4)) };
+    let Model::Full(m) = translate_function(&free, &List::Nil, &List::Nil) else { panic!("a full model") };
     assert_eq!(m.function, None);
 }
 
@@ -1481,28 +1469,28 @@ fn a_member_function_with_a_local_or_a_call_is_not_pure_and_a_free_function_neve
 fn a_contract_calls_a_pure_member_function_on_this_or_on_a_path() {
     // In a member function: requires valid(). In a free function of c: ensures result == c.value().
     let table = members_table(Some(Ty::Bool), Some(Ty::I32));
-    let req = Expr::Apply(VALID, Box::new(Args::Nil));
+    let req = Expr::Apply(VALID, Box::new(List::Nil));
     let f = Function {
         name: SAT,
         line: 9,
         params: List::Cons((THIS, Ty::This(COUNTER)), Box::new(List::Nil)),
         ret: Ty::Bool,
-        trusted: false, conds: Conds::Cons(CondKind::Requires, req, 8, names(&[THIS]), Box::new(Conds::Nil)),
+        trusted: false, conds: List::Cons((CondKind::Requires, req, 8, names(&[THIS])), Box::new(List::Nil)),
         body: one(Stmt::Return(Expr::Bool(true), 10)),
     };
-    let Model::Full(m) = translate_function(&f, &Fns::Nil, &table) else { panic!("a full model") };
+    let Model::Full(m) = translate_function(&f, &List::Nil, &table) else { panic!("a full model") };
     let on_this = DExpr::FCall(VKEY, Box::new(DArgs::Cons(DExpr::Var(THIS), Box::new(DArgs::Nil))));
     assert_eq!(strip_conds(m.requires), DConds::Cons(on_this, 0, Box::new(DConds::Nil)));
-    let ens = Expr::Bin(BinOp::Eq, b(Expr::Result), b(Expr::MApply(b(Expr::Name(A)), VALUE, Box::new(Args::Nil))));
+    let ens = Expr::Bin(BinOp::Eq, b(Expr::Result), b(Expr::MApply(b(Expr::Name(A)), VALUE, Box::new(List::Nil))));
     let g = Function {
         name: SAT,
         line: 20,
         params: List::Cons((A, Ty::Struct(COUNTER)), Box::new(List::Nil)),
         ret: Ty::I32,
-        trusted: false, conds: Conds::Cons(CondKind::Ensures, ens, 19, names(&[A]), Box::new(Conds::Nil)),
+        trusted: false, conds: List::Cons((CondKind::Ensures, ens, 19, names(&[A])), Box::new(List::Nil)),
         body: one(Stmt::Return(Expr::Lit(0, Ty::I32), 21)),
     };
-    let Model::Full(m) = translate_function(&g, &Fns::Nil, &table) else { panic!("a full model") };
+    let Model::Full(m) = translate_function(&g, &List::Nil, &table) else { panic!("a full model") };
     // The value of an integer function reads as an exact integer.
     let call = DExpr::AsInt(Box::new(DExpr::FCall(NKEY, Box::new(DArgs::Cons(DExpr::Var(A), Box::new(DArgs::Nil))))));
     let want = DExpr::Bin(BinOp::Eq, Box::new(DExpr::AsInt(Box::new(DExpr::Result))), Box::new(call));
@@ -1514,16 +1502,16 @@ fn a_contract_that_calls_a_member_function_that_is_not_pure_is_refused() {
     // value is a member that is not pure, and three is no member.
     let table = members_table(Some(Ty::Bool), None);
     for name in [VALUE, 99] {
-        let ens = Expr::Bin(BinOp::Eq, b(Expr::Result), b(Expr::MApply(b(Expr::Name(A)), name, Box::new(Args::Nil))));
+        let ens = Expr::Bin(BinOp::Eq, b(Expr::Result), b(Expr::MApply(b(Expr::Name(A)), name, Box::new(List::Nil))));
         let g = Function {
             name: SAT,
             line: 20,
             params: List::Cons((A, Ty::Struct(COUNTER)), Box::new(List::Nil)),
             ret: Ty::I32,
-            trusted: false, conds: Conds::Cons(CondKind::Ensures, ens, 19, names(&[A]), Box::new(Conds::Nil)),
+            trusted: false, conds: List::Cons((CondKind::Ensures, ens, 19, names(&[A])), Box::new(List::Nil)),
             body: one(Stmt::Return(Expr::Lit(0, Ty::I32), 21)),
         };
-        assert_eq!(bare_refusal(translate_function(&g, &Fns::Nil, &table)), Refusal::NotPure(name, 19));
+        assert_eq!(bare_refusal(translate_function(&g, &List::Nil, &table)), Refusal::NotPure(name, 19));
     }
 }
 
@@ -1538,24 +1526,24 @@ fn the_unit_marks_which_members_are_pure_whatever_the_table_says() {
         line: 12,
         params: List::Cons((THIS, Ty::This(COUNTER)), Box::new(List::Nil)),
         ret: Ty::Bool,
-        trusted: false, conds: Conds::Nil,
+        trusted: false, conds: List::Nil,
         body: Stmts::Cons(Box::new(Stmt::Local(B, Ty::Bool, Expr::Bool(true), 13)), Box::new(one(Stmt::Return(read(B, Ty::Bool), 14)))),
     };
-    let ens = Expr::Bin(BinOp::Eq, b(Expr::Result), b(Expr::MApply(b(Expr::Name(A)), VALUE, Box::new(Args::Nil))));
+    let ens = Expr::Bin(BinOp::Eq, b(Expr::Result), b(Expr::MApply(b(Expr::Name(A)), VALUE, Box::new(List::Nil))));
     let user = Function {
         name: SAT,
         line: 20,
         params: List::Cons((A, Ty::Struct(COUNTER)), Box::new(List::Nil)),
         ret: Ty::I32,
-        trusted: false, conds: Conds::Cons(CondKind::Ensures, ens, 19, names(&[A]), Box::new(Conds::Nil)),
+        trusted: false, conds: List::Cons((CondKind::Ensures, ens, 19, names(&[A])), Box::new(List::Nil)),
         body: one(Stmt::Return(Expr::Lit(0, Ty::I32), 21)),
     };
     let bad = Function {
-        trusted: false, conds: Conds::Cons(CondKind::Ensures, Expr::MApply(b(Expr::Name(A)), VALID, Box::new(Args::Nil)), 23, names(&[A]), Box::new(Conds::Nil)),
+        trusted: false, conds: List::Cons((CondKind::Ensures, Expr::MApply(b(Expr::Name(A)), VALID, Box::new(List::Nil)), 23, names(&[A])), Box::new(List::Nil)),
         line: 24,
         ret: Ty::Bool,
         body: one(Stmt::Return(Expr::Bool(true), 25)),
-        ..Function { name: SUCC, line: 24, params: List::Cons((A, Ty::Struct(COUNTER)), Box::new(List::Nil)), ret: Ty::Bool, trusted: false, conds: Conds::Nil, body: Stmts::Nil }
+        ..Function { name: SUCC, line: 24, params: List::Cons((A, Ty::Struct(COUNTER)), Box::new(List::Nil)), ret: Ty::Bool, trusted: false, conds: List::Nil, body: Stmts::Nil }
     };
     let claimed = members_table(Some(Ty::Bool), None);
     let Models::Cons(_, rest) = translate_unit(&fns(vec![value, valid, user, bad]), &claimed) else { panic!("models") };
@@ -1571,9 +1559,9 @@ fn the_unit_marks_which_members_are_pure_whatever_the_table_says() {
 fn the_parser_reads_a_call_of_a_member_function_on_a_path() {
     // c.value() and c.get(1, b)
     let toks = vec![Tok::Ident(A), Tok::Field(VALUE), Tok::LParen, Tok::RParen];
-    assert_eq!(parse_contract(&toks, 3), Ok(Expr::MApply(b(Expr::Name(A)), VALUE, Box::new(Args::Nil))));
+    assert_eq!(parse_contract(&toks, 3), Ok(Expr::MApply(b(Expr::Name(A)), VALUE, Box::new(List::Nil))));
     let toks = vec![Tok::Ident(A), Tok::Field(VALUE), Tok::LParen, Tok::Int(1), Tok::Comma, Tok::Ident(B), Tok::RParen];
-    let args = Args::Cons(b(Expr::Int(1)), Box::new(Args::Cons(b(Expr::Name(B)), Box::new(Args::Nil))));
+    let args = List::Cons(b(Expr::Int(1)), Box::new(List::Cons(b(Expr::Name(B)), Box::new(List::Nil))));
     assert_eq!(parse_contract(&toks, 3), Ok(Expr::MApply(b(Expr::Name(A)), VALUE, Box::new(args))));
     // A field with no call stays a field.
     assert_eq!(parse_contract(&vec![Tok::Ident(A), Tok::Field(VALUE)], 3), Ok(Expr::Field(b(Expr::Name(A)), VALUE)));
@@ -1586,18 +1574,18 @@ const LEKEY: u32 = 161;
 fn an_integer_argument_of_a_member_function_passes_as_the_type_of_its_parameter() {
     // bool Counter::le(int32_t k) const, called as c.le(x) in a contract, with x an int32_t parameter
     let le = List::Cons((THIS, Ty::This(COUNTER)), Box::new(List::Cons((X, Ty::I32), Box::new(List::Nil))));
-    let ms = Members::Cons(LE, LEKEY, Some((Ty::Bool, le)), Box::new(Members::Nil));
-    let table = Structs::Cons(COUNTER, 4, List::Cons((CN, Ty::I32), Box::new(List::Nil)), ms, Box::new(Structs::Nil));
-    let req = Expr::MApply(b(Expr::Name(A)), LE, Box::new(Args::Cons(b(Expr::Name(B)), Box::new(Args::Nil))));
+    let ms = List::Cons((LE, (LEKEY, Some((Ty::Bool, le)))), Box::new(List::Nil));
+    let table = List::Cons((COUNTER, (4, List::Cons((CN, Ty::I32), Box::new(List::Nil)), ms)), Box::new(List::Nil));
+    let req = Expr::MApply(b(Expr::Name(A)), LE, Box::new(List::Cons(b(Expr::Name(B)), Box::new(List::Nil))));
     let f = Function {
         name: SAT,
         line: 20,
         params: List::Cons((A, Ty::Struct(COUNTER)), Box::new(List::Cons((B, Ty::I32), Box::new(List::Nil)))),
         ret: Ty::Bool,
-        trusted: false, conds: Conds::Cons(CondKind::Requires, req, 19, names(&[A, B]), Box::new(Conds::Nil)),
+        trusted: false, conds: List::Cons((CondKind::Requires, req, 19, names(&[A, B])), Box::new(List::Nil)),
         body: one(Stmt::Return(Expr::Bool(true), 21)),
     };
-    let Model::Full(m) = translate_function(&f, &Fns::Nil, &table) else { panic!("a full model") };
+    let Model::Full(m) = translate_function(&f, &List::Nil, &table) else { panic!("a full model") };
     let arg = DExpr::Conv(DTy::Int32, Box::new(DExpr::AsInt(Box::new(DExpr::Var(B)))));
     let want = DExpr::FCall(LEKEY, Box::new(DArgs::Cons(DExpr::Var(A), Box::new(DArgs::Cons(arg, Box::new(DArgs::Nil))))));
     assert_eq!(strip_conds(m.requires), DConds::Cons(want, 0, Box::new(DConds::Nil)));
@@ -1608,16 +1596,16 @@ fn a_member_function_whose_contract_is_refused_is_not_pure() {
     // value has one return, but its requires line names nothing. So value is not pure, and a contract that calls it is refused.
     let field = Expr::Cast(CastKind::Read, b(Expr::Field(b(Expr::Var(THIS, Ty::This(COUNTER))), CN)));
     let value = Function {
-        trusted: false, conds: Conds::Cons(CondKind::Requires, Expr::Name(99), 8, names(&[THIS]), Box::new(Conds::Nil)),
+        trusted: false, conds: List::Cons((CondKind::Requires, Expr::Name(99), 8, names(&[THIS])), Box::new(List::Nil)),
         ..value_fn(one(Stmt::Return(field, 10)))
     };
-    let ens = Expr::Bin(BinOp::Eq, b(Expr::Result), b(Expr::MApply(b(Expr::Name(A)), VALUE, Box::new(Args::Nil))));
+    let ens = Expr::Bin(BinOp::Eq, b(Expr::Result), b(Expr::MApply(b(Expr::Name(A)), VALUE, Box::new(List::Nil))));
     let user = Function {
         name: SAT,
         line: 20,
         params: List::Cons((A, Ty::Struct(COUNTER)), Box::new(List::Nil)),
         ret: Ty::I32,
-        trusted: false, conds: Conds::Cons(CondKind::Ensures, ens, 19, names(&[A]), Box::new(Conds::Nil)),
+        trusted: false, conds: List::Cons((CondKind::Ensures, ens, 19, names(&[A])), Box::new(List::Nil)),
         body: one(Stmt::Return(Expr::Lit(0, Ty::I32), 21)),
     };
     let Models::Cons(first, rest) = translate_unit(&fns(vec![value, user]), &members_table(None, Some(Ty::I32))) else { panic!("models") };
@@ -1633,16 +1621,16 @@ fn a_constructor_gives_the_value_it_builds_and_its_contract_reads_that_value() {
     // explicit Counter(int32_t n) : n_(n) {} with requires n < 1000 and ensures valid() && n_ == n
     let table = members_table(Some(Ty::Bool), None);
     let req = Expr::Bin(BinOp::Lt, b(Expr::Name(X)), b(Expr::Int(1000)));
-    let ens = Expr::Bin(BinOp::And, b(Expr::Apply(VALID, Box::new(Args::Nil))), b(Expr::Bin(BinOp::Eq, b(Expr::Name(CN)), b(Expr::Name(X)))));
+    let ens = Expr::Bin(BinOp::And, b(Expr::Apply(VALID, Box::new(List::Nil))), b(Expr::Bin(BinOp::Eq, b(Expr::Name(CN)), b(Expr::Name(X)))));
     let f = Function {
         name: CTOR,
         line: 9,
         params: List::Cons((X, Ty::I32), Box::new(List::Nil)),
         ret: Ty::This(COUNTER),
-        trusted: false, conds: Conds::Cons(CondKind::Requires, req, 7, names(&[X]), Box::new(Conds::Cons(CondKind::Ensures, ens, 8, names(&[X]), Box::new(Conds::Nil)))),
-        body: one(Stmt::Return(Expr::Construct(COUNTER, Box::new(Args::Cons(b(read(X, Ty::I32)), Box::new(Args::Nil)))), 9)),
+        trusted: false, conds: List::Cons((CondKind::Requires, req, 7, names(&[X])), Box::new(List::Cons((CondKind::Ensures, ens, 8, names(&[X])), Box::new(List::Nil)))),
+        body: one(Stmt::Return(Expr::Construct(COUNTER, Box::new(List::Cons(b(read(X, Ty::I32)), Box::new(List::Nil)))), 9)),
     };
-    let Model::Full(m) = translate_function(&f, &Fns::Nil, &table) else { panic!("a full model") };
+    let Model::Full(m) = translate_function(&f, &List::Nil, &table) else { panic!("a full model") };
     // The result is a value of the datatype.
     assert_eq!(m.ret, DTy::Struct(COUNTER));
     // valid() passes result, and n_ is the field of result.
@@ -1661,10 +1649,10 @@ fn a_constructor_of_a_struct_that_holds_a_sequence_is_refused() {
         line: 9,
         params: List::Nil,
         ret: Ty::This(NODE),
-        trusted: false, conds: Conds::Nil,
+        trusted: false, conds: List::Nil,
         body: one(Stmt::Return(Expr::Lit(0, Ty::I32), 9)),
     };
-    assert_eq!(translate_function(&f, &Fns::Nil, &node_table()), Model::Refused(Refusal::HoldsSeq(9)));
+    assert_eq!(translate_function(&f, &List::Nil, &node_table()), Model::Refused(Refusal::HoldsSeq(9)));
 }
 
 const BUMP: u32 = 170;
@@ -1682,14 +1670,14 @@ fn bump_fn() -> Function {
         line: 9,
         params: this,
         ret: Ty::Void,
-        trusted: false, conds: Conds::Cons(CondKind::Requires, req, 7, names(&[THIS]), Box::new(Conds::Cons(CondKind::Ensures, ens, 8, names(&[THIS]), Box::new(Conds::Nil)))),
+        trusted: false, conds: List::Cons((CondKind::Requires, req, 7, names(&[THIS])), Box::new(List::Cons((CondKind::Ensures, ens, 8, names(&[THIS])), Box::new(List::Nil)))),
         body: one(Stmt::SetField(CN, Expr::Bin(BinOp::Add, b(field), b(Expr::Lit(1, Ty::I32))), 10)),
     }
 }
 
 #[test]
 fn a_member_function_that_writes_its_object_gives_it_back() {
-    let Model::Full(m) = translate_function(&bump_fn(), &Fns::Nil, &counter_table()) else { panic!("a full model") };
+    let Model::Full(m) = translate_function(&bump_fn(), &List::Nil, &counter_table()) else { panic!("a full model") };
     assert_eq!(m.ret, DTy::Void);
     assert!(m.writes);
     // The body reads and writes the object after: this'.
@@ -1709,17 +1697,17 @@ fn a_member_function_that_writes_its_object_gives_it_back() {
 #[test]
 fn a_const_member_function_writes_no_field_and_old_reads_only_in_an_ensures_line() {
     // A field write in a const member function writes a parameter.
-    let f = Function { params: List::Cons((THIS, Ty::This(COUNTER)), Box::new(List::Nil)), trusted: false, conds: Conds::Nil, ..bump_fn() };
-    assert_eq!(bare_refusal(translate_function(&f, &Fns::Nil, &counter_table())), Refusal::WriteParam(THIS, 10));
+    let f = Function { params: List::Cons((THIS, Ty::This(COUNTER)), Box::new(List::Nil)), trusted: false, conds: List::Nil, ..bump_fn() };
+    assert_eq!(bare_refusal(translate_function(&f, &List::Nil, &counter_table())), Refusal::WriteParam(THIS, 10));
     // old() in a requires line of a function that writes its object, and in a free function.
     let old = Expr::Bin(BinOp::Lt, b(Expr::Old(b(Expr::Name(CN)))), b(Expr::Int(1000)));
-    let f = Function { trusted: false, conds: Conds::Cons(CondKind::Requires, old, 7, names(&[THIS]), Box::new(Conds::Nil)), ..bump_fn() };
-    assert_eq!(bare_refusal(translate_function(&f, &Fns::Nil, &counter_table())), Refusal::Syntax(7));
+    let f = Function { trusted: false, conds: List::Cons((CondKind::Requires, old, 7, names(&[THIS])), Box::new(List::Nil)), ..bump_fn() };
+    assert_eq!(bare_refusal(translate_function(&f, &List::Nil, &counter_table())), Refusal::Syntax(7));
     let free = Function {
-        trusted: false, conds: Conds::Cons(CondKind::Ensures, Expr::Bin(BinOp::Eq, b(Expr::Result), b(Expr::Old(b(Expr::Name(X))))), 2, names(&[X]), Box::new(Conds::Nil)),
+        trusted: false, conds: List::Cons((CondKind::Ensures, Expr::Bin(BinOp::Eq, b(Expr::Result), b(Expr::Old(b(Expr::Name(X))))), 2, names(&[X])), Box::new(List::Nil)),
         ..with_n(one(Stmt::Return(read(X, Ty::I32), 4)))
     };
-    assert_eq!(bare_refusal(translate_function(&free, &Fns::Nil, &counter_table())), Refusal::Syntax(2));
+    assert_eq!(bare_refusal(translate_function(&free, &List::Nil, &counter_table())), Refusal::Syntax(2));
 }
 
 #[test]
@@ -1730,19 +1718,19 @@ fn a_call_that_writes_its_object_writes_a_local_back() {
         line: 20,
         params: List::Cons((THIS, Ty::ThisMut(COUNTER)), Box::new(List::Nil)),
         ret: Ty::I32,
-        trusted: false, conds: Conds::Nil,
+        trusted: false, conds: List::Nil,
         body: one(Stmt::Return(Expr::Lit(0, Ty::I32), 21)),
     };
-    let obj = || Box::new(Args::Cons(b(read(LOC, Ty::Struct(COUNTER))), Box::new(Args::Nil)));
+    let obj = || Box::new(List::Cons(b(read(LOC, Ty::Struct(COUNTER))), Box::new(List::Nil)));
     let all = fns(vec![bump_fn(), take]);
     let user = Function {
         name: SAT,
         line: 29,
         params: List::Nil,
         ret: Ty::I32,
-        trusted: false, conds: Conds::Nil,
+        trusted: false, conds: List::Nil,
         body: Stmts::Cons(
-            Box::new(Stmt::Local(LOC, Ty::Struct(COUNTER), Expr::Construct(COUNTER, Box::new(Args::Cons(b(Expr::Lit(5, Ty::I32)), Box::new(Args::Nil)))), 30)),
+            Box::new(Stmt::Local(LOC, Ty::Struct(COUNTER), Expr::Construct(COUNTER, Box::new(List::Cons(b(Expr::Lit(5, Ty::I32)), Box::new(List::Nil)))), 30)),
             Box::new(Stmts::Cons(
                 Box::new(Stmt::Call(BUMP, SAT_NAME, obj(), 31)),
                 Box::new(Stmts::Cons(
@@ -1769,8 +1757,8 @@ fn a_call_that_writes_a_parameter_or_a_field_is_refused() {
         line: 16,
         params: List::Cons((LOC, Ty::Struct(COUNTER)), Box::new(List::Nil)),
         ret: Ty::Void,
-        trusted: false, conds: Conds::Nil,
-        body: one(Stmt::Call(BUMP, SAT_NAME, Box::new(Args::Cons(b(read(LOC, Ty::Struct(COUNTER))), Box::new(Args::Nil))), 17)),
+        trusted: false, conds: List::Nil,
+        body: one(Stmt::Call(BUMP, SAT_NAME, Box::new(List::Cons(b(read(LOC, Ty::Struct(COUNTER))), Box::new(List::Nil))), 17)),
     };
     assert_eq!(bare_refusal(translate_function(&on_param, &all, &counter_table())), Refusal::WriteParam(LOC, 17));
     // q.c_.bump() on a field of a local
@@ -1778,10 +1766,10 @@ fn a_call_that_writes_a_parameter_or_a_field_is_refused() {
     let on_field = Function {
         params: List::Nil,
         body: Stmts::Cons(
-            Box::new(Stmt::Local(LOC, Ty::Struct(POINT), Expr::Construct(POINT, Box::new(Args::Nil)), 22)),
-            Box::new(one(Stmt::Call(BUMP, SAT_NAME, Box::new(Args::Cons(b(field), Box::new(Args::Nil))), 23))),
+            Box::new(Stmt::Local(LOC, Ty::Struct(POINT), Expr::Construct(POINT, Box::new(List::Nil)), 22)),
+            Box::new(one(Stmt::Call(BUMP, SAT_NAME, Box::new(List::Cons(b(field), Box::new(List::Nil))), 23))),
         ),
-        ..Function { name: SAT, line: 21, params: List::Nil, ret: Ty::Void, trusted: false, conds: Conds::Nil, body: Stmts::Nil }
+        ..Function { name: SAT, line: 21, params: List::Nil, ret: Ty::Void, trusted: false, conds: List::Nil, body: Stmts::Nil }
     };
     assert_eq!(bare_refusal(translate_function(&on_field, &all, &counter_table())), Refusal::NoTarget(23));
 }
@@ -1789,8 +1777,8 @@ fn a_call_that_writes_a_parameter_or_a_field_is_refused() {
 #[test]
 fn a_void_function_ends_with_return_and_is_called_as_a_statement() {
     // void nothing() { return; }, and nothing(); in another function
-    let nothing = Function { name: BUMP, line: 40, params: List::Nil, ret: Ty::Void, trusted: false, conds: Conds::Nil, body: one(Stmt::Exit(41)) };
-    let Model::Full(m) = translate_function(&nothing, &Fns::Nil, &Structs::Nil) else { panic!("a full model") };
+    let nothing = Function { name: BUMP, line: 40, params: List::Nil, ret: Ty::Void, trusted: false, conds: List::Nil, body: one(Stmt::Exit(41)) };
+    let Model::Full(m) = translate_function(&nothing, &List::Nil, &List::Nil) else { panic!("a full model") };
     assert_eq!(m.ret, DTy::Void);
     assert!(!m.writes);
     assert_eq!(strip(m.body), DStmts::Cons(Box::new(DStmt::Exit), 0, Box::new(DStmts::Nil)));
@@ -1799,15 +1787,15 @@ fn a_void_function_ends_with_return_and_is_called_as_a_statement() {
         line: 44,
         params: List::Nil,
         ret: Ty::I32,
-        trusted: false, conds: Conds::Nil,
-        body: Stmts::Cons(Box::new(Stmt::Call(BUMP, SAT_NAME, Box::new(Args::Nil), 45)), Box::new(one(Stmt::Return(Expr::Lit(3, Ty::I32), 46)))),
+        trusted: false, conds: List::Nil,
+        body: Stmts::Cons(Box::new(Stmt::Call(BUMP, SAT_NAME, Box::new(List::Nil), 45)), Box::new(one(Stmt::Return(Expr::Lit(3, Ty::I32), 46)))),
     };
-    let Model::Full(m) = translate_function(&caller, &fns(vec![nothing]), &Structs::Nil) else { panic!("a full model") };
+    let Model::Full(m) = translate_function(&caller, &fns(vec![nothing]), &List::Nil) else { panic!("a full model") };
     let DStmts::Cons(call, _, _) = strip(m.body) else { panic!("a call") };
     assert_eq!(*call, DStmt::CallStmt(BUMP, DArgs::Nil));
     // return; in a function that gives a value, and a local of void, are refused.
-    assert_eq!(bare_refusal(translate_function(&with_n(one(Stmt::Exit(4))), &Fns::Nil, &Structs::Nil)), Refusal::Syntax(4));
-    assert_eq!(translate_value_ty(Ty::Void, 3, &Structs::Nil), Err(Refusal::Syntax(3)));
+    assert_eq!(bare_refusal(translate_function(&with_n(one(Stmt::Exit(4))), &List::Nil, &List::Nil)), Refusal::Syntax(4));
+    assert_eq!(translate_value_ty(Ty::Void, 3, &List::Nil), Err(Refusal::Syntax(3)));
 }
 
 #[test]
@@ -1828,13 +1816,13 @@ fn a_requires_line_of_a_constructor_has_no_object_yet() {
         line: 9,
         params: List::Cons((X, Ty::I32), Box::new(List::Nil)),
         ret: Ty::This(COUNTER),
-        trusted: false, conds: Conds::Cons(CondKind::Requires, req, 7, names(&[X]), Box::new(Conds::Nil)),
-        body: one(Stmt::Return(Expr::Construct(COUNTER, Box::new(Args::Cons(b(read(X, Ty::I32)), Box::new(Args::Nil)))), 9)),
+        trusted: false, conds: List::Cons((CondKind::Requires, req, 7, names(&[X])), Box::new(List::Nil)),
+        body: one(Stmt::Return(Expr::Construct(COUNTER, Box::new(List::Cons(b(read(X, Ty::I32)), Box::new(List::Nil)))), 9)),
     };
     let field = ctor(Expr::Bin(BinOp::Lt, b(Expr::Name(CN)), b(Expr::Int(1000))));
-    assert_eq!(bare_refusal(translate_function(&field, &Fns::Nil, &table)), Refusal::NoObject(CN, 7));
-    let valid = ctor(Expr::Apply(VALID, Box::new(Args::Nil)));
-    assert_eq!(bare_refusal(translate_function(&valid, &Fns::Nil, &table)), Refusal::NoObject(VALID, 7));
+    assert_eq!(bare_refusal(translate_function(&field, &List::Nil, &table)), Refusal::NoObject(CN, 7));
+    let valid = ctor(Expr::Apply(VALID, Box::new(List::Nil)));
+    assert_eq!(bare_refusal(translate_function(&valid, &List::Nil, &table)), Refusal::NoObject(VALID, 7));
 }
 
 const CAP: u32 = 180;
@@ -1847,7 +1835,7 @@ const FC: u32 = 185;
 /// `struct CapAt { int32_t limit; }` with its `operator()` of the key OPKEY, pure when `pure` holds.
 fn cap_table(pure: bool) -> Structs {
     let op = if pure { Some((Ty::I32, List::Cons((THIS, Ty::This(CAP)), Box::new(List::Cons((X, Ty::I32), Box::new(List::Nil)))))) } else { None };
-    Structs::Cons(CAP, 4, List::Cons((LIMIT, Ty::I32), Box::new(List::Nil)), Members::Cons(CALL_OP, OPKEY, op, Box::new(Members::Nil)), Box::new(Structs::Nil))
+    List::Cons((CAP, (4, List::Cons((LIMIT, Ty::I32), Box::new(List::Nil)), List::Cons((CALL_OP, (OPKEY, op)), Box::new(List::Nil)))), Box::new(List::Nil))
 }
 
 #[test]
@@ -1862,10 +1850,10 @@ fn a_conditional_chooses_a_branch_in_code_and_in_contracts() {
         line: 3,
         params: ps,
         ret: Ty::I32,
-        trusted: false, conds: Conds::Cons(CondKind::Ensures, ens, 2, names(&[X, LIMIT]), Box::new(Conds::Nil)),
+        trusted: false, conds: List::Cons((CondKind::Ensures, ens, 2, names(&[X, LIMIT])), Box::new(List::Nil)),
         body: one(Stmt::Return(code, 4)),
     };
-    let Model::Full(m) = translate_function(&f, &Fns::Nil, &Structs::Nil) else { panic!("a full model") };
+    let Model::Full(m) = translate_function(&f, &List::Nil, &List::Nil) else { panic!("a full model") };
     let v = |n| Box::new(DExpr::Var(n));
     let want = DExpr::Ite(Box::new(DExpr::Bin(BinOp::Lt, v(X), v(LIMIT))), v(X), v(LIMIT));
     assert_eq!(strip(m.body), DStmts::Cons(Box::new(DStmt::Return(want)), 0, Box::new(DStmts::Nil)));
@@ -1874,8 +1862,8 @@ fn a_conditional_chooses_a_branch_in_code_and_in_contracts() {
     assert_eq!(strip_conds(m.ensures), DConds::Cons(want, 0, Box::new(DConds::Nil)));
     // A branch holds no call, as any expression of code.
     let call_in = Expr::Cond(b(Expr::Bool(true)), b(call(SUCC, vec![read(X, Ty::I32)], 4)), b(read(X, Ty::I32)));
-    let f = Function { trusted: false, conds: Conds::Nil, body: one(Stmt::Return(call_in, 4)), ..f };
-    assert_eq!(bare_refusal(translate_function(&f, &Fns::Nil, &Structs::Nil)), Refusal::Place(4));
+    let f = Function { trusted: false, conds: List::Nil, body: one(Stmt::Return(call_in, 4)), ..f };
+    assert_eq!(bare_refusal(translate_function(&f, &List::Nil, &List::Nil)), Refusal::Place(4));
 }
 
 #[test]
@@ -1904,17 +1892,17 @@ fn the_parser_reads_a_conditional() {
 fn a_contract_calls_the_operator_of_a_functor() {
     // int32_t cap_twice(CapAt f, int32_t x) with ensures result == f(f(x))
     let ps = List::Cons((F, Ty::Struct(CAP)), Box::new(List::Cons((X, Ty::I32), Box::new(List::Nil))));
-    let inner = Expr::Apply(F, Box::new(Args::Cons(b(Expr::Name(X)), Box::new(Args::Nil))));
-    let ens = Expr::Bin(BinOp::Eq, b(Expr::Result), b(Expr::Apply(F, Box::new(Args::Cons(b(inner), Box::new(Args::Nil))))));
+    let inner = Expr::Apply(F, Box::new(List::Cons(b(Expr::Name(X)), Box::new(List::Nil))));
+    let ens = Expr::Bin(BinOp::Eq, b(Expr::Result), b(Expr::Apply(F, Box::new(List::Cons(b(inner), Box::new(List::Nil))))));
     let f = Function {
         name: SAT,
         line: 3,
         params: ps,
         ret: Ty::I32,
-        trusted: false, conds: Conds::Cons(CondKind::Ensures, ens, 2, names(&[F, X]), Box::new(Conds::Nil)),
+        trusted: false, conds: List::Cons((CondKind::Ensures, ens, 2, names(&[F, X])), Box::new(List::Nil)),
         body: one(Stmt::Return(read(X, Ty::I32), 4)),
     };
-    let Model::Full(m) = translate_function(&f, &Fns::Nil, &cap_table(true)) else { panic!("a full model") };
+    let Model::Full(m) = translate_function(&f, &List::Nil, &cap_table(true)) else { panic!("a full model") };
     let op = |o: DExpr, arg: DExpr| {
         DExpr::AsInt(Box::new(DExpr::FCall(OPKEY, Box::new(DArgs::Cons(o, Box::new(DArgs::Cons(DExpr::Conv(DTy::Int32, Box::new(arg)), Box::new(DArgs::Nil))))))))
     };
@@ -1922,20 +1910,20 @@ fn a_contract_calls_the_operator_of_a_functor() {
     let want = DExpr::Bin(BinOp::Eq, Box::new(DExpr::AsInt(Box::new(DExpr::Result))), Box::new(op(DExpr::Var(F), op(DExpr::Var(F), x()))));
     assert_eq!(strip_conds(m.ensures), DConds::Cons(want, 0, Box::new(DConds::Nil)));
     // An operator() that is not pure is refused at the line.
-    assert_eq!(bare_refusal(translate_function(&f, &Fns::Nil, &cap_table(false))), Refusal::NotPure(CALL_OP, 2));
+    assert_eq!(bare_refusal(translate_function(&f, &List::Nil, &cap_table(false))), Refusal::NotPure(CALL_OP, 2));
     // A field of the object: struct Wrap { CapAt c; } with int32_t Wrap::run(int32_t x) const and ensures result == c(x).
-    let wrap = Structs::Cons(HOLDER, 8, List::Cons((FC, Ty::Struct(CAP)), Box::new(List::Nil)), Members::Nil, Box::new(cap_table(true)));
+    let wrap = List::Cons((HOLDER, (8, List::Cons((FC, Ty::Struct(CAP)), Box::new(List::Nil)), List::Nil)), Box::new(cap_table(true)));
     let ps = List::Cons((THIS, Ty::This(HOLDER)), Box::new(List::Cons((X, Ty::I32), Box::new(List::Nil))));
-    let ens = Expr::Bin(BinOp::Eq, b(Expr::Result), b(Expr::Apply(FC, Box::new(Args::Cons(b(Expr::Name(X)), Box::new(Args::Nil))))));
+    let ens = Expr::Bin(BinOp::Eq, b(Expr::Result), b(Expr::Apply(FC, Box::new(List::Cons(b(Expr::Name(X)), Box::new(List::Nil))))));
     let g = Function {
         name: SAT,
         line: 10,
         params: ps,
         ret: Ty::I32,
-        trusted: false, conds: Conds::Cons(CondKind::Ensures, ens, 9, names(&[THIS, X]), Box::new(Conds::Nil)),
+        trusted: false, conds: List::Cons((CondKind::Ensures, ens, 9, names(&[THIS, X])), Box::new(List::Nil)),
         body: one(Stmt::Return(read(X, Ty::I32), 11)),
     };
-    let Model::Full(m) = translate_function(&g, &Fns::Nil, &wrap) else { panic!("a full model") };
+    let Model::Full(m) = translate_function(&g, &List::Nil, &wrap) else { panic!("a full model") };
     let DConds::Cons(first, _, _) = m.ensures else { panic!("an ensures line") };
     let obj = DExpr::Field(Box::new(DExpr::Var(THIS)), FC);
     assert_eq!(first, DExpr::Bin(BinOp::Eq, Box::new(DExpr::AsInt(Box::new(DExpr::Result))), Box::new(op(obj, x()))));
@@ -1946,17 +1934,17 @@ fn a_bound_name_is_no_function() {
     // int32_t f(CapAt c, int32_t x) with ensures forall c :: 0 <= c < 1 ==> c(x) == x
     let ps = List::Cons((F, Ty::Struct(CAP)), Box::new(List::Cons((X, Ty::I32), Box::new(List::Nil))));
     let range = Expr::Chain(BinOp::Le, BinOp::Lt, b(Expr::Int(0)), b(Expr::Name(F)), b(Expr::Int(1)));
-    let call = Expr::Apply(F, Box::new(Args::Cons(b(Expr::Name(X)), Box::new(Args::Nil))));
+    let call = Expr::Apply(F, Box::new(List::Cons(b(Expr::Name(X)), Box::new(List::Nil))));
     let ens = Expr::Forall(F, b(Expr::Bin(BinOp::Implies, b(range), b(Expr::Bin(BinOp::Eq, b(call), b(Expr::Name(X)))))));
     let f = Function {
         name: SAT,
         line: 3,
         params: ps,
         ret: Ty::I32,
-        trusted: false, conds: Conds::Cons(CondKind::Ensures, ens, 2, names(&[F, X]), Box::new(Conds::Nil)),
+        trusted: false, conds: List::Cons((CondKind::Ensures, ens, 2, names(&[F, X])), Box::new(List::Nil)),
         body: one(Stmt::Return(read(X, Ty::I32), 4)),
     };
-    assert_eq!(bare_refusal(translate_function(&f, &Fns::Nil, &cap_table(true))), Refusal::Syntax(2));
+    assert_eq!(bare_refusal(translate_function(&f, &List::Nil, &cap_table(true))), Refusal::Syntax(2));
 }
 
 const YY: u32 = 190;
@@ -1972,14 +1960,14 @@ fn an_assert_line_states_a_fact_about_the_variables_in_scope() {
             Box::new(Stmts::Cons(
                 Box::new(s),
                 Box::new(Stmts::Cons(
-                    Box::new(Stmt::Apply(LEM, Box::new(Args::Cons(b(Expr::Name(YY)), Box::new(Args::Nil))), 6)),
+                    Box::new(Stmt::Apply(LEM, Box::new(List::Cons(b(Expr::Name(YY)), Box::new(List::Nil))), 6)),
                     Box::new(one(Stmt::Return(read(YY, Ty::I32), 7))),
                 )),
             )),
         )
     };
-    let f = |s: Stmt| Function { name: SAT, line: 3, params: List::Cons((X, Ty::I32), Box::new(List::Nil)), ret: Ty::I32, trusted: false, conds: Conds::Nil, body: body(s) };
-    let Model::Full(m) = translate_function(&f(fact(Expr::Bin(BinOp::Eq, b(Expr::Name(YY)), b(Expr::Name(X))))), &Fns::Nil, &Structs::Nil) else {
+    let f = |s: Stmt| Function { name: SAT, line: 3, params: List::Cons((X, Ty::I32), Box::new(List::Nil)), ret: Ty::I32, trusted: false, conds: List::Nil, body: body(s) };
+    let Model::Full(m) = translate_function(&f(fact(Expr::Bin(BinOp::Eq, b(Expr::Name(YY)), b(Expr::Name(X))))), &List::Nil, &List::Nil) else {
         panic!("a full model")
     };
     let i = |n| Box::new(DExpr::AsInt(Box::new(DExpr::Var(n))));
@@ -1990,9 +1978,9 @@ fn an_assert_line_states_a_fact_about_the_variables_in_scope() {
     assert_eq!((*p, lp), (DStmt::Apply(LEM, DArgs::Cons(DExpr::AsInt(Box::new(DExpr::Var(YY))), Box::new(DArgs::Nil))), 6));
     // A name out of scope is no variable, and an assert line names no result.
     let out = fact(Expr::Bin(BinOp::Eq, b(Expr::Name(Q)), b(Expr::Int(0))));
-    assert_eq!(bare_refusal(translate_function(&f(out), &Fns::Nil, &Structs::Nil)), Refusal::NoVar(Q, 5));
+    assert_eq!(bare_refusal(translate_function(&f(out), &List::Nil, &List::Nil)), Refusal::NoVar(Q, 5));
     let res = fact(Expr::Bin(BinOp::Eq, b(Expr::Result), b(Expr::Int(0))));
-    assert_eq!(bare_refusal(translate_function(&f(res), &Fns::Nil, &Structs::Nil)), Refusal::Syntax(5));
+    assert_eq!(bare_refusal(translate_function(&f(res), &List::Nil, &List::Nil)), Refusal::Syntax(5));
 }
 
 #[test]
@@ -2000,7 +1988,7 @@ fn a_contract_in_the_body_of_a_member_function_reads_the_object_as_the_body_leav
     // void Counter::reset() with int32_t a = 0; then //@ assert n_ == 0 && old(n_) >= 0, and a loop with //@ invariant n_ == a.
     let this = |t: Ty| List::Cons((THIS, t), Box::new(List::Nil));
     let fact = Expr::Bin(BinOp::And, b(Expr::Bin(BinOp::Eq, b(Expr::Name(CN)), b(Expr::Int(0)))), b(Expr::Bin(BinOp::Ge, b(Expr::Old(b(Expr::Name(CN)))), b(Expr::Int(0)))));
-    let inv = Conds::Cons(CondKind::Invariant, Expr::Bin(BinOp::Eq, b(Expr::Name(CN)), b(Expr::Name(A))), 13, List::Nil, Box::new(Conds::Nil));
+    let inv = List::Cons((CondKind::Invariant, Expr::Bin(BinOp::Eq, b(Expr::Name(CN)), b(Expr::Name(A))), 13, List::Nil), Box::new(List::Nil));
     let body = Stmts::Cons(
         Box::new(Stmt::Local(A, Ty::I32, Expr::Lit(0, Ty::I32), 11)),
         Box::new(Stmts::Cons(
@@ -2008,8 +1996,8 @@ fn a_contract_in_the_body_of_a_member_function_reads_the_object_as_the_body_leav
             Box::new(one(Stmt::While(Expr::Bool(false), Box::new(inv), Box::new(Stmts::Nil), 14))),
         )),
     );
-    let f = Function { name: BUMP, line: 10, params: this(Ty::ThisMut(COUNTER)), ret: Ty::Void, trusted: false, conds: Conds::Nil, body };
-    let Model::Full(m) = translate_function(&f, &Fns::Nil, &counter_table()) else { panic!("a full model") };
+    let f = Function { name: BUMP, line: 10, params: this(Ty::ThisMut(COUNTER)), ret: Ty::Void, trusted: false, conds: List::Nil, body };
+    let Model::Full(m) = translate_function(&f, &List::Nil, &counter_table()) else { panic!("a full model") };
     let field = |o: DExpr| Box::new(DExpr::AsInt(Box::new(DExpr::Field(Box::new(o), CN))));
     let DStmts::Cons(_, _, rest) = m.body else { panic!("a local") };
     let DStmts::Cons(a, _, rest) = *rest else { panic!("an assert") };
@@ -2029,13 +2017,13 @@ fn a_contract_in_the_body_of_a_member_function_reads_the_object_as_the_body_leav
         Box::new(one(Stmt::Assert(Expr::Bin(BinOp::Eq, b(Expr::Name(CN)), b(Expr::Name(A))), 12))),
     );
     let g = Function { params: this(Ty::This(COUNTER)), body, ..f };
-    let Model::Full(m) = translate_function(&g, &Fns::Nil, &counter_table()) else { panic!("a full model") };
+    let Model::Full(m) = translate_function(&g, &List::Nil, &counter_table()) else { panic!("a full model") };
     let DStmts::Cons(_, _, rest) = m.body else { panic!("a local") };
     let DStmts::Cons(a, _, _) = *rest else { panic!("an assert") };
     assert_eq!(*a, DStmt::Assert(DExpr::Bin(BinOp::Eq, field(DExpr::Var(THIS)), Box::new(DExpr::AsInt(Box::new(DExpr::Var(A)))))));
     let old = Stmt::Assert(Expr::Bin(BinOp::Ge, b(Expr::Old(b(Expr::Name(CN)))), b(Expr::Int(0))), 12);
     let h = Function { body: one(old), ..g };
-    assert_eq!(bare_refusal(translate_function(&h, &Fns::Nil, &counter_table())), Refusal::Syntax(12));
+    assert_eq!(bare_refusal(translate_function(&h, &List::Nil, &counter_table())), Refusal::Syntax(12));
 }
 
 #[test]
@@ -2048,17 +2036,17 @@ fn a_trusted_function_is_a_method_with_its_contract_and_no_body() {
         params: List::Nil,
         ret: Ty::U32,
         trusted: true,
-        conds: Conds::Cons(CondKind::Ensures, ens, 7, List::Nil, Box::new(Conds::Nil)),
+        conds: List::Cons((CondKind::Ensures, ens, 7, List::Nil), Box::new(List::Nil)),
         body: one(Stmt::Unknown(77, 9)),
     };
-    let Model::Full(m) = translate_function(&f, &Fns::Nil, &Structs::Nil) else { panic!("a full model") };
+    let Model::Full(m) = translate_function(&f, &List::Nil, &List::Nil) else { panic!("a full model") };
     assert!(m.trusted);
     assert_eq!(m.body, DStmts::Nil);
     let want = DExpr::Bin(BinOp::Le, Box::new(DExpr::AsInt(Box::new(DExpr::Result))), Box::new(DExpr::Lit(255)));
     assert_eq!(strip_conds(m.ensures), DConds::Cons(want, 0, Box::new(DConds::Nil)));
     // A function that is not trusted has its body, so the same body is refused.
     let g = Function { trusted: false, ..f };
-    assert_eq!(bare_refusal(translate_function(&g, &Fns::Nil, &Structs::Nil)), Refusal::Construct(77, 9));
+    assert_eq!(bare_refusal(translate_function(&g, &List::Nil, &List::Nil)), Refusal::Construct(77, 9));
 }
 
 #[test]
@@ -2072,7 +2060,7 @@ fn a_trusted_member_function_is_never_pure() {
         params: List::Cons((THIS, Ty::This(COUNTER)), Box::new(List::Nil)),
         ret: Ty::I32,
         trusted: false,
-        conds: Conds::Cons(CondKind::Ensures, Expr::Bin(BinOp::Eq, b(Expr::Result), b(Expr::Apply(VALUE, Box::new(Args::Nil)))), 19, names(&[THIS]), Box::new(Conds::Nil)),
+        conds: List::Cons((CondKind::Ensures, Expr::Bin(BinOp::Eq, b(Expr::Result), b(Expr::Apply(VALUE, Box::new(List::Nil)))), 19, names(&[THIS])), Box::new(List::Nil)),
         body: one(Stmt::Return(Expr::Lit(0, Ty::I32), 21)),
     };
     let Models::Cons(Model::Full(m), rest) = translate_unit(&fns(vec![value, user]), &members_table(None, Some(Ty::I32))) else {
@@ -2094,17 +2082,17 @@ fn three_small_integer_types_and_a_right_shift() {
         params: List::Cons((X, Ty::I32), Box::new(List::Nil)),
         ret: Ty::I8,
         trusted: false,
-        conds: Conds::Nil,
+        conds: List::Nil,
         body: one(Stmt::Return(cast, 4)),
     };
-    let Model::Full(m) = translate_function(&f, &Fns::Nil, &Structs::Nil) else { panic!("a full model") };
+    let Model::Full(m) = translate_function(&f, &List::Nil, &List::Nil) else { panic!("a full model") };
     assert_eq!(m.ret, DTy::Int8);
     assert_eq!(strip(m.body), DStmts::Cons(Box::new(DStmt::Return(DExpr::Conv(DTy::Int8, Box::new(DExpr::Var(X))))), 0, Box::new(DStmts::Nil)));
     assert_eq!(translate_ty(Ty::I16, 3), Ok(DTy::Int16));
     assert_eq!(translate_ty(Ty::U16, 3), Ok(DTy::UInt16));
     // A contract reads an int16_t as an exact integer.
     let ps = List::Cons((X, Ty::I16), Box::new(List::Nil));
-    assert_eq!(translate_contract(&Expr::Name(X), &names(&[X]), &ps, Some(Ty::I16), &List::Nil, 2, &Structs::Nil), Ok(DExpr::AsInt(Box::new(DExpr::Var(X)))));
+    assert_eq!(translate_contract(&Expr::Name(X), &names(&[X]), &ps, Some(Ty::I16), &List::Nil, 2, &List::Nil), Ok(DExpr::AsInt(Box::new(DExpr::Var(X)))));
     // uint32_t shift(uint32_t x, uint32_t n) { return x >> n; }: the width is that of the type after promotion.
     let int = |n: u32| Box::new(DExpr::AsInt(Box::new(DExpr::Var(n))));
     let shr = Expr::Shr(b(read(X, Ty::U32)), b(read(B, Ty::U32)), Ty::U32);
@@ -2139,7 +2127,7 @@ fn int_params(v: &[u32]) -> DParams {
 
 /// `//@ modifies` lines that name each of `v`, at line 5 above a declaration with the parameters `ps`.
 fn modifies(v: &[u32], ps: &[u32], rest: Conds) -> Conds {
-    v.iter().rev().fold(rest, |r, n| Conds::Cons(CondKind::Modifies, Expr::Name(*n), 5, names(ps), Box::new(r)))
+    v.iter().rev().fold(rest, |r, n| List::Cons((CondKind::Modifies, Expr::Name(*n), 5, names(ps)), Box::new(r)))
 }
 
 /// `void take(int32_t& dst, int32_t& src)` with modifies dst, src and ensures dst == old(src) && src == 0, and a body of
@@ -2156,7 +2144,7 @@ fn take_ref() -> Function {
         params: List::Cons((DST, mut32()), Box::new(List::Cons((SRC, mut32()), Box::new(List::Nil)))),
         ret: Ty::Void,
         trusted: false,
-        conds: modifies(&[DST, SRC], &[DST, SRC], Conds::Cons(CondKind::Ensures, ens, 7, names(&[DST, SRC]), Box::new(Conds::Nil))),
+        conds: modifies(&[DST, SRC], &[DST, SRC], List::Cons((CondKind::Ensures, ens, 7, names(&[DST, SRC])), Box::new(List::Nil))),
         body: Stmts::Cons(
             Box::new(Stmt::Assign(DST, read(SRC, mut32()), 9)),
             Box::new(one(Stmt::Assign(SRC, Expr::Lit(0, Ty::I32), 10))),
@@ -2166,7 +2154,7 @@ fn take_ref() -> Function {
 
 #[test]
 fn a_reference_parameter_on_the_modifies_line_takes_a_value_in_and_gives_it_back() {
-    let Model::Full(m) = translate_function(&take_ref(), &Fns::Nil, &Structs::Nil) else { panic!("a full model") };
+    let Model::Full(m) = translate_function(&take_ref(), &List::Nil, &List::Nil) else { panic!("a full model") };
     assert_eq!(m.params, int_params(&[DST, SRC]));
     assert_eq!(m.outs, int_params(&[DST, SRC]));
     assert!(!m.writes);
@@ -2199,34 +2187,34 @@ fn a_requires_line_reads_a_reference_parameter_before_the_call_and_old_has_no_pl
         params: List::Cons((X, mut32()), Box::new(List::Nil)),
         ret: Ty::Void,
         trusted: false,
-        conds: modifies(&[X], &[X], Conds::Cons(CondKind::Requires, req, 6, names(&[X]), Box::new(Conds::Nil))),
+        conds: modifies(&[X], &[X], List::Cons((CondKind::Requires, req, 6, names(&[X])), Box::new(List::Nil))),
         body: one(Stmt::Step(X, Ty::I32, true, 9)),
     };
-    let Model::Full(m) = translate_function(&f, &Fns::Nil, &Structs::Nil) else { panic!("a full model") };
+    let Model::Full(m) = translate_function(&f, &List::Nil, &List::Nil) else { panic!("a full model") };
     let want = DExpr::Bin(BinOp::Lt, Box::new(DExpr::AsInt(Box::new(DExpr::Var(X)))), Box::new(DExpr::Lit(1000)));
     assert_eq!(strip_conds(m.requires), DConds::Cons(want, 0, Box::new(DConds::Nil)));
     // ++x writes the value after.
     let step = DStmt::SetOut(X, DExpr::Bin(BinOp::Add, Box::new(DExpr::Out(X)), Box::new(lit32(1))));
     assert_eq!(strip(m.body), DStmts::Cons(Box::new(step), 0, Box::new(DStmts::Nil)));
     let old = Expr::Bin(BinOp::Lt, b(Expr::Old(b(Expr::Name(X)))), b(Expr::Int(1000)));
-    let g = Function { conds: modifies(&[X], &[X], Conds::Cons(CondKind::Requires, old, 6, names(&[X]), Box::new(Conds::Nil))), ..f };
-    assert_eq!(bare_refusal(translate_function(&g, &Fns::Nil, &Structs::Nil)), Refusal::Syntax(6));
+    let g = Function { conds: modifies(&[X], &[X], List::Cons((CondKind::Requires, old, 6, names(&[X])), Box::new(List::Nil))), ..f };
+    assert_eq!(bare_refusal(translate_function(&g, &List::Nil, &List::Nil)), Refusal::Syntax(6));
 }
 
 #[test]
 fn the_modifies_line_names_each_reference_parameter_and_nothing_else() {
     // A name on the modifies line that is a parameter by value.
     let by_value = Function {
-        conds: modifies(&[X], &[X], Conds::Nil),
+        conds: modifies(&[X], &[X], List::Nil),
         ..with_n(one(Stmt::Return(read(X, Ty::I32), 4)))
     };
-    assert_eq!(translate_function(&by_value, &Fns::Nil, &Structs::Nil), Model::Refused(Refusal::NotRef(X, 5)));
+    assert_eq!(translate_function(&by_value, &List::Nil, &List::Nil), Model::Refused(Refusal::NotRef(X, 5)));
     // A reference parameter that the modifies line does not name.
-    let unlisted = Function { conds: modifies(&[DST], &[DST, SRC], Conds::Nil), ..take_ref() };
-    assert_eq!(translate_function(&unlisted, &Fns::Nil, &Structs::Nil), Model::Refused(Refusal::Unlisted(SRC, 8)));
+    let unlisted = Function { conds: modifies(&[DST], &[DST, SRC], List::Nil), ..take_ref() };
+    assert_eq!(translate_function(&unlisted, &List::Nil, &List::Nil), Model::Refused(Refusal::Unlisted(SRC, 8)));
     // A reference parameter is a parameter only. It is no result type.
-    let ret = Function { ret: mut32(), conds: Conds::Nil, ..with_n(one(Stmt::Return(read(X, Ty::I32), 4))) };
-    assert!(matches!(translate_function(&ret, &Fns::Nil, &Structs::Nil), Model::Refused(_)));
+    let ret = Function { ret: mut32(), conds: List::Nil, ..with_n(one(Stmt::Return(read(X, Ty::I32), 4))) };
+    assert!(matches!(translate_function(&ret, &List::Nil, &List::Nil), Model::Refused(_)));
 }
 
 #[test]
@@ -2239,19 +2227,19 @@ fn a_call_writes_back_each_argument_of_a_reference_parameter() {
         params: List::Nil,
         ret: Ty::I32,
         trusted: false,
-        conds: Conds::Nil,
+        conds: List::Nil,
         body: Stmts::Cons(
             Box::new(Stmt::Local(A, Ty::I32, Expr::Lit(1, Ty::I32), 21)),
             Box::new(Stmts::Cons(
                 Box::new(Stmt::Local(B, Ty::I32, Expr::Lit(5, Ty::I32), 22)),
                 Box::new(Stmts::Cons(
-                    Box::new(Stmt::Call(TAKE_REF, SAT_NAME, Box::new(Args::Cons(b(var(A)), Box::new(Args::Cons(b(var(B)), Box::new(Args::Nil))))), 23)),
+                    Box::new(Stmt::Call(TAKE_REF, SAT_NAME, Box::new(List::Cons(b(var(A)), Box::new(List::Cons(b(var(B)), Box::new(List::Nil))))), 23)),
                     Box::new(one(Stmt::Return(read(A, Ty::I32), 24))),
                 )),
             )),
         ),
     };
-    let Model::Full(m) = translate_function(&user, &all, &Structs::Nil) else { panic!("a full model") };
+    let Model::Full(m) = translate_function(&user, &all, &List::Nil) else { panic!("a full model") };
     let DStmts::Cons(_, _, rest) = strip(m.body) else { panic!("a body") };
     let DStmts::Cons(_, _, rest) = *rest else { panic!("a local") };
     let DStmts::Cons(update, _, _) = *rest else { panic!("an update") };
@@ -2266,7 +2254,7 @@ fn next_fn() -> Function {
         params: List::Cons((X, mut32()), Box::new(List::Nil)),
         ret: Ty::I32,
         trusted: false,
-        conds: modifies(&[X], &[X], Conds::Nil),
+        conds: modifies(&[X], &[X], List::Nil),
         body: one(Stmt::Return(Expr::Lit(0, Ty::I32), 31)),
     }
 }
@@ -2281,20 +2269,20 @@ fn a_reference_parameter_of_the_caller_is_written_back_and_a_call_that_gives_a_v
         params: List::Cons((X, mut32()), Box::new(List::Nil)),
         ret: Ty::I32,
         trusted: false,
-        conds: modifies(&[X], &[X], Conds::Nil),
+        conds: modifies(&[X], &[X], List::Nil),
         body: Stmts::Cons(
             Box::new(Stmt::Local(FIRST, Ty::I32, call(NEXT, vec![Expr::Var(X, mut32())], 41), 41)),
             Box::new(one(Stmt::Return(read(FIRST, Ty::I32), 42))),
         ),
     };
-    let Model::Full(m) = translate_function(&user, &all, &Structs::Nil) else { panic!("a full model") };
+    let Model::Full(m) = translate_function(&user, &all, &List::Nil) else { panic!("a full model") };
     assert_eq!(m.outs, int_params(&[X]));
     let DStmts::Cons(local, _, _) = strip(m.body) else { panic!("a body") };
     assert_eq!(*local, DStmt::LocalUpdate(FIRST, DTy::Int32, objs(&[Obj::Out(X)]), NEXT, dargs(vec![DExpr::Out(X)])));
     // The call writes x, so it has no place inside an expression: return next(x) + 1;
     let inside = Expr::Bin(BinOp::Add, b(call(NEXT, vec![Expr::Var(X, mut32())], 43)), b(Expr::Lit(1, Ty::I32)));
     let g = Function { body: one(Stmt::Return(inside, 43)), ..user };
-    assert_eq!(bare_refusal(translate_function(&g, &all, &Structs::Nil)), Refusal::Place(43));
+    assert_eq!(bare_refusal(translate_function(&g, &all, &List::Nil)), Refusal::Place(43));
 }
 
 #[test]
@@ -2307,7 +2295,7 @@ fn a_call_that_writes_a_parameter_by_value_or_a_field_is_refused_at_its_line() {
         params: List::Cons((Q, Ty::I32), Box::new(List::Nil)),
         ret: Ty::Void,
         trusted: false,
-        conds: Conds::Nil,
+        conds: List::Nil,
         body: one(Stmt::Local(FIRST, Ty::I32, call(NEXT, vec![var(Q)], 51), 51)),
     };
     assert_eq!(bare_refusal(translate_function(&by_value, &all, &point_table())), Refusal::WriteParam(Q, 51));
@@ -2316,7 +2304,7 @@ fn a_call_that_writes_a_parameter_by_value_or_a_field_is_refused_at_its_line() {
     let on_field = Function {
         params: List::Nil,
         body: Stmts::Cons(
-            Box::new(Stmt::Local(LOC, Ty::Struct(POINT), Expr::Construct(POINT, Box::new(Args::Nil)), 52)),
+            Box::new(Stmt::Local(LOC, Ty::Struct(POINT), Expr::Construct(POINT, Box::new(List::Nil)), 52)),
             Box::new(one(Stmt::Local(FIRST, Ty::I32, call(NEXT, vec![field], 53), 53))),
         ),
         ..by_value
@@ -2333,13 +2321,13 @@ fn a_reference_to_a_struct_writes_the_whole_value_and_each_field() {
         params: List::Cons((DST, Ty::Mut(Scalar::Struct(POINT))), Box::new(List::Cons((P, Ty::Struct(POINT)), Box::new(List::Nil)))),
         ret: Ty::Void,
         trusted: false,
-        conds: modifies(&[DST], &[DST, P], Conds::Nil),
+        conds: modifies(&[DST], &[DST, P], List::Nil),
         body: Stmts::Cons(
             Box::new(Stmt::Assign(DST, read(P, Ty::Struct(POINT)), 61)),
             Box::new(one(Stmt::SetRefField(DST, FX, Expr::Lit(0, Ty::I32), 62))),
         ),
     };
-    let Model::Full(m) = translate_function(&f, &Fns::Nil, &point_table()) else { panic!("a full model") };
+    let Model::Full(m) = translate_function(&f, &List::Nil, &point_table()) else { panic!("a full model") };
     assert_eq!(m.outs, DParams::Cons(DST, DTy::Struct(POINT), Box::new(DParams::Nil)));
     assert_eq!(
         strip(m.body),
@@ -2377,7 +2365,7 @@ fn weight_fn() -> Function {
         params: List::Cons((K, kind()), Box::new(List::Nil)),
         ret: Ty::I32,
         trusted: false,
-        conds: Conds::Cons(CondKind::Ensures, ens, 6, names(&[K]), Box::new(Conds::Nil)),
+        conds: List::Cons((CondKind::Ensures, ens, 6, names(&[K])), Box::new(List::Nil)),
         body: Stmts::Cons(
             Box::new(Stmt::Switch(read(K, kind()), KIND, Box::new(cases), 8)),
             Box::new(one(Stmt::Return(Expr::Lit(0, Ty::I32), 14))),
@@ -2387,7 +2375,7 @@ fn weight_fn() -> Function {
 
 #[test]
 fn a_switch_over_an_enum_is_a_match_and_an_enumerator_is_a_constructor() {
-    let Model::Full(m) = translate_function(&weight_fn(), &Fns::Nil, &Structs::Nil) else { panic!("a full model") };
+    let Model::Full(m) = translate_function(&weight_fn(), &List::Nil, &List::Nil) else { panic!("a full model") };
     assert_eq!(m.params, DParams::Cons(K, DTy::Enum(KIND), Box::new(DParams::Nil)));
     let cases = DCases::Cons(
         0,
@@ -2425,13 +2413,13 @@ fn an_enum_is_a_value_of_a_local_and_a_result() {
         params: List::Nil,
         ret: kind(),
         trusted: false,
-        conds: Conds::Nil,
+        conds: List::Nil,
         body: Stmts::Cons(
             Box::new(Stmt::Local(K, kind(), Expr::Enumerator(KIND, 0), 21)),
             Box::new(one(Stmt::Return(read(K, kind()), 22))),
         ),
     };
-    let Model::Full(m) = translate_function(&f, &Fns::Nil, &Structs::Nil) else { panic!("a full model") };
+    let Model::Full(m) = translate_function(&f, &List::Nil, &List::Nil) else { panic!("a full model") };
     assert_eq!(m.ret, DTy::Enum(KIND));
     assert_eq!(
         strip(m.body),
@@ -2460,10 +2448,10 @@ fn an_order_of_enums_in_a_contract_is_refused() {
             params: List::Cons((K, kind()), Box::new(List::Nil)),
             ret: Ty::Bool,
             trusted: false,
-            conds: Conds::Cons(CondKind::Ensures, line, 30, names(&[K]), Box::new(Conds::Nil)),
+            conds: List::Cons((CondKind::Ensures, line, 30, names(&[K])), Box::new(List::Nil)),
             body: one(Stmt::Return(Expr::Bool(true), 32)),
         };
-        assert_eq!(bare_refusal(translate_function(&f, &Fns::Nil, &Structs::Nil)), Refusal::Syntax(30), "{op:?}");
+        assert_eq!(bare_refusal(translate_function(&f, &List::Nil, &List::Nil)), Refusal::Syntax(30), "{op:?}");
     }
     // An order of two enumerators, with no name, is refused too.
     let f = Function {
@@ -2472,8 +2460,8 @@ fn an_order_of_enums_in_a_contract_is_refused() {
         params: List::Cons((K, kind()), Box::new(List::Nil)),
         ret: Ty::Bool,
         trusted: false,
-        conds: Conds::Cons(CondKind::Ensures, Expr::Bin(BinOp::Lt, b(Expr::Enumerator(KIND, 0)), b(Expr::Enumerator(KIND, 1))), 30, names(&[K]), Box::new(Conds::Nil)),
+        conds: List::Cons((CondKind::Ensures, Expr::Bin(BinOp::Lt, b(Expr::Enumerator(KIND, 0)), b(Expr::Enumerator(KIND, 1))), 30, names(&[K])), Box::new(List::Nil)),
         body: one(Stmt::Return(Expr::Bool(true), 32)),
     };
-    assert_eq!(bare_refusal(translate_function(&f, &Fns::Nil, &Structs::Nil)), Refusal::Syntax(30));
+    assert_eq!(bare_refusal(translate_function(&f, &List::Nil, &List::Nil)), Refusal::Syntax(30));
 }
