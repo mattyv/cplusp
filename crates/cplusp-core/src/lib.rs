@@ -17,6 +17,7 @@
 pub mod companion;
 pub mod contract;
 pub mod dafny;
+pub mod flags;
 pub mod fold;
 pub mod model;
 pub mod verdict;
