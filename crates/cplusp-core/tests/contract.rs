@@ -127,12 +127,18 @@ fn a_number_that_cannot_be_read_is_never_a_value() {
         vec![
             t("0x", LexKind::BadNumber(NumberFault::NoDigits)),
             t("017", LexKind::BadNumber(NumberFault::Octal)),
-            t("12q", LexKind::BadNumber(NumberFault::Suffix)),
+            t("12q", LexKind::BadNumber(NumberFault::Suffix(1))),
             t("18446744073709551616", LexKind::BadNumber(NumberFault::TooBig)),
-            t("1e5", LexKind::BadNumber(NumberFault::Suffix)),
+            t("1e5", LexKind::BadNumber(NumberFault::Suffix(2))),
             t("0xg", LexKind::BadNumber(NumberFault::NoDigits)),
         ]
     );
+}
+
+/// A bad suffix carries its length in the number without separators, so the shell names it as the author wrote it, decision 0124.
+#[test]
+fn a_bad_suffix_has_its_length_without_separators() {
+    assert_eq!(lex("12u'q 0x1Fzz"), vec![t("12u'q", LexKind::BadNumber(NumberFault::Suffix(2))), t("0x1Fzz", LexKind::BadNumber(NumberFault::Suffix(2)))]);
 }
 
 #[test]
