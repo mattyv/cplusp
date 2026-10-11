@@ -1,4 +1,4 @@
-//! The flags of the compiler that the gate refuses, decisions 0022 and 0128. The shell gives each flag after `--` as bytes, and the
+//! The flags of the compiler that the gate refuses, decisions 0022, 0128 and 0129. The shell gives each flag after `--` as bytes, and the
 //! checks of the config. The core gives the index and the reason of each refused flag, and says when a flag that the gate needs is
 //! missing. It proves the facts of a run with no refusal, `check_flags`.
 
@@ -6,7 +6,7 @@ use vstd::prelude::*;
 
 verus! {
 
-/// Why the gate refuses a flag. `Float` changes floating-point results. `Std` names a standard before C++23. `Reads` changes what
+/// Why the gate refuses a flag. `Float` changes floating-point results. `Std` names a standard before C++23, or is the bare `--std`. `Reads` changes what
 /// the compiler reads or reports. `HidesAll` hides each warning, and `HidesRow` a warning that the policy names.
 #[derive(Structural, PartialEq, Eq, Clone, Copy, Debug)]
 pub enum FlagFault {
@@ -109,7 +109,7 @@ pub open spec fn fault(fl: Seq<Vec<u8>>, cs: Seq<Vec<u8>>, i: int) -> Option<Fla
     let eval = starts(f, b"-ffp-eval-method="@) && f != b"-ffp-eval-method=source"@;
     if contracts || denormals || eval || float_flag(f) {
         Some(FlagFault::Float)
-    } else if std_value(f) is Some && !std_ok(std_value(f).unwrap()) {
+    } else if f == b"--std"@ || (std_value(f) is Some && !std_ok(std_value(f).unwrap())) {
         Some(FlagFault::Std)
     } else if reads(f) {
         Some(FlagFault::Reads)
@@ -117,7 +117,7 @@ pub open spec fn fault(fl: Seq<Vec<u8>>, cs: Seq<Vec<u8>>, i: int) -> Option<Fla
         Some(FlagFault::ResponseFile)
     } else if f == b"--config"@ || starts(f, b"--config="@) {
         Some(FlagFault::ConfigFile)
-    } else if f == b"-w"@ || f == b"-Wno-everything"@ {
+    } else if f == b"-w"@ || f == b"-Wno-everything"@ || f == b"--no-warnings"@ {
         Some(FlagFault::HidesAll)
     } else if starts(f, b"-Wno-"@) && names_warning(cs, rest(f, b"-Wno-"@)) {
         Some(FlagFault::HidesRow)
@@ -177,8 +177,8 @@ pub open spec fn clean(fl: Seq<Vec<u8>>, cs: Seq<Vec<u8>>) -> bool {
     &&& forall|i: int| 0 <= i < fl.len() ==> flag_clean(#[trigger] fl[i]@, cs)
 }
 
-/// One flag that changes no floating-point result, nothing that the compiler reads or reports, and no warning of the policy, and
-/// names no file of flags.
+/// One flag that changes no floating-point result, nothing that the compiler reads or reports, and no warning of the policy. It
+/// names no file of flags, and it is no bare `--std`, decision 0129.
 pub open spec fn flag_clean(f: Seq<u8>, cs: Seq<Vec<u8>>) -> bool {
     &&& !float_flag(f)
     &&& !(starts(f, b"-fdenormal-fp-math="@) && f != b"-fdenormal-fp-math=ieee"@)
@@ -186,7 +186,8 @@ pub open spec fn flag_clean(f: Seq<u8>, cs: Seq<Vec<u8>>) -> bool {
     &&& !reads(f)
     &&& !starts(f, b"@"@)
     &&& f != b"--config"@ && !starts(f, b"--config="@)
-    &&& f != b"-w"@ && f != b"-Wno-everything"@
+    &&& f != b"-w"@ && f != b"-Wno-everything"@ && f != b"--no-warnings"@
+    &&& f != b"--std"@
     &&& !(starts(f, b"-Wno-"@) && names_warning(cs, rest(f, b"-Wno-"@)))
 }
 
@@ -453,6 +454,9 @@ fn fault_exec(fl: &Vec<Vec<u8>>, cs: &Vec<Vec<u8>>, i: usize, last: Option<usize
     if contracts || denormals || eval || float_exec(f) {
         return Some(FlagFault::Float);
     }
+    if eq(f, b"--std") {
+        return Some(FlagFault::Std);
+    }
     if let Some(ok) = std_exec(f) {
         if !ok {
             return Some(FlagFault::Std);
@@ -464,7 +468,7 @@ fn fault_exec(fl: &Vec<Vec<u8>>, cs: &Vec<Vec<u8>>, i: usize, last: Option<usize
         Some(FlagFault::ResponseFile)
     } else if eq(f, b"--config") || starts_exec(f, b"--config=") {
         Some(FlagFault::ConfigFile)
-    } else if eq(f, b"-w") || eq(f, b"-Wno-everything") {
+    } else if eq(f, b"-w") || eq(f, b"-Wno-everything") || eq(f, b"--no-warnings") {
         Some(FlagFault::HidesAll)
     } else if starts_exec(f, b"-Wno-") && names_warning_exec(cs, f) {
         Some(FlagFault::HidesRow)
