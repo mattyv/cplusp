@@ -6,6 +6,7 @@ use std::collections::HashMap;
 use std::fmt::Write;
 
 use anyhow::{Context, Result};
+use cplusp_core::companion::CompanionRefusal;
 use cplusp_core::model::{
     parse_contract, translate_structs, translate_unit, Args, BinOp, CastKind, CondKind, Conds, DArgs, DConds, DExpr, DParams, DStmt, DStmts, DTy, Expr, Extent, Fns,
     Function, List, Members, Method, Model, Names as CNames, Obj, Objs, Params, Refusal, Scalar, Stmt, Stmts, Structs, Tok, Ty,
@@ -723,20 +724,6 @@ fn conds(v: Vec<JCond>, names: &mut Names) -> Conds {
 
 // ------------------------------------------------------------------ the companion file
 
-/// The keywords of Dafny 4.11 that a companion file may not hold, decisions 0080 and 0099. The words that it may hold are `function`, `predicate`,
-/// `lemma`, `assert`, `ghost`, `requires`, `ensures`, `decreases`, `reads`, `if`, `then`, `else`, `var`, `match`, `case`, `forall`, `exists`, `true`, `false`,
-/// `as`, `is`, `in`, `int`, `nat`, `bool`, `seq`, `set`, `map` and `multiset`.
-const BANNED: &[&str] = &[
-    "abstract", "allocated", "assume", "break", "by", "calc", "char", "class", "codatatype", "colemma", "comethod", "const", "constructor",
-    "continue", "copredicate", "datatype", "default", "expect", "export", "extends", "fresh", "greatest", "imap", "import", "include", "inductive",
-    "invariant", "iset", "iterator", "label", "least", "method", "modifies", "modify", "module", "nameonly", "new", "newtype", "null", "object",
-    "old", "opaque", "opened", "ORDINAL", "print", "provides", "real", "refines", "return", "returns", "reveal", "reveals", "static", "string", "this",
-    "to", "trait", "twostate", "type", "unchanged", "while", "witness", "yield", "yields",
-];
-
-/// The names of the prelude. A companion file may not declare them, nor a name with a prefix of the model, decision 0083.
-const MODEL_NAMES: &[&str] = &["Option", "Some", "None", "Vec", "value", "int8", "int16", "uint16", "int32", "int64", "uint8", "uint32", "uint64", "shr"];
-
 /// The sentence for a word of a companion file that is not allowed.
 fn only_functions(word: &str) -> String {
     format!("{word}: a companion file can hold only functions, predicates and lemmas.")
@@ -745,114 +732,36 @@ fn only_functions(word: &str) -> String {
 /// A declaration of the companion file: its name, the line of the name, and whether it is a lemma.
 type Declared = (String, u32, bool);
 
-/// The refusals of a companion file as (line, sentence), and the declarations it holds, decision 0080. The scan reads comments as Dafny does:
-/// `//` to the end of the line, and `/* */` that nest. It refuses a comment that does not end, each `"`, `@` and `{:`, and each keyword of
-/// Dafny that is not on the short list. Each word is refused once for each line. The file holds nothing else than `function`, `predicate`
-/// and `lemma` declarations then, and a file with a refusal declares no name.
-// ponytail: a string is skipped to the next quote on its line, because the file is refused at the quote anyway. A file with no quote
-// has no string. Upgrade: the lexer in the core, decision 0077.
+/// The refusals of a companion file as (line, sentence), and the declarations it holds, decisions 0080 and 0123. The core reads the bytes, and the
+/// shell writes the sentences, puts them in order and removes the copies. A file with a refusal declares no name.
 fn scan_companion(text: &str) -> (Vec<(u32, String)>, Vec<Declared>) {
-    // The bytes first, decision 0083. Dafny ends a line at a carriage return alone, so the lines below are those of a file with no lone one.
-    let mut bad = Vec::new();
-    let mut line = 1u32;
-    let mut chars = text.chars().peekable();
-    while let Some(c) = chars.next() {
-        match c {
-            '\n' => line += 1,
-            '\r' if chars.peek() == Some(&'\n') => {}
-            ' '..='~' | '\t' => {}
-            _ => bad.push((line, "a character that a companion file cannot hold.".to_string())),
-        }
+    // The core reads a file under 4 GiB. No companion file is near it.
+    if text.len() >= u32::MAX as usize {
+        return (vec![(1, "a companion file this long cannot be read.".to_string())], Vec::new());
     }
-    bad.dedup();
-    if !bad.is_empty() {
-        return (bad, Vec::new());
-    }
-    let (mut refused, mut declared) = (Vec::new(), Vec::new());
-    let mut depth = 0usize;
-    let mut opened = 0u32;
-    // The word before the name: 0 none, 1 `function` or `predicate`, 2 `lemma`.
-    let mut after_decl = 0u8;
-    for (n, line) in text.lines().enumerate() {
-        let n = n as u32 + 1;
-        let mut rest = line;
-        while let Some(c) = rest.chars().next() {
-            let mut used = c.len_utf8();
-            // A comment does not part a name from `function`.
-            let in_comment = depth > 0 || rest.starts_with("/*");
-            if depth > 0 {
-                if rest.starts_with("/*") {
-                    depth += 1;
-                    used = 2;
-                } else if rest.starts_with("*/") {
-                    depth -= 1;
-                    used = 2;
-                }
-            } else if rest.starts_with("//") {
-                break;
-            } else if rest.starts_with("/*") {
-                if depth == 0 {
-                    opened = n;
-                }
-                depth += 1;
-                used = 2;
-            } else if c.is_ascii_alphabetic() || c == '_' || c == '?' {
-                used = rest.find(|ch: char| !(ch.is_ascii_alphanumeric() || matches!(ch, '_' | '\'' | '?'))).unwrap_or(rest.len());
-                let w = &rest[..used];
-                if after_decl != 0 {
-                    if MODEL_NAMES.contains(&w) || ["v_", "c_", "S_", "E_", "f_", "b_", "trunc_"].iter().any(|p| w.starts_with(p)) {
-                        refused.push((n, format!("{w}: a name that the model uses.")));
-                    }
-                    declared.push((w.to_string(), n, after_decl == 2));
-                }
-                after_decl = match w {
-                    "function" | "predicate" => 1,
-                    "lemma" => 2,
-                    _ => 0,
-                };
-                if BANNED.contains(&w) {
-                    refused.push((n, only_functions(w)));
-                }
-                rest = &rest[used..];
-                continue;
-            } else if c.is_ascii_digit() {
-                // A run of digits ends where a letter starts, so `1newtype` is the number 1 and the word newtype.
-                used = rest.find(|ch: char| !ch.is_ascii_digit()).unwrap_or(rest.len());
-            } else if c == '"' {
-                refused.push((n, only_functions("\"")));
-                let mut skip = 1;
-                let mut chars = rest[1..].chars();
-                while let Some(d) = chars.next() {
-                    skip += d.len_utf8();
-                    if d == '\\' {
-                        skip += chars.next().map_or(0, char::len_utf8);
-                    } else if d == '"' {
-                        break;
-                    }
-                }
-                used = skip.min(rest.len());
-            } else if c == '@' {
-                refused.push((n, only_functions("@")));
-            } else if rest.starts_with("{:") {
-                refused.push((n, only_functions("{:")));
-                used = 2;
-            }
-            if !c.is_whitespace() && !in_comment {
-                after_decl = 0;
-            }
-            rest = &rest[used..];
-        }
-    }
-    if depth > 0 {
-        refused.push((opened, "a comment that does not end.".to_string()));
-    }
+    let bytes = text.as_bytes().to_vec();
+    let scan = cplusp_core::companion::scan_companion(&bytes);
+    let word = |start: usize, end: usize| String::from_utf8_lossy(&bytes[start..end]).into_owned();
+    let mut refused: Vec<(u32, String)> = scan
+        .refusals
+        .into_iter()
+        .map(|(line, why)| {
+            let said = match why {
+                CompanionRefusal::Char => "a character that a companion file cannot hold.".to_string(),
+                CompanionRefusal::Word(start, end) => only_functions(&word(start, end)),
+                CompanionRefusal::Quote => only_functions("\""),
+                CompanionRefusal::At => only_functions("@"),
+                CompanionRefusal::Attribute => only_functions("{:"),
+                CompanionRefusal::ModelName(start, end) => format!("{}: a name that the model uses.", word(start, end)),
+                CompanionRefusal::Unclosed => "a comment that does not end.".to_string(),
+            };
+            (line, said)
+        })
+        .collect();
     refused.sort();
     refused.dedup();
-    if refused.is_empty() {
-        (refused, declared)
-    } else {
-        (refused, Vec::new())
-    }
+    let declared = scan.declared.into_iter().map(|(start, end, line, lemma)| (word(start, end), line, lemma)).collect();
+    (refused, declared)
 }
 
 // ------------------------------------------------------------------ names that Dafny can read
