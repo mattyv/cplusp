@@ -116,6 +116,27 @@ pub fn keys<V>(l: &List<(u32, V)>) -> (r: List<u32>)
     }
 }
 
+/// The items of `a`, then the items of `b`.
+pub open spec fn spec_append<T>(a: List<T>, b: List<T>) -> List<T>
+    decreases a,
+{
+    match a {
+        List::Nil => b,
+        List::Cons(x, rest) => List::Cons(x, Box::new(spec_append(*rest, b))),
+    }
+}
+
+pub fn append<T>(a: List<T>, b: List<T>) -> (r: List<T>)
+    ensures
+        r == spec_append(a, b),
+    decreases a,
+{
+    match a {
+        List::Nil => b,
+        List::Cons(x, rest) => List::Cons(x, Box::new(append(*rest, b))),
+    }
+}
+
 /// A copy of a list of plain items.
 pub fn copy<T: Copy>(l: &List<T>) -> (r: List<T>)
     ensures
@@ -298,19 +319,11 @@ pub enum Stmt {
     Unknown(u32, u32),
 }
 
-#[derive(PartialEq, Eq, Debug)]
-pub enum Stmts {
-    Nil,
-    Cons(Box<Stmt>, Box<Stmts>),
-}
+pub type Stmts = List<Box<Stmt>>;
 
 /// The cases of a switch, each by the place of its enumerator among the enumerators, with its body, decision 0109. The plugin drops a
 /// `break` that ends a case.
-#[derive(PartialEq, Eq, Debug)]
-pub enum Cases {
-    Nil,
-    Cons(u32, Box<Stmts>, Box<Cases>),
-}
+pub type Cases = List<(u32, Box<Stmts>)>;
 
 /// The names and types of the parameters of a function, or of the fields of a struct, in their order.
 pub type Params = List<(u32, Ty)>;
@@ -358,11 +371,7 @@ pub type Structs = List<(u32, (u32, Params, Members))>;
 pub type Members = List<(u32, (u32, Option<(Ty, Params)>))>;
 
 /// The model of each struct of a file: its key and Dafny fields, or the refusal.
-#[derive(PartialEq, Eq, Debug)]
-pub enum StructModels {
-    Nil,
-    Cons(Result<(u32, DParams), Refusal>, Box<StructModels>),
-}
+pub type StructModels = List<Result<(u32, DParams), Refusal>>;
 
 /// The functions of one file.
 pub type Fns = List<Box<Function>>;
@@ -439,17 +448,9 @@ pub enum DExpr {
 
 /// The calls that run before a statement, in the order that they run: each sets a temporary of the statement by its number, of a
 /// type, to the value of a method by its key with its arguments, decision 0104.
-#[derive(PartialEq, Eq, Debug)]
-pub enum DCalls {
-    Nil,
-    Cons(u32, DTy, u32, DArgs, Box<DCalls>),
-}
+pub type DCalls = List<(u32, DTy, u32, DArgs)>;
 
-#[derive(PartialEq, Eq, Debug)]
-pub enum DArgs {
-    Nil,
-    Cons(DExpr, Box<DArgs>),
-}
+pub type DArgs = List<DExpr>;
 
 /// A Dafny statement. `Local` is `var x: T := e;`. `LocalCall` is `var x: T := m(args);`. `ReturnCall` is `result := m(args);
 /// return;`, since Dafny takes no call in a `return`. `Assign` is `x := e;` and `AssignCall` is `x := m(args);`. `While` is the
@@ -495,38 +496,18 @@ pub enum Obj {
 
 /// The places that a call writes back, in the order of the results of its method after `result`: the object, then each reference
 /// parameter, decision 0108.
-#[derive(PartialEq, Eq, Debug)]
-pub enum Objs {
-    Nil,
-    Cons(Obj, Box<Objs>),
-}
+pub type Objs = List<Obj>;
 
 /// The statements of a Dafny body. Each keeps the place of the C++ statement it comes from, decision 0068.
-#[derive(PartialEq, Eq, Debug)]
-pub enum DStmts {
-    Nil,
-    Cons(Box<DStmt>, u32, Box<DStmts>),
-}
+pub type DStmts = List<(Box<DStmt>, u32)>;
 
 /// The cases of a match, each by the place of its constructor, with its body, decision 0109.
-#[derive(PartialEq, Eq, Debug)]
-pub enum DCases {
-    Nil,
-    Cons(u32, Box<DStmts>, Box<DCases>),
-}
+pub type DCases = List<(u32, Box<DStmts>)>;
 
-#[derive(PartialEq, Eq, Debug)]
-pub enum DParams {
-    Nil,
-    Cons(u32, DTy, Box<DParams>),
-}
+pub type DParams = List<(u32, DTy)>;
 
 /// Contract lines of a Dafny method or loop. Each keeps the place of the C++ contract line it comes from, decision 0068.
-#[derive(PartialEq, Eq, Debug)]
-pub enum DConds {
-    Nil,
-    Cons(DExpr, u32, Box<DConds>),
-}
+pub type DConds = List<(DExpr, u32)>;
 
 /// A Dafny method. `function` is the body of the Dafny function of a pure member function, decision 0090. `writes` holds when the
 /// method takes its object in and gives it back as `this'`, decision 0096. `outs` are the reference parameters that it gives back,
@@ -557,11 +538,7 @@ pub enum Model {
     Refused(Refusal),
 }
 
-#[derive(PartialEq, Eq, Debug)]
-pub enum Models {
-    Nil,
-    Cons(Model, Box<Models>),
-}
+pub type Models = List<Model>;
 
 /// Why the translator refused. `Construct` is a node with no rule: the id of its kind and its line. `Name` is a name in a contract
 /// that is no parameter. `Syntax` is a contract line the parser cannot read. `Backslash` is a contract line that ends in a backslash.
@@ -796,20 +773,10 @@ pub open spec fn spec_code(e: Expr, line: u32) -> Result<DExpr, Refusal> {
     }
 }
 
-/// The calls `a`, then the calls `b`.
-pub open spec fn spec_append_calls(a: DCalls, b: DCalls) -> DCalls
-    decreases a,
-{
-    match a {
-        DCalls::Nil => b,
-        DCalls::Cons(t, dt, k, da, rest) => DCalls::Cons(t, dt, k, da, Box::new(spec_append_calls(*rest, b))),
-    }
-}
-
 /// A statement with the calls that run before it. With no call it is the statement alone.
 pub open spec fn spec_pre(c: DCalls, s: DStmt) -> DStmt {
     match c {
-        DCalls::Nil => s,
+        List::Nil => s,
         _ => DStmt::Pre(c, Box::new(s)),
     }
 }
@@ -835,13 +802,13 @@ pub open spec fn spec_lift(e: Expr, all: Fns, line: u32, sd: Structs, n: u32, op
 {
     match e {
         Expr::Lit(v, t) => match spec_ty(t, line) {
-            Ok(dt) => Ok((DCalls::Nil, DExpr::Conv(dt, Box::new(DExpr::Lit(v))), n)),
+            Ok(dt) => Ok((List::Nil, DExpr::Conv(dt, Box::new(DExpr::Lit(v))), n)),
             Err(r) => Err(r),
         },
-        Expr::Bool(v) => Ok((DCalls::Nil, DExpr::Bool(v), n)),
-        Expr::Enumerator(k, i) => Ok((DCalls::Nil, DExpr::Enumerator(k, i), n)),
+        Expr::Bool(v) => Ok((List::Nil, DExpr::Bool(v), n)),
+        Expr::Enumerator(k, i) => Ok((List::Nil, DExpr::Enumerator(k, i), n)),
         Expr::Var(v, t) => match spec_ty(t, line) {
-            Ok(_) => Ok((DCalls::Nil, spec_code_var(v, t), n)),
+            Ok(_) => Ok((List::Nil, spec_code_var(v, t), n)),
             Err(r) => Err(r),
         },
         Expr::Call(k, nm, args, at) => if !open || spec_callee_writes(all, k) {
@@ -854,7 +821,7 @@ pub open spec fn spec_lift(e: Expr, all: Fns, line: u32, sd: Structs, n: u32, op
                 Ok((ca, da, n1)) => match spec_callee_ty(all, k, line, sd) {
                     Err(r) => Err(r),
                     Ok(dt) => if n1 < 0xFFFF_FFFF {
-                        Ok((spec_append_calls(ca, DCalls::Cons(n1, dt, k, da, Box::new(DCalls::Nil))), DExpr::Temp(n1), (n1 + 1) as u32))
+                        Ok((spec_append(ca, List::Cons((n1, dt, k, da), Box::new(List::Nil))), DExpr::Temp(n1), (n1 + 1) as u32))
                     } else {
                         Err(Refusal::Syntax(line))
                     },
@@ -868,7 +835,7 @@ pub open spec fn spec_lift(e: Expr, all: Fns, line: u32, sd: Structs, n: u32, op
                 Err(r) => Err(r),
                 Ok((ca, da, n1)) => match spec_lift(*b, all, line, sd, n1, open && !(op == BinOp::And || op == BinOp::Or)) {
                     Err(r) => Err(r),
-                    Ok((cb, db, n2)) => Ok((spec_append_calls(ca, cb), DExpr::Bin(op, Box::new(da), Box::new(db)), n2)),
+                    Ok((cb, db, n2)) => Ok((spec_append(ca, cb), DExpr::Bin(op, Box::new(da), Box::new(db)), n2)),
                 },
             }
         },
@@ -881,7 +848,7 @@ pub open spec fn spec_lift(e: Expr, all: Fns, line: u32, sd: Structs, n: u32, op
                     Err(r) => Err(r),
                     Ok((cb, db, n2)) => match spec_divide(op, da, db, t, line) {
                         Err(r) => Err(r),
-                        Ok(d) => Ok((spec_append_calls(ca, cb), d, n2)),
+                        Ok(d) => Ok((spec_append(ca, cb), d, n2)),
                     },
                 },
             }
@@ -892,7 +859,7 @@ pub open spec fn spec_lift(e: Expr, all: Fns, line: u32, sd: Structs, n: u32, op
                 Err(r) => Err(r),
                 Ok((cb, db, n2)) => match spec_shift(da, db, t, line) {
                     Err(r) => Err(r),
-                    Ok(d) => Ok((spec_append_calls(ca, cb), d, n2)),
+                    Ok(d) => Ok((spec_append(ca, cb), d, n2)),
                 },
             },
         },
@@ -925,7 +892,7 @@ pub open spec fn spec_lift(e: Expr, all: Fns, line: u32, sd: Structs, n: u32, op
             Err(r) => Err(r),
             Ok((co, d, n1)) => match spec_lift(*i, all, line, sd, n1, open) {
                 Err(r) => Err(r),
-                Ok((ci, di, n2)) => Ok((spec_append_calls(co, ci), DExpr::Index(Box::new(d), Box::new(di)), n2)),
+                Ok((ci, di, n2)) => Ok((spec_append(co, ci), DExpr::Index(Box::new(d), Box::new(di)), n2)),
             },
         },
         Expr::Copy(a, from, to) => if copies(from, to) {
@@ -949,7 +916,7 @@ pub open spec fn spec_lift(e: Expr, all: Fns, line: u32, sd: Structs, n: u32, op
             Err(r) => Err(r),
             Ok((c, d, n1)) => Ok((c, DExpr::Get(Box::new(d)), n1)),
         },
-        Expr::Nullopt => Ok((DCalls::Nil, DExpr::Nothing, n)),
+        Expr::Nullopt => Ok((List::Nil, DExpr::Nothing, n)),
         Expr::Wrap(a) => match spec_lift(*a, all, line, sd, n, open) {
             Err(r) => Err(r),
             Ok((c, d, n1)) => Ok((c, DExpr::Just(Box::new(d)), n1)),
@@ -962,7 +929,7 @@ pub open spec fn spec_lift(e: Expr, all: Fns, line: u32, sd: Structs, n: u32, op
             Err(r) => Err(r),
             Ok((co, d, n1)) => match spec_lift(*k, all, line, sd, n1, open) {
                 Err(r) => Err(r),
-                Ok((ck, dk, n2)) => Ok((spec_append_calls(co, ck), DExpr::Drop(Box::new(d), Box::new(dk)), n2)),
+                Ok((ck, dk, n2)) => Ok((spec_append(co, ck), DExpr::Drop(Box::new(d), Box::new(dk)), n2)),
             },
         },
         Expr::Cond(cnd, a, b) => match spec_lift(*cnd, all, line, sd, n, open) {
@@ -971,7 +938,7 @@ pub open spec fn spec_lift(e: Expr, all: Fns, line: u32, sd: Structs, n: u32, op
                 Err(r) => Err(r),
                 Ok((ca, da, n2)) => match spec_lift(*b, all, line, sd, n2, false) {
                     Err(r) => Err(r),
-                    Ok((cb, db, n3)) => Ok((spec_append_calls(c, spec_append_calls(ca, cb)), DExpr::Ite(Box::new(dc), Box::new(da), Box::new(db)), n3)),
+                    Ok((cb, db, n3)) => Ok((spec_append(c, spec_append(ca, cb)), DExpr::Ite(Box::new(dc), Box::new(da), Box::new(db)), n3)),
                 },
             },
         },
@@ -986,12 +953,12 @@ pub open spec fn spec_lift_args(args: Args, all: Fns, line: u32, sd: Structs, n:
     decreases args,
 {
     match args {
-        List::Nil => Ok((DCalls::Nil, DArgs::Nil, n)),
+        List::Nil => Ok((List::Nil, List::Nil, n)),
         List::Cons(a, rest) => match spec_lift(*a, all, line, sd, n, open) {
             Err(r) => Err(r),
             Ok((ca, da, n1)) => match spec_lift_args(*rest, all, line, sd, n1, open) {
                 Err(r) => Err(r),
-                Ok((cr, dr, n2)) => Ok((spec_append_calls(ca, cr), DArgs::Cons(da, Box::new(dr)), n2)),
+                Ok((cr, dr, n2)) => Ok((spec_append(ca, cr), List::Cons(da, Box::new(dr)), n2)),
             },
         },
     }
@@ -1203,7 +1170,7 @@ pub open spec fn spec_contract(e: Expr, decl: Names, ps: Params, ret: Option<Ty>
             match spec_functor(f, decl, ps, ret, bound, sd) {
             Some((d, k)) => match spec_member(sd, k, CALL_OP) {
                 Some((key, Some((rt, mps)))) => match spec_contract_args(*args, decl, ps, ret, bound, line, sd) {
-                    Ok(da) => spec_leaf(DExpr::FCall(key, Box::new(DArgs::Cons(d, Box::new(spec_convert(da, spec_tail(mps)))))), rt, line),
+                    Ok(da) => spec_leaf(DExpr::FCall(key, Box::new(List::Cons(d, Box::new(spec_convert(da, spec_tail(mps)))))), rt, line),
                     Err(r) => Err(r),
                 },
                 _ => Err(Refusal::NotPure(CALL_OP, line)),
@@ -1211,7 +1178,7 @@ pub open spec fn spec_contract(e: Expr, decl: Names, ps: Params, ret: Option<Ty>
             None => match spec_object(ps, ret) {
             Some((o, k)) => match spec_member(sd, k, f) {
                 Some((key, Some((t, mps)))) => match spec_contract_args(*args, decl, ps, ret, bound, line, sd) {
-                    Ok(da) => spec_leaf(DExpr::FCall(key, Box::new(DArgs::Cons(o, Box::new(spec_convert(da, spec_tail(mps)))))), t, line),
+                    Ok(da) => spec_leaf(DExpr::FCall(key, Box::new(List::Cons(o, Box::new(spec_convert(da, spec_tail(mps)))))), t, line),
                     Err(r) => Err(r),
                 },
                 Some((_, None)) => Err(Refusal::NotPure(f, line)),
@@ -1250,7 +1217,7 @@ pub open spec fn spec_contract(e: Expr, decl: Names, ps: Params, ret: Option<Ty>
             Ok((d, t)) => match spec_struct_key(t) {
                 Some(k) => match spec_member(sd, k, f) {
                     Some((key, Some((rt, mps)))) => match spec_contract_args(*args, decl, ps, ret, bound, line, sd) {
-                        Ok(da) => spec_leaf(DExpr::FCall(key, Box::new(DArgs::Cons(d, Box::new(spec_convert(da, spec_tail(mps)))))), rt, line),
+                        Ok(da) => spec_leaf(DExpr::FCall(key, Box::new(List::Cons(d, Box::new(spec_convert(da, spec_tail(mps)))))), rt, line),
                         Err(r) => Err(r),
                     },
                     _ => Err(Refusal::NotPure(f, line)),
@@ -1294,10 +1261,10 @@ pub open spec fn spec_contract_args(args: Args, decl: Names, ps: Params, ret: Op
     decreases args, 2nat,
 {
     match args {
-        List::Nil => Ok(DArgs::Nil),
+        List::Nil => Ok(List::Nil),
         List::Cons(a, rest) => match spec_contract(*a, decl, ps, ret, bound, line, sd) {
             Ok(da) => match spec_contract_args(*rest, decl, ps, ret, bound, line, sd) {
-                Ok(dr) => Ok(DArgs::Cons(da, Box::new(dr))),
+                Ok(dr) => Ok(List::Cons(da, Box::new(dr))),
                 Err(r) => Err(r),
             },
             Err(r) => Err(r),
@@ -1533,9 +1500,9 @@ pub open spec fn spec_outs(ps: Params) -> DParams
     decreases ps,
 {
     match ps {
-        List::Nil => DParams::Nil,
+        List::Nil => List::Nil,
         List::Cons((n, t), rest) => match t {
-            Ty::Mut(s) => DParams::Cons(n, spec_scalar_dty(s), Box::new(spec_outs(*rest))),
+            Ty::Mut(s) => List::Cons((n, spec_scalar_dty(s)), Box::new(spec_outs(*rest))),
             _ => spec_outs(*rest),
         },
     }
@@ -1725,10 +1692,10 @@ pub open spec fn spec_params(ps: Params, line: u32) -> Result<DParams, Refusal>
     decreases ps,
 {
     match ps {
-        List::Nil => Ok(DParams::Nil),
+        List::Nil => Ok(List::Nil),
         List::Cons((n, t), rest) => match spec_param_ty(t, line) {
             Ok(dt) => match spec_params(*rest, line) {
-                Ok(dr) => Ok(DParams::Cons(n, dt, Box::new(dr))),
+                Ok(dr) => Ok(List::Cons((n, dt), Box::new(dr))),
                 Err(r) => Err(r),
             },
             Err(r) => Err(r),
@@ -1789,7 +1756,7 @@ pub open spec fn spec_loop_conds(cs: Conds, want: CondKind, env: Params, sd: Str
     decreases cs,
 {
     match cs {
-        List::Nil => Ok(DConds::Nil),
+        List::Nil => Ok(List::Nil),
         List::Cons((k, e, l, _), rest) => match k {
             CondKind::Other(w) => Err(Refusal::Construct(w, l)),
             CondKind::Bad(r) => Err(r),
@@ -1799,7 +1766,7 @@ pub open spec fn spec_loop_conds(cs: Conds, want: CondKind, env: Params, sd: Str
             _ => match spec_loop_conds(*rest, want, env, sd) {
                 Ok(dr) => if k == want {
                     match spec_contract(e, spec_keys(env), spec_after(env), None, List::Nil, l, sd) {
-                        Ok(d) => Ok(DConds::Cons(d, l, Box::new(dr))),
+                        Ok(d) => Ok(List::Cons((d, l), Box::new(dr))),
                         Err(r) => Err(r),
                     }
                 } else {
@@ -1859,7 +1826,7 @@ pub open spec fn spec_writebacks(args: Args, cps: Params, ps: Params, line: u32)
     decreases args,
 {
     match args {
-        List::Nil => Ok(Objs::Nil),
+        List::Nil => Ok(List::Nil),
         List::Cons(a, rest) => match cps {
             List::Nil => Err(Refusal::Syntax(line)),
             List::Cons((_, t), crest) => if spec_written(t) {
@@ -1867,7 +1834,7 @@ pub open spec fn spec_writebacks(args: Args, cps: Params, ps: Params, line: u32)
                     Err(r) => Err(r),
                     Ok(o) => match spec_writebacks(*rest, *crest, ps, line) {
                         Err(r) => Err(r),
-                        Ok(os) => Ok(Objs::Cons(o, Box::new(os))),
+                        Ok(os) => Ok(List::Cons(o, Box::new(os))),
                     },
                 }
             } else {
@@ -2111,10 +2078,10 @@ pub open spec fn spec_cases(cs: Cases, all: Fns, env: Params, ps: Params, sd: St
     decreases cs,
 {
     match cs {
-        Cases::Nil => Ok(DCases::Nil),
-        Cases::Cons(i, body, rest) => match spec_stmts(*body, all, env, ps, sd) {
+        List::Nil => Ok(List::Nil),
+        List::Cons((i, body), rest) => match spec_stmts(*body, all, env, ps, sd) {
             Ok(db) => match spec_cases(*rest, all, env, ps, sd) {
-                Ok(dr) => Ok(DCases::Cons(i, Box::new(db), Box::new(dr))),
+                Ok(dr) => Ok(List::Cons((i, Box::new(db)), Box::new(dr))),
                 Err(r) => Err(r),
             },
             Err(r) => Err(r),
@@ -2126,10 +2093,10 @@ pub open spec fn spec_stmts(ss: Stmts, all: Fns, env: Params, ps: Params, sd: St
     decreases ss,
 {
     match ss {
-        Stmts::Nil => Ok(DStmts::Nil),
-        Stmts::Cons(s, rest) => match spec_stmt(*s, all, env, ps, sd) {
+        List::Nil => Ok(List::Nil),
+        List::Cons(s, rest) => match spec_stmt(*s, all, env, ps, sd) {
             Ok(d) => match spec_stmts(*rest, all, spec_scope(*s, env), ps, sd) {
-                Ok(dr) => Ok(DStmts::Cons(Box::new(d), spec_place(*s), Box::new(dr))),
+                Ok(dr) => Ok(List::Cons((Box::new(d), spec_place(*s)), Box::new(dr))),
                 Err(r) => Err(r),
             },
             Err(r) => Err(r),
@@ -2183,7 +2150,7 @@ pub open spec fn spec_conds(cs: Conds, want: CondKind, ps: Params, ret: Ty, sd: 
     decreases cs,
 {
     match cs {
-        List::Nil => Ok(DConds::Nil),
+        List::Nil => Ok(List::Nil),
         List::Cons((k, e, l, decl), rest) => match k {
             CondKind::Other(w) => Err(Refusal::Construct(w, l)),
             CondKind::Bad(r) => Err(r),
@@ -2193,7 +2160,7 @@ pub open spec fn spec_conds(cs: Conds, want: CondKind, ps: Params, ret: Ty, sd: 
                     Err(Refusal::Syntax(l))
                 } else if k == want {
                     match spec_contract(e, decl, spec_view_ps(ps, k), Some(spec_view_ret(ret, k)), List::Nil, l, sd) {
-                        Ok(d) => Ok(DConds::Cons(d, l, Box::new(dr))),
+                        Ok(d) => Ok(List::Cons((d, l), Box::new(dr))),
                         Err(r) => Err(r),
                     }
                 } else {
@@ -2260,8 +2227,8 @@ pub open spec fn spec_twice_stmts(seen: Seq<u32>, ss: Stmts) -> (Option<(u32, u3
     decreases ss,
 {
     match ss {
-        Stmts::Nil => (None, seen),
-        Stmts::Cons(s, rest) => {
+        List::Nil => (None, seen),
+        List::Cons(s, rest) => {
             let (r, after) = spec_twice_stmt(seen, *s);
             if r.is_some() {
                 (r, after)
@@ -2276,8 +2243,8 @@ pub open spec fn spec_twice_cases(seen: Seq<u32>, cs: Cases) -> (Option<(u32, u3
     decreases cs,
 {
     match cs {
-        Cases::Nil => (None, seen),
-        Cases::Cons(_, body, rest) => {
+        List::Nil => (None, seen),
+        List::Cons((_, body), rest) => {
             let (r, after) = spec_twice_stmts(seen, *body);
             if r.is_some() {
                 (r, after)
@@ -2304,8 +2271,8 @@ pub open spec fn spec_misreturn(ss: Stmts, void: bool) -> Option<u32>
     decreases ss,
 {
     match ss {
-        Stmts::Nil => None,
-        Stmts::Cons(s, rest) => match spec_misreturn_stmt(*s, void) {
+        List::Nil => None,
+        List::Cons(s, rest) => match spec_misreturn_stmt(*s, void) {
             Some(l) => Some(l),
             None => spec_misreturn(*rest, void),
         },
@@ -2316,8 +2283,8 @@ pub open spec fn spec_misreturn_cases(cs: Cases, void: bool) -> Option<u32>
     decreases cs,
 {
     match cs {
-        Cases::Nil => None,
-        Cases::Cons(_, body, rest) => match spec_misreturn(*body, void) {
+        List::Nil => None,
+        List::Cons((_, body), rest) => match spec_misreturn(*body, void) {
             Some(l) => Some(l),
             None => spec_misreturn_cases(*rest, void),
         },
@@ -2365,7 +2332,7 @@ pub open spec fn spec_inside(f: Function, all: Fns, sd: Structs) -> Result<(DCon
             Ok(ens) => match spec_conds(f.conds, CondKind::Decreases, f.params, f.ret, sd) {
                 Err(r) => Err(r),
                 Ok(dec) => if f.trusted {
-                    Ok((req, ens, dec, DStmts::Nil))
+                    Ok((req, ens, dec, List::Nil))
                 } else {
                     match spec_twice(f) {
                     Some((n, l)) => Err(Refusal::Twice(n, l)),
@@ -2391,11 +2358,7 @@ pub open spec fn spec_bounds(ps: Params, line: u32, tail: DConds) -> DConds
     match ps {
         List::Nil => tail,
         List::Cons((n, t), rest) => match t {
-            Ty::Seq(_, Extent::Fixed(k)) => DConds::Cons(
-                DExpr::Bin(BinOp::Eq, Box::new(DExpr::Len(Box::new(DExpr::Var(n)))), Box::new(DExpr::Lit(k))),
-                line,
-                Box::new(spec_bounds(*rest, line, tail)),
-            ),
+            Ty::Seq(_, Extent::Fixed(k)) => List::Cons((DExpr::Bin(BinOp::Eq, Box::new(DExpr::Len(Box::new(DExpr::Var(n)))), Box::new(DExpr::Lit(k))), line), Box::new(spec_bounds(*rest, line, tail))),
             _ => spec_bounds(*rest, line, tail),
         },
     }
@@ -2410,7 +2373,7 @@ pub open spec fn spec_pure_body(ps: Params, body: DStmts) -> Option<DExpr> {
             None
         } else {
             match body {
-                DStmts::Cons(s, _, rest) => if *rest == DStmts::Nil {
+                List::Cons((s, _), rest) => if *rest == List::Nil {
                     match *s {
                         DStmt::Return(d) => Some(d),
                         _ => None,
@@ -2418,7 +2381,7 @@ pub open spec fn spec_pure_body(ps: Params, body: DStmts) -> Option<DExpr> {
                 } else {
                     None
                 },
-                DStmts::Nil => None,
+                List::Nil => None,
             }
         },
         None => None,
@@ -2430,18 +2393,8 @@ pub open spec fn spec_param_args(ps: Params) -> DArgs
     decreases ps,
 {
     match ps {
-        List::Nil => DArgs::Nil,
-        List::Cons((p, _), rest) => DArgs::Cons(DExpr::Var(p), Box::new(spec_param_args(*rest))),
-    }
-}
-
-/// The lines `a`, then the lines `b`.
-pub open spec fn spec_append(a: DConds, b: DConds) -> DConds
-    decreases a,
-{
-    match a {
-        DConds::Nil => b,
-        DConds::Cons(e, l, rest) => DConds::Cons(e, l, Box::new(spec_append(*rest, b))),
+        List::Nil => List::Nil,
+        List::Cons((p, _), rest) => List::Cons(DExpr::Var(p), Box::new(spec_param_args(*rest))),
     }
 }
 
@@ -2450,11 +2403,7 @@ pub open spec fn spec_linked(f: Function, ens: DConds, pure: Option<DExpr>) -> D
     match pure {
         Some(_) => spec_append(
             ens,
-            DConds::Cons(
-                DExpr::Bin(BinOp::Eq, Box::new(DExpr::Result), Box::new(DExpr::FCall(f.name, Box::new(spec_param_args(f.params))))),
-                f.line,
-                Box::new(DConds::Nil),
-            ),
+            List::Cons((DExpr::Bin(BinOp::Eq, Box::new(DExpr::Result), Box::new(DExpr::FCall(f.name, Box::new(spec_param_args(f.params))))), f.line), Box::new(List::Nil)),
         ),
         None => ens,
     }
@@ -2575,16 +2524,15 @@ pub open spec fn spec_convert(da: DArgs, ps: Params) -> DArgs
     decreases da,
 {
     match da {
-        DArgs::Nil => DArgs::Nil,
-        DArgs::Cons(d, rest) => match ps {
-            List::Cons((_, t), prest) => DArgs::Cons(
+        List::Nil => List::Nil,
+        List::Cons(d, rest) => match ps {
+            List::Cons((_, t), prest) => List::Cons(
                 match spec_int_dty(t) {
                     Some(dt) => DExpr::Conv(dt, Box::new(d)),
                     None => d,
                 },
-                Box::new(spec_convert(*rest, *prest)),
-            ),
-            List::Nil => DArgs::Cons(d, Box::new(spec_convert(*rest, List::Nil))),
+                Box::new(spec_convert(*rest, *prest))),
+            List::Nil => List::Cons(d, Box::new(spec_convert(*rest, List::Nil))),
         },
     }
 }
@@ -2625,10 +2573,10 @@ pub open spec fn spec_fields(ps: Params, line: u32) -> Result<DParams, Refusal>
     decreases ps,
 {
     match ps {
-        List::Nil => Ok(DParams::Nil),
+        List::Nil => Ok(List::Nil),
         List::Cons((n, t), rest) => match spec_ty(t, line) {
             Ok(dt) => match spec_fields(*rest, line) {
-                Ok(dr) => Ok(DParams::Cons(n, dt, Box::new(dr))),
+                Ok(dr) => Ok(List::Cons((n, dt), Box::new(dr))),
                 Err(r) => Err(r),
             },
             Err(r) => Err(r),
@@ -2640,14 +2588,13 @@ pub open spec fn spec_structs(sd: Structs) -> StructModels
     decreases sd,
 {
     match sd {
-        List::Nil => StructModels::Nil,
-        List::Cons((k, (l, fields, _)), rest) => StructModels::Cons(
+        List::Nil => List::Nil,
+        List::Cons((k, (l, fields, _)), rest) => List::Cons(
             match spec_fields(fields, l) {
                 Ok(df) => Ok((k, df)),
                 Err(r) => Err(r),
             },
-            Box::new(spec_structs(*rest)),
-        ),
+            Box::new(spec_structs(*rest))),
     }
 }
 
@@ -2656,8 +2603,8 @@ pub open spec fn spec_unit(fs: Fns, all: Fns, sd: Structs) -> Models
     decreases fs,
 {
     match fs {
-        List::Nil => Models::Nil,
-        List::Cons(f, rest) => Models::Cons(spec_function(*f, all, sd), Box::new(spec_unit(*rest, all, sd))),
+        List::Nil => List::Nil,
+        List::Cons(f, rest) => List::Cons(spec_function(*f, all, sd), Box::new(spec_unit(*rest, all, sd))),
     }
 }
 
@@ -2736,8 +2683,8 @@ pub open spec fn unknown_cases(cs: Cases) -> bool
     decreases cs,
 {
     match cs {
-        Cases::Nil => false,
-        Cases::Cons(_, body, rest) => unknown_stmts(*body) || unknown_cases(*rest),
+        List::Nil => false,
+        List::Cons((_, body), rest) => unknown_stmts(*body) || unknown_cases(*rest),
     }
 }
 
@@ -2745,8 +2692,8 @@ pub open spec fn unknown_stmts(ss: Stmts) -> bool
     decreases ss,
 {
     match ss {
-        Stmts::Nil => false,
-        Stmts::Cons(s, rest) => unknown_stmt(*s) || unknown_stmts(*rest),
+        List::Nil => false,
+        List::Cons(s, rest) => unknown_stmt(*s) || unknown_stmts(*rest),
     }
 }
 
@@ -2884,14 +2831,14 @@ pub proof fn lemma_unknown_cases_is_refused(cs: Cases, all: Fns, env: Params, ps
     decreases cs,
 {
     match cs {
-        Cases::Cons(_, body, rest) => {
+        List::Cons((_, body), rest) => {
             if unknown_stmts(*body) {
                 lemma_unknown_stmts_is_refused(*body, all, env, ps, sd);
             } else {
                 lemma_unknown_cases_is_refused(*rest, all, env, ps, sd);
             }
         },
-        Cases::Nil => {},
+        List::Nil => {},
     }
 }
 
@@ -2903,14 +2850,14 @@ pub proof fn lemma_unknown_stmts_is_refused(ss: Stmts, all: Fns, env: Params, ps
     decreases ss,
 {
     match ss {
-        Stmts::Cons(s, rest) => {
+        List::Cons(s, rest) => {
             if unknown_stmt(*s) {
                 lemma_unknown_stmt_is_refused(*s, all, env, ps, sd);
             } else {
                 lemma_unknown_stmts_is_refused(*rest, all, spec_scope(*s, env), ps, sd);
             }
         },
-        Stmts::Nil => {},
+        List::Nil => {},
     }
 }
 
@@ -2930,8 +2877,8 @@ pub open spec fn count_stmts(ss: Stmts) -> nat
     decreases ss,
 {
     match ss {
-        Stmts::Nil => 0,
-        Stmts::Cons(s, rest) => count_stmt(*s) + count_stmts(*rest),
+        List::Nil => 0,
+        List::Cons(s, rest) => count_stmt(*s) + count_stmts(*rest),
     }
 }
 
@@ -2951,8 +2898,8 @@ pub open spec fn count_cases(cs: Cases) -> nat
     decreases cs,
 {
     match cs {
-        Cases::Nil => 0,
-        Cases::Cons(_, body, rest) => count_stmts(*body) + count_cases(*rest),
+        List::Nil => 0,
+        List::Cons((_, body), rest) => count_stmts(*body) + count_cases(*rest),
     }
 }
 
@@ -2960,8 +2907,8 @@ pub open spec fn count_dcases(cs: DCases) -> nat
     decreases cs,
 {
     match cs {
-        DCases::Nil => 0,
-        DCases::Cons(_, body, rest) => count_dstmts(*body) + count_dcases(*rest),
+        List::Nil => 0,
+        List::Cons((_, body), rest) => count_dstmts(*body) + count_dcases(*rest),
     }
 }
 
@@ -2969,8 +2916,8 @@ pub open spec fn count_dstmts(ss: DStmts) -> nat
     decreases ss,
 {
     match ss {
-        DStmts::Nil => 0,
-        DStmts::Cons(s, _, rest) => count_dstmt(*s) + count_dstmts(*rest),
+        List::Nil => 0,
+        List::Cons((s, _), rest) => count_dstmt(*s) + count_dstmts(*rest),
     }
 }
 
@@ -3092,11 +3039,11 @@ pub proof fn lemma_cases_kept(cs: Cases, all: Fns, env: Params, ps: Params, sd: 
     decreases cs,
 {
     match cs {
-        Cases::Cons(_, body, rest) => {
+        List::Cons((_, body), rest) => {
             lemma_statements_kept(*body, all, env, ps, sd);
             lemma_cases_kept(*rest, all, env, ps, sd);
         },
-        Cases::Nil => {},
+        List::Nil => {},
     }
 }
 
@@ -3108,11 +3055,11 @@ pub proof fn lemma_statements_kept(ss: Stmts, all: Fns, env: Params, ps: Params,
     decreases ss,
 {
     match ss {
-        Stmts::Cons(s, rest) => {
+        List::Cons(s, rest) => {
             lemma_stmt_kept(*s, all, env, ps, sd);
             lemma_statements_kept(*rest, all, spec_scope(*s, env), ps, sd);
         },
-        Stmts::Nil => {},
+        List::Nil => {},
     }
 }
 
@@ -3121,8 +3068,8 @@ pub open spec fn has_method(ms: Models, key: u32) -> bool
     decreases ms,
 {
     match ms {
-        Models::Nil => false,
-        Models::Cons(m, rest) => match m {
+        List::Nil => false,
+        List::Cons(m, rest) => match m {
             Model::Full(method) => method.name == key || has_method(*rest, key),
             Model::Bare(name, _, _, _) => name == key || has_method(*rest, key),
             Model::Refused(_) => has_method(*rest, key),
@@ -3135,8 +3082,8 @@ pub open spec fn calls_resolve_cases(cs: DCases, all: Fns, sd: Structs) -> bool
     decreases cs,
 {
     match cs {
-        DCases::Nil => true,
-        DCases::Cons(_, body, rest) => calls_resolve(*body, all, sd) && calls_resolve_cases(*rest, all, sd),
+        List::Nil => true,
+        List::Cons((_, body), rest) => calls_resolve(*body, all, sd) && calls_resolve_cases(*rest, all, sd),
     }
 }
 
@@ -3144,8 +3091,8 @@ pub open spec fn calls_resolve(ss: DStmts, all: Fns, sd: Structs) -> bool
     decreases ss,
 {
     match ss {
-        DStmts::Nil => true,
-        DStmts::Cons(s, _, rest) => calls_resolve_stmt(*s, all, sd) && calls_resolve(*rest, all, sd),
+        List::Nil => true,
+        List::Cons((s, _), rest) => calls_resolve_stmt(*s, all, sd) && calls_resolve(*rest, all, sd),
     }
 }
 
@@ -3173,19 +3120,19 @@ pub open spec fn calls_resolve_calls(c: DCalls, all: Fns, sd: Structs) -> bool
     decreases c,
 {
     match c {
-        DCalls::Nil => true,
-        DCalls::Cons(_, _, k, _, rest) => spec_callable(all, k, sd) && calls_resolve_calls(*rest, all, sd),
+        List::Nil => true,
+        List::Cons((_, _, k, _), rest) => spec_callable(all, k, sd) && calls_resolve_calls(*rest, all, sd),
     }
 }
 
 pub proof fn lemma_append_resolves(a: DCalls, b: DCalls, all: Fns, sd: Structs)
     ensures
-        calls_resolve_calls(spec_append_calls(a, b), all, sd) == (calls_resolve_calls(a, all, sd) && calls_resolve_calls(b, all, sd)),
+        calls_resolve_calls(spec_append(a, b), all, sd) == (calls_resolve_calls(a, all, sd) && calls_resolve_calls(b, all, sd)),
     decreases a,
 {
     match a {
-        DCalls::Cons(_, _, _, _, rest) => lemma_append_resolves(*rest, b, all, sd),
-        DCalls::Nil => {},
+        List::Cons((_, _, _, _), rest) => lemma_append_resolves(*rest, b, all, sd),
+        List::Nil => {},
     }
 }
 
@@ -3204,9 +3151,9 @@ pub proof fn lemma_lift_resolves(e: Expr, all: Fns, line: u32, sd: Structs, n: u
             let (ca, da, n1) = spec_lift_args(*args, all, line, sd, n, open).unwrap();
             let dt = spec_callee_ty(all, k, line, sd).unwrap();
             assert(spec_callable(all, k, sd));
-            assert(calls_resolve_calls(DCalls::Nil, all, sd));
-            assert(calls_resolve_calls(DCalls::Cons(n1, dt, k, da, Box::new(DCalls::Nil)), all, sd));
-            lemma_append_resolves(ca, DCalls::Cons(n1, dt, k, da, Box::new(DCalls::Nil)), all, sd);
+            assert(calls_resolve_calls(List::Nil, all, sd));
+            assert(calls_resolve_calls(List::Cons((n1, dt, k, da), Box::new(List::Nil)), all, sd));
+            lemma_append_resolves(ca, List::Cons((n1, dt, k, da), Box::new(List::Nil)), all, sd);
         },
         Expr::Bin(op, a, b) => {
             lemma_lift_resolves(*a, all, line, sd, n, open);
@@ -3260,7 +3207,7 @@ pub proof fn lemma_lift_resolves(e: Expr, all: Fns, line: u32, sd: Structs, n: u
             lemma_lift_resolves(*b, all, line, sd, n2, false);
             let cb = spec_lift(*b, all, line, sd, n2, false).unwrap().0;
             lemma_append_resolves(ca, cb, all, sd);
-            lemma_append_resolves(cc, spec_append_calls(ca, cb), all, sd);
+            lemma_append_resolves(cc, spec_append(ca, cb), all, sd);
         },
         _ => {},
     }
@@ -3383,7 +3330,7 @@ pub proof fn lemma_closed_runs_no_call(e: Expr, all: Fns, line: u32, sd: Structs
     requires
         spec_lift(e, all, line, sd, n, false).is_ok(),
     ensures
-        spec_lift(e, all, line, sd, n, false).unwrap().0 == DCalls::Nil,
+        spec_lift(e, all, line, sd, n, false).unwrap().0 == List::Nil,
     decreases e,
 {
     match e {
@@ -3434,7 +3381,7 @@ pub proof fn lemma_closed_args_run_no_call(args: Args, all: Fns, line: u32, sd: 
     requires
         spec_lift_args(args, all, line, sd, n, false).is_ok(),
     ensures
-        spec_lift_args(args, all, line, sd, n, false).unwrap().0 == DCalls::Nil,
+        spec_lift_args(args, all, line, sd, n, false).unwrap().0 == List::Nil,
     decreases args,
 {
     match args {
@@ -3648,11 +3595,11 @@ pub proof fn lemma_cases_calls_resolve(cs: Cases, all: Fns, env: Params, ps: Par
     decreases cs,
 {
     match cs {
-        Cases::Cons(_, body, rest) => {
+        List::Cons((_, body), rest) => {
             lemma_stmts_calls_resolve(*body, all, env, ps, sd);
             lemma_cases_calls_resolve(*rest, all, env, ps, sd);
         },
-        Cases::Nil => {},
+        List::Nil => {},
     }
 }
 
@@ -3664,11 +3611,11 @@ pub proof fn lemma_stmts_calls_resolve(ss: Stmts, all: Fns, env: Params, ps: Par
     decreases ss,
 {
     match ss {
-        Stmts::Cons(s, rest) => {
+        List::Cons(s, rest) => {
             lemma_stmt_calls_resolve(*s, all, env, ps, sd);
             lemma_stmts_calls_resolve(*rest, all, spec_scope(*s, env), ps, sd);
         },
-        Stmts::Nil => {},
+        List::Nil => {},
     }
 }
 
@@ -3883,23 +3830,12 @@ pub fn translate_code(e: &Expr, line: u32) -> (r: Result<DExpr, Refusal>)
     }
 }
 
-pub fn append_calls(a: DCalls, b: DCalls) -> (r: DCalls)
-    ensures
-        r == spec_append_calls(a, b),
-    decreases a,
-{
-    match a {
-        DCalls::Nil => b,
-        DCalls::Cons(t, dt, k, da, rest) => DCalls::Cons(t, dt, k, da, Box::new(append_calls(*rest, b))),
-    }
-}
-
 pub fn pre(c: DCalls, s: DStmt) -> (r: DStmt)
     ensures
         r == spec_pre(c, s),
 {
     match c {
-        DCalls::Nil => s,
+        List::Nil => s,
         _ => DStmt::Pre(c, Box::new(s)),
     }
 }
@@ -3924,13 +3860,13 @@ pub fn lift(e: &Expr, all: &Fns, line: u32, sd: &Structs, n: u32, open: bool) ->
 {
     match e {
         Expr::Lit(v, t) => match translate_ty(*t, line) {
-            Ok(dt) => Ok((DCalls::Nil, DExpr::Conv(dt, Box::new(DExpr::Lit(*v))), n)),
+            Ok(dt) => Ok((List::Nil, DExpr::Conv(dt, Box::new(DExpr::Lit(*v))), n)),
             Err(r) => Err(r),
         },
-        Expr::Bool(v) => Ok((DCalls::Nil, DExpr::Bool(*v), n)),
-        Expr::Enumerator(k, i) => Ok((DCalls::Nil, DExpr::Enumerator(*k, *i), n)),
+        Expr::Bool(v) => Ok((List::Nil, DExpr::Bool(*v), n)),
+        Expr::Enumerator(k, i) => Ok((List::Nil, DExpr::Enumerator(*k, *i), n)),
         Expr::Var(v, t) => match translate_ty(*t, line) {
-            Ok(_) => Ok((DCalls::Nil, code_var(*v, *t), n)),
+            Ok(_) => Ok((List::Nil, code_var(*v, *t), n)),
             Err(r) => Err(r),
         },
         Expr::Call(k, nm, args, at) => if !open || callee_writes(all, *k) {
@@ -3943,7 +3879,7 @@ pub fn lift(e: &Expr, all: &Fns, line: u32, sd: &Structs, n: u32, open: bool) ->
                 Ok((ca, da, n1)) => match callee_ty(all, *k, line, sd) {
                     Err(r) => Err(r),
                     Ok(dt) => if n1 < 0xFFFF_FFFF {
-                        Ok((append_calls(ca, DCalls::Cons(n1, dt, *k, da, Box::new(DCalls::Nil))), DExpr::Temp(n1), n1 + 1))
+                        Ok((append(ca, List::Cons((n1, dt, *k, da), Box::new(List::Nil))), DExpr::Temp(n1), n1 + 1))
                     } else {
                         Err(Refusal::Syntax(line))
                     },
@@ -3957,7 +3893,7 @@ pub fn lift(e: &Expr, all: &Fns, line: u32, sd: &Structs, n: u32, open: bool) ->
                 Err(r) => Err(r),
                 Ok((ca, da, n1)) => match lift(b, all, line, sd, n1, open && !(*op == BinOp::And || *op == BinOp::Or)) {
                     Err(r) => Err(r),
-                    Ok((cb, db, n2)) => Ok((append_calls(ca, cb), DExpr::Bin(*op, Box::new(da), Box::new(db)), n2)),
+                    Ok((cb, db, n2)) => Ok((append(ca, cb), DExpr::Bin(*op, Box::new(da), Box::new(db)), n2)),
                 },
             }
         },
@@ -3970,7 +3906,7 @@ pub fn lift(e: &Expr, all: &Fns, line: u32, sd: &Structs, n: u32, open: bool) ->
                     Err(r) => Err(r),
                     Ok((cb, db, n2)) => match divide(*op, da, db, *t, line) {
                         Err(r) => Err(r),
-                        Ok(d) => Ok((append_calls(ca, cb), d, n2)),
+                        Ok(d) => Ok((append(ca, cb), d, n2)),
                     },
                 },
             }
@@ -3981,7 +3917,7 @@ pub fn lift(e: &Expr, all: &Fns, line: u32, sd: &Structs, n: u32, open: bool) ->
                 Err(r) => Err(r),
                 Ok((cb, db, n2)) => match shift(da, db, *t, line) {
                     Err(r) => Err(r),
-                    Ok(d) => Ok((append_calls(ca, cb), d, n2)),
+                    Ok(d) => Ok((append(ca, cb), d, n2)),
                 },
             },
         },
@@ -4014,7 +3950,7 @@ pub fn lift(e: &Expr, all: &Fns, line: u32, sd: &Structs, n: u32, open: bool) ->
             Err(r) => Err(r),
             Ok((co, d, n1)) => match lift(i, all, line, sd, n1, open) {
                 Err(r) => Err(r),
-                Ok((ci, di, n2)) => Ok((append_calls(co, ci), DExpr::Index(Box::new(d), Box::new(di)), n2)),
+                Ok((ci, di, n2)) => Ok((append(co, ci), DExpr::Index(Box::new(d), Box::new(di)), n2)),
             },
         },
         Expr::Copy(a, from, to) => if copy_ok(*from, *to) {
@@ -4038,7 +3974,7 @@ pub fn lift(e: &Expr, all: &Fns, line: u32, sd: &Structs, n: u32, open: bool) ->
             Err(r) => Err(r),
             Ok((c, d, n1)) => Ok((c, DExpr::Get(Box::new(d)), n1)),
         },
-        Expr::Nullopt => Ok((DCalls::Nil, DExpr::Nothing, n)),
+        Expr::Nullopt => Ok((List::Nil, DExpr::Nothing, n)),
         Expr::Wrap(a) => match lift(a, all, line, sd, n, open) {
             Err(r) => Err(r),
             Ok((c, d, n1)) => Ok((c, DExpr::Just(Box::new(d)), n1)),
@@ -4051,7 +3987,7 @@ pub fn lift(e: &Expr, all: &Fns, line: u32, sd: &Structs, n: u32, open: bool) ->
             Err(r) => Err(r),
             Ok((co, d, n1)) => match lift(k, all, line, sd, n1, open) {
                 Err(r) => Err(r),
-                Ok((ck, dk, n2)) => Ok((append_calls(co, ck), DExpr::Drop(Box::new(d), Box::new(dk)), n2)),
+                Ok((ck, dk, n2)) => Ok((append(co, ck), DExpr::Drop(Box::new(d), Box::new(dk)), n2)),
             },
         },
         Expr::Cond(cnd, a, b) => match lift(cnd, all, line, sd, n, open) {
@@ -4060,7 +3996,7 @@ pub fn lift(e: &Expr, all: &Fns, line: u32, sd: &Structs, n: u32, open: bool) ->
                 Err(r) => Err(r),
                 Ok((ca, da, n2)) => match lift(b, all, line, sd, n2, false) {
                     Err(r) => Err(r),
-                    Ok((cb, db, n3)) => Ok((append_calls(c, append_calls(ca, cb)), DExpr::Ite(Box::new(dc), Box::new(da), Box::new(db)), n3)),
+                    Ok((cb, db, n3)) => Ok((append(c, append(ca, cb)), DExpr::Ite(Box::new(dc), Box::new(da), Box::new(db)), n3)),
                 },
             },
         },
@@ -4076,12 +4012,12 @@ pub fn lift_args(args: &Args, all: &Fns, line: u32, sd: &Structs, n: u32, open: 
     decreases args,
 {
     match args {
-        List::Nil => Ok((DCalls::Nil, DArgs::Nil, n)),
+        List::Nil => Ok((List::Nil, List::Nil, n)),
         List::Cons(a, rest) => match lift(a, all, line, sd, n, open) {
             Err(r) => Err(r),
             Ok((ca, da, n1)) => match lift_args(rest, all, line, sd, n1, open) {
                 Err(r) => Err(r),
-                Ok((cr, dr, n2)) => Ok((append_calls(ca, cr), DArgs::Cons(da, Box::new(dr)), n2)),
+                Ok((cr, dr, n2)) => Ok((append(ca, cr), List::Cons(da, Box::new(dr)), n2)),
             },
         },
     }
@@ -4323,7 +4259,7 @@ pub fn translate_contract(e: &Expr, decl: &Names, ps: &Params, ret: Option<Ty>, 
             match functor(*f, decl, ps, ret, bound, sd) {
             Some((d, k)) => match member(sd, k, CALL_OP) {
                 Some((key, Some((rt, mps)))) => match translate_contract_args(args, decl, ps, ret, bound, line, sd) {
-                    Ok(da) => translate_leaf(DExpr::FCall(key, Box::new(DArgs::Cons(d, Box::new(convert(da, &tail(&mps)))))), rt, line),
+                    Ok(da) => translate_leaf(DExpr::FCall(key, Box::new(List::Cons(d, Box::new(convert(da, &tail(&mps)))))), rt, line),
                     Err(r) => Err(r),
                 },
                 _ => Err(Refusal::NotPure(CALL_OP, line)),
@@ -4331,7 +4267,7 @@ pub fn translate_contract(e: &Expr, decl: &Names, ps: &Params, ret: Option<Ty>, 
             None => match object(ps, ret) {
             Some((o, k)) => match member(sd, k, *f) {
                 Some((key, Some((t, mps)))) => match translate_contract_args(args, decl, ps, ret, bound, line, sd) {
-                    Ok(da) => translate_leaf(DExpr::FCall(key, Box::new(DArgs::Cons(o, Box::new(convert(da, &tail(&mps)))))), t, line),
+                    Ok(da) => translate_leaf(DExpr::FCall(key, Box::new(List::Cons(o, Box::new(convert(da, &tail(&mps)))))), t, line),
                     Err(r) => Err(r),
                 },
                 Some((_, None)) => Err(Refusal::NotPure(*f, line)),
@@ -4370,7 +4306,7 @@ pub fn translate_contract(e: &Expr, decl: &Names, ps: &Params, ret: Option<Ty>, 
             Ok((d, t)) => match struct_key(t) {
                 Some(k) => match member(sd, k, *f) {
                     Some((key, Some((rt, mps)))) => match translate_contract_args(args, decl, ps, ret, bound, line, sd) {
-                        Ok(da) => translate_leaf(DExpr::FCall(key, Box::new(DArgs::Cons(d, Box::new(convert(da, &tail(&mps)))))), rt, line),
+                        Ok(da) => translate_leaf(DExpr::FCall(key, Box::new(List::Cons(d, Box::new(convert(da, &tail(&mps)))))), rt, line),
                         Err(r) => Err(r),
                     },
                     _ => Err(Refusal::NotPure(*f, line)),
@@ -4408,10 +4344,10 @@ pub fn translate_contract_args(args: &Args, decl: &Names, ps: &Params, ret: Opti
     decreases args, 2nat,
 {
     match args {
-        List::Nil => Ok(DArgs::Nil),
+        List::Nil => Ok(List::Nil),
         List::Cons(a, rest) => match translate_contract(a, decl, ps, ret, bound, line, sd) {
             Ok(da) => match translate_contract_args(rest, decl, ps, ret, bound, line, sd) {
-                Ok(dr) => Ok(DArgs::Cons(da, Box::new(dr))),
+                Ok(dr) => Ok(List::Cons(da, Box::new(dr))),
                 Err(r) => Err(r),
             },
             Err(r) => Err(r),
@@ -4666,9 +4602,9 @@ pub fn outs(ps: &Params) -> (r: DParams)
     decreases ps,
 {
     match ps {
-        List::Nil => DParams::Nil,
+        List::Nil => List::Nil,
         List::Cons((n, t), rest) => match t {
-            Ty::Mut(s) => DParams::Cons(*n, scalar_dty(*s), Box::new(outs(rest))),
+            Ty::Mut(s) => List::Cons((*n, scalar_dty(*s)), Box::new(outs(rest))),
             _ => outs(rest),
         },
     }
@@ -4880,10 +4816,10 @@ pub fn translate_params(ps: &Params, line: u32) -> (r: Result<DParams, Refusal>)
     decreases ps,
 {
     match ps {
-        List::Nil => Ok(DParams::Nil),
+        List::Nil => Ok(List::Nil),
         List::Cons((n, t), rest) => match param_ty(*t, line) {
             Ok(dt) => match translate_params(rest, line) {
-                Ok(dr) => Ok(DParams::Cons(*n, dt, Box::new(dr))),
+                Ok(dr) => Ok(List::Cons((*n, dt), Box::new(dr))),
                 Err(r) => Err(r),
             },
             Err(r) => Err(r),
@@ -4948,7 +4884,7 @@ pub fn translate_loop_conds(cs: &Conds, want: CondKind, env: &Params, sd: &Struc
     decreases cs,
 {
     match cs {
-        List::Nil => Ok(DConds::Nil),
+        List::Nil => Ok(List::Nil),
         List::Cons((k, e, l, _), rest) => match k {
             CondKind::Other(w) => Err(Refusal::Construct(*w, *l)),
             CondKind::Bad(r) => Err(*r),
@@ -4958,7 +4894,7 @@ pub fn translate_loop_conds(cs: &Conds, want: CondKind, env: &Params, sd: &Struc
             _ => match translate_loop_conds(rest, want, env, sd) {
                 Ok(dr) => if *k == want {
                     match translate_contract(e, &keys(env), &after(env), None, &List::Nil, *l, sd) {
-                        Ok(d) => Ok(DConds::Cons(d, *l, Box::new(dr))),
+                        Ok(d) => Ok(List::Cons((d, *l), Box::new(dr))),
                         Err(r) => Err(r),
                     }
                 } else {
@@ -5029,7 +4965,7 @@ pub fn writebacks(args: &Args, cps: &Params, ps: &Params, line: u32) -> (r: Resu
     decreases args,
 {
     match args {
-        List::Nil => Ok(Objs::Nil),
+        List::Nil => Ok(List::Nil),
         List::Cons(a, rest) => match cps {
             List::Nil => Err(Refusal::Syntax(line)),
             List::Cons((_, t), crest) => if written(*t) {
@@ -5037,7 +4973,7 @@ pub fn writebacks(args: &Args, cps: &Params, ps: &Params, line: u32) -> (r: Resu
                     Err(r) => Err(r),
                     Ok(o) => match writebacks(rest, crest, ps, line) {
                         Err(r) => Err(r),
-                        Ok(os) => Ok(Objs::Cons(o, Box::new(os))),
+                        Ok(os) => Ok(List::Cons(o, Box::new(os))),
                     },
                 }
             } else {
@@ -5280,10 +5216,10 @@ pub fn translate_cases(cs: &Cases, all: &Fns, env: &Params, ps: &Params, sd: &St
     decreases cs,
 {
     match cs {
-        Cases::Nil => Ok(DCases::Nil),
-        Cases::Cons(i, body, rest) => match translate_stmts(body, all, env, ps, sd) {
+        List::Nil => Ok(List::Nil),
+        List::Cons((i, body), rest) => match translate_stmts(body, all, env, ps, sd) {
             Ok(db) => match translate_cases(rest, all, env, ps, sd) {
-                Ok(dr) => Ok(DCases::Cons(*i, Box::new(db), Box::new(dr))),
+                Ok(dr) => Ok(List::Cons((*i, Box::new(db)), Box::new(dr))),
                 Err(r) => Err(r),
             },
             Err(r) => Err(r),
@@ -5297,10 +5233,10 @@ pub fn translate_stmts(ss: &Stmts, all: &Fns, env: &Params, ps: &Params, sd: &St
     decreases ss,
 {
     match ss {
-        Stmts::Nil => Ok(DStmts::Nil),
-        Stmts::Cons(s, rest) => match translate_stmt(s, all, env, ps, sd) {
+        List::Nil => Ok(List::Nil),
+        List::Cons(s, rest) => match translate_stmt(s, all, env, ps, sd) {
             Ok(d) => match translate_stmts(rest, all, &scope(s, env), ps, sd) {
-                Ok(dr) => Ok(DStmts::Cons(Box::new(d), place(s), Box::new(dr))),
+                Ok(dr) => Ok(List::Cons((Box::new(d), place(s)), Box::new(dr))),
                 Err(r) => Err(r),
             },
             Err(r) => Err(r),
@@ -5356,7 +5292,7 @@ pub fn translate_conds(cs: &Conds, want: CondKind, ps: &Params, ret: Ty, sd: &St
     decreases cs,
 {
     match cs {
-        List::Nil => Ok(DConds::Nil),
+        List::Nil => Ok(List::Nil),
         List::Cons((k, e, l, decl), rest) => match k {
             CondKind::Other(w) => Err(Refusal::Construct(*w, *l)),
             CondKind::Bad(r) => Err(*r),
@@ -5366,7 +5302,7 @@ pub fn translate_conds(cs: &Conds, want: CondKind, ps: &Params, ret: Ty, sd: &St
                     Err(Refusal::Syntax(*l))
                 } else if *k == want {
                     match translate_contract(e, decl, &view_ps(ps, *k), Some(view_ret(ret, *k)), &List::Nil, *l, sd) {
-                        Ok(d) => Ok(DConds::Cons(d, *l, Box::new(dr))),
+                        Ok(d) => Ok(List::Cons((d, *l), Box::new(dr))),
                         Err(r) => Err(r),
                     }
                 } else {
@@ -5463,8 +5399,8 @@ pub fn twice_cases(seen: &mut Vec<u32>, cs: &Cases) -> (r: Option<(u32, u32)>)
     decreases cs,
 {
     match cs {
-        Cases::Nil => None,
-        Cases::Cons(_, body, rest) => {
+        List::Nil => None,
+        List::Cons((_, body), rest) => {
             let r = twice_stmts(seen, body);
             if r.is_some() {
                 r
@@ -5482,8 +5418,8 @@ pub fn twice_stmts(seen: &mut Vec<u32>, ss: &Stmts) -> (r: Option<(u32, u32)>)
     decreases ss,
 {
     match ss {
-        Stmts::Nil => None,
-        Stmts::Cons(s, rest) => {
+        List::Nil => None,
+        List::Cons(s, rest) => {
             let r = twice_stmt(seen, s);
             if r.is_some() {
                 r
@@ -5514,8 +5450,8 @@ pub fn misreturn(ss: &Stmts, void: bool) -> (r: Option<u32>)
     decreases ss,
 {
     match ss {
-        Stmts::Nil => None,
-        Stmts::Cons(s, rest) => match misreturn_stmt(s, void) {
+        List::Nil => None,
+        List::Cons(s, rest) => match misreturn_stmt(s, void) {
             Some(l) => Some(l),
             None => misreturn(rest, void),
         },
@@ -5528,8 +5464,8 @@ pub fn misreturn_cases(cs: &Cases, void: bool) -> (r: Option<u32>)
     decreases cs,
 {
     match cs {
-        Cases::Nil => None,
-        Cases::Cons(_, body, rest) => match misreturn(body, void) {
+        List::Nil => None,
+        List::Cons((_, body), rest) => match misreturn(body, void) {
             Some(l) => Some(l),
             None => misreturn_cases(rest, void),
         },
@@ -5580,7 +5516,7 @@ pub fn translate_inside(f: &Function, all: &Fns, sd: &Structs) -> (r: Result<(DC
             Ok(ens) => match translate_conds(&f.conds, CondKind::Decreases, &f.params, f.ret, sd) {
                 Err(r) => Err(r),
                 Ok(dec) => if f.trusted {
-                    Ok((req, ens, dec, DStmts::Nil))
+                    Ok((req, ens, dec, List::Nil))
                 } else {
                     match twice(f) {
                     Some((n, l)) => Err(Refusal::Twice(n, l)),
@@ -5606,11 +5542,7 @@ pub fn bounds(ps: &Params, line: u32, tail: DConds) -> (r: DConds)
     match ps {
         List::Nil => tail,
         List::Cons((n, t), rest) => match t {
-            Ty::Seq(_, Extent::Fixed(k)) => DConds::Cons(
-                DExpr::Bin(BinOp::Eq, Box::new(DExpr::Len(Box::new(DExpr::Var(*n)))), Box::new(DExpr::Lit(*k))),
-                line,
-                Box::new(bounds(rest, line, tail)),
-            ),
+            Ty::Seq(_, Extent::Fixed(k)) => List::Cons((DExpr::Bin(BinOp::Eq, Box::new(DExpr::Len(Box::new(DExpr::Var(*n)))), Box::new(DExpr::Lit(*k))), line), Box::new(bounds(rest, line, tail))),
             _ => bounds(rest, line, tail),
         },
     }
@@ -5669,8 +5601,8 @@ pub fn copy_dargs(a: &DArgs) -> (r: DArgs)
     decreases a,
 {
     match a {
-        DArgs::Nil => DArgs::Nil,
-        DArgs::Cons(d, rest) => DArgs::Cons(copy_dexpr(d), Box::new(copy_dargs(rest))),
+        List::Nil => List::Nil,
+        List::Cons(d, rest) => List::Cons(copy_dexpr(d), Box::new(copy_dargs(rest))),
     }
 }
 
@@ -5683,14 +5615,14 @@ pub fn pure_body(ps: &Params, body: &DStmts) -> (r: Option<DExpr>)
             None
         } else {
             match body {
-                DStmts::Cons(s, _, rest) => match &**rest {
-                    DStmts::Nil => match &**s {
+                List::Cons((s, _), rest) => match &**rest {
+                    List::Nil => match &**s {
                         DStmt::Return(d) => Some(copy_dexpr(d)),
                         _ => None,
                     },
                     _ => None,
                 },
-                DStmts::Nil => None,
+                List::Nil => None,
             }
         },
         None => None,
@@ -5703,19 +5635,8 @@ pub fn param_args(ps: &Params) -> (r: DArgs)
     decreases ps,
 {
     match ps {
-        List::Nil => DArgs::Nil,
-        List::Cons((p, _), rest) => DArgs::Cons(DExpr::Var(*p), Box::new(param_args(rest))),
-    }
-}
-
-pub fn append(a: DConds, b: DConds) -> (r: DConds)
-    ensures
-        r == spec_append(a, b),
-    decreases a,
-{
-    match a {
-        DConds::Nil => b,
-        DConds::Cons(e, l, rest) => DConds::Cons(e, l, Box::new(append(*rest, b))),
+        List::Nil => List::Nil,
+        List::Cons((p, _), rest) => List::Cons(DExpr::Var(*p), Box::new(param_args(rest))),
     }
 }
 
@@ -5726,11 +5647,7 @@ pub fn linked(f: &Function, ens: DConds, pure: &Option<DExpr>) -> (r: DConds)
     match pure {
         Some(_) => append(
             ens,
-            DConds::Cons(
-                DExpr::Bin(BinOp::Eq, Box::new(DExpr::Result), Box::new(DExpr::FCall(f.name, Box::new(param_args(&f.params))))),
-                f.line,
-                Box::new(DConds::Nil),
-            ),
+            List::Cons((DExpr::Bin(BinOp::Eq, Box::new(DExpr::Result), Box::new(DExpr::FCall(f.name, Box::new(param_args(&f.params))))), f.line), Box::new(List::Nil)),
         ),
         None => ens,
     }
@@ -5741,18 +5658,11 @@ pub fn member(sd: &Structs, k: u32, name: u32) -> (r: Option<(u32, Option<(Ty, P
         r == spec_member(*sd, k, name),
 {
     match get_ref(sd, k) {
-        Some((_, _, ms)) => member_of(ms, name),
-        None => None,
-    }
-}
-
-pub fn member_of(ms: &Members, name: u32) -> (r: Option<(u32, Option<(Ty, Params)>)>)
-    ensures
-        r == spec_get(*ms, name),
-{
-    match get_ref(ms, name) {
-        Some((key, Some((rt, mps)))) => Some((*key, Some((*rt, copy(mps))))),
-        Some((key, None)) => Some((*key, None)),
+        Some((_, _, ms)) => match get_ref(ms, name) {
+            Some((key, Some((rt, mps)))) => Some((*key, Some((*rt, copy(mps))))),
+            Some((key, None)) => Some((*key, None)),
+            None => None,
+        },
         None => None,
     }
 }
@@ -5871,16 +5781,15 @@ pub fn convert(da: DArgs, ps: &Params) -> (r: DArgs)
     decreases da,
 {
     match da {
-        DArgs::Nil => DArgs::Nil,
-        DArgs::Cons(d, rest) => match ps {
-            List::Cons((_, t), prest) => DArgs::Cons(
+        List::Nil => List::Nil,
+        List::Cons(d, rest) => match ps {
+            List::Cons((_, t), prest) => List::Cons(
                 match int_dty(*t) {
                     Some(dt) => DExpr::Conv(dt, Box::new(d)),
                     None => d,
                 },
-                Box::new(convert(*rest, prest)),
-            ),
-            List::Nil => DArgs::Cons(d, Box::new(convert(*rest, &List::Nil))),
+                Box::new(convert(*rest, prest))),
+            List::Nil => List::Cons(d, Box::new(convert(*rest, &List::Nil))),
         },
     }
 }
@@ -5928,8 +5837,8 @@ fn translate_each(fs: &Fns, all: &Fns, sd: &Structs) -> (r: Models)
     decreases fs,
 {
     match fs {
-        List::Nil => Models::Nil,
-        List::Cons(f, rest) => Models::Cons(translate_function(f, all, sd), Box::new(translate_each(rest, all, sd))),
+        List::Nil => List::Nil,
+        List::Cons(f, rest) => List::Cons(translate_function(f, all, sd), Box::new(translate_each(rest, all, sd))),
     }
 }
 
@@ -5939,10 +5848,10 @@ fn translate_fields(ps: &Params, line: u32) -> (r: Result<DParams, Refusal>)
     decreases ps,
 {
     match ps {
-        List::Nil => Ok(DParams::Nil),
+        List::Nil => Ok(List::Nil),
         List::Cons((n, t), rest) => match translate_ty(*t, line) {
             Ok(dt) => match translate_fields(rest, line) {
-                Ok(dr) => Ok(DParams::Cons(*n, dt, Box::new(dr))),
+                Ok(dr) => Ok(List::Cons((*n, dt), Box::new(dr))),
                 Err(r) => Err(r),
             },
             Err(r) => Err(r),
@@ -5957,13 +5866,13 @@ pub fn translate_structs(sd: &Structs) -> (r: StructModels)
     decreases sd,
 {
     match sd {
-        List::Nil => StructModels::Nil,
+        List::Nil => List::Nil,
         List::Cons((k, (l, fields, _)), rest) => {
             let m = match translate_fields(fields, *l) {
                 Ok(df) => Ok((*k, df)),
                 Err(r) => Err(r),
             };
-            StructModels::Cons(m, Box::new(translate_structs(rest)))
+            List::Cons(m, Box::new(translate_structs(rest)))
         },
     }
 }

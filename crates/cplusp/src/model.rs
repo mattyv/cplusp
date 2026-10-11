@@ -7,8 +7,8 @@ use std::fmt::Write;
 
 use anyhow::{Context, Result};
 use cplusp_core::model::{
-    parse_contract, translate_structs, translate_unit, Args, BinOp, Cases, CastKind, CondKind, Conds, DArgs, DCalls, DCases, DConds, DExpr, DParams, DStmt, DStmts, DTy, Expr, Extent, Fns,
-    Function, Members, Method, Model, Models, Names as CNames, Obj, Objs, Params, Refusal, Scalar, Stmt, Stmts, StructModels, Structs, Tok, Ty,
+    parse_contract, translate_structs, translate_unit, Args, BinOp, CastKind, CondKind, Conds, DArgs, DConds, DExpr, DParams, DStmt, DStmts, DTy, Expr, Extent, Fns,
+    Function, List, Members, Method, Model, Names as CNames, Obj, Objs, Params, Refusal, Scalar, Stmt, Stmts, Structs, Tok, Ty,
 };
 use serde::Deserialize;
 
@@ -384,7 +384,7 @@ fn stmt(s: JStmt, names: &mut Names) -> Stmt {
         JStmt::Switch(e, k, cases, line) => {
             let place = names.here(line);
             let key = names.id(&k);
-            let cases = cases.into_iter().rev().fold(Cases::Nil, |rest, (i, body)| Cases::Cons(i, Box::new(stmts(body, names)), Box::new(rest)));
+            let cases = cases.into_iter().rev().fold(List::Nil, |rest, (i, body)| List::Cons((i, Box::new(stmts(body, names))), Box::new(rest)));
             Stmt::Switch(expr(e, names), key, Box::new(cases), place)
         }
         JStmt::SetRefField(p, f, e, line) => Stmt::SetRefField(names.id(&p), names.id(&f), expr(e, names), names.here(line)),
@@ -464,7 +464,7 @@ fn body_line(c: JCond, apply: bool, names: &mut Names) -> Stmt {
 /// A cons list from a vector.
 fn stmts(v: Vec<JStmt>, names: &mut Names) -> Stmts {
     let items: Vec<Stmt> = v.into_iter().map(|s| stmt(s, names)).collect();
-    items.into_iter().rev().fold(Stmts::Nil, |rest, s| Stmts::Cons(Box::new(s), Box::new(rest)))
+    items.into_iter().rev().fold(List::Nil, |rest, s| List::Cons(Box::new(s), Box::new(rest)))
 }
 
 // ------------------------------------------------------------------ the contract lexer
@@ -1091,7 +1091,7 @@ fn mangle(name: &str) -> String {
 fn dargs(args: &DArgs, names: &Names) -> Vec<String> {
     let mut shown = Vec::new();
     let mut rest = args;
-    while let DArgs::Cons(a, next) = rest {
+    while let List::Cons(a, next) = rest {
         shown.push(dexpr(a, names));
         rest = next;
     }
@@ -1218,7 +1218,7 @@ impl Printer<'_> {
     fn update(&self, objs: &Objs, m: u32, args: &DArgs) -> (String, String) {
         let mut places = Vec::new();
         let mut rest = objs;
-        while let Objs::Cons(o, next) = rest {
+        while let List::Cons(o, next) = rest {
             places.push(match o {
                 Obj::Local(n) => mangle(self.names.text(*n)),
                 Obj::Object => "v_this'".to_string(),
@@ -1231,7 +1231,7 @@ impl Printer<'_> {
 
     fn stmts(&mut self, ss: &DStmts, depth: usize) {
         let mut rest = ss;
-        while let DStmts::Cons(s, place, next) = rest {
+        while let List::Cons((s, place), next) = rest {
             self.stmt(s, *place, depth);
             rest = next;
         }
@@ -1242,7 +1242,7 @@ impl Printer<'_> {
     fn dwhile(&mut self, (c, place): (&DExpr, u32), lists: [&DConds; 2], body: &DStmts, step: Option<(&DStmt, u32)>, depth: usize) {
         let mut invariants = Vec::new();
         let mut cs = lists[0];
-        while let DConds::Cons(_, line, next) = cs {
+        while let List::Cons((_, line), next) = cs {
             invariants.push(*line);
             cs = next;
         }
@@ -1254,7 +1254,7 @@ impl Printer<'_> {
         self.own = invariants.clone();
         for (word, list) in ["invariant", "decreases"].into_iter().zip(lists) {
             let mut cs = list;
-            while let DConds::Cons(e, line, next) = cs {
+            while let List::Cons((e, line), next) = cs {
                 self.put(depth + 1, format!("{word} {}", dexpr(e, self.names)), *line);
                 cs = next;
             }
@@ -1306,7 +1306,7 @@ impl Printer<'_> {
             DStmt::Match(d, k, cases) => {
                 self.put(depth, format!("match {} {{", dexpr(d, names)), place);
                 let mut rest = &**cases;
-                while let DCases::Cons(i, body, next) = rest {
+                while let List::Cons((i, body), next) = rest {
                     let case = dexpr(&DExpr::Enumerator(*k, *i), names);
                     self.put(depth + 1, format!("case {case} => {{"), place);
                     self.stmts(body, depth + 2);
@@ -1326,7 +1326,7 @@ impl Printer<'_> {
                 let base = self.temps;
                 let outer = names.temp_base.replace(Some(base));
                 let mut rest = calls;
-                while let DCalls::Cons(t, ty, m, args, next) = rest {
+                while let List::Cons((t, ty, m, args), next) = rest {
                     let call = self.call(*m, args);
                     self.put(depth, format!("var v_'t{}: {} := {call};", base + t, dty(*ty, names)), place);
                     self.temps = self.temps.max(base + t + 1);
@@ -1360,7 +1360,7 @@ impl Printer<'_> {
             DStmt::If(c, t, f) => {
                 self.put(depth, format!("if {} {{", dexpr(c, names)), place);
                 self.stmts(t, depth + 1);
-                if matches!(**f, DStmts::Nil) {
+                if matches!(**f, List::Nil) {
                     self.put(depth, "}".to_string(), place);
                 } else {
                     self.put(depth, "} else {".to_string(), place);
@@ -1377,7 +1377,7 @@ impl Printer<'_> {
     fn header(&mut self, name: u32, params: &DParams, ret: DTy, (writes, axiom): (bool, bool), outs: &[(u32, DTy)], place: u32) {
         let mut shown = Vec::new();
         let mut ps = params;
-        while let DParams::Cons(n, t, next) = ps {
+        while let List::Cons((n, t), next) = ps {
             shown.push(format!("{}: {}", mangle(self.names.text(*n)), dty(*t, self.names)));
             ps = next;
         }
@@ -1385,7 +1385,7 @@ impl Printer<'_> {
         if ret != DTy::Void {
             gives.push(format!("result: {}", dty(ret, self.names)));
         }
-        if let (true, DParams::Cons(_, t, _)) = (writes, params) {
+        if let (true, List::Cons((_, t), _)) = (writes, params) {
             gives.push(format!("v_this': {}", dty(*t, self.names)));
         }
         // The reference parameters that the method gives back follow, in the order of the parameters, decision 0108.
@@ -1401,7 +1401,7 @@ impl Printer<'_> {
     fn function(&mut self, m: &Method, body: &DExpr, place: u32) {
         let mut shown = Vec::new();
         let mut ps = &m.params;
-        while let DParams::Cons(n, t, next) = ps {
+        while let List::Cons((n, t), next) = ps {
             shown.push(format!("{}: {}", mangle(self.names.text(*n)), dty(*t, self.names)));
             ps = next;
         }
@@ -1409,7 +1409,7 @@ impl Printer<'_> {
         self.lines.push(None);
         self.put(0, format!("function {}({}): {}", self.names.functions[&m.name], shown.join(", "), dty(m.ret, self.names)), place);
         let mut cs = &m.requires;
-        while let DConds::Cons(e, line, next) = cs {
+        while let List::Cons((e, line), next) = cs {
             self.put(1, format!("requires {}", dexpr(e, self.names)), *line);
             self.scope.push(*line);
             cs = next;
@@ -1430,7 +1430,7 @@ impl Printer<'_> {
         // A requires line has the requires lines before it in scope, and an ensures or decreases line and the body have all of them.
         for (word, list) in [("requires", &m.requires), ("ensures", &m.ensures), ("decreases", &m.decreases)] {
             let mut cs = list;
-            while let DConds::Cons(e, line, next) = cs {
+            while let List::Cons((e, line), next) = cs {
                 self.put(1, format!("{word} {}", dexpr(e, self.names)), *line);
                 if word == "requires" {
                     self.scope.push(*line);
@@ -1503,7 +1503,7 @@ pub type Refusing = (String, u32, String);
 fn dparams(ps: &DParams) -> Vec<(u32, DTy)> {
     let mut out = Vec::new();
     let mut rest = ps;
-    while let DParams::Cons(n, t, next) = rest {
+    while let List::Cons((n, t), next) = rest {
         out.push((*n, *t));
         rest = next;
     }
@@ -1664,7 +1664,7 @@ pub fn translate(lines: &str, companion: Option<(&str, &str)>) -> Result<Transla
     // The result type of each method, so a call that writes its object can drop the value.
     let mut rets = HashMap::new();
     let mut seen = &models;
-    while let Models::Cons(model, next) = seen {
+    while let List::Cons(model, next) = seen {
         match model {
             Model::Full(m) => rets.insert(m.name, m.ret),
             Model::Bare(key, _, ret, _) => rets.insert(*key, *ret),
@@ -1681,14 +1681,14 @@ pub fn translate(lines: &str, companion: Option<(&str, &str)>) -> Result<Transla
         p.put(0, format!("datatype {name} = {}", constructors.join(" | ")), place);
     }
     for (place, unreadable) in struct_places {
-        let StructModels::Cons(model, rest) = smodels else { unreachable!("one model for each struct") };
+        let List::Cons(model, rest) = smodels else { unreachable!("one model for each struct") };
         match model {
             // The struct is refused, and its callers keep the type. The refusal stands for the file.
             Ok(_) if unreadable.is_some() => refused_at.push((place, format!("{}: a name with a character Dafny cannot read.", unreadable.unwrap_or_default()))),
-            Ok((key, DParams::Nil)) => p.put(0, format!("datatype {0} = {0}()", names.datatypes[&key]), place),
+            Ok((key, List::Nil)) => p.put(0, format!("datatype {0} = {0}()", names.datatypes[&key]), place),
             Ok((key, mut fields)) => {
                 let mut shown = Vec::new();
-                while let DParams::Cons(n, t, next) = fields {
+                while let List::Cons((n, t), next) = fields {
                     shown.push(format!("f_{}: {}", names.text(n), dty(t, &names)));
                     fields = *next;
                 }
@@ -1701,7 +1701,7 @@ pub fn translate(lines: &str, companion: Option<(&str, &str)>) -> Result<Transla
     let mut printed = 0;
     let mut trusted = Vec::new();
     for _ in 0..count {
-        let Models::Cons(model, rest) = models else { unreachable!("one model for each function") };
+        let List::Cons(model, rest) = models else { unreachable!("one model for each function") };
         let refused = match model {
             Model::Full(m) => {
                 p.method(&m, at[&m.name]);

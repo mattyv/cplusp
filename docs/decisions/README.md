@@ -126,3 +126,4 @@ Status is `decided`, `proposed` (the default until someone objects or the thin s
 | [0119](0119-a-raw-copy-is-banned-where-it-can-make-a-bad-value.md) | A raw copy of bytes is banned where it can make a bad pointer, reference, enum or bool, or reads padding, in all code | decided |
 | [0120](0120-the-last-forms-of-a-raw-copy.md) | type_punning also bans a pointer to bytes from an integer or a const_cast, as_writable_bytes, more copy functions, virtual classes and incomplete types. Library reads through void* stay a documented gap | decided |
 | [0121](0121-one-list-type-in-the-core.md) | One generic list type in the core in place of 18, in three steps that change no rule | decided |
+| [0122](0122-the-cases-of-a-switch-stay-a-list-of-their-own.md) | The cases of a switch stay a list of their own. One generic append. The 0121 cleanup saves about 230 lines | decided |
