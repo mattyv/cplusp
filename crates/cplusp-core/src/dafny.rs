@@ -316,6 +316,7 @@ proof fn lemma_line_end(t: Seq<u8>, i: int)
     ensures
         i <= line_end(t, i) <= t.len(),
         line_end(t, i) < t.len() ==> t[line_end(t, i)] == 10,
+        forall|k: int| i <= k < line_end(t, i) ==> t[k] != 10,
     decreases t.len() - i,
 {
     if i < t.len() && t[i] != 10 {
@@ -365,8 +366,237 @@ pub open spec fn spec_summary(r: SReading, lo: usize, hi: usize) -> Option<(u64,
     }
 }
 
+/// The verdict reads only whether a count is zero, so the counts pass as 0 or 1.
 pub open spec fn spec_judge(r: SReading, exit_ok: bool, refused: bool, methods: usize, lo: usize, hi: usize) -> Verdict {
-    spec_verdict(exit_ok, spec_summary(r, lo, hi), r.errors.len() as usize, refused, axiom_count(r.warnings, r.trigger, lo, hi) as usize, methods)
+    spec_verdict(
+        exit_ok,
+        spec_summary(r, lo, hi),
+        if r.errors.len() == 0 { 0 } else { 1 },
+        refused,
+        if axiom_count(r.warnings, r.trigger, lo, hi) == 0 { 0 } else { 1 },
+        methods,
+    )
+}
+
+// ------------------------------------------------------------------ the text-level claim
+
+/// The line that starts at `j` in the lines from `i`: `j` is `i`, or follows a line feed.
+pub open spec fn line_start(t: Seq<u8>, i: int, j: int) -> bool {
+    i <= j < t.len() && (j == i || t[j - 1] == 10)
+}
+
+/// The end of the text of the line that starts at `j`.
+pub open spec fn line_text_end(t: Seq<u8>, j: int) -> int {
+    text_end(t, j, line_end(t, j))
+}
+
+/// The counts of the first line from `i` with the shape of a summary.
+pub open spec fn first_counts(t: Seq<u8>, i: int) -> Option<((u64, u64, u64), Option<Unread>)>
+    decreases t.len() + 1 - i,
+    via lemma_first_decreases
+{
+    if i < 0 || i >= t.len() {
+        None
+    } else {
+        let e = line_end(t, i);
+        match spec_counts(t, i, text_end(t, i, e)) {
+            Some(c) => Some(c),
+            None => first_counts(t, e + 1),
+        }
+    }
+}
+
+#[via_fn]
+proof fn lemma_first_decreases(t: Seq<u8>, i: int) {
+    if 0 <= i < t.len() {
+        lemma_line_end(t, i);
+    }
+}
+
+/// One line keeps what the reading has.
+proof fn lemma_line_keeps(r: SReading, t: Seq<u8>, s: int, e: int)
+    ensures
+        ({
+            let o = spec_line(r, t, s, e);
+            &&& o.errors.len() >= r.errors.len()
+            &&& o.warnings.len() >= r.warnings.len()
+            &&& o.trigger.len() >= r.trigger.len()
+            &&& (r.warnings.len() == r.trigger.len() ==> o.warnings.len() == o.trigger.len())
+            &&& forall|k: int| 0 <= k < r.warnings.len() ==> #[trigger] o.warnings[k] == r.warnings[k]
+            &&& forall|k: int| 0 <= k < r.trigger.len() ==> #[trigger] o.trigger[k] == r.trigger[k]
+            &&& (r.summary is Some ==> o.summary == r.summary)
+            &&& (r.summary is None ==> o.summary == spec_counts(t, s, e))
+            &&& (o.errors.len() == r.errors.len() ==> spec_at(t, s, e, error_mark()) is None)
+            &&& (spec_at(t, s, e, warning_mark()) matches Some((n, m)) ==> o.warnings.len() == r.warnings.len() + 1 && o.trigger.len()
+                == r.trigger.len() + 1 && o.warnings.last() == (n as usize, m as usize, e as usize) && o.trigger.last() == at(t, m, e, trigger_text()))
+        }),
+{
+    reveal(spec_line);
+}
+
+/// The reading keeps what it has, and adds the facts of each line from `i`, decision 0127.
+proof fn lemma_read_keeps(r: SReading, t: Seq<u8>, i: int)
+    requires
+        0 <= i <= t.len(),
+    ensures
+        ({
+            let out = spec_read_from(r, t, i);
+            &&& out.errors.len() >= r.errors.len()
+            &&& out.warnings.len() >= r.warnings.len()
+            &&& out.trigger.len() >= r.trigger.len()
+            &&& (r.warnings.len() == r.trigger.len() ==> out.warnings.len() == out.trigger.len())
+            &&& forall|k: int| 0 <= k < r.warnings.len() ==> #[trigger] out.warnings[k] == r.warnings[k]
+            &&& forall|k: int| 0 <= k < r.trigger.len() ==> #[trigger] out.trigger[k] == r.trigger[k]
+            &&& (r.summary is Some ==> out.summary == r.summary)
+            &&& (r.summary is None ==> out.summary == first_counts(t, i))
+        }),
+    decreases t.len() - i,
+{
+    if i < t.len() {
+        lemma_line_end(t, i);
+        let e = line_end(t, i);
+        let z = text_end(t, i, e);
+        let r2 = spec_line(r, t, i, z);
+        lemma_line_keeps(r, t, i, z);
+        let out = spec_read_from(r, t, i);
+        assert(out == spec_read_from(r2, t, e + 1));
+        if e + 1 <= t.len() {
+            lemma_read_keeps(r2, t, e + 1);
+        } else {
+            assert(first_counts(t, e + 1) is None);
+            assert(out == r2);
+        }
+        assert forall|k: int| 0 <= k < r.warnings.len() implies #[trigger] out.warnings[k] == r.warnings[k] by {
+            assert(r2.warnings[k] == r.warnings[k]);
+            assert(out.warnings[k] == r2.warnings[k]);
+        }
+        assert forall|k: int| 0 <= k < r.trigger.len() implies #[trigger] out.trigger[k] == r.trigger[k] by {
+            assert(r2.trigger[k] == r.trigger[k]);
+            assert(out.trigger[k] == r2.trigger[k]);
+        }
+    }
+}
+
+/// The line starts from `i` are `i` and the line starts after the end of its line.
+proof fn lemma_starts(t: Seq<u8>, i: int)
+    requires
+        0 <= i < t.len(),
+    ensures
+        forall|j: int| #[trigger] line_start(t, i, j) ==> j == i || line_start(t, line_end(t, i) + 1, j),
+{
+    lemma_line_end(t, i);
+    let e = line_end(t, i);
+    assert forall|j: int| #[trigger] line_start(t, i, j) implies j == i || line_start(t, e + 1, j) by {
+        if j != i {
+            assert(t[j - 1] == 10);
+        }
+    }
+}
+
+/// A reading that adds no error has seen no error line from `i`.
+proof fn lemma_read_errors(r: SReading, t: Seq<u8>, i: int)
+    requires
+        0 <= i <= t.len(),
+        spec_read_from(r, t, i).errors.len() == r.errors.len(),
+    ensures
+        forall|j: int| #[trigger] line_start(t, i, j) ==> spec_at(t, j, line_text_end(t, j), error_mark()) is None,
+    decreases t.len() - i,
+{
+    if i < t.len() {
+        lemma_line_end(t, i);
+        let e = line_end(t, i);
+        let z = text_end(t, i, e);
+        let r2 = spec_line(r, t, i, z);
+        lemma_line_keeps(r, t, i, z);
+        lemma_starts(t, i);
+        if e + 1 <= t.len() {
+            lemma_read_keeps(r2, t, e + 1);
+            lemma_read_errors(r2, t, e + 1);
+        }
+    }
+}
+
+/// Each warning line from `i` is in the reading, with its mark.
+proof fn lemma_read_warnings(r: SReading, t: Seq<u8>, i: int)
+    requires
+        0 <= i <= t.len(),
+        r.warnings.len() == r.trigger.len(),
+    ensures
+        forall|j: int| #[trigger] line_start(t, i, j) ==> (spec_at(t, j, line_text_end(t, j), warning_mark()) matches Some((n, m)) ==> exists|k: int|
+            0 <= k < spec_read_from(r, t, i).warnings.len() && #[trigger] spec_read_from(r, t, i).warnings[k] == (n as usize, m as usize, line_text_end(t, j) as usize)
+            && spec_read_from(r, t, i).trigger[k] == at(t, m, line_text_end(t, j), trigger_text())),
+    decreases t.len() - i,
+{
+    if i < t.len() {
+        lemma_line_end(t, i);
+        let e = line_end(t, i);
+        let z = text_end(t, i, e);
+        let r2 = spec_line(r, t, i, z);
+        lemma_line_keeps(r, t, i, z);
+        lemma_starts(t, i);
+        let out = spec_read_from(r, t, i);
+        if e + 1 <= t.len() {
+            lemma_read_keeps(r2, t, e + 1);
+            lemma_read_warnings(r2, t, e + 1);
+        }
+        if let Some((n, m)) = spec_at(t, i, z, warning_mark()) {
+            let k = r2.warnings.len() - 1;
+            assert(out.warnings[k] == r2.warnings[k]);
+            assert(out.trigger[k] == r2.trigger[k]);
+        }
+    }
+}
+
+/// A warning that counts as an axiom, by the rule of 0079.
+pub open spec fn axiom_at(w: (usize, usize, usize), trig: bool, lo: usize, hi: usize) -> bool {
+    w.0 >= 1 && lo <= w.0 - 1 < hi && !trig
+}
+
+proof fn lemma_axiom_count_zero(ws: Seq<(usize, usize, usize)>, tr: Seq<bool>, lo: usize, hi: usize)
+    requires
+        ws.len() == tr.len(),
+        axiom_count(ws, tr, lo, hi) == 0,
+    ensures
+        forall|k: int| 0 <= k < ws.len() ==> !axiom_at(#[trigger] ws[k], tr[k], lo, hi),
+    decreases ws.len(),
+{
+    if ws.len() > 0 {
+        lemma_axiom_count_zero(ws.drop_last(), tr.drop_last(), lo, hi);
+        assert forall|k: int| 0 <= k < ws.len() implies !axiom_at(#[trigger] ws[k], tr[k], lo, hi) by {
+            if k < ws.len() - 1 {
+                assert(ws[k] == ws.drop_last()[k]);
+                assert(tr[k] == tr.drop_last()[k]);
+            }
+        }
+    }
+}
+
+/// The text-level claim of decision 0127. A run is `Proved` only when Dafny exits with success, the translator refuses nothing, the
+/// first line of the output with the shape of a summary is clean and counts each method, no line is an error line, and each warning
+/// on a line of the companion file is about a missing trigger.
+pub proof fn lemma_proved_needs_the_text(t: Seq<u8>, exit_ok: bool, refused: bool, methods: usize, lo: usize, hi: usize)
+    requires
+        spec_judge(spec_read(t), exit_ok, refused, methods, lo, hi) == Verdict::Proved,
+    ensures
+        exit_ok,
+        !refused,
+        first_counts(t, 0) matches Some((c, u)) && c.1 == 0 && c.2 == 0 && c.0 >= methods as u64 && u != Some(Unread::Parse),
+        forall|j: int| #[trigger] line_start(t, 0, j) ==> spec_at(t, j, line_text_end(t, j), error_mark()) is None,
+        forall|j: int| #[trigger] line_start(t, 0, j) ==> (spec_at(t, j, line_text_end(t, j), warning_mark()) matches Some((n, m)) ==> !(n >= 1
+            && lo <= n - 1 < hi) || at(t, m, line_text_end(t, j), trigger_text())),
+{
+    let r = spec_read(t);
+    lemma_read_keeps(spec_empty(), t, 0);
+    lemma_read_errors(spec_empty(), t, 0);
+    lemma_read_warnings(spec_empty(), t, 0);
+    lemma_axiom_count_zero(r.warnings, r.trigger, lo, hi);
+    assert forall|j: int| #[trigger] line_start(t, 0, j) implies (spec_at(t, j, line_text_end(t, j), warning_mark()) matches Some((n, m)) ==> !(n >= 1
+        && lo <= n - 1 < hi) || at(t, m, line_text_end(t, j), trigger_text())) by {
+        if let Some((n, m)) = spec_at(t, j, line_text_end(t, j), warning_mark()) {
+            let k = choose|k: int| 0 <= k < r.warnings.len() && #[trigger] r.warnings[k] == (n as usize, m as usize, line_text_end(t, j) as usize) && r.trigger[k] == at(t, m, line_text_end(t, j), trigger_text());
+            assert(!axiom_at(r.warnings[k], r.trigger[k], lo, hi));
+        }
+    }
 }
 
 // ------------------------------------------------------------------ the code
@@ -610,9 +840,7 @@ fn at_kind(t: &Vec<u8>, s: usize, e: usize, p: &[u8]) -> (r: Option<(usize, usiz
                     Some(q) => match find_exec(t, q + 1, k - 1, &[0x2c]) {
                         None => None,
                         Some(c) => {
-                            proof {
-                                assert(seq![0x2cu8] =~= [0x2cu8]@);
-                            }
+                            
                             match parse_exec(t, q + 1, c, usize::MAX as u64) {
                                 Some(n) => Some((n as usize, k + p.len())),
                                 None => None,
@@ -774,6 +1002,7 @@ fn read_line(
 pub fn read_dafny(t: &Vec<u8>) -> (r: Reading)
     ensures
         r.sview() == spec_read(t@),
+        r.warnings@.len() == r.trigger@.len(),
 {
     let mut summary: Option<((u64, u64, u64), Option<Unread>)> = None;
     let mut errors: Vec<(usize, usize, usize)> = Vec::new();
@@ -784,6 +1013,7 @@ pub fn read_dafny(t: &Vec<u8>) -> (r: Reading)
     while i < t.len()
         invariant
             i <= t.len(),
+            warnings@.len() == trigger@.len(),
             spec_read_from(SReading { summary, errors: errors@, related: related@, warnings: warnings@, trigger: trigger@ }, t@, i as int) == spec_read(t@),
         decreases t.len() - i,
     {
@@ -797,6 +1027,7 @@ pub fn read_dafny(t: &Vec<u8>) -> (r: Reading)
         let ghost after = SReading { summary, errors: errors@, related: related@, warnings: warnings@, trigger: trigger@ };
         proof {
             assert(spec_read_from(before, t@, i as int) == spec_read_from(after, t@, e + 1));
+            lemma_line_keeps(before, t@, i as int, z as int);
         }
         if e >= t.len() {
             proof {
@@ -822,7 +1053,7 @@ pub fn read_dafny(t: &Vec<u8>) -> (r: Reading)
     r
 }
 
-fn in_companion_exec(n: usize, lo: usize, hi: usize) -> (b: bool)
+pub fn in_companion_exec(n: usize, lo: usize, hi: usize) -> (b: bool)
     requires
         hi < usize::MAX,
     ensures
