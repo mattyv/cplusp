@@ -15,6 +15,7 @@
 //!   holds it, and is verified when none does.
 
 pub mod companion;
+pub mod contract;
 pub mod model;
 pub mod verdict;
 

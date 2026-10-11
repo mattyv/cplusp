@@ -127,9 +127,9 @@ fn a_number_that_cannot_be_read_is_never_a_value() {
         vec![
             t("0x", LexKind::BadNumber(NumberFault::NoDigits)),
             t("017", LexKind::BadNumber(NumberFault::Octal)),
-            t("12q", LexKind::BadNumber(NumberFault::Suffix(9, 10))),
+            t("12q", LexKind::BadNumber(NumberFault::Suffix)),
             t("18446744073709551616", LexKind::BadNumber(NumberFault::TooBig)),
-            t("1e5", LexKind::BadNumber(NumberFault::Suffix(33, 35))),
+            t("1e5", LexKind::BadNumber(NumberFault::Suffix)),
             t("0xg", LexKind::BadNumber(NumberFault::NoDigits)),
         ]
     );
