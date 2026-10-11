@@ -129,3 +129,4 @@ Status is `decided`, `proposed` (the default until someone objects or the thin s
 | [0122](0122-the-cases-of-a-switch-stay-a-list-of-their-own.md) | The cases of a switch stay a list of their own. One generic append. The 0121 cleanup saves about 230 lines | decided |
 | [0123](0123-the-core-scans-the-companion-file.md) | The scan of the companion file moves into the Verus core, with a proof that a file passes only when no token breaks the rules of 0080 and 0083 | decided |
 | [0124](0124-the-core-cuts-a-contract-line-into-tokens.md) | The contract lexer and the fold of constants and enumerators move into the Verus core, in two steps. White space in a contract is ASCII only | decided |
+| [0125](0125-an-invisible-character-is-named-by-its-code.md) | A refused character that the eye cannot see is named by its code point. 0124 also amends 0057 | decided |

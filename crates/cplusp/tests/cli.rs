@@ -3634,3 +3634,19 @@ fn a_raw_copy_says_why_it_is_refused() {
         assert!(out.lines().any(|l| l.contains(&at) && l.ends_with(&format!("Use std::bit_cast for the bits of a value, or a pointer to bytes. {want}"))), "{line}: {out}");
     }
 }
+
+/// A refused character that the eye cannot see is named by its code point, decision 0125. The sentence for a no-break space is
+/// not a quoted space.
+#[test]
+fn an_invisible_character_in_a_contract_is_named_by_its_code_point() {
+    if !clang_tidy_available() {
+        return;
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let (o, _) = model("model-invisible.cpp", dir.path());
+    let text = stdout(&o);
+    assert_eq!(o.status.code(), Some(1), "stdout: {text} stderr: {}", stderr(&o));
+    let refusals: Vec<&str> = text.lines().filter(|l| l.starts_with("Not provable: ")).collect();
+    assert_eq!(refusals.len(), 1, "{text}");
+    assert!(refusals[0].ends_with("model-invisible.cpp:4: U+00A0 in a contract: the translator has no rule for it yet."), "{text}");
+}
