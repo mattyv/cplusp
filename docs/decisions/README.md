@@ -133,3 +133,4 @@ Status is `decided`, `proposed` (the default until someone objects or the thin s
 | [0126](0126-each-invisible-character-is-named-by-its-code.md) | A refused character is named by its code point unless it is a letter, a digit or a visible ASCII character | decided |
 | [0127](0127-the-core-reads-the-output-of-dafny.md) | The reader of the output of Dafny moves into the Verus core, with a proof that proved needs a clean summary, no error line and no axiom in the text | decided |
 | [0128](0128-the-core-checks-the-flags-of-the-compiler.md) | The check of the compiler flags moves into the Verus core, with a proof of the facts of a run with no refusal. The move of the Dafny names waits for the user | decided |
+| [0129](0129-two-more-flags-the-gate-refuses.md) | The gate refuses --no-warnings and the bare --std | decided |

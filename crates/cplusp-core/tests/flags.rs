@@ -64,13 +64,22 @@ fn flags_that_change_what_the_compiler_reads_or_reports_are_refused() {
 fn response_files_config_files_and_hidden_warnings_are_refused() {
     assert_eq!(check(&["-std=c++23", "-ffp-contract=off", "@args.txt"], &[]), (vec![(2, FlagFault::ResponseFile)], false, false));
     assert_eq!(check(&["-std=c++23", "-ffp-contract=off", "--config", "--config=x.cfg"], &[]), (vec![(2, FlagFault::ConfigFile), (3, FlagFault::ConfigFile)], false, false));
-    assert_eq!(check(&["-std=c++23", "-ffp-contract=off", "-w", "-Wno-everything"], &[]), (vec![(2, FlagFault::HidesAll), (3, FlagFault::HidesAll)], false, false));
+    assert_eq!(check(&["-std=c++23", "-ffp-contract=off", "-w", "-Wno-everything", "--no-warnings"], &[]), (vec![(2, FlagFault::HidesAll), (3, FlagFault::HidesAll), (4, FlagFault::HidesAll)], false, false));
     let checks = ["clang-diagnostic-shadow", "readability-x"];
     assert_eq!(check(&["-std=c++23", "-ffp-contract=off", "-Wno-shadow", "-Wno-unused"], &checks), (vec![(2, FlagFault::HidesRow)], false, false));
+    // The match needs the prefix: a check named `shadow` alone, or with another prefix, is no warning of the policy.
+    assert_eq!(check(&["-std=c++23", "-ffp-contract=off", "-Wno-shadow"], &["shadow", "other-clang-diagnostic-shadow"]), (vec![], false, false));
 }
 
 #[test]
 fn the_first_reason_of_a_flag_wins() {
     // `-ffp-contract=fast` is both a contraction flag and the last one: one fault, Float.
     assert_eq!(check(&["-std=c++23", "-ffp-contract=fast"], &[]), (vec![(1, FlagFault::Float)], false, true));
+}
+
+/// `--std VALUE` in two words sets the standard too, under a `-std=c++23` that the gate sees. The gate cannot read the value, so it
+/// refuses the bare flag, decision 0129.
+#[test]
+fn the_bare_std_flag_is_refused() {
+    assert_eq!(check(&["-std=c++23", "-ffp-contract=off", "--std", "c++20"], &[]), (vec![(2, FlagFault::Std)], false, false));
 }
