@@ -13,6 +13,9 @@ const KIND: u32 = 10;
 const SMALL: u32 = 11;
 const LARGE: u32 = 12;
 const OTHER: u32 = 13;
+const MODE: u32 = 14;
+const ON: u32 = 15;
+const OFF: u32 = 16;
 
 fn run(toks: &[Tok], constants: &[(u32, i128)], shadow: &[u32], enums: &[(u32, u32)], enumerators: &[(u32, u32)]) -> Vec<Tok> {
     let t = Folds { constants: constants.to_vec(), shadow: shadow.to_vec(), enums: enums.to_vec(), enumerators: enumerators.to_vec() };
@@ -102,4 +105,12 @@ fn a_constant_next_to_a_folded_enumerator_is_read_after_the_fold() {
 fn no_constant_and_no_enum_changes_nothing() {
     let toks = [Tok::Ident(A), Tok::Op(BinOp::Lt), Tok::Int(3), Tok::ColonColon, Tok::Result];
     assert_eq!(run(&toks, &[], &[], &[], &[]), toks.to_vec());
+}
+
+/// The index of a member counts only the members of its own enum.
+#[test]
+fn the_index_of_a_member_counts_its_own_enum_only() {
+    let toks = [Tok::Ident(MODE), Tok::ColonColon, Tok::Ident(OFF)];
+    let out = run(&toks, &[], &[], &[(KIND, 40), (MODE, 41)], &[(40, SMALL), (40, LARGE), (41, ON), (41, OFF)]);
+    assert_eq!(out, vec![Tok::Enumerator(41, 1)]);
 }
