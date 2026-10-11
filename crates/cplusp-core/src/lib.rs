@@ -16,6 +16,7 @@
 
 pub mod companion;
 pub mod contract;
+pub mod fold;
 pub mod model;
 pub mod verdict;
 

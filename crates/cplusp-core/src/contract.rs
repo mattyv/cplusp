@@ -10,13 +10,13 @@ verus! {
 // ------------------------------------------------------------------ the result
 
 /// Why a number cannot be read, decision 0082. `NoDigits` is `0x` with no hex digit after it. `Octal` is a decimal number with a
-/// leading 0 and more digits. `Suffix` is a suffix other than u, l, ul, lu, ll, ull and llu, in any case. `TooBig` is a value above
-/// the largest u64.
+/// leading 0 and more digits. `Suffix` is a suffix other than u, l, ul, lu, ll, ull and llu, in any case, with its length in the
+/// number without separators. `TooBig` is a value above the largest u64.
 #[derive(Structural, PartialEq, Eq, Clone, Copy, Debug)]
 pub enum NumberFault {
     NoDigits,
     Octal,
-    Suffix,
+    Suffix(usize),
     TooBig,
 }
 
@@ -209,7 +209,7 @@ pub open spec fn spec_number(w: Seq<u8>) -> LexKind {
     } else if !hex && n > 1 && body[0] == 0x30 {
         LexKind::BadNumber(NumberFault::Octal)
     } else if !suffix_ok(suffix) {
-        LexKind::BadNumber(NumberFault::Suffix)
+        LexKind::BadNumber(NumberFault::Suffix(suffix.len() as usize))
     } else if value(digits, if hex { 16 } else { 10 }) > u64::MAX {
         LexKind::BadNumber(NumberFault::TooBig)
     } else {
@@ -225,7 +225,7 @@ pub open spec fn char_len(c: u8) -> int {
         2
     } else if 0xe0 <= c <= 0xef {
         3
-    } else if 0xf0 <= c {
+    } else if 0xf0 <= c <= 0xf7 {
         4
     } else {
         1
@@ -782,7 +782,7 @@ fn number(w: &Vec<u8>) -> (r: LexKind)
         return LexKind::BadNumber(NumberFault::Octal);
     }
     if !suffix_ok_exec(w, from + n, w.len()) {
-        return LexKind::BadNumber(NumberFault::Suffix);
+        return LexKind::BadNumber(NumberFault::Suffix(w.len() - (from + n)));
     }
     match value_exec(w, from, from + n, hex) {
         None => LexKind::BadNumber(NumberFault::TooBig),
@@ -944,7 +944,7 @@ fn token(t: &Vec<u8>, i: usize) -> (r: (usize, LexKind))
             2
         } else if 0xe0 <= c && c <= 0xef {
             3
-        } else if 0xf0 <= c {
+        } else if 0xf0 <= c && c <= 0xf7 {
             4
         } else {
             1
