@@ -14,7 +14,7 @@ const SMALL: u32 = 11;
 const LARGE: u32 = 12;
 const OTHER: u32 = 13;
 
-fn run(toks: &[Tok], constants: &[(u32, i64)], shadow: &[u32], enums: &[(u32, u32)], enumerators: &[(u32, u32)]) -> Vec<Tok> {
+fn run(toks: &[Tok], constants: &[(u32, i128)], shadow: &[u32], enums: &[(u32, u32)], enumerators: &[(u32, u32)]) -> Vec<Tok> {
     let t = Folds { constants: constants.to_vec(), shadow: shadow.to_vec(), enums: enums.to_vec(), enumerators: enumerators.to_vec() };
     fold(&toks.to_vec(), &t)
 }
@@ -27,8 +27,15 @@ fn a_constant_reads_as_its_value_and_a_negative_one_in_parentheses() {
 
 #[test]
 fn the_most_negative_constant_has_its_exact_magnitude() {
-    let out = run(&[Tok::Ident(N)], &[(N, i64::MIN)], &[], &[], &[]);
+    let out = run(&[Tok::Ident(N)], &[(N, i64::MIN as i128)], &[], &[], &[]);
     assert_eq!(out, vec![Tok::LParen, Tok::Op(BinOp::Sub), Tok::Int(1u64 << 63), Tok::RParen]);
+}
+
+/// A constant holds the full range of uint64_t, decision 0063. A magnitude above it does not fold, and the name stays.
+#[test]
+fn a_constant_up_to_the_largest_u64_folds_and_a_larger_one_stays_a_name() {
+    let out = run(&[Tok::Ident(N), Tok::Ident(M), Tok::Ident(I)], &[(N, u64::MAX as i128), (M, -(u64::MAX as i128)), (I, (u64::MAX as i128) + 1)], &[], &[], &[]);
+    assert_eq!(out, vec![Tok::Int(u64::MAX), Tok::LParen, Tok::Op(BinOp::Sub), Tok::Int(u64::MAX), Tok::RParen, Tok::Ident(I)]);
 }
 
 #[test]
