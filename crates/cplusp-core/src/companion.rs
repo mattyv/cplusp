@@ -93,6 +93,7 @@ pub enum Mode {
     SkipToCode,
 }
 
+/// The state of the lexer. It is public because the open spec of `View` reads its fields.
 pub struct Lx {
     pub line: u32,
     pub depth: usize,
@@ -383,10 +384,10 @@ proof fn lemma_step_keeps(st: SLx, t: Seq<u8>, i: int)
 /// A keyword of Dafny that is not on the short list of decision 0080.
 pub open spec fn spec_banned(t: Seq<u8>, s: int, e: int) -> bool {
     let w = t.subrange(s, e);
-    w == b"abstract"@ || w == b"allocated"@ || w == b"assume"@ || w == b"break"@ || w == b"by"@ || w == b"calc"@ || w == b"char"@
+    w == b"abstract"@ || w == b"allocated"@ || w == b"array"@ || w == b"assume"@ || w == b"break"@ || w == b"by"@ || w == b"calc"@ || w == b"char"@
         || w == b"class"@ || w == b"codatatype"@ || w == b"colemma"@ || w == b"comethod"@ || w == b"const"@ || w == b"constructor"@
         || w == b"continue"@ || w == b"copredicate"@ || w == b"datatype"@ || w == b"default"@ || w == b"expect"@ || w == b"export"@
-        || w == b"extends"@ || w == b"fresh"@ || w == b"greatest"@ || w == b"imap"@ || w == b"import"@ || w == b"include"@
+        || w == b"extends"@ || w == b"for"@ || w == b"fresh"@ || w == b"greatest"@ || w == b"imap"@ || w == b"import"@ || w == b"include"@
         || w == b"inductive"@ || w == b"invariant"@ || w == b"iset"@ || w == b"iterator"@ || w == b"label"@ || w == b"least"@
         || w == b"method"@ || w == b"modifies"@ || w == b"modify"@ || w == b"module"@ || w == b"nameonly"@ || w == b"new"@
         || w == b"newtype"@ || w == b"null"@ || w == b"object"@ || w == b"old"@ || w == b"opaque"@ || w == b"opened"@
@@ -600,9 +601,9 @@ fn banned(t: &Vec<u8>, s: usize, e: usize) -> (r: bool)
         ensures
             r == (t@.subrange(s as int, e as int) == x@),
         { word_is(t, s, e, x) };
-    w(b"abstract") || w(b"allocated") || w(b"assume") || w(b"break") || w(b"by") || w(b"calc") || w(b"char") || w(b"class")
+    w(b"abstract") || w(b"allocated") || w(b"array") || w(b"assume") || w(b"break") || w(b"by") || w(b"calc") || w(b"char") || w(b"class")
         || w(b"codatatype") || w(b"colemma") || w(b"comethod") || w(b"const") || w(b"constructor") || w(b"continue")
-        || w(b"copredicate") || w(b"datatype") || w(b"default") || w(b"expect") || w(b"export") || w(b"extends") || w(b"fresh")
+        || w(b"copredicate") || w(b"datatype") || w(b"default") || w(b"expect") || w(b"export") || w(b"extends") || w(b"for") || w(b"fresh")
         || w(b"greatest") || w(b"imap") || w(b"import") || w(b"include") || w(b"inductive") || w(b"invariant") || w(b"iset")
         || w(b"iterator") || w(b"label") || w(b"least") || w(b"method") || w(b"modifies") || w(b"modify") || w(b"module")
         || w(b"nameonly") || w(b"new") || w(b"newtype") || w(b"null") || w(b"object") || w(b"old") || w(b"opaque") || w(b"opened")
