@@ -735,13 +735,13 @@ type Declared = (String, u32, bool);
 /// The refusals of a companion file as (line, sentence), and the declarations it holds, decisions 0080 and 0123. The core reads the bytes, and the
 /// shell writes the sentences, puts them in order and removes the copies. A file with a refusal declares no name.
 fn scan_companion(text: &str) -> (Vec<(u32, String)>, Vec<Declared>) {
-    // The core reads a file under 4 GiB. No companion file is near it.
+    // ponytail: the core reads a file under 4 GiB, so a longer one is refused at line 1. Upgrade: none planned.
     if text.len() >= u32::MAX as usize {
         return (vec![(1, "a companion file this long cannot be read.".to_string())], Vec::new());
     }
     let bytes = text.as_bytes().to_vec();
     let scan = cplusp_core::companion::scan_companion(&bytes);
-    let word = |start: usize, end: usize| String::from_utf8_lossy(&bytes[start..end]).into_owned();
+    let word = |start: usize, end: usize| text[start..end].to_string();
     let mut refused: Vec<(u32, String)> = scan
         .refusals
         .into_iter()
