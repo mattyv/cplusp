@@ -131,3 +131,14 @@ fn an_empty_file_passes_and_declares_nothing() {
     assert_eq!(r, refused(&[]));
     assert_eq!(d, vec![]);
 }
+
+/// `for` and `array` are keywords of Dafny that are not on the short list of decision 0080, so the scan refuses them. A name
+/// that starts with `'` is a name in Dafny, but the scan reads the `'` as a symbol, so such a name is not declared. Each such
+/// file is still refused later, so only the words of the refusal differ. The `bvN` types are keywords too. They need a rule for a
+/// prefix, and they add no axiom, so the scan lets them through.
+#[test]
+fn for_and_array_are_refused() {
+    let (r, d) = scan("function F(): int { 1 }\nlemma L() { for i := 0 }\nfunction G(a: array<int>): int { 1 }\n");
+    assert_eq!(r, refused(&[(2, "word:for"), (3, "word:array")]));
+    assert_eq!(d, vec![]);
+}
