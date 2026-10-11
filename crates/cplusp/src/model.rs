@@ -7,6 +7,7 @@ use std::fmt::Write;
 
 use anyhow::{Context, Result};
 use cplusp_core::companion::CompanionRefusal;
+use cplusp_core::contract::{LexKind, NumberFault};
 use cplusp_core::model::{
     parse_contract, translate_structs, translate_unit, Args, BinOp, CastKind, CondKind, Conds, DArgs, DConds, DExpr, DParams, DStmt, DStmts, DTy, Expr, Extent, Fns,
     Function, List, Members, Method, Model, Names as CNames, Obj, Objs, Params, Refusal, Scalar, Stmt, Stmts, Structs, Tok, Ty,
@@ -470,120 +471,45 @@ fn stmts(v: Vec<JStmt>, names: &mut Names) -> Stmts {
 
 // ------------------------------------------------------------------ the contract lexer
 
-/// Cut the text of a contract line into tokens. Any character with no token is `Tok::Unknown`, and the parser refuses the line there.
+/// Cut the text of a contract line into tokens, decision 0124. The core reads the bytes. The shell gives each name its id and makes the text of each
+/// refusal. Any text with no token is `Tok::Unknown`, and the parser refuses the line there.
 fn lex(text: &str, line: u32, names: &mut Names) -> Vec<Tok> {
-    const OPS: [(&str, BinOp); 14] = [
-        ("==>", BinOp::Implies),
-        ("&&", BinOp::And),
-        ("||", BinOp::Or),
-        ("<=", BinOp::Le),
-        (">=", BinOp::Ge),
-        ("==", BinOp::Eq),
-        ("!=", BinOp::Ne),
-        ("<", BinOp::Lt),
-        (">", BinOp::Gt),
-        ("+", BinOp::Add),
-        ("-", BinOp::Sub),
-        ("*", BinOp::Mul),
-        ("/", BinOp::Div),
-        ("%", BinOp::Rem),
-    ];
-    let mut toks = Vec::new();
-    let mut rest = text;
-    while let Some(c) = rest.chars().next() {
-        let word_end = |pred: fn(char) -> bool| rest.find(|ch: char| !pred(ch)).unwrap_or(rest.len());
-        if c.is_whitespace() {
-            rest = rest.trim_start();
-        } else if c.is_ascii_alphabetic() || c == '_' {
-            let end = word_end(|ch| ch.is_ascii_alphanumeric() || ch == '_');
-            toks.push(match &rest[..end] {
-                "result" => Tok::Result,
-                // `old(e)` is the word `old` and a parenthesis. A parameter named `old` is a name, decision 0057.
-                "old" if rest[end..].trim_start().starts_with('(') => Tok::Old,
-                "forall" => Tok::Forall,
-                "exists" => Tok::Exists,
-                "true" => Tok::Bool(true),
-                "false" => Tok::Bool(false),
-                w => {
+    let bytes = text.as_bytes().to_vec();
+    cplusp_core::contract::lex_contract(&bytes)
+        .into_iter()
+        .map(|lexeme| {
+            let word = &text[lexeme.start..lexeme.end];
+            match lexeme.kind {
+                LexKind::Name(call) => {
                     // A name followed by `(` is a call, and the companion file must declare it. A member name in a member function may be a call of
                     // the member, and the core decides, decision 0090.
-                    if rest[end..].trim_start().starts_with('(') && !names.declared.iter().any(|d| d == w) && !names.this_members.iter().any(|d| d == w) && !names.functors.iter().any(|d| d == w) {
-                        names.bad_calls.entry(line).or_insert_with(|| w.to_string());
+                    if call && !names.declared.iter().any(|d| d == word) && !names.this_members.iter().any(|d| d == word) && !names.functors.iter().any(|d| d == word) {
+                        names.bad_calls.entry(line).or_insert_with(|| word.to_string());
                     }
-                    Tok::Ident(names.id(w))
+                    Tok::Ident(names.id(word))
                 }
-            });
-            rest = &rest[end..];
-        } else if c.is_ascii_digit() {
-            // A C++ integer, decision 0082: decimal or hex, digit separators `'`, and a suffix of u and l. The value is exact. A literal that cannot be read
-            // or does not fit u64 is `Tok::Unknown`, never a token of the grammar.
-            let bytes = rest.as_bytes();
-            let mut end = 0;
-            while end < bytes.len() && (bytes[end].is_ascii_alphanumeric() || (bytes[end] == b'\'' && bytes.get(end + 1).is_some_and(u8::is_ascii_alphanumeric))) {
-                end += 1;
+                LexKind::Field => Tok::Field(names.id(&word[1..])),
+                LexKind::Fixed(tok) => tok,
+                LexKind::Int(value) => Tok::Int(value),
+                LexKind::BadNumber(fault) => {
+                    // The number without its digit separators.
+                    let number: String = word.chars().filter(|&ch| ch != '\'').collect();
+                    let kind = match fault {
+                        NumberFault::NoDigits => format!("a number with no digits after {}", &number[..2]),
+                        NumberFault::Octal => "an octal number".to_string(),
+                        NumberFault::Suffix => {
+                            let (digits, radix) = number.strip_prefix("0x").or_else(|| number.strip_prefix("0X")).map_or((number.as_str(), 10), |h| (h, 16));
+                            let suffix = &digits[digits.find(|ch: char| !ch.is_digit(radix)).unwrap_or(digits.len())..];
+                            format!("a number with the suffix {suffix}")
+                        }
+                        NumberFault::TooBig => "a number above 18446744073709551615".to_string(),
+                    };
+                    Tok::Unknown(names.id(&kind), line)
+                }
+                LexKind::BadChar => Tok::Unknown(names.id(&format!("'{word}' in a contract")), line),
             }
-            let word: String = rest[..end].chars().filter(|&ch| ch != '\'').collect();
-            let (prefix, digits, radix) = match word.strip_prefix("0x").or_else(|| word.strip_prefix("0X")) {
-                Some(h) => (&word[..2], h, 16),
-                None => ("", word.as_str(), 10),
-            };
-            let n = &digits[..digits.find(|ch: char| !ch.is_digit(radix)).unwrap_or(digits.len())];
-            let suffix = &digits[n.len()..];
-            let bad_suffix = !["", "u", "l", "ul", "lu", "ll", "ull", "llu"].contains(&suffix.to_ascii_lowercase().as_str());
-            // A leading 0 with more digits is octal in C++, and its digits say another number.
-            let refused = if n.is_empty() {
-                Some(format!("a number with no digits after {prefix}"))
-            } else if radix == 10 && n.len() > 1 && n.starts_with('0') {
-                Some("an octal number".to_string())
-            } else if bad_suffix {
-                Some(format!("a number with the suffix {suffix}"))
-            } else {
-                None
-            };
-            let value = match refused {
-                Some(kind) => Err(kind),
-                None => u64::from_str_radix(n, radix).map_err(|_| "a number above 18446744073709551615".to_string()),
-            };
-            toks.push(value.map_or_else(|kind| Tok::Unknown(names.id(&kind), line), Tok::Int));
-            rest = &rest[end..];
-        } else if let Some(t) = [(".size()", Tok::Size), (".empty()", Tok::Empty), (".has_value()", Tok::HasValue), (".value()", Tok::Value), ("..", Tok::DotDot), ("::", Tok::ColonColon)].into_iter().find(|(s, _)| rest.starts_with(s)) {
-            rest = &rest[t.0.len()..];
-            toks.push(t.1);
-        } else if c == '.' && rest[1..].starts_with(|ch: char| ch.is_ascii_alphabetic() || ch == '_') {
-            let end = 1 + rest[1..].find(|ch: char| !(ch.is_ascii_alphanumeric() || ch == '_')).unwrap_or(rest.len() - 1);
-            toks.push(Tok::Field(names.id(&rest[1..end])));
-            rest = &rest[end..];
-        } else if let Some(code) = char_literal(rest) {
-            // A character is its code, decision 0106. A character with an escape stays `'` below: the contract refuses it.
-            toks.push(Tok::Int(code));
-            rest = &rest[3..];
-        } else if let Some((s, o)) = OPS.iter().find(|(s, _)| rest.starts_with(s)) {
-            toks.push(Tok::Op(*o));
-            rest = &rest[s.len()..];
-        } else {
-            toks.push(match c {
-                '!' => Tok::Bang,
-                '(' => Tok::LParen,
-                ')' => Tok::RParen,
-                '[' => Tok::LBracket,
-                ']' => Tok::RBracket,
-                ',' => Tok::Comma,
-                '?' => Tok::Question,
-                ':' => Tok::Colon,
-                _ => Tok::Unknown(names.id(&format!("'{c}' in a contract")), line),
-            });
-            rest = &rest[c.len_utf8()..];
-        }
-    }
-    toks
-}
-
-/// The code of `'c'` at the start of the text, for one printable ASCII character that is no quote and no backslash, decision 0106.
-fn char_literal(text: &str) -> Option<u64> {
-    match text.as_bytes() {
-        [b'\'', c @ b' '..=b'~', b'\'', ..] if *c != b'\'' && *c != b'\\' => Some(u64::from(*c)),
-        _ => None,
-    }
+        })
+        .collect()
 }
 
 /// The names that a quantifier binds in the tokens: those after `forall` or `exists`, parted by commas.
