@@ -973,7 +973,7 @@ fn function(f: JFunction, names: &mut Names) -> Function {
         .enumerate()
         .map(|(i, (n, t))| (names.id(&if n.is_empty() { format!("'{i}") } else { n }), ty(t, names)))
         .collect();
-    let params = ps.into_iter().rev().fold(Params::Nil, |rest, (n, t)| Params::Cons(n, t, Box::new(rest)));
+    let params = ps.into_iter().rev().fold(Params::Nil, |rest, (n, t)| Params::Cons((n, t), Box::new(rest)));
     let ret = ty(f.ret, names);
     let line = names.here(f.line);
     Function { name, line, params, ret, trusted: f.trusted.is_some(), conds: conds(f.conds, names), body: stmts(f.body, names) }
@@ -1646,7 +1646,7 @@ pub fn translate(lines: &str, companion: Option<(&str, &str)>) -> Result<Transla
         let key = names.id(&st.key);
         let place = names.place(&st.file, st.line);
         names.file = st.file;
-        let fields = st.fields.into_iter().rev().fold(Params::Nil, |rest, (n, t)| Params::Cons(names.id(&n), ty(t, &mut names), Box::new(rest)));
+        let fields = st.fields.into_iter().rev().fold(Params::Nil, |rest, (n, t)| Params::Cons((names.id(&n), ty(t, &mut names)), Box::new(rest)));
         // The core marks which members are pure and their types, so the shell writes `None`.
         let members = st.members.into_iter().rev().fold(Members::Nil, |rest, (n, k)| Members::Cons(names.id(&n), names.id(&k), None, Box::new(rest)));
         table = Structs::Cons(key, place, fields, members, Box::new(table));

@@ -17,6 +17,86 @@ use vstd::prelude::*;
 
 verus! {
 
+// ------------------------------------------------------------------ lists, decision 0121
+
+/// A list of items, in their order. Every list of the model is one, decision 0121.
+#[derive(PartialEq, Eq, Debug)]
+pub enum List<T> {
+    Nil,
+    Cons(T, Box<List<T>>),
+}
+
+/// The value of the first pair with the key `k`.
+pub open spec fn spec_get<V>(l: List<(u32, V)>, k: u32) -> Option<V>
+    decreases l,
+{
+    match l {
+        List::Nil => None,
+        List::Cons((n, v), rest) => if n == k {
+            Some(v)
+        } else {
+            spec_get(*rest, k)
+        },
+    }
+}
+
+pub fn get<V: Copy>(l: &List<(u32, V)>, k: u32) -> (r: Option<V>)
+    ensures
+        r == spec_get(*l, k),
+    decreases l,
+{
+    match l {
+        List::Nil => None,
+        List::Cons((n, v), rest) => if *n == k {
+            Some(*v)
+        } else {
+            get(rest, k)
+        },
+    }
+}
+
+/// `k` is in the list.
+pub open spec fn spec_has(l: List<u32>, k: u32) -> bool
+    decreases l,
+{
+    match l {
+        List::Nil => false,
+        List::Cons(n, rest) => n == k || spec_has(*rest, k),
+    }
+}
+
+pub fn has(l: &List<u32>, k: u32) -> (r: bool)
+    ensures
+        r == spec_has(*l, k),
+    decreases l,
+{
+    match l {
+        List::Nil => false,
+        List::Cons(n, rest) => *n == k || has(rest, k),
+    }
+}
+
+/// The keys of a list of pairs, in their order.
+pub open spec fn spec_keys<V>(l: List<(u32, V)>) -> List<u32>
+    decreases l,
+{
+    match l {
+        List::Nil => List::Nil,
+        List::Cons((n, _), rest) => List::Cons(n, Box::new(spec_keys(*rest))),
+    }
+}
+
+pub fn keys<V>(l: &List<(u32, V)>) -> (r: List<u32>)
+    ensures
+        r == spec_keys(*l),
+    decreases l,
+{
+    match l {
+        List::Nil => List::Nil,
+        List::Cons((n, _), rest) => List::Cons(*n, Box::new(keys(rest))),
+    }
+}
+
 // ------------------------------------------------------------------ the C++ side
 
 /// The element of a sequence or of an optional: a scalar type, decision 0064, or a struct of the file by its key, decision 0076.
@@ -205,11 +285,8 @@ pub enum Cases {
     Cons(u32, Box<Stmts>, Box<Cases>),
 }
 
-#[derive(PartialEq, Eq, Debug)]
-pub enum Params {
-    Nil,
-    Cons(u32, Ty, Box<Params>),
-}
+/// The names and types of the parameters of a function, or of the fields of a struct, in their order.
+pub type Params = List<(u32, Ty)>;
 
 /// What a contract line says. `Modifies` names one reference parameter that the function writes, decision 0108. `Other` is a word
 /// the translator has no rule for yet, by the id of the word. `Bad` is a line that the shell could not cut or parse, with the refusal
@@ -226,11 +303,7 @@ pub enum CondKind {
 }
 
 /// The names of the parameters of a declaration, in their order.
-#[derive(PartialEq, Eq, Debug)]
-pub enum Names {
-    Nil,
-    Cons(u32, Box<Names>),
-}
+pub type Names = List<u32>;
 
 /// A contract line: what it says, its expression, its line, and the names of the parameters of the declaration it stands on,
 /// decision 0060.
@@ -621,8 +694,8 @@ pub open spec fn spec_holds_any(sd: Structs, ps: Params, depth: nat) -> bool
     decreases depth, ps,
 {
     match ps {
-        Params::Nil => false,
-        Params::Cons(_, t, rest) => (match t {
+        List::Nil => false,
+        List::Cons((_, t), rest) => (match t {
             Ty::Seq(_, _) => true,
             Ty::Struct(k) => depth == 0 || match spec_fields_of(sd, k) {
                 Some(fs) => spec_holds_any(sd, fs, (depth - 1) as nat),
@@ -965,10 +1038,10 @@ pub open spec fn spec_rebind(decl: Names, ps: Params, name: u32) -> Option<(u32,
     decreases ps,
 {
     match decl {
-        Names::Nil => None,
-        Names::Cons(d, drest) => match ps {
-            Params::Nil => None,
-            Params::Cons(p, t, prest) => if d == name {
+        List::Nil => None,
+        List::Cons(d, drest) => match ps {
+            List::Nil => None,
+            List::Cons((p, t), prest) => if d == name {
                 Some((p, t))
             } else {
                 spec_rebind(*drest, *prest, name)
@@ -1096,11 +1169,11 @@ pub open spec fn spec_contract(e: Expr, decl: Names, ps: Params, ret: Option<Ty>
             Ok((d, t)) => spec_leaf(d, t, line),
             Err(r) => Err(r),
         },
-        Expr::Forall(j, body) => match spec_contract(*body, decl, ps, ret, Names::Cons(j, Box::new(bound)), line, sd) {
+        Expr::Forall(j, body) => match spec_contract(*body, decl, ps, ret, List::Cons(j, Box::new(bound)), line, sd) {
             Ok(db) => Ok(DExpr::Forall(j, Box::new(db))),
             Err(r) => Err(r),
         },
-        Expr::Exists(j, body) => match spec_contract(*body, decl, ps, ret, Names::Cons(j, Box::new(bound)), line, sd) {
+        Expr::Exists(j, body) => match spec_contract(*body, decl, ps, ret, List::Cons(j, Box::new(bound)), line, sd) {
             Ok(db) => Ok(DExpr::Exists(j, Box::new(db))),
             Err(r) => Err(r),
         },
@@ -1234,23 +1307,9 @@ pub open spec fn spec_field_ty(sd: Structs, k: u32, f: u32) -> Option<Ty>
     match sd {
         Structs::Nil => None,
         Structs::Cons(key, _, fields, _, rest) => if key == k {
-            spec_lookup(fields, f)
+            spec_get(fields, f)
         } else {
             spec_field_ty(*rest, k, f)
-        },
-    }
-}
-
-/// The type of a field name among the fields of a struct.
-pub open spec fn spec_lookup(ps: Params, name: u32) -> Option<Ty>
-    decreases ps,
-{
-    match ps {
-        Params::Nil => None,
-        Params::Cons(n, t, rest) => if n == name {
-            Some(t)
-        } else {
-            spec_lookup(*rest, name)
         },
     }
 }
@@ -1355,23 +1414,13 @@ pub open spec fn spec_path(e: Expr, decl: Names, ps: Params, ret: Option<Ty>, bo
     }
 }
 
-/// `name` is bound.
-pub open spec fn spec_has(bound: Names, name: u32) -> bool
-    decreases bound,
-{
-    match bound {
-        Names::Nil => false,
-        Names::Cons(n, rest) => n == name || spec_has(*rest, name),
-    }
-}
-
 /// The parameter `this` of a member function, with the key of its struct, decision 0089.
 pub open spec fn spec_this(ps: Params) -> Option<(u32, u32)>
     decreases ps,
 {
     match ps {
-        Params::Nil => None,
-        Params::Cons(p, t, rest) => match t {
+        List::Nil => None,
+        List::Cons((p, t), rest) => match t {
             Ty::This(k) => Some((p, k)),
             _ => spec_this(*rest),
         },
@@ -1384,13 +1433,13 @@ pub open spec fn spec_self(ps: Params) -> Option<(u32, Ty)>
     decreases ps,
 {
     match ps {
-        Params::Cons(p, t, rest) => match t {
+        List::Cons((p, t), rest) => match t {
             Ty::This(_) => Some((p, t)),
             Ty::ThisMut(_) => Some((p, t)),
             Ty::ThisAfter(_) => Some((p, t)),
             _ => spec_self(*rest),
         },
-        Params::Nil => None,
+        List::Nil => None,
     }
 }
 
@@ -1407,16 +1456,12 @@ pub open spec fn spec_after(ps: Params) -> Params
     decreases ps,
 {
     match ps {
-        Params::Nil => Params::Nil,
-        Params::Cons(p, t, rest) => Params::Cons(
-            p,
-            match t {
+        List::Nil => List::Nil,
+        List::Cons((p, t), rest) => List::Cons((p, match t {
                 Ty::ThisMut(k) => Ty::ThisAfter(k),
                 Ty::Mut(s) => Ty::MutAfter(s),
                 _ => t,
-            },
-            Box::new(spec_after(*rest)),
-        ),
+            }), Box::new(spec_after(*rest))),
     }
 }
 
@@ -1425,16 +1470,12 @@ pub open spec fn spec_before(ps: Params) -> Params
     decreases ps,
 {
     match ps {
-        Params::Nil => Params::Nil,
-        Params::Cons(p, t, rest) => Params::Cons(
-            p,
-            match t {
+        List::Nil => List::Nil,
+        List::Cons((p, t), rest) => List::Cons((p, match t {
                 Ty::ThisAfter(k) => Ty::ThisMut(k),
                 Ty::MutAfter(s) => Ty::Mut(s),
                 _ => t,
-            },
-            Box::new(spec_before(*rest)),
-        ),
+            }), Box::new(spec_before(*rest))),
     }
 }
 
@@ -1452,31 +1493,17 @@ pub open spec fn spec_any_after(ps: Params) -> bool
     decreases ps,
 {
     match ps {
-        Params::Nil => false,
-        Params::Cons(_, t, rest) => match t {
+        List::Nil => false,
+        List::Cons((_, t), rest) => match t {
             Ty::MutAfter(_) => true,
             _ => spec_any_after(*rest),
         },
     }
 }
 
-/// The type of the parameter `name`.
-pub open spec fn spec_ty_of(ps: Params, name: u32) -> Option<Ty>
-    decreases ps,
-{
-    match ps {
-        Params::Nil => None,
-        Params::Cons(n, t, rest) => if n == name {
-            Some(t)
-        } else {
-            spec_ty_of(*rest, name)
-        },
-    }
-}
-
 /// `name` is a reference parameter that the function writes, decision 0108.
 pub open spec fn spec_is_mut(ps: Params, name: u32) -> bool {
-    match spec_ty_of(ps, name) {
+    match spec_get(ps, name) {
         Some(Ty::Mut(_)) => true,
         _ => false,
     }
@@ -1497,8 +1524,8 @@ pub open spec fn spec_mutates(ps: Params) -> bool
     decreases ps,
 {
     match ps {
-        Params::Nil => false,
-        Params::Cons(_, t, rest) => spec_written(t) || spec_mutates(*rest),
+        List::Nil => false,
+        List::Cons((_, t), rest) => spec_written(t) || spec_mutates(*rest),
     }
 }
 
@@ -1507,8 +1534,8 @@ pub open spec fn spec_outs(ps: Params) -> DParams
     decreases ps,
 {
     match ps {
-        Params::Nil => DParams::Nil,
-        Params::Cons(n, t, rest) => match t {
+        List::Nil => DParams::Nil,
+        List::Cons((n, t), rest) => match t {
             Ty::Mut(s) => DParams::Cons(n, spec_scalar_dty(s), Box::new(spec_outs(*rest))),
             _ => spec_outs(*rest),
         },
@@ -1565,8 +1592,8 @@ pub open spec fn spec_unlisted(todo: Params, ps: Params, cs: Conds, line: u32) -
     decreases todo,
 {
     match todo {
-        Params::Nil => None,
-        Params::Cons(p, t, rest) => match t {
+        List::Nil => None,
+        List::Cons((p, t), rest) => match t {
             Ty::Mut(_) => if spec_lists(ps, cs, p) {
                 spec_unlisted(*rest, ps, cs, line)
             } else {
@@ -1699,8 +1726,8 @@ pub open spec fn spec_params(ps: Params, line: u32) -> Result<DParams, Refusal>
     decreases ps,
 {
     match ps {
-        Params::Nil => Ok(DParams::Nil),
-        Params::Cons(n, t, rest) => match spec_param_ty(t, line) {
+        List::Nil => Ok(DParams::Nil),
+        List::Cons((n, t), rest) => match spec_param_ty(t, line) {
             Ok(dt) => match spec_params(*rest, line) {
                 Ok(dr) => Ok(DParams::Cons(n, dt, Box::new(dr))),
                 Err(r) => Err(r),
@@ -1751,28 +1778,8 @@ pub open spec fn spec_place(s: Stmt) -> u32 {
 /// A local inside a branch or a loop body stays inside, so the scope after any other statement is the scope before it.
 pub open spec fn spec_scope(s: Stmt, env: Params) -> Params {
     match s {
-        Stmt::Local(n, t, _, _) => Params::Cons(n, t, Box::new(env)),
+        Stmt::Local(n, t, _, _) => List::Cons((n, t), Box::new(env)),
         _ => env,
-    }
-}
-
-/// The names of a list of variables, in order.
-pub open spec fn spec_names_of(ps: Params) -> Names
-    decreases ps,
-{
-    match ps {
-        Params::Nil => Names::Nil,
-        Params::Cons(n, _, rest) => Names::Cons(n, Box::new(spec_names_of(*rest))),
-    }
-}
-
-/// `name` is a parameter.
-pub open spec fn spec_is_param(ps: Params, name: u32) -> bool
-    decreases ps,
-{
-    match ps {
-        Params::Nil => false,
-        Params::Cons(n, _, rest) => n == name || spec_is_param(*rest, name),
     }
 }
 
@@ -1792,7 +1799,7 @@ pub open spec fn spec_loop_conds(cs: Conds, want: CondKind, env: Params, sd: Str
             CondKind::Modifies => Err(Refusal::Misplaced(l)),
             _ => match spec_loop_conds(*rest, want, env, sd) {
                 Ok(dr) => if k == want {
-                    match spec_contract(e, spec_names_of(env), spec_after(env), None, Names::Nil, l, sd) {
+                    match spec_contract(e, spec_keys(env), spec_after(env), None, List::Nil, l, sd) {
                         Ok(d) => Ok(DConds::Cons(d, l, Box::new(dr))),
                         Err(r) => Err(r),
                     }
@@ -1831,7 +1838,7 @@ pub open spec fn spec_target(o: Expr, ps: Params, line: u32) -> Result<Obj, Refu
             } else {
                 Err(Refusal::Syntax(line))
             },
-            _ => if spec_is_param(ps, v) {
+            _ => if (spec_get(ps, v) is Some) {
                 Err(Refusal::WriteParam(v, line))
             } else {
                 Ok(Obj::Local(v))
@@ -1855,8 +1862,8 @@ pub open spec fn spec_writebacks(args: Args, cps: Params, ps: Params, line: u32)
     match args {
         Args::Nil => Ok(Objs::Nil),
         Args::Cons(a, rest) => match cps {
-            Params::Nil => Err(Refusal::Syntax(line)),
-            Params::Cons(_, t, crest) => if spec_written(t) {
+            List::Nil => Err(Refusal::Syntax(line)),
+            List::Cons((_, t), crest) => if spec_written(t) {
                 match spec_target(*a, ps, line) {
                     Err(r) => Err(r),
                     Ok(o) => match spec_writebacks(*rest, *crest, ps, line) {
@@ -1995,7 +2002,7 @@ pub open spec fn spec_stmt(s: Stmt, all: Fns, env: Params, ps: Params, sd: Struc
                 Ok((c, d, _)) => Ok(spec_pre(c, DStmt::SetOut(n, d))),
                 Err(r) => Err(r),
             }
-        } else if spec_is_param(ps, n) {
+        } else if (spec_get(ps, n) is Some) {
             Err(Refusal::WriteParam(n, l))
         } else {
             match e {
@@ -2013,7 +2020,7 @@ pub open spec fn spec_stmt(s: Stmt, all: Fns, env: Params, ps: Params, sd: Struc
                 },
             }
         },
-        Stmt::Step(n, t, up, l) => if spec_is_param(ps, n) && !spec_is_mut(ps, n) {
+        Stmt::Step(n, t, up, l) => if (spec_get(ps, n) is Some) && !spec_is_mut(ps, n) {
             Err(Refusal::WriteParam(n, l))
         } else {
             match spec_ty(t, l) {
@@ -2067,7 +2074,7 @@ pub open spec fn spec_stmt(s: Stmt, all: Fns, env: Params, ps: Params, sd: Struc
             },
             None => Err(Refusal::Syntax(l)),
         },
-        Stmt::SetRefField(p, f, e, l) => match spec_ty_of(ps, p) {
+        Stmt::SetRefField(p, f, e, l) => match spec_get(ps, p) {
             Some(Ty::Mut(Scalar::Struct(k))) => match spec_field_ty(sd, k, f) {
                 Some(Ty::Seq(_, _)) => Err(Refusal::SeqParam(l)),
                 Some(_) => match spec_lift(e, all, l, sd, 0, true) {
@@ -2088,11 +2095,11 @@ pub open spec fn spec_stmt(s: Stmt, all: Fns, env: Params, ps: Params, sd: Struc
         },
         Stmt::Call(k, nm, args, l) => spec_call_stmt(k, nm, *args, l, all, ps, sd),
         Stmt::Exit(_) => Ok(DStmt::Exit),
-        Stmt::Assert(e, l) => match spec_contract(e, spec_names_of(env), spec_after(env), None, Names::Nil, l, sd) {
+        Stmt::Assert(e, l) => match spec_contract(e, spec_keys(env), spec_after(env), None, List::Nil, l, sd) {
             Ok(d) => Ok(DStmt::Assert(d)),
             Err(r) => Err(r),
         },
-        Stmt::Apply(f, args, l) => match spec_contract_args(*args, spec_names_of(env), spec_after(env), None, Names::Nil, l, sd) {
+        Stmt::Apply(f, args, l) => match spec_contract_args(*args, spec_keys(env), spec_after(env), None, List::Nil, l, sd) {
             Ok(da) => Ok(DStmt::Apply(f, da)),
             Err(r) => Err(r),
         },
@@ -2186,7 +2193,7 @@ pub open spec fn spec_conds(cs: Conds, want: CondKind, ps: Params, ret: Ty, sd: 
                 Ok(dr) => if k == want && k == CondKind::Decreases && spec_has_result(e) {
                     Err(Refusal::Syntax(l))
                 } else if k == want {
-                    match spec_contract(e, decl, spec_view_ps(ps, k), Some(spec_view_ret(ret, k)), Names::Nil, l, sd) {
+                    match spec_contract(e, decl, spec_view_ps(ps, k), Some(spec_view_ret(ret, k)), List::Nil, l, sd) {
                         Ok(d) => Ok(DConds::Cons(d, l, Box::new(dr))),
                         Err(r) => Err(r),
                     }
@@ -2205,8 +2212,8 @@ pub open spec fn spec_twice_params(seen: Seq<u32>, ps: Params, line: u32) -> (Op
     decreases ps,
 {
     match ps {
-        Params::Nil => (None, seen),
-        Params::Cons(n, _, rest) => if seen.contains(n) {
+        List::Nil => (None, seen),
+        List::Cons((n, _), rest) => if seen.contains(n) {
             (Some((n, line)), seen)
         } else {
             spec_twice_params(seen.push(n), *rest, line)
@@ -2383,8 +2390,8 @@ pub open spec fn spec_bounds(ps: Params, line: u32, tail: DConds) -> DConds
     decreases ps,
 {
     match ps {
-        Params::Nil => tail,
-        Params::Cons(n, t, rest) => match t {
+        List::Nil => tail,
+        List::Cons((n, t), rest) => match t {
             Ty::Seq(_, Extent::Fixed(k)) => DConds::Cons(
                 DExpr::Bin(BinOp::Eq, Box::new(DExpr::Len(Box::new(DExpr::Var(n)))), Box::new(DExpr::Lit(k))),
                 line,
@@ -2424,8 +2431,8 @@ pub open spec fn spec_param_args(ps: Params) -> DArgs
     decreases ps,
 {
     match ps {
-        Params::Nil => DArgs::Nil,
-        Params::Cons(p, _, rest) => DArgs::Cons(DExpr::Var(p), Box::new(spec_param_args(*rest))),
+        List::Nil => DArgs::Nil,
+        List::Cons((p, _), rest) => DArgs::Cons(DExpr::Var(p), Box::new(spec_param_args(*rest))),
     }
 }
 
@@ -2589,8 +2596,8 @@ pub open spec fn spec_int_dty(t: Ty) -> Option<DTy> {
 /// The parameters after `this`.
 pub open spec fn spec_tail(ps: Params) -> Params {
     match ps {
-        Params::Cons(_, _, rest) => *rest,
-        Params::Nil => Params::Nil,
+        List::Cons((_, _), rest) => *rest,
+        List::Nil => List::Nil,
     }
 }
 
@@ -2601,14 +2608,14 @@ pub open spec fn spec_convert(da: DArgs, ps: Params) -> DArgs
     match da {
         DArgs::Nil => DArgs::Nil,
         DArgs::Cons(d, rest) => match ps {
-            Params::Cons(_, t, prest) => DArgs::Cons(
+            List::Cons((_, t), prest) => DArgs::Cons(
                 match spec_int_dty(t) {
                     Some(dt) => DExpr::Conv(dt, Box::new(d)),
                     None => d,
                 },
                 Box::new(spec_convert(*rest, *prest)),
             ),
-            Params::Nil => DArgs::Cons(d, Box::new(spec_convert(*rest, Params::Nil))),
+            List::Nil => DArgs::Cons(d, Box::new(spec_convert(*rest, List::Nil))),
         },
     }
 }
@@ -2649,8 +2656,8 @@ pub open spec fn spec_fields(ps: Params, line: u32) -> Result<DParams, Refusal>
     decreases ps,
 {
     match ps {
-        Params::Nil => Ok(DParams::Nil),
-        Params::Cons(n, t, rest) => match spec_ty(t, line) {
+        List::Nil => Ok(DParams::Nil),
+        List::Cons((n, t), rest) => match spec_ty(t, line) {
             Ok(dt) => match spec_fields(*rest, line) {
                 Ok(dr) => Ok(DParams::Cons(n, dt, Box::new(dr))),
                 Err(r) => Err(r),
@@ -3835,8 +3842,8 @@ pub fn holds_any(sd: &Structs, ps: &Params, depth: u64) -> (r: bool)
     decreases depth, ps,
 {
     match ps {
-        Params::Nil => false,
-        Params::Cons(_, t, rest) => {
+        List::Nil => false,
+        List::Cons((_, t), rest) => {
             let here = match t {
                 Ty::Seq(_, _) => true,
                 Ty::Struct(k) => depth == 0 || match fields_of(sd, *k) {
@@ -4169,10 +4176,10 @@ pub fn rebind(decl: &Names, ps: &Params, name: u32) -> (r: Option<(u32, Ty)>)
     decreases ps,
 {
     match decl {
-        Names::Nil => None,
-        Names::Cons(d, drest) => match ps {
-            Params::Nil => None,
-            Params::Cons(p, t, prest) => if *d == name {
+        List::Nil => None,
+        List::Cons(d, drest) => match ps {
+            List::Nil => None,
+            List::Cons((p, t), prest) => if *d == name {
                 Some((*p, *t))
             } else {
                 rebind(drest, prest, name)
@@ -4319,14 +4326,14 @@ pub fn translate_contract(e: &Expr, decl: &Names, ps: &Params, ret: Option<Ty>, 
             Err(r) => Err(r),
         },
         Expr::Forall(j, body) => {
-            let inner = Names::Cons(*j, Box::new(copy_names(bound)));
+            let inner = List::Cons(*j, Box::new(copy_names(bound)));
             match translate_contract(body, decl, ps, ret, &inner, line, sd) {
                 Ok(db) => Ok(DExpr::Forall(*j, Box::new(db))),
                 Err(r) => Err(r),
             }
         },
         Expr::Exists(j, body) => {
-            let inner = Names::Cons(*j, Box::new(copy_names(bound)));
+            let inner = List::Cons(*j, Box::new(copy_names(bound)));
             match translate_contract(body, decl, ps, ret, &inner, line, sd) {
                 Ok(db) => Ok(DExpr::Exists(*j, Box::new(db))),
                 Err(r) => Err(r),
@@ -4456,24 +4463,9 @@ pub fn field_ty(sd: &Structs, k: u32, f: u32) -> (r: Option<Ty>)
     match sd {
         Structs::Nil => None,
         Structs::Cons(key, _, fields, _, rest) => if *key == k {
-            lookup(fields, f)
+            get(fields, f)
         } else {
             field_ty(rest, k, f)
-        },
-    }
-}
-
-pub fn lookup(ps: &Params, name: u32) -> (r: Option<Ty>)
-    ensures
-        r == spec_lookup(*ps, name),
-    decreases ps,
-{
-    match ps {
-        Params::Nil => None,
-        Params::Cons(n, t, rest) => if *n == name {
-            Some(*t)
-        } else {
-            lookup(rest, name)
         },
     }
 }
@@ -4583,8 +4575,8 @@ pub fn this_param(ps: &Params) -> (r: Option<(u32, u32)>)
     decreases ps,
 {
     match ps {
-        Params::Nil => None,
-        Params::Cons(p, t, rest) => match t {
+        List::Nil => None,
+        List::Cons((p, t), rest) => match t {
             Ty::This(k) => Some((*p, *k)),
             _ => this_param(rest),
         },
@@ -4597,13 +4589,13 @@ pub fn self_param(ps: &Params) -> (r: Option<(u32, Ty)>)
     decreases ps,
 {
     match ps {
-        Params::Cons(p, t, rest) => match t {
+        List::Cons((p, t), rest) => match t {
             Ty::This(_) => Some((*p, *t)),
             Ty::ThisMut(_) => Some((*p, *t)),
             Ty::ThisAfter(_) => Some((*p, *t)),
             _ => self_param(rest),
         },
-        Params::Nil => None,
+        List::Nil => None,
     }
 }
 
@@ -4623,14 +4615,14 @@ pub fn after(ps: &Params) -> (r: Params)
     decreases ps,
 {
     match ps {
-        Params::Nil => Params::Nil,
-        Params::Cons(p, t, rest) => {
+        List::Nil => List::Nil,
+        List::Cons((p, t), rest) => {
             let v = match t {
                 Ty::ThisMut(k) => Ty::ThisAfter(*k),
                 Ty::Mut(s) => Ty::MutAfter(*s),
                 _ => *t,
             };
-            Params::Cons(*p, v, Box::new(after(rest)))
+            List::Cons((*p, v), Box::new(after(rest)))
         },
     }
 }
@@ -4641,14 +4633,14 @@ pub fn before(ps: &Params) -> (r: Params)
     decreases ps,
 {
     match ps {
-        Params::Nil => Params::Nil,
-        Params::Cons(p, t, rest) => {
+        List::Nil => List::Nil,
+        List::Cons((p, t), rest) => {
             let v = match t {
                 Ty::ThisAfter(k) => Ty::ThisMut(*k),
                 Ty::MutAfter(s) => Ty::Mut(*s),
                 _ => *t,
             };
-            Params::Cons(*p, v, Box::new(before(rest)))
+            List::Cons((*p, v), Box::new(before(rest)))
         },
     }
 }
@@ -4669,25 +4661,10 @@ pub fn any_after(ps: &Params) -> (r: bool)
     decreases ps,
 {
     match ps {
-        Params::Nil => false,
-        Params::Cons(_, t, rest) => match t {
+        List::Nil => false,
+        List::Cons((_, t), rest) => match t {
             Ty::MutAfter(_) => true,
             _ => any_after(rest),
-        },
-    }
-}
-
-pub fn ty_of(ps: &Params, name: u32) -> (r: Option<Ty>)
-    ensures
-        r == spec_ty_of(*ps, name),
-    decreases ps,
-{
-    match ps {
-        Params::Nil => None,
-        Params::Cons(n, t, rest) => if *n == name {
-            Some(*t)
-        } else {
-            ty_of(rest, name)
         },
     }
 }
@@ -4696,7 +4673,7 @@ pub fn is_mut(ps: &Params, name: u32) -> (r: bool)
     ensures
         r == spec_is_mut(*ps, name),
 {
-    match ty_of(ps, name) {
+    match get(ps, name) {
         Some(Ty::Mut(_)) => true,
         _ => false,
     }
@@ -4719,8 +4696,8 @@ pub fn mutates(ps: &Params) -> (r: bool)
     decreases ps,
 {
     match ps {
-        Params::Nil => false,
-        Params::Cons(_, t, rest) => written(*t) || mutates(rest),
+        List::Nil => false,
+        List::Cons((_, t), rest) => written(*t) || mutates(rest),
     }
 }
 
@@ -4730,8 +4707,8 @@ pub fn outs(ps: &Params) -> (r: DParams)
     decreases ps,
 {
     match ps {
-        Params::Nil => DParams::Nil,
-        Params::Cons(n, t, rest) => match t {
+        List::Nil => DParams::Nil,
+        List::Cons((n, t), rest) => match t {
             Ty::Mut(s) => DParams::Cons(*n, scalar_dty(*s), Box::new(outs(rest))),
             _ => outs(rest),
         },
@@ -4795,8 +4772,8 @@ pub fn unlisted(todo: &Params, ps: &Params, cs: &Conds, line: u32) -> (r: Option
     decreases todo,
 {
     match todo {
-        Params::Nil => None,
-        Params::Cons(p, t, rest) => match t {
+        List::Nil => None,
+        List::Cons((p, t), rest) => match t {
             Ty::Mut(_) => if lists(ps, cs, *p) {
                 unlisted(rest, ps, cs, line)
             } else {
@@ -4912,25 +4889,14 @@ pub fn ret_ty(t: Ty, line: u32, sd: &Structs) -> (r: Result<DTy, Refusal>)
     }
 }
 
-pub fn has(bound: &Names, name: u32) -> (r: bool)
-    ensures
-        r == spec_has(*bound, name),
-    decreases bound,
-{
-    match bound {
-        Names::Nil => false,
-        Names::Cons(n, rest) => *n == name || has(rest, name),
-    }
-}
-
 pub fn copy_names(ns: &Names) -> (r: Names)
     ensures
         r == *ns,
     decreases ns,
 {
     match ns {
-        Names::Nil => Names::Nil,
-        Names::Cons(n, rest) => Names::Cons(*n, Box::new(copy_names(rest))),
+        List::Nil => List::Nil,
+        List::Cons(n, rest) => List::Cons(*n, Box::new(copy_names(rest))),
     }
 }
 
@@ -4966,8 +4932,8 @@ pub fn translate_params(ps: &Params, line: u32) -> (r: Result<DParams, Refusal>)
     decreases ps,
 {
     match ps {
-        Params::Nil => Ok(DParams::Nil),
-        Params::Cons(n, t, rest) => match param_ty(*t, line) {
+        List::Nil => Ok(DParams::Nil),
+        List::Cons((n, t), rest) => match param_ty(*t, line) {
             Ok(dt) => match translate_params(rest, line) {
                 Ok(dr) => Ok(DParams::Cons(*n, dt, Box::new(dr))),
                 Err(r) => Err(r),
@@ -5001,8 +4967,8 @@ pub fn copy_params(ps: &Params) -> (r: Params)
     decreases ps,
 {
     match ps {
-        Params::Nil => Params::Nil,
-        Params::Cons(n, t, rest) => Params::Cons(*n, *t, Box::new(copy_params(rest))),
+        List::Nil => List::Nil,
+        List::Cons((n, t), rest) => List::Cons((*n, *t), Box::new(copy_params(rest))),
     }
 }
 
@@ -5034,30 +5000,8 @@ pub fn scope(s: &Stmt, env: &Params) -> (r: Params)
         r == spec_scope(*s, *env),
 {
     match s {
-        Stmt::Local(n, t, _, _) => Params::Cons(*n, *t, Box::new(copy_params(env))),
+        Stmt::Local(n, t, _, _) => List::Cons((*n, *t), Box::new(copy_params(env))),
         _ => copy_params(env),
-    }
-}
-
-pub fn names_of(ps: &Params) -> (r: Names)
-    ensures
-        r == spec_names_of(*ps),
-    decreases ps,
-{
-    match ps {
-        Params::Nil => Names::Nil,
-        Params::Cons(n, _, rest) => Names::Cons(*n, Box::new(names_of(rest))),
-    }
-}
-
-pub fn is_param(ps: &Params, name: u32) -> (r: bool)
-    ensures
-        r == spec_is_param(*ps, name),
-    decreases ps,
-{
-    match ps {
-        Params::Nil => false,
-        Params::Cons(n, _, rest) => *n == name || is_param(rest, name),
     }
 }
 
@@ -5076,7 +5020,7 @@ pub fn translate_loop_conds(cs: &Conds, want: CondKind, env: &Params, sd: &Struc
             CondKind::Modifies => Err(Refusal::Misplaced(*l)),
             _ => match translate_loop_conds(rest, want, env, sd) {
                 Ok(dr) => if *k == want {
-                    match translate_contract(e, &names_of(env), &after(env), None, &Names::Nil, *l, sd) {
+                    match translate_contract(e, &keys(env), &after(env), None, &List::Nil, *l, sd) {
                         Ok(d) => Ok(DConds::Cons(d, *l, Box::new(dr))),
                         Err(r) => Err(r),
                     }
@@ -5126,7 +5070,7 @@ pub fn target(o: &Expr, ps: &Params, line: u32) -> (r: Result<Obj, Refusal>)
             } else {
                 Err(Refusal::Syntax(line))
             },
-            _ => if is_param(ps, *v) {
+            _ => if get(ps, *v).is_some() {
                 Err(Refusal::WriteParam(*v, line))
             } else {
                 Ok(Obj::Local(*v))
@@ -5150,8 +5094,8 @@ pub fn writebacks(args: &Args, cps: &Params, ps: &Params, line: u32) -> (r: Resu
     match args {
         Args::Nil => Ok(Objs::Nil),
         Args::Cons(a, rest) => match cps {
-            Params::Nil => Err(Refusal::Syntax(line)),
-            Params::Cons(_, t, crest) => if written(*t) {
+            List::Nil => Err(Refusal::Syntax(line)),
+            List::Cons((_, t), crest) => if written(*t) {
                 match target(a, ps, line) {
                     Err(r) => Err(r),
                     Ok(o) => match writebacks(rest, crest, ps, line) {
@@ -5285,7 +5229,7 @@ pub fn translate_stmt(s: &Stmt, all: &Fns, env: &Params, ps: &Params, sd: &Struc
                 Ok((c, d, _)) => Ok(pre(c, DStmt::SetOut(*n, d))),
                 Err(r) => Err(r),
             }
-        } else if is_param(ps, *n) {
+        } else if get(ps, *n).is_some() {
             Err(Refusal::WriteParam(*n, *l))
         } else {
             match e {
@@ -5303,7 +5247,7 @@ pub fn translate_stmt(s: &Stmt, all: &Fns, env: &Params, ps: &Params, sd: &Struc
                 },
             }
         },
-        Stmt::Step(n, t, up, l) => if is_param(ps, *n) && !is_mut(ps, *n) {
+        Stmt::Step(n, t, up, l) => if get(ps, *n).is_some() && !is_mut(ps, *n) {
             Err(Refusal::WriteParam(*n, *l))
         } else {
             match translate_ty(*t, *l) {
@@ -5360,7 +5304,7 @@ pub fn translate_stmt(s: &Stmt, all: &Fns, env: &Params, ps: &Params, sd: &Struc
             },
             None => Err(Refusal::Syntax(*l)),
         },
-        Stmt::SetRefField(p, f, e, l) => match ty_of(ps, *p) {
+        Stmt::SetRefField(p, f, e, l) => match get(ps, *p) {
             Some(Ty::Mut(Scalar::Struct(k))) => match field_ty(sd, k, *f) {
                 Some(Ty::Seq(_, _)) => Err(Refusal::SeqParam(*l)),
                 Some(_) => match lift(e, all, *l, sd, 0, true) {
@@ -5381,11 +5325,11 @@ pub fn translate_stmt(s: &Stmt, all: &Fns, env: &Params, ps: &Params, sd: &Struc
         },
         Stmt::Call(k, nm, args, l) => call_stmt(*k, *nm, args, *l, all, ps, sd),
         Stmt::Exit(_) => Ok(DStmt::Exit),
-        Stmt::Assert(e, l) => match translate_contract(e, &names_of(env), &after(env), None, &Names::Nil, *l, sd) {
+        Stmt::Assert(e, l) => match translate_contract(e, &keys(env), &after(env), None, &List::Nil, *l, sd) {
             Ok(d) => Ok(DStmt::Assert(d)),
             Err(r) => Err(r),
         },
-        Stmt::Apply(f, args, l) => match translate_contract_args(args, &names_of(env), &after(env), None, &Names::Nil, *l, sd) {
+        Stmt::Apply(f, args, l) => match translate_contract_args(args, &keys(env), &after(env), None, &List::Nil, *l, sd) {
             Ok(da) => Ok(DStmt::Apply(*f, da)),
             Err(r) => Err(r),
         },
@@ -5484,7 +5428,7 @@ pub fn translate_conds(cs: &Conds, want: CondKind, ps: &Params, ret: Ty, sd: &St
                 Ok(dr) => if *k == want && *k == CondKind::Decreases && has_result(e) {
                     Err(Refusal::Syntax(*l))
                 } else if *k == want {
-                    match translate_contract(e, decl, &view_ps(ps, *k), Some(view_ret(ret, *k)), &Names::Nil, *l, sd) {
+                    match translate_contract(e, decl, &view_ps(ps, *k), Some(view_ret(ret, *k)), &List::Nil, *l, sd) {
                         Ok(d) => Ok(DConds::Cons(d, *l, Box::new(dr))),
                         Err(r) => Err(r),
                     }
@@ -5525,8 +5469,8 @@ pub fn twice_params(seen: &mut Vec<u32>, ps: &Params, line: u32) -> (r: Option<(
     decreases ps,
 {
     match ps {
-        Params::Nil => None,
-        Params::Cons(n, _, rest) => if holds(seen, *n) {
+        List::Nil => None,
+        List::Cons((n, _), rest) => if holds(seen, *n) {
             Some((*n, line))
         } else {
             seen.push(*n);
@@ -5723,8 +5667,8 @@ pub fn bounds(ps: &Params, line: u32, tail: DConds) -> (r: DConds)
     decreases ps,
 {
     match ps {
-        Params::Nil => tail,
-        Params::Cons(n, t, rest) => match t {
+        List::Nil => tail,
+        List::Cons((n, t), rest) => match t {
             Ty::Seq(_, Extent::Fixed(k)) => DConds::Cons(
                 DExpr::Bin(BinOp::Eq, Box::new(DExpr::Len(Box::new(DExpr::Var(*n)))), Box::new(DExpr::Lit(*k))),
                 line,
@@ -5822,8 +5766,8 @@ pub fn param_args(ps: &Params) -> (r: DArgs)
     decreases ps,
 {
     match ps {
-        Params::Nil => DArgs::Nil,
-        Params::Cons(p, _, rest) => DArgs::Cons(DExpr::Var(*p), Box::new(param_args(rest))),
+        List::Nil => DArgs::Nil,
+        List::Cons((p, _), rest) => DArgs::Cons(DExpr::Var(*p), Box::new(param_args(rest))),
     }
 }
 
@@ -5997,8 +5941,8 @@ pub fn tail(ps: &Params) -> (r: Params)
         r == spec_tail(*ps),
 {
     match ps {
-        Params::Cons(_, _, rest) => copy_params(rest),
-        Params::Nil => Params::Nil,
+        List::Cons((_, _), rest) => copy_params(rest),
+        List::Nil => List::Nil,
     }
 }
 
@@ -6010,14 +5954,14 @@ pub fn convert(da: DArgs, ps: &Params) -> (r: DArgs)
     match da {
         DArgs::Nil => DArgs::Nil,
         DArgs::Cons(d, rest) => match ps {
-            Params::Cons(_, t, prest) => DArgs::Cons(
+            List::Cons((_, t), prest) => DArgs::Cons(
                 match int_dty(*t) {
                     Some(dt) => DExpr::Conv(dt, Box::new(d)),
                     None => d,
                 },
                 Box::new(convert(*rest, prest)),
             ),
-            Params::Nil => DArgs::Cons(d, Box::new(convert(*rest, &Params::Nil))),
+            List::Nil => DArgs::Cons(d, Box::new(convert(*rest, &List::Nil))),
         },
     }
 }
@@ -6076,8 +6020,8 @@ fn translate_fields(ps: &Params, line: u32) -> (r: Result<DParams, Refusal>)
     decreases ps,
 {
     match ps {
-        Params::Nil => Ok(DParams::Nil),
-        Params::Cons(n, t, rest) => match translate_ty(*t, line) {
+        List::Nil => Ok(DParams::Nil),
+        List::Cons((n, t), rest) => match translate_ty(*t, line) {
             Ok(dt) => match translate_fields(rest, line) {
                 Ok(dr) => Ok(DParams::Cons(*n, dt, Box::new(dr))),
                 Err(r) => Err(r),
