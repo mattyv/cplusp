@@ -11,7 +11,7 @@ verus! {
 /// function. `enums` are (name, key). `enumerators` are (key, member) in the order of the enum, so the index of a member is the
 /// count of the entries of its key before it.
 pub struct Folds {
-    pub constants: Vec<(u32, i64)>,
+    pub constants: Vec<(u32, i128)>,
     pub shadow: Vec<u32>,
     pub enums: Vec<(u32, u32)>,
     pub enumerators: Vec<(u32, u32)>,
@@ -93,7 +93,7 @@ pub open spec fn member_index(es: Seq<(u32, u32)>, key: u32, b: u32, seen: nat) 
 }
 
 /// The value of the first constant with the name `n`.
-pub open spec fn const_of(cs: Seq<(u32, i64)>, n: u32) -> Option<i64>
+pub open spec fn const_of(cs: Seq<(u32, i128)>, n: u32) -> Option<i128>
     decreases cs.len(),
 {
     if cs.len() == 0 {
@@ -144,8 +144,13 @@ pub open spec fn spec_enums_from(toks: Seq<Tok>, i: int, enums: Seq<(u32, u32)>,
 
 // ------------------------------------------------------------------ the fold of constants
 
+/// A value whose magnitude a u64 holds, decision 0063.
+pub open spec fn fits(v: i128) -> bool {
+    -(u64::MAX as int) <= v <= u64::MAX
+}
+
 /// The tokens of a value: a negative value in parentheses, with its exact magnitude.
-pub open spec fn spec_value_toks(v: i64) -> Seq<Tok> {
+pub open spec fn spec_value_toks(v: i128) -> Seq<Tok> {
     if v < 0 {
         seq![Tok::LParen, Tok::Op(BinOp::Sub), Tok::Int((-(v as int)) as u64), Tok::RParen]
     } else {
@@ -155,13 +160,16 @@ pub open spec fn spec_value_toks(v: i64) -> Seq<Tok> {
 
 /// The name at `i` as its value, decision 0106: it is a constant, no parameter, local or bound name hides it, and no call or
 /// `::` stands next to it.
-pub open spec fn spec_const_at(toks: Seq<Tok>, i: int, cs: Seq<(u32, i64)>, shadow: Seq<u32>, bound: Seq<u32>) -> Option<i64> {
+pub open spec fn spec_const_at(toks: Seq<Tok>, i: int, cs: Seq<(u32, i128)>, shadow: Seq<u32>, bound: Seq<u32>) -> Option<i128> {
     if 0 <= i < toks.len() && toks[i] is Ident {
         let n = toks[i]->Ident_0;
         let next_ok = !(i + 1 < toks.len() && (toks[i + 1] == Tok::LParen || toks[i + 1] == Tok::ColonColon));
         let prev_ok = i == 0 || toks[i - 1] != Tok::ColonColon;
         if !bound.contains(n) && next_ok && prev_ok && !shadow.contains(n) {
-            const_of(cs, n)
+            match const_of(cs, n) {
+                Some(v) => if fits(v) { Some(v) } else { None },
+                None => None,
+            }
         } else {
             None
         }
@@ -170,7 +178,7 @@ pub open spec fn spec_const_at(toks: Seq<Tok>, i: int, cs: Seq<(u32, i64)>, shad
     }
 }
 
-pub open spec fn spec_consts_from(toks: Seq<Tok>, i: int, cs: Seq<(u32, i64)>, shadow: Seq<u32>, bound: Seq<u32>) -> Seq<Tok>
+pub open spec fn spec_consts_from(toks: Seq<Tok>, i: int, cs: Seq<(u32, i128)>, shadow: Seq<u32>, bound: Seq<u32>) -> Seq<Tok>
     decreases toks.len() - i,
 {
     if i < 0 || i >= toks.len() {
@@ -184,7 +192,7 @@ pub open spec fn spec_consts_from(toks: Seq<Tok>, i: int, cs: Seq<(u32, i64)>, s
 }
 
 /// The fold of a contract line: the enumerators first, then the constants, each with the names that the line binds.
-pub open spec fn spec_fold(toks: Seq<Tok>, cs: Seq<(u32, i64)>, shadow: Seq<u32>, enums: Seq<(u32, u32)>, es: Seq<(u32, u32)>) -> Seq<
+pub open spec fn spec_fold(toks: Seq<Tok>, cs: Seq<(u32, i128)>, shadow: Seq<u32>, enums: Seq<(u32, u32)>, es: Seq<(u32, u32)>) -> Seq<
     Tok,
 > {
     let e = spec_enums_from(toks, 0, enums, es, spec_bound(toks));
@@ -354,7 +362,7 @@ fn member_index_exec(es: &Vec<(u32, u32)>, key: u32, b: u32) -> (r: Option<usize
     None
 }
 
-fn const_of_exec(cs: &Vec<(u32, i64)>, n: u32) -> (r: Option<i64>)
+fn const_of_exec(cs: &Vec<(u32, i128)>, n: u32) -> (r: Option<i128>)
     ensures
         r == const_of(cs@, n),
 {
@@ -399,7 +407,7 @@ fn enum_at(toks: &Vec<Tok>, i: usize, t: &Folds, bound: &Vec<u32>) -> (r: Option
     None
 }
 
-fn const_at(toks: &Vec<Tok>, i: usize, t: &Folds, bound: &Vec<u32>) -> (r: Option<i64>)
+fn const_at(toks: &Vec<Tok>, i: usize, t: &Folds, bound: &Vec<u32>) -> (r: Option<i128>)
     requires
         i < toks.len(),
     ensures
@@ -409,7 +417,11 @@ fn const_at(toks: &Vec<Tok>, i: usize, t: &Folds, bound: &Vec<u32>) -> (r: Optio
         let next_ok = !(i + 1 < toks.len() && (toks[i + 1] == Tok::LParen || toks[i + 1] == Tok::ColonColon));
         let prev_ok = i == 0 || toks[i - 1] != Tok::ColonColon;
         if !contains(bound, n) && next_ok && prev_ok && !contains(&t.shadow, n) {
-            return const_of_exec(&t.constants, n);
+            if let Some(v) = const_of_exec(&t.constants, n) {
+                if -(u64::MAX as i128) <= v && v <= u64::MAX as i128 {
+                    return Some(v);
+                }
+            }
         }
     }
     None
@@ -495,7 +507,7 @@ fn consts_pass(toks: &Vec<Tok>, t: &Folds) -> (r: Vec<Tok>)
         match const_at(toks, i, t, &b) {
             Some(v) => {
                 if v < 0 {
-                    let m: u64 = ((-(v + 1)) as u64) + 1;
+                    let m: u64 = (-v) as u64;
                     out.push(Tok::LParen);
                     out.push(Tok::Op(BinOp::Sub));
                     out.push(Tok::Int(m));
