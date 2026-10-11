@@ -3666,3 +3666,18 @@ fn a_format_character_in_a_contract_is_named_by_its_code_point() {
     assert!(refusals[0].ends_with("model-format-char.cpp:4: U+200B in a contract: the translator has no rule for it yet."), "{text}");
     assert!(refusals[1].ends_with("model-format-char.cpp:9: U+202E in a contract: the translator has no rule for it yet."), "{text}");
 }
+
+/// A Hangul filler is a letter that prints as nothing, so it is named by its code point too, decision 0126.
+#[test]
+fn a_hangul_filler_in_a_contract_is_named_by_its_code_point() {
+    if !clang_tidy_available() {
+        return;
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let (o, _) = model("model-filler.cpp", dir.path());
+    let text = stdout(&o);
+    assert_eq!(o.status.code(), Some(1), "stdout: {text} stderr: {}", stderr(&o));
+    let refusals: Vec<&str> = text.lines().filter(|l| l.starts_with("Not provable: ")).collect();
+    assert_eq!(refusals.len(), 1, "{text}");
+    assert!(refusals[0].ends_with("model-filler.cpp:4: U+3164 in a contract: the translator has no rule for it yet."), "{text}");
+}
