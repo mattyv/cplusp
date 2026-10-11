@@ -1,6 +1,6 @@
-//! The shell side of the translator, decisions 0056 and 0057. It reads the plugin's lines of JSON, numbers the names, cuts the contract
-//! lines into tokens, hands the core its types, and prints the Dafny text of what the core gives back. Every rule of the translation is
-//! in `cplusp_core::model`. Nothing here decides what is allowed.
+//! The shell side of the translator, decisions 0056, 0057 and 0124. It reads the plugin's lines of JSON, numbers the names, hands the core the
+//! bytes of each contract line and its tables, and prints the Dafny text of what the core gives back. Every rule of the translation is
+//! in `cplusp_core`. Nothing here decides what is allowed.
 
 use std::collections::HashMap;
 use std::fmt::Write;
@@ -256,6 +256,10 @@ impl Names {
         });
         at as u32
     }
+    /// The id of a word that the table has, or none. It adds nothing.
+    fn find(&self, s: &str) -> Option<u32> {
+        self.words.iter().position(|n| n == s).map(|at| at as u32)
+    }
     fn text(&self, id: u32) -> &str {
         &self.words[id as usize]
     }
@@ -450,7 +454,7 @@ fn body_line(c: JCond, apply: bool, names: &mut Names) -> Stmt {
     };
     let mut toks: Vec<Tok> = head.into_iter().flat_map(|h| [Tok::Ident(names.id(h)), Tok::LParen]).collect();
     let lexed = lex(text, line, names);
-    toks.extend(fold_constants(lexed, names));
+    toks.extend(fold_names(lexed, names));
     // A call to an undeclared name is refused by `sentence` at this line.
     if names.bad_calls.contains_key(&line) {
         return syntax(line, None, names);
@@ -497,97 +501,38 @@ fn lex(text: &str, line: u32, names: &mut Names) -> Vec<Tok> {
                     let kind = match fault {
                         NumberFault::NoDigits => format!("a number with no digits after {}", &number[..2]),
                         NumberFault::Octal => "an octal number".to_string(),
-                        NumberFault::Suffix => {
-                            let (digits, radix) = number.strip_prefix("0x").or_else(|| number.strip_prefix("0X")).map_or((number.as_str(), 10), |h| (h, 16));
-                            let suffix = &digits[digits.find(|ch: char| !ch.is_digit(radix)).unwrap_or(digits.len())..];
-                            format!("a number with the suffix {suffix}")
-                        }
+                        NumberFault::Suffix(length) => format!("a number with the suffix {}", &number[number.len() - length..]),
                         NumberFault::TooBig => "a number above 18446744073709551615".to_string(),
                     };
                     Tok::Unknown(names.id(&kind), line)
                 }
-                LexKind::BadChar => Tok::Unknown(names.id(&format!("'{word}' in a contract")), line),
+                // An invisible character is named by its code point, decision 0125. A bot cannot see it in quotes.
+                LexKind::BadChar => match word.chars().next() {
+                    Some(ch) if ch.is_whitespace() || ch.is_control() => Tok::Unknown(names.id(&format!("U+{:04X} in a contract", ch as u32)), line),
+                    _ => Tok::Unknown(names.id(&format!("'{word}' in a contract")), line),
+                },
             }
         })
         .collect()
 }
 
-/// The names that a quantifier binds in the tokens: those after `forall` or `exists`, parted by commas.
-fn bound_names(toks: &[Tok]) -> Vec<u32> {
-    let mut bound = Vec::new();
-    for (i, t) in toks.iter().enumerate() {
-        if matches!(t, Tok::Forall | Tok::Exists) {
-            let mut at = i + 1;
-            while let Some(Tok::Ident(n)) = toks.get(at) {
-                bound.push(*n);
-                at += 1;
-                if toks.get(at) != Some(&Tok::Comma) {
-                    break;
-                }
-                at += 1;
-            }
+/// The fold of a contract line, decisions 0106, 0109 and 0124. The core does it, from the tables of the shell by id. A name that is not in the table of
+/// words cannot be in the tokens, so it is left out. An enumerator that is not in the table still takes its place among the members of its enum.
+fn fold_names(toks: Vec<Tok>, names: &Names) -> Vec<Tok> {
+    let mut missing = u32::MAX;
+    let mut folds = cplusp_core::fold::Folds { constants: Vec::new(), shadow: Vec::new(), enums: Vec::new(), enumerators: Vec::new() };
+    folds.constants = names.constants.iter().filter_map(|(c, v)| Some((names.find(c)?, *v))).collect();
+    folds.shadow = names.shadow.iter().filter_map(|n| names.find(n)).collect();
+    for (plain, key, list) in &names.enums {
+        folds.enums.extend(names.find(plain).map(|id| (id, *key)));
+        for member in list {
+            folds.enumerators.push((*key, names.find(member).unwrap_or_else(|| {
+                missing -= 1;
+                missing
+            })));
         }
     }
-    bound
-}
-
-/// `Kind::Small` for an enum class of the file and an enumerator of it reads as the enumerator, decision 0109. A name that a quantifier binds is no
-/// enum, and neither is a plain name that two enums share.
-fn fold_enumerators(toks: Vec<Tok>, names: &Names) -> Vec<Tok> {
-    if names.enums.is_empty() {
-        return toks;
-    }
-    let bound = bound_names(&toks);
-    let mut out = Vec::with_capacity(toks.len());
-    let mut i = 0;
-    while i < toks.len() {
-        if let [Tok::Ident(a), Tok::ColonColon, Tok::Ident(b), ..] = toks[i..] {
-            let (kind, member) = (names.text(a), names.text(b));
-            let mut same = names.enums.iter().filter(|(n, _, _)| n == kind);
-            if let (Some((_, key, list)), None, false) = (same.next(), same.next(), bound.contains(&a)) {
-                if let Some(at) = list.iter().position(|e| e == member) {
-                    out.push(Tok::Enumerator(*key, at as u32));
-                    i += 3;
-                    continue;
-                }
-            }
-        }
-        out.push(toks[i]);
-        i += 1;
-    }
-    out
-}
-
-/// A name that is a named constant of the file reads as its value, decision 0106. A parameter, a local or a name that a quantifier binds hides the
-/// constant. So does a name that is called or follows `::`.
-// ponytail: a name bound by a quantifier hides the constant on the whole line. Upgrade: scope the binder.
-fn fold_constants(toks: Vec<Tok>, names: &Names) -> Vec<Tok> {
-    let toks = fold_enumerators(toks, names);
-    if names.constants.is_empty() {
-        return toks;
-    }
-    let bound = bound_names(&toks);
-    let mut out = Vec::with_capacity(toks.len());
-    for (i, t) in toks.iter().enumerate() {
-        let value = match t {
-            Tok::Ident(n) if !bound.contains(n) && toks.get(i + 1) != Some(&Tok::LParen) && (i == 0 || toks[i - 1] != Tok::ColonColon) && toks.get(i + 1) != Some(&Tok::ColonColon) => {
-                let name = names.text(*n);
-                names.constants.iter().find(|(c, _)| c == name).filter(|_| !names.shadow.iter().any(|s| s == name)).map(|(_, v)| *v)
-            }
-            _ => None,
-        };
-        match value.map(|v| (v < 0, u64::try_from(v.unsigned_abs()))) {
-            Some((negative, Ok(n))) => {
-                if negative {
-                    out.extend([Tok::LParen, Tok::Op(BinOp::Sub), Tok::Int(n), Tok::RParen]);
-                } else {
-                    out.push(Tok::Int(n));
-                }
-            }
-            _ => out.push(*t),
-        }
-    }
-    out
+    cplusp_core::fold::fold(&toks, &folds)
 }
 
 /// The names of the parameters of a declaration, in order. A parameter with no name is `'N` by its place, as in `function`.
@@ -627,7 +572,7 @@ fn conds(v: Vec<JCond>, names: &mut Names) -> Conds {
                         _ => CondKind::Decreases,
                     };
                     let toks = lex(&c.text, line, names);
-                    let toks = fold_constants(toks, names);
+                    let toks = fold_names(toks, names);
                     // A call to an undeclared name is refused by `sentence` at this line, so the core refuses the line as a form it cannot read.
                     if names.bad_calls.contains_key(&line) {
                         (CondKind::Bad(Refusal::Syntax(line)), Expr::Int(0))

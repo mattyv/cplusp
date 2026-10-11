@@ -48,6 +48,7 @@ pub open spec fn spec_bound_from(toks: Seq<Tok>, i: int) -> Seq<u32>
     }
 }
 
+// ponytail: a name bound by a quantifier hides the constant on the whole line. Upgrade: scope the binder.
 pub open spec fn spec_bound(toks: Seq<Tok>) -> Seq<u32> {
     spec_bound_from(toks, 0)
 }
