@@ -174,8 +174,20 @@ pub open spec fn clean(fl: Seq<Vec<u8>>, cs: Seq<Vec<u8>>) -> bool {
     &&& exists|i: int| 0 <= i < fl.len() && #[trigger] std_value(fl[i]@) is Some
     &&& forall|i: int| 0 <= i < fl.len() && #[trigger] std_value(fl[i]@) is Some ==> std_ok(std_value(fl[i]@).unwrap())
     &&& last_contract(fl, fl.len() as int) matches Some(j) && is_off(fl[j]@)
-    &&& forall|i: int| 0 <= i < fl.len() ==> !float_flag(#[trigger] fl[i]@) && !reads(fl[i]@) && fl[i]@ != b"-w"@ && fl[i]@
-        != b"-Wno-everything"@
+    &&& forall|i: int| 0 <= i < fl.len() ==> flag_clean(#[trigger] fl[i]@, cs)
+}
+
+/// One flag that changes no floating-point result, nothing that the compiler reads or reports, and no warning of the policy, and
+/// names no file of flags.
+pub open spec fn flag_clean(f: Seq<u8>, cs: Seq<Vec<u8>>) -> bool {
+    &&& !float_flag(f)
+    &&& !(starts(f, b"-fdenormal-fp-math="@) && f != b"-fdenormal-fp-math=ieee"@)
+    &&& !(starts(f, b"-ffp-eval-method="@) && f != b"-ffp-eval-method=source"@)
+    &&& !reads(f)
+    &&& !starts(f, b"@"@)
+    &&& f != b"--config"@ && !starts(f, b"--config="@)
+    &&& f != b"-w"@ && f != b"-Wno-everything"@
+    &&& !(starts(f, b"-Wno-"@) && names_warning(cs, rest(f, b"-Wno-"@)))
 }
 
 // ------------------------------------------------------------------ the code
@@ -526,8 +538,7 @@ pub fn check_flags(fl: &Vec<Vec<u8>>, cs: &Vec<Vec<u8>>) -> (r: FlagCheck)
             assert(contraction(fl@[w]@) is Some);
             let j = last_contract(fl@, n).unwrap();
             assert(fault(fl@, cs@, j) is None);
-            assert forall|j: int| 0 <= j < n implies !float_flag(#[trigger] fl@[j]@) && !reads(fl@[j]@) && fl@[j]@ != b"-w"@ && fl@[j]@
-                != b"-Wno-everything"@ by {
+            assert forall|j: int| 0 <= j < n implies flag_clean(#[trigger] fl@[j]@, cs@) by {
                 assert(fault(fl@, cs@, j) is None);
             }
         }
