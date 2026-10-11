@@ -508,7 +508,8 @@ fn lex(text: &str, line: u32, names: &mut Names) -> Vec<Tok> {
                 }
                 // An invisible character is named by its code point, decision 0125. A bot cannot see it in quotes.
                 LexKind::BadChar => match word.chars().next() {
-                    Some(ch) if ch.is_whitespace() || ch.is_control() => Tok::Unknown(names.id(&format!("U+{:04X} in a contract", ch as u32)), line),
+                    // ponytail: the four Hangul fillers are letters that print as nothing. Upgrade: a table of the default-ignorable code points.
+                    Some(ch) if !(ch.is_ascii_graphic() || ch.is_alphanumeric()) || matches!(ch, '\u{115F}' | '\u{1160}' | '\u{3164}' | '\u{FFA0}') => Tok::Unknown(names.id(&format!("U+{:04X} in a contract", ch as u32)), line),
                     _ => Tok::Unknown(names.id(&format!("'{word}' in a contract")), line),
                 },
             }

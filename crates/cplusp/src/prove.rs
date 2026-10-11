@@ -5,19 +5,13 @@ use std::fs;
 use std::process::{Command, ExitCode, Stdio};
 
 use anyhow::{Context, Result};
-use cplusp_core::verdict::{verdict, Verdict};
+use cplusp_core::dafny::{in_companion_exec, judge, read_dafny};
+use cplusp_core::verdict::Verdict;
 
 use crate::model::{Line, Map, Translation, PRELUDE};
 
 /// Where to look for Dafny, after the env var `DAFNY`.
 const INSTALLED: &str = "/opt/dafny/dafny/dafny";
-
-/// Why Dafny gave no proof run: it could not resolve the file, or it could not parse it.
-#[derive(PartialEq, Clone, Copy)]
-enum Unread {
-    Resolve,
-    Parse,
-}
 
 /// An error of Dafny: the line of the Dafny text, the message, and the lines of its related locations.
 struct Error {
@@ -33,51 +27,6 @@ fn find_dafny() -> Result<String> {
         .chain([INSTALLED.to_string(), "dafny".to_string()])
         .find(|c| Command::new(c).arg("--version").stdin(Stdio::null()).output().is_ok_and(|o| o.status.success()));
     found.with_context(|| format!("dafny not found. Set DAFNY, install it at {INSTALLED}, or put dafny on the PATH."))
-}
-
-/// The line number of `PATH(L,C): KIND: MESSAGE`, and the message, when the line has that kind.
-fn at(text: &str, kind: &str) -> Option<(usize, String)> {
-    let (head, message) = text.split_once(&format!(": {kind}: "))?;
-    let inside = head.strip_suffix(')')?.rsplit_once('(')?.1;
-    Some((inside.split_once(',')?.0.parse().ok()?, message.to_string()))
-}
-
-/// The errors in the output of Dafny. A related location belongs to the error line before it.
-fn errors(output: &str) -> Vec<Error> {
-    let mut found: Vec<Error> = Vec::new();
-    for l in output.lines() {
-        if let Some((line, message)) = at(l, "Error") {
-            found.push(Error { line, message, related: Vec::new() });
-        } else if let (Some((line, _)), Some(last)) = (at(l, "Related location"), found.last_mut()) {
-            last.related.push(line);
-        }
-    }
-    found
-}
-
-/// The counts of a summary line, `Dafny program verifier finished with N verified, M errors[, K time outs]`, as verified items, errors and
-/// time-outs. Dafny gives `N resolution/type errors detected in FILE` when it cannot resolve the file, and `N parse errors detected in FILE`
-/// when it cannot parse it. Either line counts as N errors, and the second fact is `Some(kind)`. `run` decides whether a parse error is the
-/// author's. `None` when the line is not a summary or its shape cannot be read.
-fn counts(line: &str) -> Option<((u64, u64, u64), Option<Unread>)> {
-    if let Some((n, rest)) = line.split_once(' ') {
-        for (word, kind) in [("resolution/type error", Unread::Resolve), ("parse error", Unread::Parse)] {
-            if rest.starts_with(word) && rest.contains(" detected in ") {
-                return Some(((0, n.parse().ok()?, 0), Some(kind)));
-            }
-        }
-    }
-    let rest = line.strip_prefix("Dafny program verifier finished with ")?;
-    let number = |part: &str, words: &[&str]| -> Option<u64> {
-        let (n, w) = part.split_once(' ')?;
-        words.contains(&w).then(|| n.parse().ok())?
-    };
-    let found = match rest.trim_end().split(", ").collect::<Vec<_>>()[..] {
-        [v, e] => (number(v, &["verified"])?, number(e, &["error", "errors"])?, 0),
-        [v, e, t] => (number(v, &["verified"])?, number(e, &["error", "errors"])?, number(t, &["time out", "time outs"])?),
-        _ => return None,
-    };
-    Some((found, None))
 }
 
 /// The type between the quotes at the end of a message, as C++ writes it.
@@ -145,18 +94,21 @@ pub fn run(t: &Translation, limit: u32, refused: bool, source: &str, shown: &dyn
         .output()
         .with_context(|| format!("cannot run {dafny}"))?;
     let output = format!("{}{}", String::from_utf8_lossy(&run.stdout), String::from_utf8_lossy(&run.stderr));
-    let found = errors(&output);
+    // The core reads the text of Dafny, decision 0127. The spans are into the bytes of the output.
+    let reading = read_dafny(&output.as_bytes().to_vec());
+    let found: Vec<Error> = reading
+        .errors
+        .iter()
+        .enumerate()
+        .map(|(k, &(line, start, end))| Error { line, message: output[start..end].to_string(), related: reading.related.iter().filter(|(of, _)| *of == k).map(|&(_, line)| line).collect() })
+        .collect();
     // A warning on a line of the companion file refuses the file, decisions 0079, 0099 and 0101. A declaration, a forall statement or a loop with no body is
     // an axiom. A lemma with no body is named at its own name, because Dafny warns at its first ensures line. Any other is named at its own line.
     let map = &t.map;
     let mut axioms: Vec<(String, usize, String)> = Vec::new();
-    for (line, message) in output.lines().filter_map(|l| at(l, "Warning")).filter(|(line, _)| line.checked_sub(1).is_some_and(|n| map.companion.contains(&n))) {
+    for (&(line, start, end), _) in reading.warnings.iter().zip(&reading.trigger).filter(|(&(line, ..), &trigger)| !trigger && line.checked_sub(1).is_some_and(|n| map.companion.contains(&n))) {
+        let message = &output[start..end];
         let bodyless = message.contains("bodyless") || message.contains("{:axiom}");
-        // ponytail: an allow-list of the harmless kinds, which is only the missing trigger. Any other warning refuses the file. The ceiling is a good file
-        // with another harmless warning, which is refused too. Upgrade: add the kind to the list.
-        if message.starts_with("Could not find a trigger for this quantifier") {
-            continue;
-        }
         let lemma = map.decls.iter().rev().find(|(at, _)| *at <= line).filter(|(_, lemma)| *lemma && bodyless);
         let at = lemma.map_or(line, |(at, _)| *at);
         let said = if bodyless {
@@ -175,16 +127,14 @@ pub fn run(t: &Translation, limit: u32, refused: bool, source: &str, shown: &dyn
             }
         }
     }
-    // The core decides: it reads the exit status, the summary, the error lines, the refusals, the axioms and the methods together, decisions 0077 and 0080.
-    let (summary, unread) = output.lines().find_map(counts).map_or((None, None), |(c, r)| (Some(c), r));
+    let unread = reading.unread;
     // A line at the end of the file, one past the last line of the companion file, is the last line, decision 0083.
     let in_companion = |line: usize| {
         let last = map.companion.end;
-        (!map.companion.is_empty() && (map.companion.contains(&line.wrapping_sub(1)) || line == last + 1)).then_some(line.min(last))
+        in_companion_exec(line, map.companion.start, map.companion.end).then_some(line.min(last))
     };
-    // A parse error is the author's only when each error is in the companion file. Else it is a failure of the tool, decision 0069.
-    let summary = if unread == Some(Unread::Parse) && !(found.iter().all(|e| in_companion(e.line).is_some()) && !found.is_empty()) { None } else { summary };
-    let verdict = verdict(run.status.success(), summary, found.len(), refused, axioms.len(), t.methods);
+    // The core decides: it reads the exit status, the summary, the error lines, the refusals, the axioms and the methods together, decisions 0077 and 0080.
+    let verdict = judge(&reading, run.status.success(), refused, t.methods, map.companion.start, map.companion.end);
     if verdict == Verdict::ToolFailed {
         eprint!("dafny failed\n{output}");
         return Ok(ExitCode::from(2));
@@ -253,7 +203,7 @@ pub fn run(t: &Translation, limit: u32, refused: bool, source: &str, shown: &dyn
         }
     }
     // The count of verified items is the only fault, decision 0083.
-    if let (Some((v, 0, 0)), true) = (summary, found.is_empty() && !refused && axioms.is_empty() && verdict == Verdict::NotProved) {
+    if let (Some((v, 0, 0)), true) = (reading.summary, found.is_empty() && !refused && axioms.is_empty() && verdict == Verdict::NotProved) {
         println!("Not provable: {source}: Dafny verified fewer items than the model has methods: {v} for {}.", t.methods);
     }
     if verdict == Verdict::Proved {
