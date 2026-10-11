@@ -131,3 +131,4 @@ Status is `decided`, `proposed` (the default until someone objects or the thin s
 | [0124](0124-the-core-cuts-a-contract-line-into-tokens.md) | The contract lexer and the fold of constants and enumerators move into the Verus core, in two steps. White space in a contract is ASCII only | decided |
 | [0125](0125-an-invisible-character-is-named-by-its-code.md) | A refused character that the eye cannot see is named by its code point. 0124 also amends 0057 | decided |
 | [0126](0126-each-invisible-character-is-named-by-its-code.md) | A refused character is named by its code point unless it is a letter, a digit or a visible ASCII character | decided |
+| [0127](0127-the-core-reads-the-output-of-dafny.md) | The reader of the output of Dafny moves into the Verus core, with a proof that proved needs a clean summary, no error line and no axiom in the text | decided |
