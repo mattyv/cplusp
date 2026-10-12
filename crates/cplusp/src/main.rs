@@ -652,7 +652,9 @@ fn dependencies(clang: &str, (file, dir, flags): &Build, shown: impl Fn(&Path) -
         .output()
         .with_context(|| format!("cannot run {clang}"))?;
     if !out.status.success() {
-        bail!("cannot preprocess {}: {}", shown(file), String::from_utf8_lossy(&out.stderr).lines().next().unwrap_or_default());
+        // The first line with an error, else the first line: a warning before the error is not the cause.
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        bail!("cannot preprocess {}: {}", shown(file), stderr.lines().find(|l| l.contains("error:")).or_else(|| stderr.lines().next()).unwrap_or_default());
     }
     let list = String::from_utf8_lossy(&out.stdout);
     // The compiler escapes a space, `#` and `$` in a name, and no other white space. A name with a tab or a newline would split in the

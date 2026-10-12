@@ -1,4 +1,4 @@
-//! The flags of the compiler that the gate refuses, decisions 0022, 0128, 0129 and 0130. The shell gives each flag after `--` as bytes, and the
+//! The flags of the compiler that the gate refuses, decisions 0022, 0128, 0129, 0130 and 0134. The shell gives each flag after `--` as bytes, and the
 //! checks of the config. The core gives the index and the reason of each refused flag, and says when a flag that the gate needs is
 //! missing. It proves the facts of a run with no refusal, `check_flags`.
 
@@ -7,7 +7,7 @@ use vstd::prelude::*;
 verus! {
 
 /// Why the gate refuses a flag. `Float` changes floating-point results. `Std` names a standard before C++23, or is the bare `--std`. `Reads` changes what
-/// the compiler reads or reports. `HidesAll` hides each warning, and `HidesRow` a warning that the policy names. `Swallows` takes the next flag as its value.
+/// the compiler reads or reports. `HidesAll` hides each warning, and `HidesRow` a warning that the policy names. `Swallows` takes the next flag as its value, or stands at the end and takes the first flag of the gate.
 #[derive(Structural, PartialEq, Eq, Clone, Copy, Debug)]
 pub enum FlagFault {
     Float,
@@ -96,9 +96,10 @@ pub open spec fn takes_value(f: Seq<u8>) -> bool {
         || f == b"-target"@ || f == b"-isysroot"@ || f == b"-cxx-isystem"@ || f == b"-isystem-after"@
 }
 
-/// The flag at `i` takes as its value a next flag that starts with `-`. A lone `-` is a value.
+/// The flag at `i` takes as its value a next flag that starts with `-`. A lone `-` is a value. At the end, it takes the first flag
+/// that the gate adds, decision 0134.
 pub open spec fn swallows(fl: Seq<Vec<u8>>, i: int) -> bool {
-    takes_value(fl[i]@) && i + 1 < fl.len() && fl[i + 1]@.len() > 1 && fl[i + 1]@[0] == 0x2d
+    takes_value(fl[i]@) && (i + 1 == fl.len() || (fl[i + 1]@.len() > 1 && fl[i + 1]@[0] == 0x2d))
 }
 
 /// A check of the config is the compiler warning `name`.
@@ -189,7 +190,8 @@ proof fn lemma_last_contract(fl: Seq<Vec<u8>>, n: int)
 }
 
 /// A run with no refusal, decision 0128: a `-std` flag, each `-std` at C++23 or later, the last contraction off, and no flag that
-/// changes floating point, changes what the compiler reads or reports, or hides a warning of the policy.
+/// changes floating point, changes what the compiler reads or reports, or hides a warning of the policy. No flag takes the next flag,
+/// or the first flag of the gate, as its value.
 pub open spec fn clean(fl: Seq<Vec<u8>>, cs: Seq<Vec<u8>>) -> bool {
     &&& exists|i: int| 0 <= i < fl.len() && #[trigger] std_value(fl[i]@) is Some
     &&& forall|i: int| 0 <= i < fl.len() && #[trigger] std_value(fl[i]@) is Some ==> std_ok(std_value(fl[i]@).unwrap())
@@ -504,7 +506,7 @@ fn fault_exec(fl: &Vec<Vec<u8>>, cs: &Vec<Vec<u8>>, i: usize, last: Option<usize
         Some(FlagFault::HidesAll)
     } else if starts_exec(f, b"-Wno-") && names_warning_exec(cs, f) {
         Some(FlagFault::HidesRow)
-    } else if takes_value_exec(f) && i + 1 < fl.len() && fl[i + 1].len() > 1 && fl[i + 1][0] == 0x2d {
+    } else if takes_value_exec(f) && (i + 1 == fl.len() || (fl[i + 1].len() > 1 && fl[i + 1][0] == 0x2d)) {
         Some(FlagFault::Swallows)
     } else {
         None
