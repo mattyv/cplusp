@@ -4427,7 +4427,7 @@ private:
   }
 
   // The small integer types of decision 0106: `int8_t`, `int16_t` and `uint16_t`, or null. They are types of the subset, but no element of a
-  // sequence, an optional or a field, so `scalar` does not name them.
+  // sequence and no value of an optional, so `scalar` does not name them. They can be a field, decision 0138.
   const char *smallScalar(QualType T) const {
     const QualType Canon = T.getCanonicalType();
     if (Canon.hasQualifiers())
@@ -4513,8 +4513,9 @@ private:
   bool isOpt(QualType T) const { return !optType(T).isNull(); }
 
   // The plain struct that a type is, decision 0073, or null. A const and a reference are looked through. Plain means a definition with
-  // a name, no bases, no virtual function, no destructor and no member template, and fields that are each a scalar, a plain
-  // struct, an optional of a scalar (decision 0075) or a sequence (decision 0076), with no const, no reference and no bit field. Member
+  // a name, no bases, no virtual function, no destructor and no member template, and fields that are each a scalar, a small integer
+  // type (decision 0138), a plain enum (decision 0109), a plain struct, an optional of a scalar (decision 0075) or a sequence (decision
+  // 0076), with no const, no reference and no bit field. Member
   // functions, static members and access do not matter, decision 0089. Nor do constructors, decision 0094: a constructor that is no
   // value constructor is refused where it is written.
   const CXXRecordDecl *plainStruct(QualType T) const {
@@ -4538,7 +4539,7 @@ private:
     for (const FieldDecl *F : RD->fields()) {
       const QualType FT = F->getType();
       if (F->isBitField() || FT->isReferenceType() || FT.hasQualifiers() ||
-          (!scalar(FT) && !plainEnum(FT) && !plainStruct(FT) && !optElement(FT) && seqElement(FT, true).isNull())) {
+          (!scalar(FT) && !smallScalar(FT) && !plainEnum(FT) && !plainStruct(FT) && !optElement(FT) && seqElement(FT, true).isNull())) {
         Plain = false;
         break;
       }
