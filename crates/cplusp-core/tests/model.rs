@@ -1193,12 +1193,15 @@ fn a_contract_reads_true_and_false() {
 
 #[test]
 fn the_body_of_a_quantifier_reaches_to_the_end_of_the_line() {
-    // forall i :: 0 <= i < j < n stops after three operands. The rest would fall outside the forall, so the line is refused.
+    // forall i :: 0 <= i < a < b holds the whole chain, decision 0131. Before 0131 the body stopped after three operands, and the
+    // line was refused, so the rest never fell outside the forall.
     let toks = vec![
         Tok::Forall, Tok::Ident(70), Tok::ColonColon, Tok::Int(0), Tok::Op(BinOp::Le), Tok::Ident(70), Tok::Op(BinOp::Lt), Tok::Ident(A),
         Tok::Op(BinOp::Lt), Tok::Ident(B),
     ];
-    assert_eq!(parse_contract(&toks, 3), Err(Refusal::Syntax(3)));
+    let chain = |o1, x: Expr, y: Expr, z: Expr| Expr::Chain(o1, BinOp::Lt, b(x), b(y), b(z));
+    let body = Expr::Bin(BinOp::And, b(chain(BinOp::Le, Expr::Int(0), Expr::Name(70), Expr::Name(A))), b(chain(BinOp::Lt, Expr::Name(70), Expr::Name(A), Expr::Name(B))));
+    assert_eq!(parse_contract(&toks, 3), Ok(Expr::Forall(70, b(body))));
     // In parentheses, the body ends at the bracket, and the line goes on.
     let toks = vec![
         Tok::LParen, Tok::Forall, Tok::Ident(70), Tok::ColonColon, Tok::Ident(70), Tok::Op(BinOp::Lt), Tok::Ident(A), Tok::RParen,
@@ -2403,4 +2406,75 @@ fn an_order_of_enums_in_a_contract_is_refused() {
         body: one(Stmt::Return(Expr::Bool(true), 32)),
     };
     assert_eq!(bare_refusal(translate_function(&f, &List::Nil, &List::Nil)), Refusal::Syntax(30));
+}
+
+/// A chain of three or more comparisons is the chains of two that overlap, joined by `&&`, decision 0131.
+#[test]
+fn a_longer_chain_is_the_chains_of_two_that_overlap() {
+    let chain = |o1, o2, x: Expr, y: Expr, z: Expr| Expr::Chain(o1, o2, b(x), b(y), b(z));
+    let and = |x: Expr, y: Expr| Expr::Bin(BinOp::And, b(x), b(y));
+    let (i, j, n) = (70, 71, 72);
+    // 0 <= i < j < n
+    let toks = vec![Tok::Int(0), Tok::Op(BinOp::Le), Tok::Ident(i), Tok::Op(BinOp::Lt), Tok::Ident(j), Tok::Op(BinOp::Lt), Tok::Ident(n)];
+    assert_eq!(
+        parse_contract(&toks, 3),
+        Ok(and(chain(BinOp::Le, BinOp::Lt, Expr::Int(0), Expr::Name(i), Expr::Name(j)), chain(BinOp::Lt, BinOp::Lt, Expr::Name(i), Expr::Name(j), Expr::Name(n))))
+    );
+    // 0 < i <= j < n > 1: each turn of direction is in one chain of two, which the translator refuses.
+    let toks = vec![
+        Tok::Int(0), Tok::Op(BinOp::Lt), Tok::Ident(i), Tok::Op(BinOp::Le), Tok::Ident(j), Tok::Op(BinOp::Lt), Tok::Ident(n),
+        Tok::Op(BinOp::Gt), Tok::Int(1),
+    ];
+    assert_eq!(
+        parse_contract(&toks, 3),
+        Ok(and(
+            chain(BinOp::Lt, BinOp::Le, Expr::Int(0), Expr::Name(i), Expr::Name(j)),
+            and(
+                chain(BinOp::Le, BinOp::Lt, Expr::Name(i), Expr::Name(j), Expr::Name(n)),
+                chain(BinOp::Lt, BinOp::Gt, Expr::Name(j), Expr::Name(n), Expr::Int(1))
+            )
+        ))
+    );
+    // a + 1 < b < c ==> x: each term is a sum, and the chain stops at the implication.
+    let toks = vec![
+        Tok::Ident(A), Tok::Op(BinOp::Add), Tok::Int(1), Tok::Op(BinOp::Lt), Tok::Ident(B), Tok::Op(BinOp::Lt), Tok::Ident(i),
+        Tok::Op(BinOp::Lt), Tok::Ident(j), Tok::Op(BinOp::Implies), Tok::Ident(X),
+    ];
+    let sum = Expr::Bin(BinOp::Add, b(Expr::Name(A)), b(Expr::Int(1)));
+    assert_eq!(
+        parse_contract(&toks, 3),
+        Ok(Expr::Bin(
+            BinOp::Implies,
+            b(and(chain(BinOp::Lt, BinOp::Lt, sum, Expr::Name(B), Expr::Name(i)), chain(BinOp::Lt, BinOp::Lt, Expr::Name(B), Expr::Name(i), Expr::Name(j)))),
+            b(Expr::Name(X))
+        ))
+    );
+}
+
+/// `*o` is `o.value()`. It binds tighter than any operator and looser than a postfix, as in C++, decision 0131.
+#[test]
+fn a_star_before_a_term_reads_the_value() {
+    let value = |x: Expr| Expr::Value(b(x));
+    // *result < n && a[*result] == x
+    let n = 72;
+    let toks = vec![
+        Tok::Op(BinOp::Mul), Tok::Result, Tok::Op(BinOp::Lt), Tok::Ident(n), Tok::Op(BinOp::And),
+        Tok::Ident(A), Tok::LBracket, Tok::Op(BinOp::Mul), Tok::Result, Tok::RBracket, Tok::Op(BinOp::Eq), Tok::Ident(X),
+    ];
+    assert_eq!(
+        parse_contract(&toks, 3),
+        Ok(Expr::Bin(
+            BinOp::And,
+            b(Expr::Bin(BinOp::Lt, b(value(Expr::Result)), b(Expr::Name(n)))),
+            b(Expr::Bin(BinOp::Eq, b(Expr::Index(b(Expr::Name(A)), b(value(Expr::Result)))), b(Expr::Name(X))))
+        ))
+    );
+    // a * *b and *a[1]
+    let toks = vec![Tok::Ident(A), Tok::Op(BinOp::Mul), Tok::Op(BinOp::Mul), Tok::Ident(B)];
+    assert_eq!(parse_contract(&toks, 3), Ok(Expr::Bin(BinOp::Mul, b(Expr::Name(A)), b(value(Expr::Name(B))))));
+    let toks = vec![Tok::Op(BinOp::Mul), Tok::Ident(A), Tok::LBracket, Tok::Int(1), Tok::RBracket];
+    assert_eq!(parse_contract(&toks, 3), Ok(value(Expr::Index(b(Expr::Name(A)), b(Expr::Int(1))))));
+    // A lone star and a star at the end are refused.
+    assert_eq!(parse_contract(&vec![Tok::Op(BinOp::Mul)], 5), Err(Refusal::Syntax(5)));
+    assert_eq!(parse_contract(&vec![Tok::Ident(A), Tok::Op(BinOp::Mul)], 6), Err(Refusal::Syntax(6)));
 }

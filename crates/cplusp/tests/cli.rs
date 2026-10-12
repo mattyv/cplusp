@@ -3685,3 +3685,50 @@ fn a_hangul_filler_in_a_contract_is_named_by_its_code_point() {
     assert_eq!(refusals.len(), 1, "{text}");
     assert!(refusals[0].ends_with("model-filler.cpp:4: U+3164 in a contract: the translator has no rule for it yet."), "{text}");
 }
+
+/// A chain of three comparisons means each of them, and `*o` reads an optional, decision 0131. The ensures lines need the last
+/// comparison of each chain, and the first and the last index of the sorted form.
+#[test]
+fn a_longer_chain_and_the_star_of_an_optional_prove() {
+    let Some(dafny) = dafny() else { return };
+    if !clang_tidy_available() {
+        return;
+    }
+    let o = prove("model-chain.cpp", &[], &dafny);
+    let text = stdout(&o);
+    assert_eq!(o.status.code(), Some(0), "stdout: {text} stderr: {}", stderr(&o));
+    assert_eq!(text.lines().last(), Some("ok: proved"), "{text}");
+}
+
+/// The chain gives no more than it says, and `*result` with no test of has_value does not prove, decision 0131.
+#[test]
+fn a_longer_chain_gives_no_more_and_the_star_needs_a_value() {
+    let Some(dafny) = dafny() else { return };
+    if !clang_tidy_available() {
+        return;
+    }
+    let o = prove("model-chain-wrong.cpp", &[], &dafny);
+    let text = stdout(&o);
+    assert_eq!(o.status.code(), Some(1), "stdout: {text} stderr: {}", stderr(&o));
+    for want in ["model-chain-wrong.cpp:8: the ensures line may not hold on this return.", "model-chain-wrong.cpp:12: the optional may be empty here."] {
+        assert!(text.lines().any(|l| l.starts_with("Not proved: ") && l.ends_with(want)), "{want}: {text}");
+    }
+}
+
+/// A chain with two directions anywhere in it, and `*` on a value that is not an optional, are refused, decision 0131.
+#[test]
+fn a_chain_that_turns_and_the_star_of_a_scalar_are_refused() {
+    if !clang_tidy_available() {
+        return;
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let (o, _) = model("model-chain-refuse.cpp", dir.path());
+    let text = stdout(&o);
+    assert_eq!(o.status.code(), Some(1), "stdout: {text} stderr: {}", stderr(&o));
+    let refusals: Vec<&str> = text.lines().filter(|l| l.starts_with("Not provable: ")).collect();
+    assert_eq!(
+        refusals.iter().map(|l| l.rsplit_once(".cpp:").unwrap().1).collect::<Vec<_>>(),
+        vec!["4: the contract line has a form the translator cannot read.", "10: the contract line has a form the translator cannot read."],
+        "{text}"
+    );
+}
