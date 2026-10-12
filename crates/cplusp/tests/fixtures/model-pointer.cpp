@@ -27,6 +27,7 @@ int32_t high(const Pair* q) {
 }
 
 // A caller passes the address of a local, a pointer it has, or nullptr.
+//@ requires -1000 <= x <= 1000
 //@ ensures result == x + 7
 int32_t caller(int32_t x) {
   int32_t y = 7;

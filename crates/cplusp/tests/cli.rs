@@ -3929,7 +3929,7 @@ fn a_pointer_that_may_be_null_does_not_prove() {
     assert_eq!(o.status.code(), Some(1), "stdout: {text} stderr: {}", stderr(&o));
     for want in [
         "model-pointer-wrong.cpp:5: the optional may be empty or the pointer may be null here.",
-        "model-pointer-wrong.cpp:9: the optional may be empty or the pointer may be null here.",
+        "model-pointer-wrong.cpp:8: the optional may be empty or the pointer may be null here.",
         "model-pointer-wrong.cpp:19: a requires line of the callee may not hold.",
     ] {
         assert!(text.lines().any(|l| l.starts_with("Not proved: ") && l.ends_with(want)), "{want}: {text}");
