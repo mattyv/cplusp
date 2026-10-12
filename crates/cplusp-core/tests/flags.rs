@@ -83,3 +83,22 @@ fn the_first_reason_of_a_flag_wins() {
 fn the_bare_std_flag_is_refused() {
     assert_eq!(check(&["-std=c++23", "-ffp-contract=off", "--std", "c++20"], &[]), (vec![(2, FlagFault::Std)], false, false));
 }
+
+/// `-ansi` and `--ansi` set C++98, so the gate refuses them as a standard before C++23, decision 0130.
+#[test]
+fn ansi_is_a_standard_before_cxx23() {
+    assert_eq!(check(&["-std=c++23", "-ffp-contract=off", "-ansi", "--ansi"], &[]), (vec![(2, FlagFault::Std), (3, FlagFault::Std)], false, false));
+}
+
+/// A flag with a separate value takes the next flag as its value. The gate refuses it when that next flag looks like a flag,
+/// decision 0130. A lone `-` and a plain word are values.
+#[test]
+fn a_flag_that_would_swallow_the_next_flag_is_refused() {
+    for f in ["-I", "-isystem", "-idirafter", "-iquote", "-include", "-imacros", "-D", "-U", "-x", "-o", "-MF", "-MT", "-MQ", "-target", "-isysroot", "-cxx-isystem", "-isystem-after"] {
+        assert_eq!(check(&[f, "-std=c++23", "-ffp-contract=off"], &[]), (vec![(0, FlagFault::Swallows)], false, false), "{f}");
+    }
+    // `-Xclang` keeps its own reason, which comes first.
+    assert_eq!(check(&["-Xclang", "-std=c++20", "-std=c++23", "-ffp-contract=off"], &[]), (vec![(0, FlagFault::Reads)], false, false));
+    // A value is fine, and so is a lone `-` or a flag at the end.
+    assert_eq!(check(&["-I", "include", "-o", "-", "-std=c++23", "-ffp-contract=off", "-x"], &[]), (vec![], false, false));
+}

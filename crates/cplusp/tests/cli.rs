@@ -294,6 +294,8 @@ fn gate_refuses_flags_the_proofs_cannot_follow() {
         (vec!["-std=c++23", "-ffp-contract=off", "-Wno-everything"], "-Wno-everything: not allowed with the gate. It hides the compiler warnings the policy names.".to_string()),
         (vec!["-std=c++23", "-ffp-contract=off", "--no-warnings"], "--no-warnings: not allowed with the gate. It hides the compiler warnings the policy names.".to_string()),
         (vec!["-std=c++23", "-ffp-contract=off", "--std", "c++20"], "--std: not allowed with the gate. The proofs assume C++23 or later.".to_string()),
+        (vec!["-std=c++23", "-ffp-contract=off", "-ansi"], "-ansi: not allowed with the gate. The proofs assume C++23 or later.".to_string()),
+        (vec!["-I", "-std=c++23", "-ffp-contract=off"], "-I: not allowed with the gate. It takes the next flag as its value, and the gate reads the flags as written.".to_string()),
         (vec!["-std=c++23", "-ffp-contract=off", "-Wno-unsequenced"], "-Wno-unsequenced: not allowed with the gate. It hides a compiler warning the policy names.".to_string()),
     ] {
         let mut args = vec!["rules/goto/allowed.cpp", "--"];

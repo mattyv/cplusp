@@ -134,3 +134,4 @@ Status is `decided`, `proposed` (the default until someone objects or the thin s
 | [0127](0127-the-core-reads-the-output-of-dafny.md) | The reader of the output of Dafny moves into the Verus core, with a proof that proved needs a clean summary, no error line and no axiom in the text | decided |
 | [0128](0128-the-core-checks-the-flags-of-the-compiler.md) | The check of the compiler flags moves into the Verus core, with a proof of the facts of a run with no refusal. The move of the Dafny names waits for the user | decided |
 | [0129](0129-two-more-flags-the-gate-refuses.md) | The gate refuses --no-warnings and the bare --std | decided |
+| [0130](0130-naming-flags-and-system-headers-after-the-review.md) | The Dafny names stay in the shell with a guard. The gate refuses -ansi and a flag that takes the next flag as its value. -isystem stays a documented limit | decided |
