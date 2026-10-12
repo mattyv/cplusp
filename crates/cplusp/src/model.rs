@@ -1330,6 +1330,8 @@ pub fn translate(lines: &str, companion: Option<(&str, &str)>) -> Result<Transla
         .collect();
     // A struct with a field of such a type has no datatype either, and nor has a struct that holds that struct, with no refusal of its own, decision 0115.
     let mut dropped = Vec::new();
+    // The file and line of the first item that the model leaves out, decision 0130.
+    let mut first_dropped: Option<(String, u32)> = None;
     loop {
         let more: Vec<(String, String)> = items
             .iter()
@@ -1360,9 +1362,13 @@ pub fn translate(lines: &str, companion: Option<(&str, &str)>) -> Result<Transla
                 Some(n) => refusals.push((en.file.clone(), en.line, format!("{n}: a name with a character Dafny cannot read."))),
                 None => enums.push(en),
             },
-            Item::Struct(st) if dropped.contains(&st.key) => {}
+            Item::Struct(st) if dropped.contains(&st.key) => {
+                first_dropped.get_or_insert((st.file.clone(), st.line));
+            }
             Item::Struct(st) => structs.push(st),
-            Item::Function(_) if unreadable_keys.iter().any(|k| l.contains(k.as_str())) => {}
+            Item::Function(f) if unreadable_keys.iter().any(|k| l.contains(k.as_str())) => {
+                first_dropped.get_or_insert((f.file.clone(), f.line));
+            }
             Item::Function(f) => match unreadable_name(&f) {
                 Some(n) => refusals.push((f.file.clone(), f.line, format!("{n}: a name with a character Dafny cannot read."))),
                 None => funcs.push(f),
@@ -1518,6 +1524,11 @@ pub fn translate(lines: &str, companion: Option<(&str, &str)>) -> Result<Transla
     for (place, sentence) in refused_at {
         let (file, line) = names.places[place as usize].clone();
         refusals.push((file, line, sentence));
+    }
+    // The guard of decision 0130. Today a drop always comes with the refusal of its struct or enum, so no test reaches it. A function that the model
+    // leaves out must never leave the file unrefused.
+    if let (true, Some((file, line))) = (refusals.is_empty(), first_dropped) {
+        refusals.push((file, line, "the model left out this function, and nothing else refused the file.".to_string()));
     }
     refusals.sort();
     refusals.dedup();

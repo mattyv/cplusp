@@ -471,6 +471,7 @@ fn flag_reason(fault: FlagFault) -> &'static str {
         FlagFault::ConfigFile => "The gate cannot read a config file.",
         FlagFault::HidesAll => "It hides the compiler warnings the policy names.",
         FlagFault::HidesRow => "It hides a compiler warning the policy names.",
+        FlagFault::Swallows => "It takes the next flag as its value, and the gate reads the flags as written.",
     }
 }
 
