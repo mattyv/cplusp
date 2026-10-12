@@ -5130,6 +5130,10 @@ private:
     if (const auto *Operator = dyn_cast<CXXOperatorCallExpr>(E); Operator && Operator->getOperator() == OO_Subscript && Operator->getNumArgs() == 2 &&
                                                                   isSeq(Operator->getArg(0)->getType()))
       return tag("Index", llvm::json::Array{expr(Operator->getArg(0), Near), expr(Operator->getArg(1), Near)});
+    // `v.at(i)` of a read-only sequence is `v[i]`, decision 0139. The prover proves the index in range, so `at` never throws.
+    if (const auto *Member = dyn_cast<CXXMemberCallExpr>(E); Member && Member->getNumArgs() == 1 && Member->getMethodDecl() && Member->getMethodDecl()->getNameAsString() == "at")
+      if (const Expr *Object = Member->getImplicitObjectArgument(); Object && isSeq(Object->getType()))
+        return tag("Index", llvm::json::Array{expr(Object, Near), expr(Member->getArg(0), Near)});
     // A call of a member function, `o.f(a)` or `f(a)` in a method, is a call of `f` with the object first, decisions 0089 and 0096.
     if (const auto *Call = dyn_cast<CXXMemberCallExpr>(E); Call && Call->getDirectCallee() && member(Call->getDirectCallee())) {
       const Expr *Object = Call->getImplicitObjectArgument()->IgnoreParenImpCasts();
