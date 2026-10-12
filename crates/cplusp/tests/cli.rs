@@ -3936,7 +3936,8 @@ fn a_pointer_that_may_be_null_does_not_prove() {
     }
 }
 
-/// A pointer with no const, and a pointer tested as a bool, have no rule yet, decision 0140.
+/// A pointer with no const, and a pointer tested as a bool, have no rule yet, decision 0140. Two pointers do not compare, in code
+/// and in a contract, and neither does `this`, decision 0141. No refusal speaks in the words of Dafny.
 #[test]
 fn a_pointer_with_no_const_and_a_pointer_as_a_bool_are_refused() {
     if !clang_tidy_available() {
@@ -3946,8 +3947,13 @@ fn a_pointer_with_no_const_and_a_pointer_as_a_bool_are_refused() {
     let (o, _) = model("model-pointer-refuse.cpp", dir.path());
     let text = stdout(&o);
     assert_eq!(o.status.code(), Some(1), "stdout: {text} stderr: {}", stderr(&o));
+    assert!(!text.contains("Dafny says"), "{text}");
     let refusals: Vec<&str> = text.lines().filter(|l| l.starts_with("Not provable: ")).map(|l| l.rsplit_once(".cpp:").unwrap().1).collect();
-    assert_eq!(refusals.len(), 2, "{text}");
+    assert_eq!(refusals.len(), 6, "{text}");
     assert_eq!(refusals[0], "5: int32_t *: the translator has no rule for it yet.", "{text}");
-    assert!(refusals[1].starts_with("10: ") && refusals[1].ends_with(": the translator has no rule for it yet."), "{text}");
+    for (i, line) in [(1, "10: "), (2, "18: "), (5, "34: ")] {
+        assert!(refusals[i].starts_with(line) && refusals[i].ends_with(": the translator has no rule for it yet."), "{line}: {text}");
+    }
+    assert_eq!(refusals[3], "21: the contract line has a form the translator cannot read.", "{text}");
+    assert_eq!(refusals[4], "26: the contract line has a form the translator cannot read.", "{text}");
 }

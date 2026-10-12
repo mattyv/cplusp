@@ -2515,7 +2515,7 @@ fn a_comparison_with_nullptr_tests_for_a_value() {
     let f = Function {
         name: SAT,
         line: 10,
-        params: List::Cons((A, Ty::Opt(Scalar::I32)), Box::new(List::Cons((B, Ty::I32), Box::new(List::Nil)))),
+        params: List::Cons((A, Ty::Ptr(Scalar::I32)), Box::new(List::Cons((B, Ty::I32), Box::new(List::Nil)))),
         ret: Ty::I32,
         trusted: false,
         conds: List::Cons(
@@ -2526,10 +2526,40 @@ fn a_comparison_with_nullptr_tests_for_a_value() {
     };
     let Model::Full(m) = translate_function(&f, &List::Nil, &List::Nil) else { panic!("a full model") };
     assert_eq!(strip_conds(m.requires), List::Cons((some(), 0), Box::new(List::Cons((none(), 0), Box::new(List::Nil)))));
-    let o = || b(Expr::Var(A, Ty::Opt(Scalar::I32)));
+    let o = || b(Expr::Var(A, Ty::Ptr(Scalar::I32)));
     assert_eq!(translate_code(&Expr::Bin(BinOp::Eq, o(), b(Expr::Nullopt)), 3), Ok(none()));
     assert_eq!(translate_code(&Expr::Bin(BinOp::Ne, b(Expr::Nullopt), o()), 3), Ok(some()));
     // b == nullptr, with b an int32_t, is refused.
     let f = Function { conds: List::Cons(req(Expr::Bin(BinOp::Eq, b(Expr::Name(B)), b(Expr::Nullopt)), 6), Box::new(List::Nil)), ..f };
     assert_eq!(bare_refusal(translate_function(&f, &List::Nil, &List::Nil)), Refusal::Syntax(6));
+}
+
+/// Two pointers do not compare, and an optional is no pointer, decision 0141. In a contract, `p == q`, `p < q` and `o != nullptr`
+/// are refused. In code, a comparison of two pointers is refused.
+#[test]
+fn two_pointers_do_not_compare() {
+    let c = 72;
+    let ptr = Ty::Ptr(Scalar::I32);
+    let f = |e: Expr| Function {
+        name: SAT,
+        line: 10,
+        params: List::Cons((A, ptr), Box::new(List::Cons((B, ptr), Box::new(List::Cons((c, Ty::Opt(Scalar::I32)), Box::new(List::Nil)))))),
+        ret: Ty::I32,
+        trusted: false,
+        conds: List::Cons((CondKind::Requires, e, 6, names(&[A, B, c])), Box::new(List::Nil)),
+        body: one(Stmt::Return(Expr::Lit(0, Ty::I32), 11)),
+    };
+    for op in [BinOp::Eq, BinOp::Ne, BinOp::Lt, BinOp::Ge] {
+        let e = Expr::Bin(op, b(Expr::Name(A)), b(Expr::Name(B)));
+        assert_eq!(bare_refusal(translate_function(&f(e), &List::Nil, &List::Nil)), Refusal::Syntax(6), "{op:?}");
+    }
+    let e = Expr::Bin(BinOp::Ne, b(Expr::Name(c)), b(Expr::Nullopt));
+    assert_eq!(bare_refusal(translate_function(&f(e), &List::Nil, &List::Nil)), Refusal::Syntax(6));
+    // *p and p->f still read a pointer in a contract.
+    let e = Expr::Bin(BinOp::Eq, b(Expr::Value(b(Expr::Name(A)))), b(Expr::Int(1)));
+    assert!(matches!(translate_function(&f(e), &List::Nil, &List::Nil), Model::Full(_)));
+    let p = || b(Expr::Var(A, ptr));
+    let q = || b(Expr::Var(B, ptr));
+    assert_eq!(translate_code(&Expr::Bin(BinOp::Eq, p(), q()), 3), Err(Refusal::Syntax(3)));
+    assert_eq!(translate_code(&Expr::Bin(BinOp::Lt, p(), q()), 3), Err(Refusal::Syntax(3)));
 }
