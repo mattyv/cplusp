@@ -55,7 +55,7 @@ fn a_std_before_cxx23_is_refused() {
 
 #[test]
 fn flags_that_change_what_the_compiler_reads_or_reports_are_refused() {
-    for f in ["-E", "-P", "-M", "-MM", "-MV", "-dM", "-dD", "-dI", "-###", "-fdriver-only", "-Xpreprocessor", "-Xclang", "-include-pch", "-Wp,-MD", "-fmodules"] {
+    for f in ["-E", "-P", "-M", "-MM", "-MV", "-dM", "-dD", "-dI", "-###", "-fdriver-only", "-Xpreprocessor", "-Xclang", "-include-pch", "-Wp,-MD", "-fmodules", "-MJ", "-MJx.json"] {
         assert_eq!(check(&["-std=c++23", "-ffp-contract=off", f], &[]), (vec![(2, FlagFault::Reads)], false, false), "{f}");
     }
 }
@@ -97,6 +97,19 @@ fn a_flag_that_would_swallow_the_next_flag_is_refused() {
     for f in ["-I", "-isystem", "-idirafter", "-iquote", "-include", "-imacros", "-D", "-U", "-x", "-o", "-MF", "-MT", "-MQ", "-target", "-isysroot", "-cxx-isystem", "-isystem-after"] {
         assert_eq!(check(&[f, "-std=c++23", "-ffp-contract=off"], &[]), (vec![(0, FlagFault::Swallows)], false, false), "{f}");
     }
+    // More flags that take a value, decision 0135.
+    for f in [
+        "-F", "-L", "-l", "-B", "-z", "-u", "-e", "-T", "-rpath", "-arch", "-dumpdir", "-Xlinker", "-Xassembler", "-Xanalyzer", "-Xarch_host",
+        "-Xarch_device", "-mllvm", "-iprefix", "-iwithprefix", "-iwithprefixbefore", "-iframework", "-iwithsysroot", "-ivfsoverlay",
+        "-stdlib++-isystem", "--sysroot", "-working-directory", "-module-dependency-dir", "-resource-dir", "-fdebug-compilation-dir",
+        "-serialize-diagnostics", "--serialize-diagnostics", "--param", "--language", "--output", "--include-directory", "--define-macro",
+        "--undefine-macro", "--include", "--imacros", "--prefix", "--system-header-prefix", "--library-directory",
+    ] {
+        assert_eq!(check(&[f, "-std=c++23", "-ffp-contract=off"], &[]), (vec![(0, FlagFault::Swallows)], false, false), "{f}");
+        assert_eq!(check(&["-std=c++23", "-ffp-contract=off", f], &[]), (vec![(2, FlagFault::Swallows)], false, false), "{f}");
+    }
+    // Each is an exact match: a joined value is no flag that takes the next one.
+    assert_eq!(check(&["-std=c++23", "-ffp-contract=off", "-Llib", "-lm", "-F.", "--sysroot=/"], &[]), (vec![], false, false));
     // `-Xclang` keeps its own reason, which comes first. The flag that it swallows is judged too.
     assert_eq!(check(&["-Xclang", "-std=c++20", "-std=c++23", "-ffp-contract=off"], &[]), (vec![(0, FlagFault::Reads), (1, FlagFault::Std)], false, false));
     // A value is fine, and so is a lone `-`.
