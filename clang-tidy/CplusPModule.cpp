@@ -4487,8 +4487,8 @@ private:
     return N.isNegative() || N.getActiveBits() > 63 || N.isAllOnes() ? llvm::json::Value(nullptr) : llvm::json::Value(static_cast<int64_t>(N.getZExtValue()));
   }
 
-  // The element scalar of a `std::optional` of a scalar, decision 0075, or null: by value, or by const lvalue reference. A write
-  // handle, a volatile optional and an optional of anything else are none.
+  // The element of a `std::optional` of a scalar or of a plain struct, decisions 0075 and 0137, or null: by value, or by const lvalue
+  // reference. A write handle, a volatile optional and an optional of anything else are none.
   QualType optType(QualType T) const {
     if (T->isReferenceType()) {
       if (!T->isLValueReferenceType() || !T->getPointeeType().isConstQualified())
@@ -4500,13 +4500,17 @@ private:
         Spec->getTemplateArgs()[0].getKind() != TemplateArgument::Type)
       return QualType();
     const QualType Elem = Spec->getTemplateArgs()[0].getAsType();
-    return scalar(Elem) ? Elem : QualType();
+    // The element is a scalar, or a plain struct with no qualifier, decision 0137.
+    return scalar(Elem) || (!Elem.getCanonicalType().hasQualifiers() && plainStruct(Elem)) ? Elem : QualType();
   }
 
+  // The scalar of an optional of a scalar, or null. A field of a struct may hold such an optional, and no other.
   const char *optElement(QualType T) const {
     const QualType Elem = optType(T);
     return Elem.isNull() ? nullptr : scalar(Elem);
   }
+  // Whether a type is an optional of a scalar or of a plain struct.
+  bool isOpt(QualType T) const { return !optType(T).isNull(); }
 
   // The plain struct that a type is, decision 0073, or null. A const and a reference are looked through. Plain means a definition with
   // a name, no bases, no virtual function, no destructor and no member template, and fields that are each a scalar, a plain
@@ -4716,8 +4720,8 @@ private:
     }
     if (const QualType E = seqElement(T, Field); !E.isNull())
       return tag("Seq", llvm::json::Array{type(E), seqExtent(T)});
-    if (const char *S = optElement(T))
-      return tag("Opt", S);
+    if (const QualType E = optType(T); !E.isNull())
+      return tag("Opt", type(E));
     return tag("Other", T.getAsString(Context.getPrintingPolicy()));
   }
 
@@ -5047,7 +5051,7 @@ private:
       return tag("Copy", llvm::json::Array{expr(Construct->getArg(0), Near), type(Construct->getArg(0)->getType()), type(Construct->getType())});
     // An optional of a scalar, decision 0075: `std::nullopt`, a value that the compiler turns into one, and a copy of one. The core
     // judges the two types of the copy. A construction from any other argument stays unknown.
-    if (const auto *Construct = dyn_cast<CXXConstructExpr>(E); Construct && Construct->getNumArgs() == 1 && optElement(Construct->getType())) {
+    if (const auto *Construct = dyn_cast<CXXConstructExpr>(E); Construct && Construct->getNumArgs() == 1 && isOpt(Construct->getType())) {
       const Expr *Arg = Construct->getArg(0);
       const QualType From = Arg->getType().getNonReferenceType().getUnqualifiedType().getCanonicalType();
       const CXXRecordDecl *Tag = From->getAsCXXRecordDecl();
@@ -5065,7 +5069,7 @@ private:
           return "Nullopt";
         return unknown(E, E->getStmtClassName(), Near);
       }
-      if (optElement(Arg->getType()))
+      if (isOpt(Arg->getType()))
         return tag("Copy", llvm::json::Array{expr(Arg, Near), type(Arg->getType()), type(Construct->getType())});
       if (From == optType(Construct->getType()).getCanonicalType()) {
         // A computed value, `x + 1`, is held in a temporary for the reference parameter of the constructor. The temporary is not the value.
@@ -5076,7 +5080,7 @@ private:
     }
     // `o.has_value()` and `o.value()`.
     if (const auto *Member = dyn_cast<CXXMemberCallExpr>(E); Member && Member->getNumArgs() == 0 && Member->getMethodDecl())
-      if (const Expr *Object = Member->getImplicitObjectArgument(); Object && optElement(Object->getType())) {
+      if (const Expr *Object = Member->getImplicitObjectArgument(); Object && isOpt(Object->getType())) {
         const std::string Method = Member->getMethodDecl()->getNameAsString();
         if (Method == "has_value")
           return tag("HasValue", expr(optObject(Object), Near));
@@ -5085,7 +5089,7 @@ private:
       }
     // `*o`.
     if (const auto *Operator = dyn_cast<CXXOperatorCallExpr>(E); Operator && Operator->getOperator() == OO_Star && Operator->getNumArgs() == 1 &&
-                                                                  optElement(Operator->getArg(0)->getType()))
+                                                                  isOpt(Operator->getArg(0)->getType()))
       return tag("Value", expr(optObject(Operator->getArg(0)), Near));
     if (const auto *List = dyn_cast<InitListExpr>(E); List && List->getNumInits() == 1 && List->getType()->isScalarType())
       return tag("Brace", expr(List->getInit(0), Near));
@@ -5100,6 +5104,12 @@ private:
     // The object of a const member function, decision 0089.
     if (const auto *This = dyn_cast<CXXThisExpr>(E); This && plainStruct(This->getType()->getPointeeType()))
       return tag("Var", llvm::json::Array{"this", thisType(This->getType()->getPointeeType()->getAsCXXRecordDecl(), !This->getType()->getPointeeType().isConstQualified())});
+    // `o->f` on an optional of a plain struct reads the field of its value, decision 0137.
+    if (const auto *Member = dyn_cast<MemberExpr>(E); Member && Member->isArrow())
+      if (const auto *Arrow = dyn_cast<CXXOperatorCallExpr>(Member->getBase()->IgnoreParenImpCasts());
+          Arrow && Arrow->getOperator() == OO_Arrow && Arrow->getNumArgs() == 1 && isOpt(Arrow->getArg(0)->getType()))
+        if (const auto *Field = dyn_cast<FieldDecl>(Member->getMemberDecl()); Field && plainStruct(Context.getRecordType(Field->getParent())))
+          return tag("Field", llvm::json::Array{tag("Value", expr(optObject(Arrow->getArg(0)), Near)), Field->getNameAsString()});
     // A read of a field of a plain struct, also through `this`.
     if (const auto *Member = dyn_cast<MemberExpr>(E); Member && (!Member->isArrow() || isa<CXXThisExpr>(Member->getBase()->IgnoreParenImpCasts())))
       if (const auto *Field = dyn_cast<FieldDecl>(Member->getMemberDecl()); Field && plainStruct(Context.getRecordType(Field->getParent())))

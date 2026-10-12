@@ -612,7 +612,6 @@ pub open spec fn spec_ty(t: Ty, line: u32) -> Result<DTy, Refusal> {
         Ty::Seq(Scalar::Bool, _) => Err(Refusal::Element(line)),
         Ty::Seq(s, _) => Ok(DTy::Seq(s)),
         Ty::Struct(k) => Ok(DTy::Struct(k)),
-        Ty::Opt(Scalar::Struct(_)) => Err(Refusal::Element(line)),
         Ty::Opt(s) => Ok(DTy::Opt(s)),
         Ty::This(k) => Ok(DTy::Struct(k)),
         Ty::ThisMut(k) => Ok(DTy::Struct(k)),
@@ -639,6 +638,12 @@ pub open spec fn spec_value_ty(t: Ty, line: u32, sd: Structs) -> Result<DTy, Ref
             Ty::Mut(_) => Err(Refusal::Syntax(line)),
             Ty::MutAfter(_) => Err(Refusal::Syntax(line)),
             Ty::Struct(k) => if spec_holds(sd, k) {
+                Err(Refusal::HoldsSeq(line))
+            } else {
+                Ok(dt)
+            },
+            // An optional of a struct that holds a sequence stays out, decision 0137.
+            Ty::Opt(Scalar::Struct(k)) => if spec_holds(sd, k) {
                 Err(Refusal::HoldsSeq(line))
             } else {
                 Ok(dt)
@@ -1331,6 +1336,12 @@ pub open spec fn spec_path(e: Expr, decl: Names, ps: Params, ret: Option<Ty>, bo
             None => Err(Refusal::Syntax(line)),
         },
         Expr::Paren(a) => spec_path(*a, decl, ps, ret, bound, line, sd),
+        // The value of an optional of a struct is a struct, so `o->f` reads its field, decision 0137. Dafny checks that it holds a value.
+        Expr::Value(o) => match spec_path(*o, decl, ps, ret, bound, line, sd) {
+            Ok((d, Ty::Opt(Scalar::Struct(k)))) => Ok((DExpr::Get(Box::new(d)), Ty::Struct(k))),
+            Ok(_) => Err(Refusal::Syntax(line)),
+            Err(r) => Err(r),
+        },
         Expr::Field(o, f) => match spec_path(*o, decl, ps, ret, bound, line, sd) {
             Ok((d, t)) => match spec_struct_key(t) {
                 Some(k) => match spec_field_ty(sd, k, f) {
@@ -1678,23 +1689,29 @@ pub open spec fn spec_no_name(n: u32, ret: Option<Ty>, line: u32, sd: Structs) -
     }
 }
 
-/// The type of a parameter. The object after a call is a view of the contract, never a parameter.
-pub open spec fn spec_param_ty(t: Ty, line: u32) -> Result<DTy, Refusal> {
+/// The type of a parameter. The object after a call is a view of the contract, never a parameter. An optional of a struct that holds
+/// a sequence stays out, decision 0137.
+pub open spec fn spec_param_ty(t: Ty, line: u32, sd: Structs) -> Result<DTy, Refusal> {
     match t {
         Ty::ThisAfter(_) => Err(Refusal::Syntax(line)),
         Ty::MutAfter(_) => Err(Refusal::Syntax(line)),
+        Ty::Opt(Scalar::Struct(k)) => if spec_holds(sd, k) {
+            Err(Refusal::HoldsSeq(line))
+        } else {
+            spec_ty(t, line)
+        },
         _ => spec_ty(t, line),
     }
 }
 
 /// The parameters as Dafny parameters.
-pub open spec fn spec_params(ps: Params, line: u32) -> Result<DParams, Refusal>
+pub open spec fn spec_params(ps: Params, line: u32, sd: Structs) -> Result<DParams, Refusal>
     decreases ps,
 {
     match ps {
         List::Nil => Ok(List::Nil),
-        List::Cons((n, t), rest) => match spec_param_ty(t, line) {
-            Ok(dt) => match spec_params(*rest, line) {
+        List::Cons((n, t), rest) => match spec_param_ty(t, line, sd) {
+            Ok(dt) => match spec_params(*rest, line, sd) {
                 Ok(dr) => Ok(List::Cons((n, dt), Box::new(dr))),
                 Err(r) => Err(r),
             },
@@ -1706,7 +1723,7 @@ pub open spec fn spec_params(ps: Params, line: u32) -> Result<DParams, Refusal>
 /// A function has a method when its parameters and its return type are in the subset, and its modifies lines name each reference
 /// parameter and nothing else, decision 0108.
 pub open spec fn has_signature(f: Function, sd: Structs) -> bool {
-    spec_params(f.params, f.line).is_ok() && spec_ret_ty(f.ret, f.line, sd).is_ok() && spec_modifies(f.params, f.conds, f.line) is None
+    spec_params(f.params, f.line, sd).is_ok() && spec_ret_ty(f.ret, f.line, sd).is_ok() && spec_modifies(f.params, f.conds, f.line) is None
 }
 
 /// A key names a function of the file that has a method.
@@ -2539,7 +2556,7 @@ pub open spec fn spec_convert(da: DArgs, ps: Params) -> DArgs
 
 /// The model of a function among the functions `all` of its file, decision 0058.
 pub open spec fn spec_function(f: Function, all: Fns, sd: Structs) -> Model {
-    match spec_params(f.params, f.line) {
+    match spec_params(f.params, f.line, sd) {
         Err(r) => Model::Refused(r),
         Ok(ps) => match spec_ret_ty(f.ret, f.line, sd) {
             Err(r) => Model::Refused(r),
@@ -2574,7 +2591,8 @@ pub open spec fn spec_fields(ps: Params, line: u32) -> Result<DParams, Refusal>
 {
     match ps {
         List::Nil => Ok(List::Nil),
-        List::Cons((n, t), rest) => match spec_ty(t, line) {
+        // An optional of a struct is no field yet, decision 0137.
+        List::Cons((n, t), rest) => match (if t is Opt && t->Opt_0 is Struct { Err(Refusal::Element(line)) } else { spec_ty(t, line) }) {
             Ok(dt) => match spec_fields(*rest, line) {
                 Ok(dr) => Ok(List::Cons((n, dt), Box::new(dr))),
                 Err(r) => Err(r),
@@ -3687,7 +3705,6 @@ pub fn translate_ty(t: Ty, line: u32) -> (r: Result<DTy, Refusal>)
         Ty::Seq(Scalar::Bool, _) => Err(Refusal::Element(line)),
         Ty::Seq(s, _) => Ok(DTy::Seq(s)),
         Ty::Struct(k) => Ok(DTy::Struct(k)),
-        Ty::Opt(Scalar::Struct(_)) => Err(Refusal::Element(line)),
         Ty::Opt(s) => Ok(DTy::Opt(s)),
         Ty::This(k) => Ok(DTy::Struct(k)),
         Ty::ThisMut(k) => Ok(DTy::Struct(k)),
@@ -3715,6 +3732,11 @@ pub fn translate_value_ty(t: Ty, line: u32, sd: &Structs) -> (r: Result<DTy, Ref
             Ty::Mut(_) => Err(Refusal::Syntax(line)),
             Ty::MutAfter(_) => Err(Refusal::Syntax(line)),
             Ty::Struct(k) => if holds_seq(sd, k) {
+                Err(Refusal::HoldsSeq(line))
+            } else {
+                Ok(dt)
+            },
+            Ty::Opt(Scalar::Struct(k)) => if holds_seq(sd, k) {
                 Err(Refusal::HoldsSeq(line))
             } else {
                 Ok(dt)
@@ -4415,6 +4437,11 @@ pub fn path(e: &Expr, decl: &Names, ps: &Params, ret: Option<Ty>, bound: &Names,
             None => Err(Refusal::Syntax(line)),
         },
         Expr::Paren(a) => path(a, decl, ps, ret, bound, line, sd),
+        Expr::Value(o) => match path(o, decl, ps, ret, bound, line, sd) {
+            Ok((d, Ty::Opt(Scalar::Struct(k)))) => Ok((DExpr::Get(Box::new(d)), Ty::Struct(k))),
+            Ok(_) => Err(Refusal::Syntax(line)),
+            Err(r) => Err(r),
+        },
         Expr::Field(o, f) => match path(o, decl, ps, ret, bound, line, sd) {
             Ok((d, t)) => match struct_key(t) {
                 Some(k) => match field_ty(sd, k, *f) {
@@ -4799,26 +4826,31 @@ pub fn no_name(n: u32, ret: Option<Ty>, line: u32, sd: &Structs) -> (r: Refusal)
     }
 }
 
-pub fn param_ty(t: Ty, line: u32) -> (r: Result<DTy, Refusal>)
+pub fn param_ty(t: Ty, line: u32, sd: &Structs) -> (r: Result<DTy, Refusal>)
     ensures
-        r == spec_param_ty(t, line),
+        r == spec_param_ty(t, line, *sd),
 {
     match t {
         Ty::ThisAfter(_) => Err(Refusal::Syntax(line)),
         Ty::MutAfter(_) => Err(Refusal::Syntax(line)),
+        Ty::Opt(Scalar::Struct(k)) => if holds_seq(sd, k) {
+            Err(Refusal::HoldsSeq(line))
+        } else {
+            translate_ty(t, line)
+        },
         _ => translate_ty(t, line),
     }
 }
 
-pub fn translate_params(ps: &Params, line: u32) -> (r: Result<DParams, Refusal>)
+pub fn translate_params(ps: &Params, line: u32, sd: &Structs) -> (r: Result<DParams, Refusal>)
     ensures
-        r == spec_params(*ps, line),
+        r == spec_params(*ps, line, *sd),
     decreases ps,
 {
     match ps {
         List::Nil => Ok(List::Nil),
-        List::Cons((n, t), rest) => match param_ty(*t, line) {
-            Ok(dt) => match translate_params(rest, line) {
+        List::Cons((n, t), rest) => match param_ty(*t, line, sd) {
+            Ok(dt) => match translate_params(rest, line, sd) {
                 Ok(dr) => Ok(List::Cons((*n, dt), Box::new(dr))),
                 Err(r) => Err(r),
             },
@@ -4831,7 +4863,7 @@ pub fn signature(f: &Function, sd: &Structs) -> (r: bool)
     ensures
         r == has_signature(*f, *sd),
 {
-    translate_params(&f.params, f.line).is_ok() && ret_ty(f.ret, f.line, sd).is_ok() && modifies(&f.params, &f.conds, f.line).is_none()
+    translate_params(&f.params, f.line, sd).is_ok() && ret_ty(f.ret, f.line, sd).is_ok() && modifies(&f.params, &f.conds, f.line).is_none()
 }
 
 pub fn callable(fs: &Fns, key: u32, sd: &Structs) -> (r: bool)
@@ -5798,7 +5830,7 @@ pub fn translate_function(f: &Function, all: &Fns, sd: &Structs) -> (r: Model)
     ensures
         r == spec_function(*f, *all, *sd),
 {
-    match translate_params(&f.params, f.line) {
+    match translate_params(&f.params, f.line, sd) {
         Err(r) => Model::Refused(r),
         Ok(ps) => match ret_ty(f.ret, f.line, sd) {
             Err(r) => Model::Refused(r),
@@ -5849,7 +5881,7 @@ fn translate_fields(ps: &Params, line: u32) -> (r: Result<DParams, Refusal>)
 {
     match ps {
         List::Nil => Ok(List::Nil),
-        List::Cons((n, t), rest) => match translate_ty(*t, line) {
+        List::Cons((n, t), rest) => match if let Ty::Opt(Scalar::Struct(_)) = t { Err(Refusal::Element(line)) } else { translate_ty(*t, line) } {
             Ok(dt) => match translate_fields(rest, line) {
                 Ok(dr) => Ok(List::Cons((*n, dt), Box::new(dr))),
                 Err(r) => Err(r),
@@ -5922,6 +5954,7 @@ pub enum Tok {
     Old,
     Question,
     Colon,
+    Arrow,
     Unknown(u32, u32),
 }
 
@@ -6204,7 +6237,7 @@ fn parse_unary(toks: &Vec<Tok>, pos: usize, line: u32) -> (r: Result<(Expr, usiz
 /// A token that follows an atom: `.size()`, `.name` or `[`.
 fn is_postfix(t: Tok) -> bool {
     match t {
-        Tok::Size | Tok::Field(_) | Tok::HasValue | Tok::Value | Tok::Empty | Tok::LBracket => true,
+        Tok::Size | Tok::Field(_) | Tok::HasValue | Tok::Value | Tok::Empty | Tok::LBracket | Tok::Arrow => true,
         _ => false,
     }
 }
@@ -6255,6 +6288,20 @@ fn parse_postfix(toks: &Vec<Tok>, pos: usize, line: u32) -> (r: Result<(Expr, us
         } else if toks[p] == Tok::Empty {
             a = Expr::Empty(Box::new(a));
             p = p + 1;
+        } else if toks[p] == Tok::Arrow {
+            // `o->f` is `o.value().f`, decision 0137. A name of a field follows.
+            if toks.len() - p > 1 {
+                if let Tok::Ident(f) = toks[p + 1] {
+                    let v = Expr::Value(Box::new(a));
+                    assert(!unknown_expr(v));
+                    a = Expr::Field(Box::new(v), f);
+                    p = p + 2;
+                } else {
+                    return Err(Refusal::Syntax(line));
+                }
+            } else {
+                return Err(Refusal::Syntax(line));
+            }
         } else if toks.len() - p > 1 && toks[p + 1] == Tok::DotDot {
             match parse_implies(toks, p + 2, line) {
                 Ok((j, q)) => if q < toks.len() && toks[q] == Tok::RBracket {

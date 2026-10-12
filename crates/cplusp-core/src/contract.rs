@@ -331,6 +331,8 @@ pub open spec fn spec_token(t: Seq<u8>, i: int) -> (int, LexKind) {
         (i + 2, LexKind::Fixed(Tok::DotDot))
     } else if at(t, i, b"::"@) {
         (i + 2, LexKind::Fixed(Tok::ColonColon))
+    } else if at(t, i, b"->"@) {
+        (i + 2, LexKind::Fixed(Tok::Arrow))
     } else if c == 0x2e && i + 1 < t.len() && name_start(t[i + 1]) {
         (name_end(t, i + 1), LexKind::Field)
     } else if c == 0x27 && i + 2 < t.len() && 0x20 <= t[i + 1] <= 0x7e && t[i + 1] != 0x27 && t[i + 1] != 0x5c && t[i + 2] == 0x27 {
@@ -927,6 +929,8 @@ fn token(t: &Vec<u8>, i: usize) -> (r: (usize, LexKind))
         (i + 2, LexKind::Fixed(Tok::DotDot))
     } else if at_exec(t, i, b"::") {
         (i + 2, LexKind::Fixed(Tok::ColonColon))
+    } else if at_exec(t, i, b"->") {
+        (i + 2, LexKind::Fixed(Tok::Arrow))
     } else if c == 0x2e && i + 1 < t.len() && {
         let d = t[i + 1];
         (0x41 <= d && d <= 0x5a) || (0x61 <= d && d <= 0x7a) || d == 0x5f

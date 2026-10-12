@@ -2443,7 +2443,8 @@ fn prove_names_each_read_of_an_optional_that_may_be_empty() {
 }
 
 /// Each use of an optional with no rule is refused at its line, decision 0075. A construction from an expression of type
-/// `std::nullopt_t` that is not `std::nullopt` itself is refused, so its argument cannot vanish from the model.
+/// `std::nullopt_t` that is not `std::nullopt` itself is refused, so its argument cannot vanish from the model. An optional of a plain
+/// struct has a rule since decision 0137, so `of_struct` is no longer refused.
 #[test]
 fn optionals_with_no_rule_are_refused_at_their_lines() {
     if !clang_tidy_available() {
@@ -2458,7 +2459,6 @@ fn optionals_with_no_rule_are_refused_at_their_lines() {
         (6, "ImplicitCastExpr UserDefinedConversion: the translator has no rule for it yet."),
         (14, "CXXOperatorCallExpr: the translator has no rule for it yet."),
         (19, "CXXOperatorCallExpr: the translator has no rule for it yet."),
-        (26, "std::optional<Point>: the translator has no rule for it yet."),
         (35, "CXXConstructExpr: the translator has no rule for it yet."),
         (39, "CXXConstructExpr: the translator has no rule for it yet."),
         (43, "a sequence or an optional made from one of another type or length."),
@@ -2466,7 +2466,7 @@ fn optionals_with_no_rule_are_refused_at_their_lines() {
         let want = format!("model-optional-refuse.cpp:{line}: {expected}");
         assert!(refusals.iter().any(|l| l.ends_with(&want)), "{want}: {text}");
     }
-    assert_eq!(refusals.len(), 7, "{text}");
+    assert_eq!(refusals.len(), 6, "{text}");
 }
 
 /// A struct that holds a sequence, a recursive struct and a sequence of structs prove, decision 0076. Reads on a field or an

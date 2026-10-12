@@ -1005,12 +1005,22 @@ fn a_decreases_line_on_a_struct_parameter_is_the_struct_itself() {
 
 #[test]
 fn the_core_refuses_an_optional_of_a_struct_and_a_sequence_of_bool_by_itself() {
-    // Decisions 0064 and 0076 give neither a rule. The core refuses them, so the plugin is not the only guard. Found by the review
+    // Decision 0064 gives a sequence of bool no rule. The core refuses it, so the plugin is not the only guard. Found by the review
     // of decision 0076.
-    for t in [Ty::Opt(Scalar::Struct(NODE)), Ty::Seq(Scalar::Bool, Extent::Dynamic), Ty::Seq(Scalar::Bool, Extent::Fixed(2))] {
+    for t in [Ty::Seq(Scalar::Bool, Extent::Dynamic), Ty::Seq(Scalar::Bool, Extent::Fixed(2))] {
         assert_eq!(translate_ty(t, 7), Err(Refusal::Element(7)));
         assert_eq!(translate_value_ty(t, 7, &node_table()), Err(Refusal::Element(7)));
     }
+    // An optional of a struct is in, decision 0137, but not of one that holds a sequence, as a parameter, a local or a result.
+    let opt_node = Ty::Opt(Scalar::Struct(NODE));
+    assert_eq!(translate_ty(opt_node, 7), Ok(DTy::Opt(Scalar::Struct(NODE))));
+    assert_eq!(translate_value_ty(opt_node, 7, &node_table()), Err(Refusal::HoldsSeq(7)));
+    assert_eq!(param_ty(opt_node, 7, &node_table()), Err(Refusal::HoldsSeq(7)));
+    let point = List::Cons((POINT, (4, List::Cons((FX, Ty::I32), Box::new(List::Nil)), List::Nil)), Box::new(List::Nil));
+    let opt_point = Ty::Opt(Scalar::Struct(POINT));
+    assert_eq!(translate_value_ty(opt_point, 7, &point), Ok(DTy::Opt(Scalar::Struct(POINT))));
+    assert_eq!(param_ty(opt_point, 7, &point), Ok(DTy::Opt(Scalar::Struct(POINT))));
+    // A field that is an optional of a struct has no rule yet, decision 0137.
     let field = List::Cons((POINT, (4, List::Cons((FX, Ty::Opt(Scalar::Struct(POINT))), Box::new(List::Nil)), List::Nil)), Box::new(List::Nil));
     assert_eq!(translate_structs(&field), List::Cons(Err(Refusal::Element(4)), Box::new(List::Nil)));
 }
