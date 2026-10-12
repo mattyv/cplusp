@@ -3750,7 +3750,7 @@ fn a_chain_that_turns_and_the_star_of_a_scalar_are_refused() {
     );
 }
 
-/// A const std::array is a read-only sequence of fixed length, decision 0132: by reference, by value, and of bool.
+/// A const std::array is a read-only sequence of fixed length, decision 0132: by reference and by value.
 #[test]
 fn a_const_array_is_a_sequence_of_fixed_length() {
     let Some(dafny) = dafny() else { return };
@@ -3771,7 +3771,7 @@ fn a_const_array_is_a_sequence_of_fixed_length() {
     );
 }
 
-/// An array with no const, and a struct with an array field, stay out of the subset, decision 0132.
+/// An array with no const, a struct with an array field, and an array of bool stay out of the subset, decisions 0132 and 0136.
 #[test]
 fn an_array_with_no_const_and_an_array_field_are_refused() {
     if !clang_tidy_available() {
@@ -3787,6 +3787,7 @@ fn an_array_with_no_const_and_an_array_field_are_refused() {
             "6: std::array<int32_t, 4> &: the translator has no rule for it yet.",
             "10: std::array<int32_t, 4>: the translator has no rule for it yet.",
             "18: Pair: the translator has no rule for it yet.",
+            "23: an optional of a struct or a sequence of bool has no rule yet.",
         ],
         "{text}"
     );

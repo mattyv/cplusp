@@ -140,3 +140,4 @@ Status is `decided`, `proposed` (the default until someone objects or the thin s
 | [0133](0133-an-optional-that-a-call-gives.md) | has_value, value and the star read the optional that a call gives, through its temporary | decided |
 | [0134](0134-a-flag-at-the-end-that-takes-a-value.md) | The gate refuses a flag at the end that takes a value, because it takes the first flag of the gate | decided |
 | [0135](0135-mj-and-more-flags-that-take-a-value.md) | The gate refuses -MJ, which writes a file, and knows 42 more flags that take a separate value | decided |
+| [0136](0136-an-array-of-bool-stays-out.md) | An array of bool stays out, as every sequence of bool does. Amends 0132 | decided |

@@ -13,8 +13,3 @@ int32_t pick(const std::array<int32_t, 4>& a, size_t i) {
 uint64_t size(const std::array<int32_t, 3> a) {
   return a.size();
 }
-
-//@ ensures result == (a[0] || a[1])
-bool any(const std::array<bool, 2>& a) {
-  return a[0] || a[1];
-}
