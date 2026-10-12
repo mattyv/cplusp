@@ -2478,3 +2478,18 @@ fn a_star_before_a_term_reads_the_value() {
     assert_eq!(parse_contract(&vec![Tok::Op(BinOp::Mul)], 5), Err(Refusal::Syntax(5)));
     assert_eq!(parse_contract(&vec![Tok::Ident(A), Tok::Op(BinOp::Mul)], 6), Err(Refusal::Syntax(6)));
 }
+
+/// `o->f` is `o.value().f`, a postfix like `.f`, decision 0137. After `->` comes a name, and anything else refuses the line.
+#[test]
+fn the_arrow_reads_a_field_of_the_value() {
+    let lo = 90;
+    let toks = vec![Tok::Result, Tok::Arrow, Tok::Ident(lo), Tok::Op(BinOp::Eq), Tok::Ident(A), Tok::Arrow, Tok::Ident(lo), Tok::Arrow, Tok::Ident(B)];
+    let field = |o: Expr, f: u32| Expr::Field(b(Expr::Value(b(o))), f);
+    assert_eq!(parse_contract(&toks, 3), Ok(Expr::Bin(BinOp::Eq, b(field(Expr::Result, lo)), b(field(field(Expr::Name(A), lo), B)))));
+    // a->b[0] and -a->b: the arrow binds as a postfix.
+    let toks = vec![Tok::Op(BinOp::Sub), Tok::Ident(A), Tok::Arrow, Tok::Ident(B), Tok::LBracket, Tok::Int(0), Tok::RBracket];
+    assert_eq!(parse_contract(&toks, 3), Ok(Expr::Neg(b(Expr::Index(b(field(Expr::Name(A), B)), b(Expr::Int(0)))))));
+    assert_eq!(parse_contract(&vec![Tok::Ident(A), Tok::Arrow], 4), Err(Refusal::Syntax(4)));
+    assert_eq!(parse_contract(&vec![Tok::Ident(A), Tok::Arrow, Tok::Int(1)], 5), Err(Refusal::Syntax(5)));
+    assert_eq!(parse_contract(&vec![Tok::Arrow, Tok::Ident(A)], 6), Err(Refusal::Syntax(6)));
+}

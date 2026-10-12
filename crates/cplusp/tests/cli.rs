@@ -3814,3 +3814,48 @@ fn an_optional_that_a_call_gives_is_read_through_its_temporary() {
         "{text}"
     );
 }
+
+/// An optional of a plain struct, and `->` in code and in a contract, decision 0137.
+#[test]
+fn an_optional_of_a_struct_and_the_arrow_prove() {
+    let Some(dafny) = dafny() else { return };
+    if !clang_tidy_available() {
+        return;
+    }
+    let o = prove("model-opt-struct.cpp", &[], &dafny);
+    let text = stdout(&o);
+    assert_eq!(o.status.code(), Some(0), "stdout: {text} stderr: {}", stderr(&o));
+    assert_eq!(text.lines().last(), Some("ok: proved"), "{text}");
+}
+
+/// A read through `->` of an optional that may be empty does not prove, in code and in a contract, decision 0137.
+#[test]
+fn the_arrow_needs_a_value() {
+    let Some(dafny) = dafny() else { return };
+    if !clang_tidy_available() {
+        return;
+    }
+    let o = prove("model-opt-struct-wrong.cpp", &[], &dafny);
+    let text = stdout(&o);
+    assert_eq!(o.status.code(), Some(1), "stdout: {text} stderr: {}", stderr(&o));
+    for want in ["model-opt-struct-wrong.cpp:20: the optional may be empty here.", "model-opt-struct-wrong.cpp:23: the optional may be empty here."] {
+        assert!(text.lines().any(|l| l.starts_with("Not proved: ") && l.ends_with(want)), "{want}: {text}");
+    }
+}
+
+/// An optional of a struct that holds a sequence stays out, decision 0137.
+#[test]
+fn an_optional_of_a_struct_that_holds_a_sequence_is_refused() {
+    if !clang_tidy_available() {
+        return;
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let (o, _) = model("model-opt-struct-refuse.cpp", dir.path());
+    let text = stdout(&o);
+    assert_eq!(o.status.code(), Some(1), "stdout: {text} stderr: {}", stderr(&o));
+    assert_eq!(
+        text.lines().filter(|l| l.starts_with("Not provable: ")).map(|l| l.rsplit_once(".cpp:").unwrap().1).collect::<Vec<_>>(),
+        vec!["11: a struct that holds a sequence is in the subset only as a parameter."],
+        "{text}"
+    );
+}

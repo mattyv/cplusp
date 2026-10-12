@@ -234,3 +234,12 @@ fn the_spans_cover_every_byte_but_white_space() {
         assert!(bytes[at..].iter().all(|b| matches!(b, b' ' | b'\t' | b'\n' | b'\r' | 0x0b | 0x0c)), "{text:?}");
     }
 }
+
+/// `->` is one token, before `-` and `>`, decision 0137.
+#[test]
+fn the_arrow_is_one_token() {
+    assert_eq!(lex("result->lo"), vec![fixed("result", Tok::Result), fixed("->", Tok::Arrow), name("lo")]);
+    assert_eq!(lex("a -> b - > c"), vec![name("a"), fixed("->", Tok::Arrow), name("b"), op("-", BinOp::Sub), op(">", BinOp::Gt), name("c")]);
+    assert_eq!(lex("x-->0"), vec![name("x"), op("-", BinOp::Sub), fixed("->", Tok::Arrow), t("0", LexKind::Int(0))]);
+    assert_eq!(lex("a ==> b"), vec![name("a"), op("==>", BinOp::Implies), name("b")]);
+}
