@@ -296,6 +296,7 @@ fn gate_refuses_flags_the_proofs_cannot_follow() {
         (vec!["-std=c++23", "-ffp-contract=off", "--std", "c++20"], "--std: not allowed with the gate. The proofs assume C++23 or later.".to_string()),
         (vec!["-std=c++23", "-ffp-contract=off", "-ansi"], "-ansi: not allowed with the gate. The proofs assume C++23 or later.".to_string()),
         (vec!["-I", "-std=c++23", "-ffp-contract=off"], "-I: not allowed with the gate. It takes the next flag as its value, and the gate reads the flags as written.".to_string()),
+        (vec!["-std=c++23", "-ffp-contract=off", "-I"], "-I: not allowed with the gate. It takes the next flag as its value, and the gate reads the flags as written.".to_string()),
         (vec!["-std=c++23", "-ffp-contract=off", "-Wno-unsequenced"], "-Wno-unsequenced: not allowed with the gate. It hides a compiler warning the policy names.".to_string()),
     ] {
         let mut args = vec!["rules/goto/allowed.cpp", "--"];
@@ -960,18 +961,19 @@ fn gate_names_a_missing_include() {
     assert!(line.contains("nope.h"), "{line}");
 }
 
-/// The compiler can print a warning before its error. The message names the error, from the review of 0130.
+/// The compiler can print a warning before its error. The message names the error, from the review of 0130. A linker flag is
+/// unused when the gate lists the headers, so the compiler warns about it before it reads the file.
 #[test]
 fn gate_names_the_error_of_the_preprocessor_and_not_a_warning() {
     if !clang_tidy_available() {
         return;
     }
     let f = fixture("missing-include.cpp");
-    let o = gated(&[f.to_str().unwrap(), "--", "-std=c++23", "-ffp-contract=off", "-I"]);
+    let o = gated(&[f.to_str().unwrap(), "--", "-std=c++23", "-ffp-contract=off", "-Wl,--foo"]);
     assert_eq!(o.status.code(), Some(2), "stdout: {} stderr: {}", stdout(&o), stderr(&o));
     let err = stderr(&o);
     let line = err.lines().find(|l| l.starts_with("cannot preprocess crates/cplusp/tests/fixtures/missing-include.cpp: ")).expect(&err);
-    assert!(line.ends_with("error: argument to '-I' is missing (expected 1 value)"), "{line}");
+    assert!(line.ends_with("missing-include.cpp:1:10: fatal error: 'nope.h' file not found"), "{line}");
 }
 
 /// clang-tidy runs every database entry of a file, so the gate judges every one. A command with shell quoting

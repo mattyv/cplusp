@@ -99,6 +99,10 @@ fn a_flag_that_would_swallow_the_next_flag_is_refused() {
     }
     // `-Xclang` keeps its own reason, which comes first. The flag that it swallows is judged too.
     assert_eq!(check(&["-Xclang", "-std=c++20", "-std=c++23", "-ffp-contract=off"], &[]), (vec![(0, FlagFault::Reads), (1, FlagFault::Std)], false, false));
-    // A value is fine, and so is a lone `-` or a flag at the end.
-    assert_eq!(check(&["-I", "include", "-o", "-", "-std=c++23", "-ffp-contract=off", "-x"], &[]), (vec![], false, false));
+    // A value is fine, and so is a lone `-`.
+    assert_eq!(check(&["-I", "include", "-o", "-", "-std=c++23", "-ffp-contract=off"], &[]), (vec![], false, false));
+    // A flag at the end takes the first flag of the gate as its value, decision 0134.
+    for f in ["-I", "-x", "-D", "-o"] {
+        assert_eq!(check(&["-std=c++23", "-ffp-contract=off", f], &[]), (vec![(2, FlagFault::Swallows)], false, false), "{f}");
+    }
 }
