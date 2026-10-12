@@ -97,8 +97,8 @@ fn a_flag_that_would_swallow_the_next_flag_is_refused() {
     for f in ["-I", "-isystem", "-idirafter", "-iquote", "-include", "-imacros", "-D", "-U", "-x", "-o", "-MF", "-MT", "-MQ", "-target", "-isysroot", "-cxx-isystem", "-isystem-after"] {
         assert_eq!(check(&[f, "-std=c++23", "-ffp-contract=off"], &[]), (vec![(0, FlagFault::Swallows)], false, false), "{f}");
     }
-    // `-Xclang` keeps its own reason, which comes first.
-    assert_eq!(check(&["-Xclang", "-std=c++20", "-std=c++23", "-ffp-contract=off"], &[]), (vec![(0, FlagFault::Reads)], false, false));
+    // `-Xclang` keeps its own reason, which comes first. The flag that it swallows is judged too.
+    assert_eq!(check(&["-Xclang", "-std=c++20", "-std=c++23", "-ffp-contract=off"], &[]), (vec![(0, FlagFault::Reads), (1, FlagFault::Std)], false, false));
     // A value is fine, and so is a lone `-` or a flag at the end.
     assert_eq!(check(&["-I", "include", "-o", "-", "-std=c++23", "-ffp-contract=off", "-x"], &[]), (vec![], false, false));
 }

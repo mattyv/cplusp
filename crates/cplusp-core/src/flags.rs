@@ -1,4 +1,4 @@
-//! The flags of the compiler that the gate refuses, decisions 0022, 0128 and 0129. The shell gives each flag after `--` as bytes, and the
+//! The flags of the compiler that the gate refuses, decisions 0022, 0128, 0129 and 0130. The shell gives each flag after `--` as bytes, and the
 //! checks of the config. The core gives the index and the reason of each refused flag, and says when a flag that the gate needs is
 //! missing. It proves the facts of a run with no refusal, `check_flags`.
 
@@ -7,7 +7,7 @@ use vstd::prelude::*;
 verus! {
 
 /// Why the gate refuses a flag. `Float` changes floating-point results. `Std` names a standard before C++23, or is the bare `--std`. `Reads` changes what
-/// the compiler reads or reports. `HidesAll` hides each warning, and `HidesRow` a warning that the policy names.
+/// the compiler reads or reports. `HidesAll` hides each warning, and `HidesRow` a warning that the policy names. `Swallows` takes the next flag as its value.
 #[derive(Structural, PartialEq, Eq, Clone, Copy, Debug)]
 pub enum FlagFault {
     Float,
@@ -17,6 +17,7 @@ pub enum FlagFault {
     ConfigFile,
     HidesAll,
     HidesRow,
+    Swallows,
 }
 
 pub struct FlagCheck {
@@ -83,6 +84,23 @@ pub open spec fn reads(f: Seq<u8>) -> bool {
     ) || starts(f, b"-fmodule"@)
 }
 
+/// `-ansi` and `--ansi` set C++98, decision 0130.
+pub open spec fn is_ansi(f: Seq<u8>) -> bool {
+    f == b"-ansi"@ || f == b"--ansi"@
+}
+
+/// A flag whose value is the next flag, decision 0130.
+pub open spec fn takes_value(f: Seq<u8>) -> bool {
+    f == b"-I"@ || f == b"-isystem"@ || f == b"-idirafter"@ || f == b"-iquote"@ || f == b"-include"@ || f == b"-imacros"@ || f == b"-D"@ || f
+        == b"-U"@ || f == b"-x"@ || f == b"-o"@ || f == b"-MF"@ || f == b"-MT"@ || f == b"-MQ"@ || f == b"-Xclang"@ || f == b"-Xpreprocessor"@
+        || f == b"-target"@ || f == b"-isysroot"@ || f == b"-cxx-isystem"@ || f == b"-isystem-after"@
+}
+
+/// The flag at `i` takes as its value a next flag that starts with `-`. A lone `-` is a value.
+pub open spec fn swallows(fl: Seq<Vec<u8>>, i: int) -> bool {
+    takes_value(fl[i]@) && i + 1 < fl.len() && fl[i + 1]@.len() > 1 && fl[i + 1]@[0] == 0x2d
+}
+
 /// A check of the config is the compiler warning `name`.
 pub open spec fn names_warning(cs: Seq<Vec<u8>>, name: Seq<u8>) -> bool {
     exists|k: int| 0 <= k < cs.len() && #[trigger] cs[k]@ == b"clang-diagnostic-"@ + name
@@ -109,7 +127,7 @@ pub open spec fn fault(fl: Seq<Vec<u8>>, cs: Seq<Vec<u8>>, i: int) -> Option<Fla
     let eval = starts(f, b"-ffp-eval-method="@) && f != b"-ffp-eval-method=source"@;
     if contracts || denormals || eval || float_flag(f) {
         Some(FlagFault::Float)
-    } else if f == b"--std"@ || (std_value(f) is Some && !std_ok(std_value(f).unwrap())) {
+    } else if f == b"--std"@ || is_ansi(f) || (std_value(f) is Some && !std_ok(std_value(f).unwrap())) {
         Some(FlagFault::Std)
     } else if reads(f) {
         Some(FlagFault::Reads)
@@ -121,6 +139,8 @@ pub open spec fn fault(fl: Seq<Vec<u8>>, cs: Seq<Vec<u8>>, i: int) -> Option<Fla
         Some(FlagFault::HidesAll)
     } else if starts(f, b"-Wno-"@) && names_warning(cs, rest(f, b"-Wno-"@)) {
         Some(FlagFault::HidesRow)
+    } else if swallows(fl, i) {
+        Some(FlagFault::Swallows)
     } else {
         None
     }
@@ -175,6 +195,7 @@ pub open spec fn clean(fl: Seq<Vec<u8>>, cs: Seq<Vec<u8>>) -> bool {
     &&& forall|i: int| 0 <= i < fl.len() && #[trigger] std_value(fl[i]@) is Some ==> std_ok(std_value(fl[i]@).unwrap())
     &&& last_contract(fl, fl.len() as int) matches Some(j) && is_off(fl[j]@)
     &&& forall|i: int| 0 <= i < fl.len() ==> flag_clean(#[trigger] fl[i]@, cs)
+    &&& forall|i: int| 0 <= i < fl.len() ==> !#[trigger] swallows(fl, i)
 }
 
 /// One flag that changes no floating-point result, nothing that the compiler reads or reports, and no warning of the policy. It
@@ -187,7 +208,7 @@ pub open spec fn flag_clean(f: Seq<u8>, cs: Seq<Vec<u8>>) -> bool {
     &&& !starts(f, b"@"@)
     &&& f != b"--config"@ && !starts(f, b"--config="@)
     &&& f != b"-w"@ && f != b"-Wno-everything"@ && f != b"--no-warnings"@
-    &&& f != b"--std"@
+    &&& f != b"--std"@ && !is_ansi(f)
     &&& !(starts(f, b"-Wno-"@) && names_warning(cs, rest(f, b"-Wno-"@)))
 }
 
@@ -436,6 +457,17 @@ fn names_warning_exec(cs: &Vec<Vec<u8>>, f: &Vec<u8>) -> (r: bool)
     false
 }
 
+fn takes_value_exec(f: &Vec<u8>) -> (r: bool)
+    ensures
+        r == takes_value(f@),
+{
+    eq(f, b"-I") || eq(f, b"-isystem") || eq(f, b"-idirafter") || eq(f, b"-iquote") || eq(f, b"-include") || eq(f, b"-imacros") || eq(f, b"-D")
+        || eq(f, b"-U") || eq(f, b"-x") || eq(f, b"-o") || eq(f, b"-MF") || eq(f, b"-MT") || eq(f, b"-MQ") || eq(f, b"-Xclang") || eq(
+        f,
+        b"-Xpreprocessor",
+    ) || eq(f, b"-target") || eq(f, b"-isysroot") || eq(f, b"-cxx-isystem") || eq(f, b"-isystem-after")
+}
+
 fn fault_exec(fl: &Vec<Vec<u8>>, cs: &Vec<Vec<u8>>, i: usize, last: Option<usize>) -> (r: Option<FlagFault>)
     requires
         i < fl.len(),
@@ -454,7 +486,7 @@ fn fault_exec(fl: &Vec<Vec<u8>>, cs: &Vec<Vec<u8>>, i: usize, last: Option<usize
     if contracts || denormals || eval || float_exec(f) {
         return Some(FlagFault::Float);
     }
-    if eq(f, b"--std") {
+    if eq(f, b"--std") || eq(f, b"-ansi") || eq(f, b"--ansi") {
         return Some(FlagFault::Std);
     }
     if let Some(ok) = std_exec(f) {
@@ -472,6 +504,8 @@ fn fault_exec(fl: &Vec<Vec<u8>>, cs: &Vec<Vec<u8>>, i: usize, last: Option<usize
         Some(FlagFault::HidesAll)
     } else if starts_exec(f, b"-Wno-") && names_warning_exec(cs, f) {
         Some(FlagFault::HidesRow)
+    } else if takes_value_exec(f) && i + 1 < fl.len() && fl[i + 1].len() > 1 && fl[i + 1][0] == 0x2d {
+        Some(FlagFault::Swallows)
     } else {
         None
     }
@@ -543,6 +577,9 @@ pub fn check_flags(fl: &Vec<Vec<u8>>, cs: &Vec<Vec<u8>>) -> (r: FlagCheck)
             let j = last_contract(fl@, n).unwrap();
             assert(fault(fl@, cs@, j) is None);
             assert forall|j: int| 0 <= j < n implies flag_clean(#[trigger] fl@[j]@, cs@) by {
+                assert(fault(fl@, cs@, j) is None);
+            }
+            assert forall|j: int| 0 <= j < n implies !#[trigger] swallows(fl@, j) by {
                 assert(fault(fl@, cs@, j) is None);
             }
         }
