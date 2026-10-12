@@ -146,3 +146,4 @@ Status is `decided`, `proposed` (the default until someone objects or the thin s
 | [0139](0139-at-is-an-index.md) | at of a read-only sequence is an index, and Dafny proves it in range | decided |
 | [0140](0140-a-const-pointer-is-an-optional.md) | A const T* parameter is an optional of T. nullptr in contracts. The sentence for a missing value names both kinds | decided |
 | [0141](0141-a-pointer-has-its-own-type.md) | A pointer has its own type in the core. Two pointers do not compare, and neither does this. Amends 0140 | decided |
+| [0142](0142-a-unique-ptr-that-is-only-read.md) | A unique_ptr that the code only reads is an optional of its own kind, Own(T). Two do not compare | decided |

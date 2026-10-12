@@ -2563,3 +2563,36 @@ fn two_pointers_do_not_compare() {
     assert_eq!(translate_code(&Expr::Bin(BinOp::Eq, p(), q()), 3), Err(Refusal::Syntax(3)));
     assert_eq!(translate_code(&Expr::Bin(BinOp::Lt, p(), q()), 3), Err(Refusal::Syntax(3)));
 }
+
+/// A unique_ptr is `Own(T)`, decision 0142: an Option in Dafny, a parameter, a local or a result, but no field. Two of them do not
+/// compare, and the test against nullptr takes one.
+#[test]
+fn a_unique_ptr_is_an_owned_optional() {
+    let own = Ty::Own(Scalar::I32);
+    assert_eq!(translate_ty(own, 3), Ok(DTy::Opt(Scalar::I32)));
+    assert_eq!(translate_value_ty(own, 3, &List::Nil), Ok(DTy::Opt(Scalar::I32)));
+    assert_eq!(param_ty(own, 3, &List::Nil), Ok(DTy::Opt(Scalar::I32)));
+    assert_eq!(translate_value_ty(Ty::Own(Scalar::Struct(NODE)), 3, &node_table()), Err(Refusal::HoldsSeq(3)));
+    let field = List::Cons((POINT, (4, List::Cons((FX, own), Box::new(List::Nil)), List::Nil)), Box::new(List::Nil));
+    assert_eq!(translate_structs(&field), List::Cons(Err(Refusal::Element(4)), Box::new(List::Nil)));
+    let f = |e: Expr| Function {
+        name: SAT,
+        line: 10,
+        params: List::Cons((A, own), Box::new(List::Cons((B, own), Box::new(List::Nil)))),
+        ret: own,
+        trusted: false,
+        conds: List::Cons((CondKind::Ensures, e, 6, names(&[A, B])), Box::new(List::Nil)),
+        body: one(Stmt::Return(Expr::Var(A, own), 11)),
+    };
+    // ensures result != nullptr
+    let Model::Full(m) = translate_function(&f(Expr::Bin(BinOp::Ne, b(Expr::Result), b(Expr::Nullopt))), &List::Nil, &List::Nil) else { panic!("a full model") };
+    assert_eq!(strip_conds(m.ensures), List::Cons((DExpr::IsSome(Box::new(DExpr::Result)), 0), Box::new(List::Nil)));
+    // ensures a == b, and a < b
+    for op in [BinOp::Eq, BinOp::Lt] {
+        let e = Expr::Bin(op, b(Expr::Name(A)), b(Expr::Name(B)));
+        assert_eq!(bare_refusal(translate_function(&f(e), &List::Nil, &List::Nil)), Refusal::Syntax(6), "{op:?}");
+    }
+    let p = || b(Expr::Var(A, own));
+    assert_eq!(translate_code(&Expr::Bin(BinOp::Eq, p(), b(Expr::Var(B, own))), 3), Err(Refusal::Syntax(3)));
+    assert_eq!(translate_code(&Expr::Bin(BinOp::Eq, p(), b(Expr::Nullopt)), 3), Ok(DExpr::Not(Box::new(DExpr::IsSome(Box::new(DExpr::Var(A)))))));
+}

@@ -3957,3 +3957,44 @@ fn a_pointer_with_no_const_and_a_pointer_as_a_bool_are_refused() {
     assert_eq!(refusals[3], "21: the contract line has a form the translator cannot read.", "{text}");
     assert_eq!(refusals[4], "26: the contract line has a form the translator cannot read.", "{text}");
 }
+
+/// A unique_ptr that the code only reads is an optional, decision 0142: a const reference parameter, a result, a local that a call
+/// sets, std::make_unique, `*p`, `p->f` and the test against nullptr.
+#[test]
+fn a_unique_ptr_that_is_only_read_proves() {
+    let Some(dafny) = dafny() else { return };
+    if !clang_tidy_available() {
+        return;
+    }
+    let o = prove("model-unique.cpp", &[], &dafny);
+    let text = stdout(&o);
+    assert_eq!(o.status.code(), Some(0), "stdout: {text} stderr: {}", stderr(&o));
+    assert_eq!(text.lines().last(), Some("ok: proved"), "{text}");
+    let o = prove("model-unique-wrong.cpp", &[], &dafny);
+    let text = stdout(&o);
+    assert_eq!(o.status.code(), Some(1), "stdout: {text} stderr: {}", stderr(&o));
+    assert_eq!(
+        text.lines().filter(|l| l.starts_with("Not proved: ")).map(|l| l.rsplit_once(".cpp:").unwrap().1).collect::<Vec<_>>(),
+        vec!["12: the optional may be empty or the pointer may be null here."],
+        "{text}"
+    );
+}
+
+/// A write through a unique_ptr, a move, a unique_ptr by value or by reference with no const, and two unique_ptrs compared, have no
+/// rule, decision 0142.
+#[test]
+fn a_unique_ptr_that_is_written_or_compared_is_refused() {
+    if !clang_tidy_available() {
+        return;
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let (o, _) = model("model-unique-refuse.cpp", dir.path());
+    let text = stdout(&o);
+    assert_eq!(o.status.code(), Some(1), "stdout: {text} stderr: {}", stderr(&o));
+    assert!(!text.contains("Dafny says"), "{text}");
+    let refusals: Vec<&str> = text.lines().filter(|l| l.starts_with("Not provable: ")).map(|l| l.rsplit_once(".cpp:").unwrap().1).collect();
+    assert_eq!(refusals.len(), 4, "{text}");
+    for (r, line) in refusals.iter().zip(["8: ", "12: ", "17: ", "22: "]) {
+        assert!(r.starts_with(line) && r.ends_with(": the translator has no rule for it yet."), "{line}: {text}");
+    }
+}
