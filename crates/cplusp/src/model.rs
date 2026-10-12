@@ -45,6 +45,8 @@ enum JTy {
     /// An enum class of the file by its key, decision 0109.
     Enum(String),
     Opt(JScalar),
+    /// A pointer to const that is a parameter, decision 0141.
+    Ptr(JScalar),
     This(String),
     ThisMut(String),
     Void,
@@ -303,6 +305,7 @@ fn ty(t: JTy, names: &mut Names) -> Ty {
         JTy::Bool => Ty::Bool,
         JTy::Seq(s, extent) => Ty::Seq(scalar(s, names), extent.map_or(Extent::Dynamic, Extent::Fixed)),
         JTy::Opt(s) => Ty::Opt(scalar(s, names)),
+        JTy::Ptr(s) => Ty::Ptr(scalar(s, names)),
         JTy::Struct(k) => Ty::Struct(names.id(&k)),
         JTy::Mut(s) => Ty::Mut(scalar(s, names)),
         JTy::Enum(k) => Ty::Enum(names.id(&k)),

@@ -4680,10 +4680,25 @@ private:
       return tag("Mut", type(Pointee));
     return nullptr;
   }
-  // The type of a parameter, or of a name that reads one.
+  // The element of a pointer to const, decisions 0140 and 0141, or null: `const T*` for a scalar or a plain struct, with no other qualifier.
+  QualType constPointee(QualType T) const {
+    const QualType Canon = T.getCanonicalType();
+    if (!Canon->isPointerType() || Canon.hasQualifiers())
+      return QualType();
+    QualType Pointee = Canon->getPointeeType();
+    if (!Pointee.isConstQualified())
+      return QualType();
+    Pointee.removeLocalConst();
+    return !Pointee.hasQualifiers() && (scalar(Pointee) || plainStruct(Pointee)) ? Pointee : QualType();
+  }
+  // The type of a parameter, or of a name that reads one. A pointer to const is a `Ptr` of what it points to, decisions 0140 and 0141.
   llvm::json::Value paramType(QualType T) const {
     llvm::json::Value Written = mutRef(T);
-    return Written.getAsNull() ? type(T) : Written;
+    if (!Written.getAsNull())
+      return Written;
+    if (const QualType Element = constPointee(T); !Element.isNull())
+      return tag("Ptr", type(Element));
+    return type(T);
   }
   llvm::json::Value varType(const ValueDecl *D) const { return isa<ParmVarDecl>(D) ? paramType(D->getType()) : type(D->getType()); }
 
@@ -4997,6 +5012,16 @@ private:
       case BO_LOr: Op = "Or"; break;
       default: break;
       }
+      // A comparison with a pointer operand. Only the test of a pointer to const against nullptr has a rule, decisions 0140 and 0141: two pointers compare
+      // addresses, and the model has none. `this` has no rule either.
+      if (Binary->isComparisonOp() && (Binary->getLHS()->IgnoreParenImpCasts()->getType()->isPointerType() || Binary->getRHS()->IgnoreParenImpCasts()->getType()->isPointerType())) {
+        const bool NullRight = isa<CXXNullPtrLiteralExpr>(Binary->getRHS()->IgnoreParenImpCasts());
+        const bool NullLeft = isa<CXXNullPtrLiteralExpr>(Binary->getLHS()->IgnoreParenImpCasts());
+        const Expr *Pointer = (NullRight ? Binary->getLHS() : Binary->getRHS())->IgnoreParenImpCasts();
+        if ((Binary->getOpcode() == BO_EQ || Binary->getOpcode() == BO_NE) && NullRight != NullLeft && !isa<CXXThisExpr>(Pointer) && !constPointee(Pointer->getType()).isNull())
+          return tag("Bin", NullRight ? llvm::json::Array{Op, expr(Pointer, Near), "Nullopt"} : llvm::json::Array{Op, "Nullopt", expr(Pointer, Near)});
+        return unknown(E, describe(E), Near);
+      }
       // Division and remainder of integers carry the type of their result, decision 0088. Division of floating point stays unknown.
       if (!Op && (Binary->getOpcode() == BO_Div || Binary->getOpcode() == BO_Rem) && Binary->getType()->isIntegerType())
         return tag("Divide", llvm::json::Array{Binary->getOpcode() == BO_Div ? "Div" : "Rem", expr(Binary->getLHS(), Near), expr(Binary->getRHS(), Near),
@@ -5012,6 +5037,16 @@ private:
       return tag("Bin", llvm::json::Array{Op, expr(Binary->getLHS(), Near), expr(Binary->getRHS(), Near)});
     }
     if (const auto *Unary = dyn_cast<UnaryOperator>(E)) {
+      // `*p` of a pointer to const reads the value behind the pointer, and `&x` of a variable of a scalar or a plain struct is that value as an optional,
+      // decision 0140.
+      if (Unary->getOpcode() == UO_Deref)
+        if (const Expr *Sub = Unary->getSubExpr()->IgnoreParenImpCasts(); !isa<CXXThisExpr>(Sub) && !constPointee(Sub->getType()).isNull())
+          return tag("Value", expr(Sub, Near));
+      if (Unary->getOpcode() == UO_AddrOf)
+        if (const auto *Ref = dyn_cast<DeclRefExpr>(Unary->getSubExpr()->IgnoreParens()); Ref && isVariable(Ref->getDecl()) && mutRef(Ref->getDecl()->getType()).getAsNull() &&
+                                                                                          !Ref->getDecl()->getType()->isReferenceType() &&
+                                                                                          (scalar(Ref->getType().getUnqualifiedType()) || plainStruct(Ref->getType())))
+          return tag("Wrap", expr(Ref, Near));
       if (Unary->getOpcode() == UO_LNot)
         return tag("Not", expr(Unary->getSubExpr(), Near));
       if (Unary->getOpcode() == UO_Minus)
@@ -5032,6 +5067,9 @@ private:
       }
     }
     if (const auto *Cast = dyn_cast<CastExpr>(E)) {
+      // `nullptr` as an argument for a pointer to const is no value, decision 0140.
+      if (Cast->getCastKind() == CK_NullToPointer && isa<CXXNullPtrLiteralExpr>(Cast->getSubExpr()->IgnoreParens()))
+        return "Nullopt";
       llvm::json::Value Kind = Cast->getCastKind() == CK_LValueToRValue ? llvm::json::Value("Read")
                                : Cast->getCastKind() == CK_NoOp         ? llvm::json::Value("NoOp")
                                : Cast->getCastKind() == CK_ConstructorConversion ? llvm::json::Value("Construct")
@@ -5105,6 +5143,11 @@ private:
     // The object of a const member function, decision 0089.
     if (const auto *This = dyn_cast<CXXThisExpr>(E); This && plainStruct(This->getType()->getPointeeType()))
       return tag("Var", llvm::json::Array{"this", thisType(This->getType()->getPointeeType()->getAsCXXRecordDecl(), !This->getType()->getPointeeType().isConstQualified())});
+    // `p->f` on a pointer to const of a plain struct reads the field of its value, decision 0140.
+    if (const auto *Member = dyn_cast<MemberExpr>(E); Member && Member->isArrow())
+      if (const Expr *Base = Member->getBase()->IgnoreParenImpCasts(); !isa<CXXThisExpr>(Base) && !constPointee(Base->getType()).isNull())
+        if (const auto *Field = dyn_cast<FieldDecl>(Member->getMemberDecl()); Field && plainStruct(Context.getRecordType(Field->getParent())))
+          return tag("Field", llvm::json::Array{tag("Value", expr(Base, Near)), Field->getNameAsString()});
     // `o->f` on an optional of a plain struct reads the field of its value, decision 0137.
     if (const auto *Member = dyn_cast<MemberExpr>(E); Member && Member->isArrow())
       if (const auto *Arrow = dyn_cast<CXXOperatorCallExpr>(Member->getBase()->IgnoreParenImpCasts());

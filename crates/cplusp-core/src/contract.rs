@@ -305,6 +305,8 @@ pub open spec fn spec_word(t: Seq<u8>, i: int, e: int) -> LexKind {
         LexKind::Fixed(Tok::Bool(true))
     } else if w == b"false"@ {
         LexKind::Fixed(Tok::Bool(false))
+    } else if w == b"nullptr"@ {
+        LexKind::Fixed(Tok::Nullptr)
     } else {
         LexKind::Name(paren_after(t, e))
     }
@@ -894,6 +896,8 @@ fn word_exec(t: &Vec<u8>, i: usize, e: usize) -> (r: LexKind)
         LexKind::Fixed(Tok::Bool(true))
     } else if word_is(t, i, e, b"false") {
         LexKind::Fixed(Tok::Bool(false))
+    } else if word_is(t, i, e, b"nullptr") {
+        LexKind::Fixed(Tok::Nullptr)
     } else {
         LexKind::Name(paren_after_exec(t, e))
     }
