@@ -4449,7 +4449,7 @@ private:
   }
 
   // The element type of a read-only sequence, decision 0064, or null: a const vector or a reference to one, except `std::vector<bool>`, and
-  // a span of const elements, any extent. A reference is looked through. The element is a scalar or a plain struct, decision 0076. A
+  // a span of const elements, any extent, and a const std::array, decision 0132. A reference is looked through. The element is a scalar or a plain struct, decision 0076. A
   // `Field` is a field of a struct, decision 0076: a vector with no const, and no span.
   QualType seqElement(QualType T, bool Field = false) const {
     if (T->isReferenceType())
@@ -4468,16 +4468,20 @@ private:
       Elem.removeLocalConst();
       return scalar(Elem) || (!Elem.getCanonicalType().hasQualifiers() && plainStruct(Elem)) ? Elem : QualType();
     }
+    // A const std::array of a scalar or a plain struct is a sequence of fixed length, decision 0132. The plugin passes an array of bool on, and the core
+    // refuses it, decision 0136.
+    if (!Field && Spec->getName() == "array" && T.isConstQualified() && !Elem.getCanonicalType().hasQualifiers())
+      return scalar(Elem) || plainStruct(Elem) ? Elem : QualType();
     return QualType();
   }
   bool isSeq(QualType T) const { return !seqElement(T).isNull(); }
 
-  // The fixed extent of a read-only sequence, decision 0070, or null: a vector, and a span of `std::dynamic_extent`.
+  // The fixed extent of a read-only sequence, decisions 0070 and 0132, or null: a vector, and a span of `std::dynamic_extent`. A std::array has its length.
   llvm::json::Value seqExtent(QualType T) const {
     if (T->isReferenceType())
       T = T->getPointeeType();
     const auto *Spec = dyn_cast_or_null<ClassTemplateSpecializationDecl>(T->getAsCXXRecordDecl());
-    if (!Spec || Spec->getName() != "span" || Spec->getTemplateArgs().size() < 2 || Spec->getTemplateArgs()[1].getKind() != TemplateArgument::Integral)
+    if (!Spec || (Spec->getName() != "span" && Spec->getName() != "array") || Spec->getTemplateArgs().size() < 2 || Spec->getTemplateArgs()[1].getKind() != TemplateArgument::Integral)
       return nullptr;
     llvm::APSInt N = Spec->getTemplateArgs()[1].getAsIntegral();
     return N.isNegative() || N.getActiveBits() > 63 || N.isAllOnes() ? llvm::json::Value(nullptr) : llvm::json::Value(static_cast<int64_t>(N.getZExtValue()));
@@ -4906,6 +4910,24 @@ private:
   // A parameter or a local: the names the translator reads and writes.
   static bool isVariable(const ValueDecl *D) { return isa<ParmVarDecl>(D) || (isa<VarDecl>(D) && cast<VarDecl>(D)->hasLocalStorage()); }
 
+  // The optional that a read names, decision 0133. The compiler holds the optional that a call or a construction gives in a temporary, and
+  // the read names the temporary. A reference local is refused, row lvalue_references, so the read is always copied into a value and no
+  // reference outlives the temporary. Used at these reads only.
+  static const Expr *optObject(const Expr *E) {
+    const Expr *Inner = E;
+    bool Held = false;
+    for (;;) {
+      if (const auto *Temporary = dyn_cast<MaterializeTemporaryExpr>(Inner))
+        Inner = Temporary->getSubExpr(), Held = true;
+      else if (const auto *Bound = dyn_cast<CXXBindTemporaryExpr>(Inner))
+        Inner = Bound->getSubExpr(), Held = true;
+      else if (const auto *Cast = dyn_cast<ImplicitCastExpr>(Inner); Cast && Cast->getCastKind() == CK_NoOp)
+        Inner = Cast->getSubExpr();
+      else
+        return Held ? Inner : E;
+    }
+  }
+
   llvm::json::Value expr(const Expr *E, unsigned Near) const {
     // A temporary that needs a cleanup, such as an optional made from `x + 1`, wraps the expression. The wrapper is not the construct.
     if (const auto *Cleanups = dyn_cast<ExprWithCleanups>(E))
@@ -5057,14 +5079,14 @@ private:
       if (const Expr *Object = Member->getImplicitObjectArgument(); Object && optElement(Object->getType())) {
         const std::string Method = Member->getMethodDecl()->getNameAsString();
         if (Method == "has_value")
-          return tag("HasValue", expr(Object, Near));
+          return tag("HasValue", expr(optObject(Object), Near));
         if (Method == "value")
-          return tag("Value", expr(Object, Near));
+          return tag("Value", expr(optObject(Object), Near));
       }
     // `*o`.
     if (const auto *Operator = dyn_cast<CXXOperatorCallExpr>(E); Operator && Operator->getOperator() == OO_Star && Operator->getNumArgs() == 1 &&
                                                                   optElement(Operator->getArg(0)->getType()))
-      return tag("Value", expr(Operator->getArg(0), Near));
+      return tag("Value", expr(optObject(Operator->getArg(0)), Near));
     if (const auto *List = dyn_cast<InitListExpr>(E); List && List->getNumInits() == 1 && List->getType()->isScalarType())
       return tag("Brace", expr(List->getInit(0), Near));
     // A braced value of a plain struct. A field that the list leaves out is an `ImplicitValueInitExpr`, which stays unknown.
