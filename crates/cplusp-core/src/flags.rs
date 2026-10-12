@@ -1,4 +1,4 @@
-//! The flags of the compiler that the gate refuses, decisions 0022, 0128, 0129, 0130 and 0134. The shell gives each flag after `--` as bytes, and the
+//! The flags of the compiler that the gate refuses, decisions 0022, 0128, 0129, 0130, 0134 and 0135. The shell gives each flag after `--` as bytes, and the
 //! checks of the config. The core gives the index and the reason of each refused flag, and says when a flag that the gate needs is
 //! missing. It proves the facts of a run with no refusal, `check_flags`.
 
@@ -81,7 +81,7 @@ pub open spec fn reads(f: Seq<u8>) -> bool {
         == b"-###"@ || f == b"-fdriver-only"@ || f == b"-Xpreprocessor"@ || f == b"-Xclang"@ || f == b"-include-pch"@ || starts(
         f,
         b"-Wp,"@,
-    ) || starts(f, b"-fmodule"@)
+    ) || starts(f, b"-fmodule"@) || starts(f, b"-MJ"@)
 }
 
 /// `-ansi` and `--ansi` set C++98, decision 0130.
@@ -93,7 +93,12 @@ pub open spec fn is_ansi(f: Seq<u8>) -> bool {
 pub open spec fn takes_value(f: Seq<u8>) -> bool {
     f == b"-I"@ || f == b"-isystem"@ || f == b"-idirafter"@ || f == b"-iquote"@ || f == b"-include"@ || f == b"-imacros"@ || f == b"-D"@ || f
         == b"-U"@ || f == b"-x"@ || f == b"-o"@ || f == b"-MF"@ || f == b"-MT"@ || f == b"-MQ"@ || f == b"-Xclang"@ || f == b"-Xpreprocessor"@
-        || f == b"-target"@ || f == b"-isysroot"@ || f == b"-cxx-isystem"@ || f == b"-isystem-after"@
+        || f == b"-target"@ || f == b"-isysroot"@ || f == b"-cxx-isystem"@ || f == b"-isystem-after"@ || takes_value_more(f)
+}
+
+/// More flags whose value is the next flag, decision 0135. A list of its own keeps `takes_value` short enough to read.
+pub open spec fn takes_value_more(f: Seq<u8>) -> bool {
+    f == b"-F"@ || f == b"-L"@ || f == b"-l"@ || f == b"-B"@ || f == b"-z"@ || f == b"-u"@ || f == b"-e"@ || f == b"-T"@ || f == b"-rpath"@ || f == b"-arch"@ || f == b"-dumpdir"@ || f == b"-Xlinker"@ || f == b"-Xassembler"@ || f == b"-Xanalyzer"@ || f == b"-Xarch_host"@ || f == b"-Xarch_device"@ || f == b"-mllvm"@ || f == b"-iprefix"@ || f == b"-iwithprefix"@ || f == b"-iwithprefixbefore"@ || f == b"-iframework"@ || f == b"-iwithsysroot"@ || f == b"-ivfsoverlay"@ || f == b"-stdlib++-isystem"@ || f == b"--sysroot"@ || f == b"-working-directory"@ || f == b"-module-dependency-dir"@ || f == b"-resource-dir"@ || f == b"-fdebug-compilation-dir"@ || f == b"-serialize-diagnostics"@ || f == b"--serialize-diagnostics"@ || f == b"--param"@ || f == b"--language"@ || f == b"--output"@ || f == b"--include-directory"@ || f == b"--define-macro"@ || f == b"--undefine-macro"@ || f == b"--include"@ || f == b"--imacros"@ || f == b"--prefix"@ || f == b"--system-header-prefix"@ || f == b"--library-directory"@
 }
 
 /// The flag at `i` takes as its value a next flag that starts with `-`. A lone `-` is a value. At the end, it takes the first flag
@@ -379,7 +384,7 @@ fn reads_exec(f: &Vec<u8>) -> (r: bool)
         f,
         b"-###",
     ) || eq(f, b"-fdriver-only") || eq(f, b"-Xpreprocessor") || eq(f, b"-Xclang") || eq(f, b"-include-pch") || starts_exec(f, b"-Wp,")
-        || starts_exec(f, b"-fmodule")
+        || starts_exec(f, b"-fmodule") || starts_exec(f, b"-MJ")
 }
 
 /// The bytes of `c` after 17 equal the bytes of `f` after 5.
@@ -467,7 +472,14 @@ fn takes_value_exec(f: &Vec<u8>) -> (r: bool)
         || eq(f, b"-U") || eq(f, b"-x") || eq(f, b"-o") || eq(f, b"-MF") || eq(f, b"-MT") || eq(f, b"-MQ") || eq(f, b"-Xclang") || eq(
         f,
         b"-Xpreprocessor",
-    ) || eq(f, b"-target") || eq(f, b"-isysroot") || eq(f, b"-cxx-isystem") || eq(f, b"-isystem-after")
+    ) || eq(f, b"-target") || eq(f, b"-isysroot") || eq(f, b"-cxx-isystem") || eq(f, b"-isystem-after") || takes_value_more_exec(f)
+}
+
+fn takes_value_more_exec(f: &Vec<u8>) -> (r: bool)
+    ensures
+        r == takes_value_more(f@),
+{
+    eq(f, b"-F") || eq(f, b"-L") || eq(f, b"-l") || eq(f, b"-B") || eq(f, b"-z") || eq(f, b"-u") || eq(f, b"-e") || eq(f, b"-T") || eq(f, b"-rpath") || eq(f, b"-arch") || eq(f, b"-dumpdir") || eq(f, b"-Xlinker") || eq(f, b"-Xassembler") || eq(f, b"-Xanalyzer") || eq(f, b"-Xarch_host") || eq(f, b"-Xarch_device") || eq(f, b"-mllvm") || eq(f, b"-iprefix") || eq(f, b"-iwithprefix") || eq(f, b"-iwithprefixbefore") || eq(f, b"-iframework") || eq(f, b"-iwithsysroot") || eq(f, b"-ivfsoverlay") || eq(f, b"-stdlib++-isystem") || eq(f, b"--sysroot") || eq(f, b"-working-directory") || eq(f, b"-module-dependency-dir") || eq(f, b"-resource-dir") || eq(f, b"-fdebug-compilation-dir") || eq(f, b"-serialize-diagnostics") || eq(f, b"--serialize-diagnostics") || eq(f, b"--param") || eq(f, b"--language") || eq(f, b"--output") || eq(f, b"--include-directory") || eq(f, b"--define-macro") || eq(f, b"--undefine-macro") || eq(f, b"--include") || eq(f, b"--imacros") || eq(f, b"--prefix") || eq(f, b"--system-header-prefix") || eq(f, b"--library-directory")
 }
 
 fn fault_exec(fl: &Vec<Vec<u8>>, cs: &Vec<Vec<u8>>, i: usize, last: Option<usize>) -> (r: Option<FlagFault>)

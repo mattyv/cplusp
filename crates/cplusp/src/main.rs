@@ -623,7 +623,7 @@ fn nolints(path: &Path, text: &str) -> Vec<Finding> {
 
 /// The flags that name a file the compiler writes. The dependency run drops them, alone or joined to their file name.
 // ponytail: a flag that only starts with `-o` goes too, as `-objc`. It matters to no C++ build. Upgrade: ask the compiler for its flags.
-const WRITES_A_FILE: [&str; 5] = ["-MF", "-MT", "-MQ", "-MJ", "-o"];
+const WRITES_A_FILE: [&str; 4] = ["-MF", "-MT", "-MQ", "-o"];
 
 /// The files that the compiler's include graph names for a build. The NOLINT scan reads them: the file itself and every header outside
 /// the system directories. The compiler makes the list with `-MM`, from the build's own flags. The flags that write a file are the
