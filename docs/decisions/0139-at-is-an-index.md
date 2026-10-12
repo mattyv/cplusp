@@ -10,4 +10,4 @@ Date: 2026-10-12. Status: decided. Amends 0064.
 
 ## Why
 
-The survey of the examples that do not prove found that `containers` stops only at `v.at(i)`. The argument is the one of 0131 for `*o` and `value()`: a check that the prover discharges makes the two forms equal on every input that the contract allows.
+The survey of the examples that do not prove found that `containers` stops only at `v.at(i)`. The argument is the one of 0131 for `*o` and `value()`. The prover discharges the check, so the two forms are equal on every input that the contract allows.
