@@ -6074,10 +6074,27 @@ fn parse_cmp(toks: &Vec<Tok>, pos: usize, line: u32) -> (r: Result<(Expr, usize)
                 if q < toks.len() {
                     if let Tok::Op(op2) = toks[q] {
                         if is_cmp(op2) {
-                            return match parse_add(toks, q + 1, line) {
-                                Ok((c, r)) => Ok((Expr::Chain(op, op2, Box::new(a), Box::new(b), Box::new(c)), r)),
-                                Err(e) => Err(e),
+                            let (c, r) = match parse_add(toks, q + 1, line) {
+                                Ok(x) => x,
+                                Err(e) => return Err(e),
                             };
+                            let first = Expr::Chain(op, op2, Box::new(a), Box::new(b), Box::new(c));
+                            assert(!unknown_expr(first));
+                            // A third comparison: the rest of the chain starts again at `b`, so the chains of two overlap, decision
+                            // 0131. The parser reads `b` and `c` again from the same tokens, so the copies are equal.
+                            // ponytail: the cost grows by a factor of three for each chain of three or more inside another. Contract
+                            // lines are short. A chain node of any length is the upgrade.
+                            if r < toks.len() {
+                                if let Tok::Op(op3) = toks[r] {
+                                    if is_cmp(op3) {
+                                        return match parse_cmp(toks, p + 1, line) {
+                                            Ok((rest, s)) => Ok((Expr::Bin(BinOp::And, Box::new(first), Box::new(rest)), s)),
+                                            Err(e) => Err(e),
+                                        };
+                                    }
+                                }
+                            }
+                            return Ok((first, r));
                         }
                     }
                 }
@@ -6171,6 +6188,12 @@ fn parse_unary(toks: &Vec<Tok>, pos: usize, line: u32) -> (r: Result<(Expr, usiz
     } else if pos < toks.len() && toks[pos] == Tok::Op(BinOp::Sub) {
         match parse_unary(toks, pos + 1, line) {
             Ok((a, p)) => Ok((Expr::Neg(Box::new(a)), p)),
+            Err(e) => Err(e),
+        }
+    } else if pos < toks.len() && toks[pos] == Tok::Op(BinOp::Mul) {
+        // `*o` is `o.value()`, decision 0131. The translator refuses it on anything but an optional.
+        match parse_unary(toks, pos + 1, line) {
+            Ok((a, p)) => Ok((Expr::Value(Box::new(a)), p)),
             Err(e) => Err(e),
         }
     } else {
