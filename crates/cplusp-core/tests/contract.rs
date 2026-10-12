@@ -243,3 +243,10 @@ fn the_arrow_is_one_token() {
     assert_eq!(lex("x-->0"), vec![name("x"), op("-", BinOp::Sub), fixed("->", Tok::Arrow), t("0", LexKind::Int(0))]);
     assert_eq!(lex("a ==> b"), vec![name("a"), op("==>", BinOp::Implies), name("b")]);
 }
+
+/// `nullptr` is a word of the grammar in a contract, decision 0140.
+#[test]
+fn nullptr_is_a_word() {
+    assert_eq!(lex("p != nullptr"), vec![name("p"), op("!=", BinOp::Ne), fixed("nullptr", Tok::Nullptr)]);
+    assert_eq!(lex("nullptr_t nullptrx"), vec![name("nullptr_t"), name("nullptrx")]);
+}

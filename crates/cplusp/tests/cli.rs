@@ -2430,7 +2430,7 @@ fn prove_names_each_read_of_an_optional_that_may_be_empty() {
     assert_eq!(o.status.code(), Some(1), "stdout: {text} stderr: {}", stderr(&o));
     let failed: Vec<&str> = text.lines().filter(|l| l.starts_with("Not proved: ")).collect();
     for line in [6, 9, 18] {
-        let want = format!("model-optional-wrong.cpp:{line}: the optional may be empty here.");
+        let want = format!("model-optional-wrong.cpp:{line}: the optional may be empty or the pointer may be null here.");
         assert!(failed.iter().any(|l| l.ends_with(&want)), "{want}: {text}");
     }
     // The ensures line reads the value of the empty optional that line 12 gives, so it cannot hold on that return either.
@@ -3727,7 +3727,7 @@ fn a_longer_chain_gives_no_more_and_the_star_needs_a_value() {
     let o = prove("model-chain-wrong.cpp", &[], &dafny);
     let text = stdout(&o);
     assert_eq!(o.status.code(), Some(1), "stdout: {text} stderr: {}", stderr(&o));
-    for want in ["model-chain-wrong.cpp:8: the ensures line may not hold on this return.", "model-chain-wrong.cpp:12: the optional may be empty here."] {
+    for want in ["model-chain-wrong.cpp:8: the ensures line may not hold on this return.", "model-chain-wrong.cpp:12: the optional may be empty or the pointer may be null here."] {
         assert!(text.lines().any(|l| l.starts_with("Not proved: ") && l.ends_with(want)), "{want}: {text}");
     }
 }
@@ -3810,7 +3810,7 @@ fn an_optional_that_a_call_gives_is_read_through_its_temporary() {
     assert_eq!(o.status.code(), Some(1), "stdout: {text} stderr: {}", stderr(&o));
     assert_eq!(
         text.lines().filter(|l| l.starts_with("Not proved: ")).map(|l| l.rsplit_once(".cpp:").unwrap().1).collect::<Vec<_>>(),
-        vec!["15: the optional may be empty here."],
+        vec!["15: the optional may be empty or the pointer may be null here."],
         "{text}"
     );
 }
@@ -3838,7 +3838,7 @@ fn the_arrow_needs_a_value() {
     let o = prove("model-opt-struct-wrong.cpp", &[], &dafny);
     let text = stdout(&o);
     assert_eq!(o.status.code(), Some(1), "stdout: {text} stderr: {}", stderr(&o));
-    for want in ["model-opt-struct-wrong.cpp:20: the optional may be empty here.", "model-opt-struct-wrong.cpp:23: the optional may be empty here."] {
+    for want in ["model-opt-struct-wrong.cpp:20: the optional may be empty or the pointer may be null here.", "model-opt-struct-wrong.cpp:23: the optional may be empty or the pointer may be null here."] {
         assert!(text.lines().any(|l| l.starts_with("Not proved: ") && l.ends_with(want)), "{want}: {text}");
     }
 }
@@ -3900,4 +3900,54 @@ fn at_is_an_index() {
         vec!["7: the index may be out of range."],
         "{text}"
     );
+}
+
+/// A pointer to const is an optional, decision 0140: `*p`, `p->f`, `p == nullptr` and `p != nullptr`, in code and in a contract, and
+/// the arguments `&x`, `nullptr` and a pointer parameter.
+#[test]
+fn a_pointer_to_const_is_an_optional() {
+    let Some(dafny) = dafny() else { return };
+    if !clang_tidy_available() {
+        return;
+    }
+    let o = prove("model-pointer.cpp", &[], &dafny);
+    let text = stdout(&o);
+    assert_eq!(o.status.code(), Some(0), "stdout: {text} stderr: {}", stderr(&o));
+    assert_eq!(text.lines().last(), Some("ok: proved"), "{text}");
+}
+
+/// A read through a pointer that may be null does not prove, in code and in a contract, and a caller must meet `p != nullptr`,
+/// decision 0140.
+#[test]
+fn a_pointer_that_may_be_null_does_not_prove() {
+    let Some(dafny) = dafny() else { return };
+    if !clang_tidy_available() {
+        return;
+    }
+    let o = prove("model-pointer-wrong.cpp", &[], &dafny);
+    let text = stdout(&o);
+    assert_eq!(o.status.code(), Some(1), "stdout: {text} stderr: {}", stderr(&o));
+    for want in [
+        "model-pointer-wrong.cpp:5: the optional may be empty or the pointer may be null here.",
+        "model-pointer-wrong.cpp:9: the optional may be empty or the pointer may be null here.",
+        "model-pointer-wrong.cpp:19: a requires line of the callee may not hold.",
+    ] {
+        assert!(text.lines().any(|l| l.starts_with("Not proved: ") && l.ends_with(want)), "{want}: {text}");
+    }
+}
+
+/// A pointer with no const, and a pointer tested as a bool, have no rule yet, decision 0140.
+#[test]
+fn a_pointer_with_no_const_and_a_pointer_as_a_bool_are_refused() {
+    if !clang_tidy_available() {
+        return;
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let (o, _) = model("model-pointer-refuse.cpp", dir.path());
+    let text = stdout(&o);
+    assert_eq!(o.status.code(), Some(1), "stdout: {text} stderr: {}", stderr(&o));
+    let refusals: Vec<&str> = text.lines().filter(|l| l.starts_with("Not provable: ")).map(|l| l.rsplit_once(".cpp:").unwrap().1).collect();
+    assert_eq!(refusals.len(), 2, "{text}");
+    assert_eq!(refusals[0], "5: int32_t *: the translator has no rule for it yet.", "{text}");
+    assert!(refusals[1].starts_with("10: ") && refusals[1].ends_with(": the translator has no rule for it yet."), "{text}");
 }

@@ -144,3 +144,4 @@ Status is `decided`, `proposed` (the default until someone objects or the thin s
 | [0137](0137-an-optional-of-a-struct-and-the-arrow.md) | An optional of a plain struct that holds no sequence, and `->` on an optional in code and in a contract | decided |
 | [0138](0138-small-integer-types-as-fields.md) | int8_t, int16_t and uint16_t can be fields of a plain struct | decided |
 | [0139](0139-at-is-an-index.md) | at of a read-only sequence is an index, and Dafny proves it in range | decided |
+| [0140](0140-a-const-pointer-is-an-optional.md) | A const T* parameter is an optional of T. nullptr in contracts. The sentence for a missing value names both kinds | decided |

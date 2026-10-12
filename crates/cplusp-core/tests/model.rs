@@ -2503,3 +2503,33 @@ fn the_arrow_reads_a_field_of_the_value() {
     assert_eq!(parse_contract(&vec![Tok::Ident(A), Tok::Arrow, Tok::Int(1)], 5), Err(Refusal::Syntax(5)));
     assert_eq!(parse_contract(&vec![Tok::Arrow, Tok::Ident(A)], 6), Err(Refusal::Syntax(6)));
 }
+
+/// `p == nullptr` and `p != nullptr` test an optional for a value, in a contract and in code, with nullptr on either side, decision
+/// 0140. A comparison of nullptr with a value that is no optional is refused.
+#[test]
+fn a_comparison_with_nullptr_tests_for_a_value() {
+    assert_eq!(parse_contract(&vec![Tok::Ident(A), Tok::Op(BinOp::Ne), Tok::Nullptr], 3), Ok(Expr::Bin(BinOp::Ne, b(Expr::Name(A)), b(Expr::Nullopt))));
+    let some = || DExpr::IsSome(Box::new(DExpr::Var(A)));
+    let none = || DExpr::Not(Box::new(some()));
+    let req = |e: Expr, l: u32| (CondKind::Requires, e, l, names(&[A, B]));
+    let f = Function {
+        name: SAT,
+        line: 10,
+        params: List::Cons((A, Ty::Opt(Scalar::I32)), Box::new(List::Cons((B, Ty::I32), Box::new(List::Nil)))),
+        ret: Ty::I32,
+        trusted: false,
+        conds: List::Cons(
+            req(Expr::Bin(BinOp::Ne, b(Expr::Name(A)), b(Expr::Nullopt)), 6),
+            Box::new(List::Cons(req(Expr::Bin(BinOp::Eq, b(Expr::Nullopt), b(Expr::Name(A))), 7), Box::new(List::Nil))),
+        ),
+        body: one(Stmt::Return(Expr::Lit(0, Ty::I32), 11)),
+    };
+    let Model::Full(m) = translate_function(&f, &List::Nil, &List::Nil) else { panic!("a full model") };
+    assert_eq!(strip_conds(m.requires), List::Cons((some(), 0), Box::new(List::Cons((none(), 0), Box::new(List::Nil)))));
+    let o = || b(Expr::Var(A, Ty::Opt(Scalar::I32)));
+    assert_eq!(translate_code(&Expr::Bin(BinOp::Eq, o(), b(Expr::Nullopt)), 3), Ok(none()));
+    assert_eq!(translate_code(&Expr::Bin(BinOp::Ne, b(Expr::Nullopt), o()), 3), Ok(some()));
+    // b == nullptr, with b an int32_t, is refused.
+    let f = Function { conds: List::Cons(req(Expr::Bin(BinOp::Eq, b(Expr::Name(B)), b(Expr::Nullopt)), 6), Box::new(List::Nil)), ..f };
+    assert_eq!(bare_refusal(translate_function(&f, &List::Nil, &List::Nil)), Refusal::Syntax(6));
+}
