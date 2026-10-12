@@ -3859,3 +3859,24 @@ fn an_optional_of_a_struct_that_holds_a_sequence_is_refused() {
         "{text}"
     );
 }
+
+/// int8_t, int16_t and uint16_t fields of a plain struct, decision 0138. A value that may not fit the field does not prove.
+#[test]
+fn small_integer_types_can_be_fields() {
+    let Some(dafny) = dafny() else { return };
+    if !clang_tidy_available() {
+        return;
+    }
+    let o = prove("model-small-fields.cpp", &[], &dafny);
+    let text = stdout(&o);
+    assert_eq!(o.status.code(), Some(0), "stdout: {text} stderr: {}", stderr(&o));
+    assert_eq!(text.lines().last(), Some("ok: proved"), "{text}");
+    let o = prove("model-small-fields-wrong.cpp", &[], &dafny);
+    let text = stdout(&o);
+    assert_eq!(o.status.code(), Some(1), "stdout: {text} stderr: {}", stderr(&o));
+    assert_eq!(
+        text.lines().filter(|l| l.starts_with("Not proved: ")).map(|l| l.rsplit_once(".cpp:").unwrap().1).collect::<Vec<_>>(),
+        vec!["10: the value may not fit uint16_t."],
+        "{text}"
+    );
+}

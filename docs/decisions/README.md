@@ -142,3 +142,4 @@ Status is `decided`, `proposed` (the default until someone objects or the thin s
 | [0135](0135-mj-and-more-flags-that-take-a-value.md) | The gate refuses -MJ, which writes a file, and knows 42 more flags that take a separate value | decided |
 | [0136](0136-an-array-of-bool-stays-out.md) | An array of bool stays out, as every sequence of bool does. Amends 0132 | decided |
 | [0137](0137-an-optional-of-a-struct-and-the-arrow.md) | An optional of a plain struct that holds no sequence, and `->` on an optional in code and in a contract | decided |
+| [0138](0138-small-integer-types-as-fields.md) | int8_t, int16_t and uint16_t can be fields of a plain struct | decided |
