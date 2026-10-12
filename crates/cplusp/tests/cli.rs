@@ -3880,3 +3880,24 @@ fn small_integer_types_can_be_fields() {
         "{text}"
     );
 }
+
+/// `at` of a read-only sequence is an index, decision 0139. An index that may be out of range does not prove.
+#[test]
+fn at_is_an_index() {
+    let Some(dafny) = dafny() else { return };
+    if !clang_tidy_available() {
+        return;
+    }
+    let o = prove("model-at.cpp", &[], &dafny);
+    let text = stdout(&o);
+    assert_eq!(o.status.code(), Some(0), "stdout: {text} stderr: {}", stderr(&o));
+    assert_eq!(text.lines().last(), Some("ok: proved"), "{text}");
+    let o = prove("model-at-wrong.cpp", &[], &dafny);
+    let text = stdout(&o);
+    assert_eq!(o.status.code(), Some(1), "stdout: {text} stderr: {}", stderr(&o));
+    assert_eq!(
+        text.lines().filter(|l| l.starts_with("Not proved: ")).map(|l| l.rsplit_once(".cpp:").unwrap().1).collect::<Vec<_>>(),
+        vec!["7: the index may be out of range."],
+        "{text}"
+    );
+}

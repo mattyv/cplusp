@@ -143,3 +143,4 @@ Status is `decided`, `proposed` (the default until someone objects or the thin s
 | [0136](0136-an-array-of-bool-stays-out.md) | An array of bool stays out, as every sequence of bool does. Amends 0132 | decided |
 | [0137](0137-an-optional-of-a-struct-and-the-arrow.md) | An optional of a plain struct that holds no sequence, and `->` on an optional in code and in a contract | decided |
 | [0138](0138-small-integer-types-as-fields.md) | int8_t, int16_t and uint16_t can be fields of a plain struct | decided |
+| [0139](0139-at-is-an-index.md) | at of a read-only sequence is an index, and Dafny proves it in range | decided |
