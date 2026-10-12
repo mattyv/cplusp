@@ -960,6 +960,20 @@ fn gate_names_a_missing_include() {
     assert!(line.contains("nope.h"), "{line}");
 }
 
+/// The compiler can print a warning before its error. The message names the error, from the review of 0130.
+#[test]
+fn gate_names_the_error_of_the_preprocessor_and_not_a_warning() {
+    if !clang_tidy_available() {
+        return;
+    }
+    let f = fixture("missing-include.cpp");
+    let o = gated(&[f.to_str().unwrap(), "--", "-std=c++23", "-ffp-contract=off", "-I"]);
+    assert_eq!(o.status.code(), Some(2), "stdout: {} stderr: {}", stdout(&o), stderr(&o));
+    let err = stderr(&o);
+    let line = err.lines().find(|l| l.starts_with("cannot preprocess crates/cplusp/tests/fixtures/missing-include.cpp: ")).expect(&err);
+    assert!(line.ends_with("error: argument to '-I' is missing (expected 1 value)"), "{line}");
+}
+
 /// clang-tidy runs every database entry of a file, so the gate judges every one. A command with shell quoting
 /// is refused, because the gate cannot read it the way the shell would. A `--config` file is a response file by another name.
 #[test]
