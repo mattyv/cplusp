@@ -2011,7 +2011,6 @@ fn sequences_with_no_rule_are_refused_at_their_lines() {
     }
     for (line, expected) in [
         (19, "a sequence is in the subset only as a parameter."),
-        (24, "CXXMemberCallExpr: the translator has no rule for it yet."),
         (27, "a sequence is in the subset only as a parameter."),
         (31, "the contract line has a form the translator cannot read."),
         (36, "the contract line has a form the translator cannot read."),
@@ -2019,7 +2018,8 @@ fn sequences_with_no_rule_are_refused_at_their_lines() {
         let want = format!("model-seq-refuse.cpp:{line}: {expected}");
         assert!(refusals.iter().any(|l| l.ends_with(&want)), "{want}: {text}");
     }
-    assert_eq!(refusals.len(), 8, "{text}");
+    // `v.at(0)` at line 24 has a rule since decision 0139.
+    assert_eq!(refusals.len(), 7, "{text}");
 }
 
 /// A sequence stays one value across a call only because the gate refuses a callee that writes the data behind it, decision 0067.
