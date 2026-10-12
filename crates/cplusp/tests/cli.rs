@@ -3746,3 +3746,45 @@ fn a_chain_that_turns_and_the_star_of_a_scalar_are_refused() {
         "{text}"
     );
 }
+
+/// A const std::array is a read-only sequence of fixed length, decision 0132: by reference, by value, and of bool.
+#[test]
+fn a_const_array_is_a_sequence_of_fixed_length() {
+    let Some(dafny) = dafny() else { return };
+    if !clang_tidy_available() {
+        return;
+    }
+    let o = prove("model-array.cpp", &[], &dafny);
+    let text = stdout(&o);
+    assert_eq!(o.status.code(), Some(0), "stdout: {text} stderr: {}", stderr(&o));
+    assert_eq!(text.lines().last(), Some("ok: proved"), "{text}");
+    let o = prove("model-array-wrong.cpp", &[], &dafny);
+    let text = stdout(&o);
+    assert_eq!(o.status.code(), Some(1), "stdout: {text} stderr: {}", stderr(&o));
+    assert_eq!(
+        text.lines().filter(|l| l.starts_with("Not proved: ")).map(|l| l.rsplit_once(".cpp:").unwrap().1).collect::<Vec<_>>(),
+        vec!["8: the index may be out of range."],
+        "{text}"
+    );
+}
+
+/// An array with no const, and a struct with an array field, stay out of the subset, decision 0132.
+#[test]
+fn an_array_with_no_const_and_an_array_field_are_refused() {
+    if !clang_tidy_available() {
+        return;
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let (o, _) = model("model-array-refuse.cpp", dir.path());
+    let text = stdout(&o);
+    assert_eq!(o.status.code(), Some(1), "stdout: {text} stderr: {}", stderr(&o));
+    assert_eq!(
+        text.lines().filter(|l| l.starts_with("Not provable: ")).map(|l| l.rsplit_once(".cpp:").unwrap().1).collect::<Vec<_>>(),
+        vec![
+            "6: std::array<int32_t, 4> &: the translator has no rule for it yet.",
+            "10: std::array<int32_t, 4>: the translator has no rule for it yet.",
+            "18: Pair: the translator has no rule for it yet.",
+        ],
+        "{text}"
+    );
+}
