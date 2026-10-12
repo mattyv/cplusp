@@ -3788,3 +3788,25 @@ fn an_array_with_no_const_and_an_array_field_are_refused() {
         "{text}"
     );
 }
+
+/// has_value, value and the star read the optional that a call gives, decision 0133. A read of a value that may be missing does
+/// not prove.
+#[test]
+fn an_optional_that_a_call_gives_is_read_through_its_temporary() {
+    let Some(dafny) = dafny() else { return };
+    if !clang_tidy_available() {
+        return;
+    }
+    let o = prove("model-temp-opt.cpp", &[], &dafny);
+    let text = stdout(&o);
+    assert_eq!(o.status.code(), Some(0), "stdout: {text} stderr: {}", stderr(&o));
+    assert_eq!(text.lines().last(), Some("ok: proved"), "{text}");
+    let o = prove("model-temp-opt-wrong.cpp", &[], &dafny);
+    let text = stdout(&o);
+    assert_eq!(o.status.code(), Some(1), "stdout: {text} stderr: {}", stderr(&o));
+    assert_eq!(
+        text.lines().filter(|l| l.starts_with("Not proved: ")).map(|l| l.rsplit_once(".cpp:").unwrap().1).collect::<Vec<_>>(),
+        vec!["15: the optional may be empty here."],
+        "{text}"
+    );
+}

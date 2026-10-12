@@ -137,3 +137,4 @@ Status is `decided`, `proposed` (the default until someone objects or the thin s
 | [0130](0130-naming-flags-and-system-headers-after-the-review.md) | The Dafny names stay in the shell with a guard. The gate refuses -ansi and a flag that takes the next flag as its value. -isystem stays a documented limit | decided |
 | [0131](0131-longer-chains-and-the-star-of-an-optional.md) | A chain of more than two comparisons in a contract means each comparison. `*o` on an optional in a contract is `o.value()` | decided |
 | [0132](0132-a-const-std-array-is-a-sequence-of-fixed-length.md) | A const std::array parameter is a read-only sequence of fixed length, as a span of fixed extent is | decided |
+| [0133](0133-an-optional-that-a-call-gives.md) | has_value, value and the star read the optional that a call gives, through its temporary | decided |
