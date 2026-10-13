@@ -4019,7 +4019,7 @@ fn a_range_for_is_a_loop_over_indexes() {
 }
 
 /// An index line above another loop or above a function, an index name that the function has, and an index line with two names,
-/// are refused, decision 0143.
+/// are refused, decision 0143. So are an index named as a field or a constant, and a structured binding, decision 0144.
 #[test]
 fn an_index_line_in_the_wrong_place_or_with_a_used_name_is_refused() {
     if !clang_tidy_available() {
@@ -4037,6 +4037,9 @@ fn an_index_line_in_the_wrong_place_or_with_a_used_name_is_refused() {
             "17: i on the index line is a name the function already has.".to_string(),
             "26: the contract line has a form the translator cannot read.".to_string(),
             format!("33: {wrong_place}"),
+            "43: count on the index line is a name the function already has.".to_string(),
+            "55: N on the index line is a name the function already has.".to_string(),
+            "70: CXXForRangeStmt: the translator has no rule for it yet.".to_string(),
         ],
         "{text}"
     );

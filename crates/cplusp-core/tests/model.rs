@@ -2679,3 +2679,15 @@ fn a_range_for_refuses_what_it_cannot_read() {
     assert_eq!(bare_refusal(translate_function(&ranged(List::Nil, Ty::I32, field, None), &List::Nil, &List::Nil)), Refusal::Syntax(6));
     assert_eq!(bare_refusal(translate_function(&ranged(List::Nil, Ty::I64, v(), None), &List::Nil, &List::Nil)), Refusal::Syntax(6));
 }
+
+const RSELF: u32 = 215;
+
+/// An index named as a field of the object of a method is a name the function already has, decision 0144.
+#[test]
+fn an_index_is_no_field_of_the_object() {
+    let v = || Expr::Var(RV, Ty::Seq(Scalar::I32, Extent::Dynamic));
+    let table = List::Cons((POINT, (4, List::Cons((FX, Ty::I32), Box::new(List::Nil)), List::Nil)), Box::new(List::Nil));
+    let f = ranged(index_line(FX, 5), Ty::I32, v(), None);
+    let f = Function { params: List::Cons((RSELF, Ty::This(POINT)), Box::new(f.params)), ..f };
+    assert_eq!(bare_refusal(translate_function(&f, &List::Nil, &table)), Refusal::IndexName(FX, 5));
+}

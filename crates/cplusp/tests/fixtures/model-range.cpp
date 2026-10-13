@@ -30,3 +30,10 @@ bool any_zero(std::span<const int32_t> v) {
   }
   return false;
 }
+
+// Two range-fors on one line, each with no index line, get their own index, decision 0144.
+int32_t pairs(std::span<const int32_t> v, std::span<const int32_t> w) {
+  int32_t t = 0;
+  for (int32_t x : v) for (int32_t y : w) { t = x; t = y; }
+  return t;
+}
