@@ -51,7 +51,7 @@ Treat SPARK guidance as an engineering method, not an LLM performance measuremen
 
 ## Contract lines that the translator reads
 
-This list is true at decision 0144. Read the later decisions before you rely on it.
+This list is true at decision 0146. Read the later decisions before you rely on it.
 `cplusp prove` translates the C++ and the `//@` lines to Dafny, and runs Dafny. It says `ok: proved`, or `Not proved: FILE:LINE: sentence` for a proof that fails, or `Not provable: FILE:LINE: sentence` for a form that has no rule.
 
 Where each line goes:
@@ -61,7 +61,7 @@ Where each line goes:
 - Above a statement in a body: `assert E` and `apply L(a, b)`, decision 0099. `L` is a lemma of the companion file.
 
 What a contract expression can hold:
-- The parameters, `result`, and `old(x)` in an ensures line, decision 0096. The arithmetic is on exact integers, so a contract cannot overflow.
+- The parameters, `result`, and `old(x)` in an ensures line, decision 0096. `old` wraps the whole read: write `old(v[j])` and `old(v.size())`, not `old(v)[j]`. The arithmetic is on exact integers, so a contract cannot overflow.
 - `&&`, `||`, `!`, `==>`, `c ? a : b`, `forall i :: ...` and `exists i :: ...`.
 - `v.size()`, `v[i]`, `v[i..]`, `v[..j]` and `v[i..j]` of a sequence, and `o.has_value()`, `o.value()`, `*o` and `o->f` of an optional, decisions 0131 and 0137.
 - `p == nullptr`, `p != nullptr`, `*p` and `p->f` of a pointer to const or a unique_ptr, decisions 0140 to 0142. Two pointers do not compare.
@@ -73,6 +73,8 @@ What a contract expression can hold:
 The modifies line:
 - It names each non-const reference parameter (`T&`) that the function writes, and nothing else, decisions 0108 and 0110. The translator refuses a function with a reference parameter that the line does not name.
 - A function that only reads a value takes it by value or by `const T&`.
+- A `std::vector<T>&` on the line takes its value in and gives it back, decision 0145. In the body, `v[i] = e` is the only write. `push_back`, `v[i] += e` and passing `v` on to a `std::vector<T>&` have no rule yet.
+- An ensures line that reads `v[i]` after the call needs a line before it that gives the length: `ensures v.size() == old(v.size())`, decision 0146. A loop that writes `v` needs the same line as an invariant.
 - The gate also reads `modifies` and `reads` lines for globals, decision 0035. The translator has no rule for a global yet, so it refuses `reads` and a global on a `modifies` line.
 
 The companion file:

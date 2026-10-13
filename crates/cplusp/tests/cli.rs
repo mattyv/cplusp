@@ -2002,7 +2002,7 @@ fn sequences_with_no_rule_are_refused_at_their_lines() {
     assert_eq!(o.status.code(), Some(1), "stdout: {text} stderr: {}", stderr(&o));
     let refusals: Vec<&str> = text.lines().filter(|l| l.starts_with("Not provable: ")).collect();
     // The plugin names a type outside the subset as the compiler prints it.
-    for (line, ty) in [(6, "std::vector<int32_t>"), (10, "std::span<int32_t>"), (14, "std::vector<bool>")] {
+    for (line, ty) in [(10, "std::span<int32_t>"), (14, "std::vector<bool>")] {
         let at = format!("model-seq-refuse.cpp:{line}: ");
         assert!(
             refusals.iter().any(|l| l.contains(&at) && l.contains(ty) && l.ends_with(": the translator has no rule for it yet.")),
@@ -2010,6 +2010,8 @@ fn sequences_with_no_rule_are_refused_at_their_lines() {
         );
     }
     for (line, expected) in [
+        // A vector by reference is in the subset since decision 0145, so line 6 lacks only its modifies line.
+        (6, "v is a reference parameter that the modifies line does not name."),
         (19, "a sequence is in the subset only as a parameter."),
         (27, "a sequence is in the subset only as a parameter."),
         (31, "the contract line has a form the translator cannot read."),

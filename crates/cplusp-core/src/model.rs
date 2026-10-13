@@ -176,7 +176,8 @@ pub enum Extent {
 /// member function that writes it, which takes it in and gives it back, decision 0096. `ThisAfter` is that object after the call,
 /// as an ensures line reads it, and `Fresh` is the result of a constructor before it exists, as its requires line reads it. The
 /// translator makes these two views itself. `Mut` is a reference parameter that the function writes, which takes a value in and
-/// gives it back, and `MutAfter` is its value after the call, as an ensures line reads it, decision 0108. `Enum` is an enum class of
+/// gives it back, and `MutAfter` is its value after the call, as an ensures line reads it, decision 0108. `MutSeq` is a vector by
+/// reference that the function writes, as a sequence, and `MutSeqAfter` is its value after the call, decision 0145. `Enum` is an enum class of
 /// the file by its key, decision 0109. `Void` is the result type
 /// of a function that gives no value. `Other` is a type the translator has no rule for, by the id of its name.
 #[derive(Structural, PartialEq, Eq, Clone, Copy, Debug)]
@@ -198,6 +199,8 @@ pub enum Ty {
     ThisAfter(u32),
     Mut(Scalar),
     MutAfter(Scalar),
+    MutSeq(Scalar),
+    MutSeqAfter(Scalar),
     Ptr(Scalar),
     Own(Scalar),
     Enum(u32),
@@ -301,7 +304,8 @@ pub type Args = List<Box<Expr>>;
 /// the object of a member function, and `SetRefField` a field of a reference parameter, decision 0108. `Switch` is a switch over an
 /// enum, by the key of the enum, with its cases, decision 0109. `Call` is a call that stands alone as a statement, by the key of its callee, the id of its
 /// name and its arguments. `Exit` is `return;`, decision 0096. `Assert` is a `//@ assert` line in the body, and `Apply` is a
-/// `//@ apply` line that calls a lemma of the companion file by the id of its name, decision 0099.
+/// `//@ apply` line that calls a lemma of the companion file by the id of its name, decision 0099. `RangeFor` is a range-for, decision
+/// 0143. `SetIndex` is `v[i] = e` of a vector by reference, decision 0145.
 #[derive(PartialEq, Eq, Debug)]
 pub enum Stmt {
     Return(Expr, u32),
@@ -319,6 +323,7 @@ pub enum Stmt {
     Assert(Expr, u32),
     Apply(u32, Box<Args>, u32),
     RangeFor(u32, u32, Ty, Expr, Box<Conds>, Box<Stmts>, u32),
+    SetIndex(u32, Expr, Expr, u32),
     Unknown(u32, u32),
 }
 
@@ -409,7 +414,8 @@ pub enum DTy {
 /// object of a member function that writes it, as the body leaves it, decision 0096. `Out` is `x'`, a reference parameter as the body
 /// leaves it, decision 0108. `Enumerator` is the constructor of an enumerator, decision 0109. `Ite` is `if c then a else b`, decision 0098.
 /// `Temp` reads a temporary that a call before the statement set, decision 0104. `ShrIn` is `(shr(a, n, W) as T)`, a right shift
-/// of the width `W`, decision 0106. A Dafny expression calls no method.
+/// of the width `W`, decision 0106. `SetAt` is `s[i := e]`, which Dafny proves is in range, decision 0145. A Dafny expression calls no
+/// method.
 #[derive(PartialEq, Eq, Debug)]
 pub enum DExpr {
     Lit(u64),
@@ -448,6 +454,7 @@ pub enum DExpr {
     Ite(Box<DExpr>, Box<DExpr>, Box<DExpr>),
     Temp(u32),
     ShrIn(Box<DExpr>, Box<DExpr>, DTy, u32),
+    SetAt(Box<DExpr>, Box<DExpr>, Box<DExpr>),
 }
 
 /// The calls that run before a statement, in the order that they run: each sets a temporary of the statement by its number, of a
@@ -627,6 +634,10 @@ pub open spec fn spec_ty(t: Ty, line: u32) -> Result<DTy, Refusal> {
         Ty::ThisAfter(k) => Ok(DTy::Struct(k)),
         Ty::Mut(s) => Ok(spec_scalar_dty(s)),
         Ty::MutAfter(s) => Ok(spec_scalar_dty(s)),
+        Ty::MutSeq(Scalar::Bool) => Err(Refusal::Element(line)),
+        Ty::MutSeqAfter(Scalar::Bool) => Err(Refusal::Element(line)),
+        Ty::MutSeq(s) => Ok(DTy::Seq(s)),
+        Ty::MutSeqAfter(s) => Ok(DTy::Seq(s)),
         Ty::Enum(k) => Ok(DTy::Enum(k)),
         Ty::Fresh(_) => Err(Refusal::Syntax(line)),
         Ty::Void => Err(Refusal::Syntax(line)),
@@ -646,6 +657,8 @@ pub open spec fn spec_value_ty(t: Ty, line: u32, sd: Structs) -> Result<DTy, Ref
             Ty::ThisAfter(_) => Err(Refusal::Syntax(line)),
             Ty::Mut(_) => Err(Refusal::Syntax(line)),
             Ty::MutAfter(_) => Err(Refusal::Syntax(line)),
+            Ty::MutSeq(_) => Err(Refusal::Syntax(line)),
+            Ty::MutSeqAfter(_) => Err(Refusal::Syntax(line)),
             Ty::Ptr(_) => Err(Refusal::Syntax(line)),
             Ty::Struct(k) => if spec_holds(sd, k) {
                 Err(Refusal::HoldsSeq(line))
@@ -1065,6 +1078,7 @@ pub open spec fn spec_code_var(v: u32, t: Ty) -> DExpr {
     match t {
         Ty::ThisMut(_) => DExpr::After,
         Ty::Mut(_) => DExpr::Out(v),
+        Ty::MutSeq(_) => DExpr::Out(v),
         _ => DExpr::Var(v),
     }
 }
@@ -1075,6 +1089,7 @@ pub open spec fn spec_var(v: u32, t: Ty) -> DExpr {
     match t {
         Ty::ThisAfter(_) => DExpr::After,
         Ty::MutAfter(_) => DExpr::Out(v),
+        Ty::MutSeqAfter(_) => DExpr::Out(v),
         _ => DExpr::Var(v),
     }
 }
@@ -1084,6 +1099,8 @@ pub open spec fn spec_view_ty(t: Ty) -> Ty {
     match t {
         Ty::Mut(s) => spec_elem(s),
         Ty::MutAfter(s) => spec_elem(s),
+        Ty::MutSeq(s) => Ty::Seq(s, Extent::Dynamic),
+        Ty::MutSeqAfter(s) => Ty::Seq(s, Extent::Dynamic),
         _ => t,
     }
 }
@@ -1556,6 +1573,7 @@ pub open spec fn spec_after(ps: Params) -> Params
         List::Cons((p, t), rest) => List::Cons((p, match t {
                 Ty::ThisMut(k) => Ty::ThisAfter(k),
                 Ty::Mut(s) => Ty::MutAfter(s),
+                Ty::MutSeq(s) => Ty::MutSeqAfter(s),
                 _ => t,
             }), Box::new(spec_after(*rest))),
     }
@@ -1570,6 +1588,7 @@ pub open spec fn spec_before(ps: Params) -> Params
         List::Cons((p, t), rest) => List::Cons((p, match t {
                 Ty::ThisAfter(k) => Ty::ThisMut(k),
                 Ty::MutAfter(s) => Ty::Mut(s),
+                Ty::MutSeqAfter(s) => Ty::MutSeq(s),
                 _ => t,
             }), Box::new(spec_before(*rest))),
     }
@@ -1592,6 +1611,7 @@ pub open spec fn spec_any_after(ps: Params) -> bool
         List::Nil => false,
         List::Cons((_, t), rest) => match t {
             Ty::MutAfter(_) => true,
+            Ty::MutSeqAfter(_) => true,
             _ => spec_any_after(*rest),
         },
     }
@@ -1611,6 +1631,7 @@ pub open spec fn spec_written(t: Ty) -> bool {
     match t {
         Ty::ThisMut(_) => true,
         Ty::Mut(_) => true,
+        Ty::MutSeq(_) => true,
         _ => false,
     }
 }
@@ -1633,6 +1654,7 @@ pub open spec fn spec_outs(ps: Params) -> DParams
         List::Nil => List::Nil,
         List::Cons((n, t), rest) => match t {
             Ty::Mut(s) => List::Cons((n, spec_scalar_dty(s)), Box::new(spec_outs(*rest))),
+            Ty::MutSeq(s) => List::Cons((n, DTy::Seq(s)), Box::new(spec_outs(*rest))),
             _ => spec_outs(*rest),
         },
     }
@@ -1657,6 +1679,7 @@ pub open spec fn spec_bad_modifies(ps: Params, cs: Conds) -> Option<Refusal>
             match e {
                 Expr::Name(n) => match spec_rebind(decl, ps, n) {
                     Some((_, Ty::Mut(_))) => spec_bad_modifies(ps, *rest),
+                    Some((_, Ty::MutSeq(_))) => spec_bad_modifies(ps, *rest),
                     _ => Some(Refusal::NotRef(n, l)),
                 },
                 _ => Some(Refusal::Syntax(l)),
@@ -1690,7 +1713,7 @@ pub open spec fn spec_unlisted(todo: Params, ps: Params, cs: Conds, line: u32) -
     match todo {
         List::Nil => None,
         List::Cons((p, t), rest) => match t {
-            Ty::Mut(_) => if spec_lists(ps, cs, p) {
+            Ty::Mut(_) | Ty::MutSeq(_) => if spec_lists(ps, cs, p) {
                 spec_unlisted(*rest, ps, cs, line)
             } else {
                 Some(Refusal::Unlisted(p, line))
@@ -1814,6 +1837,7 @@ pub open spec fn spec_param_ty(t: Ty, line: u32, sd: Structs) -> Result<DTy, Ref
     match t {
         Ty::ThisAfter(_) => Err(Refusal::Syntax(line)),
         Ty::MutAfter(_) => Err(Refusal::Syntax(line)),
+        Ty::MutSeqAfter(_) => Err(Refusal::Syntax(line)),
         Ty::Opt(Scalar::Struct(k)) => if spec_holds(sd, k) {
             Err(Refusal::HoldsSeq(line))
         } else {
@@ -1883,6 +1907,7 @@ pub open spec fn spec_place(s: Stmt) -> u32 {
         Stmt::Exit(l) => l,
         Stmt::Assert(_, l) => l,
         Stmt::Apply(_, _, l) => l,
+        Stmt::SetIndex(_, _, _, l) => l,
         Stmt::Unknown(_, l) => l,
     }
 }
@@ -2325,6 +2350,20 @@ pub open spec fn spec_stmt(s: Stmt, all: Fns, env: Params, ps: Params, sd: Struc
         Stmt::Apply(f, args, l) => match spec_contract_args(*args, spec_keys(env), spec_after(env), None, List::Nil, l, sd) {
             Ok(da) => Ok(DStmt::Apply(f, da)),
             Err(r) => Err(r),
+        },
+        // `v[i] = e` writes one element of a vector by reference, decision 0145. The index and the value hold no call.
+        // ponytail: a call in the index or the value is refused as out of place, so the author sets a local first. Upgrade: lift the
+        // calls as `Stmt::Assign` does, decision 0104.
+        Stmt::SetIndex(v, i, e, l) => match spec_get(ps, v) {
+            Some(Ty::MutSeq(_)) => match spec_code(i, l) {
+                Ok(di) => match spec_code(e, l) {
+                    Ok(de) => Ok(DStmt::SetOut(v, DExpr::SetAt(Box::new(DExpr::Out(v)), Box::new(di), Box::new(de)))),
+                    Err(r) => Err(r),
+                },
+                Err(r) => Err(r),
+            },
+            Some(_) => Err(Refusal::WriteParam(v, l)),
+            None => Err(Refusal::Syntax(l)),
         },
         Stmt::Unknown(k, l) => Err(Refusal::Construct(k, l)),
     }
@@ -2949,6 +2988,7 @@ pub open spec fn unknown_stmt(s: Stmt) -> bool
         Stmt::RangeFor(_, _, _, seq, _, body, _) => unknown_expr(seq) || unknown_stmts(*body),
         Stmt::SetField(_, e, _) => unknown_expr(e),
         Stmt::SetRefField(_, _, e, _) => unknown_expr(e),
+        Stmt::SetIndex(_, i, e, _) => unknown_expr(i) || unknown_expr(e),
         Stmt::Switch(e, _, cs, _) => unknown_expr(e) || unknown_cases(*cs),
         Stmt::Call(_, _, args, _) => unknown_args(*args),
         Stmt::Exit(_) => false,
@@ -3070,6 +3110,13 @@ pub proof fn lemma_unknown_stmt_is_refused(s: Stmt, all: Fns, env: Params, ps: P
         },
         Stmt::SetField(_, e, l) => lemma_unknown_lift_is_refused(e, all, l, sd, 0, true),
         Stmt::SetRefField(_, _, e, l) => lemma_unknown_lift_is_refused(e, all, l, sd, 0, true),
+        Stmt::SetIndex(_, i, e, l) => {
+            if unknown_expr(i) {
+                lemma_unknown_code_is_refused(i, l);
+            } else {
+                lemma_unknown_code_is_refused(e, l);
+            }
+        },
         Stmt::Switch(e, _, cs, l) => {
             if unknown_expr(e) {
                 lemma_unknown_lift_is_refused(e, all, l, sd, 0, true);
@@ -3918,7 +3965,7 @@ pub proof fn lemma_resolves_set_ref_field(s: Stmt, all: Fns, env: Params, ps: Pa
 pub proof fn lemma_resolves_plain(s: Stmt, all: Fns, env: Params, ps: Params, sd: Structs)
     requires
         spec_stmt(s, all, env, ps, sd).is_ok(),
-        s is Step || s is Exit || s is Assert || s is Apply || s is Unknown,
+        s is Step || s is Exit || s is Assert || s is Apply || s is Unknown || s is SetIndex,
     ensures
         calls_resolve_stmt(spec_stmt(s, all, env, ps, sd).unwrap(), all, sd),
 {
@@ -3991,6 +4038,7 @@ pub proof fn lemma_stmt_calls_resolve(s: Stmt, all: Fns, env: Params, ps: Params
         Stmt::Assert(_, _) => lemma_resolves_plain(s, all, env, ps, sd),
         Stmt::Apply(_, _, _) => lemma_resolves_plain(s, all, env, ps, sd),
         Stmt::Unknown(_, _) => lemma_resolves_plain(s, all, env, ps, sd),
+        Stmt::SetIndex(_, _, _, _) => lemma_resolves_plain(s, all, env, ps, sd),
         Stmt::If(c, t, f, l) => {
             lemma_stmts_calls_resolve(*t, all, env, ps, sd);
             lemma_stmts_calls_resolve(*f, all, env, ps, sd);
@@ -4126,6 +4174,10 @@ pub fn translate_ty(t: Ty, line: u32) -> (r: Result<DTy, Refusal>)
         Ty::ThisAfter(k) => Ok(DTy::Struct(k)),
         Ty::Mut(s) => Ok(scalar_dty(s)),
         Ty::MutAfter(s) => Ok(scalar_dty(s)),
+        Ty::MutSeq(Scalar::Bool) => Err(Refusal::Element(line)),
+        Ty::MutSeqAfter(Scalar::Bool) => Err(Refusal::Element(line)),
+        Ty::MutSeq(s) => Ok(DTy::Seq(s)),
+        Ty::MutSeqAfter(s) => Ok(DTy::Seq(s)),
         Ty::Enum(k) => Ok(DTy::Enum(k)),
         Ty::Fresh(_) => Err(Refusal::Syntax(line)),
         Ty::Void => Err(Refusal::Syntax(line)),
@@ -4146,6 +4198,8 @@ pub fn translate_value_ty(t: Ty, line: u32, sd: &Structs) -> (r: Result<DTy, Ref
             Ty::ThisAfter(_) => Err(Refusal::Syntax(line)),
             Ty::Mut(_) => Err(Refusal::Syntax(line)),
             Ty::MutAfter(_) => Err(Refusal::Syntax(line)),
+            Ty::MutSeq(_) => Err(Refusal::Syntax(line)),
+            Ty::MutSeqAfter(_) => Err(Refusal::Syntax(line)),
             Ty::Ptr(_) => Err(Refusal::Syntax(line)),
             Ty::Struct(k) => if holds_seq(sd, k) {
                 Err(Refusal::HoldsSeq(line))
@@ -4500,6 +4554,7 @@ pub fn code_var(v: u32, t: Ty) -> (r: DExpr)
     match t {
         Ty::ThisMut(_) => DExpr::After,
         Ty::Mut(_) => DExpr::Out(v),
+        Ty::MutSeq(_) => DExpr::Out(v),
         _ => DExpr::Var(v),
     }
 }
@@ -4511,6 +4566,7 @@ pub fn contract_var(v: u32, t: Ty) -> (r: DExpr)
     match t {
         Ty::ThisAfter(_) => DExpr::After,
         Ty::MutAfter(_) => DExpr::Out(v),
+        Ty::MutSeqAfter(_) => DExpr::Out(v),
         _ => DExpr::Var(v),
     }
 }
@@ -4522,6 +4578,8 @@ pub fn view_ty(t: Ty) -> (r: Ty)
     match t {
         Ty::Mut(s) => elem(s),
         Ty::MutAfter(s) => elem(s),
+        Ty::MutSeq(s) => Ty::Seq(s, Extent::Dynamic),
+        Ty::MutSeqAfter(s) => Ty::Seq(s, Extent::Dynamic),
         _ => t,
     }
 }
@@ -5015,6 +5073,7 @@ pub fn after(ps: &Params) -> (r: Params)
             let v = match t {
                 Ty::ThisMut(k) => Ty::ThisAfter(*k),
                 Ty::Mut(s) => Ty::MutAfter(*s),
+                Ty::MutSeq(s) => Ty::MutSeqAfter(*s),
                 _ => *t,
             };
             List::Cons((*p, v), Box::new(after(rest)))
@@ -5033,6 +5092,7 @@ pub fn before(ps: &Params) -> (r: Params)
             let v = match t {
                 Ty::ThisAfter(k) => Ty::ThisMut(*k),
                 Ty::MutAfter(s) => Ty::Mut(*s),
+                Ty::MutSeqAfter(s) => Ty::MutSeq(*s),
                 _ => *t,
             };
             List::Cons((*p, v), Box::new(before(rest)))
@@ -5059,6 +5119,7 @@ pub fn any_after(ps: &Params) -> (r: bool)
         List::Nil => false,
         List::Cons((_, t), rest) => match t {
             Ty::MutAfter(_) => true,
+            Ty::MutSeqAfter(_) => true,
             _ => any_after(rest),
         },
     }
@@ -5081,6 +5142,7 @@ pub fn written(t: Ty) -> (r: bool)
     match t {
         Ty::ThisMut(_) => true,
         Ty::Mut(_) => true,
+        Ty::MutSeq(_) => true,
         _ => false,
     }
 }
@@ -5105,6 +5167,7 @@ pub fn outs(ps: &Params) -> (r: DParams)
         List::Nil => List::Nil,
         List::Cons((n, t), rest) => match t {
             Ty::Mut(s) => List::Cons((*n, scalar_dty(*s)), Box::new(outs(rest))),
+            Ty::MutSeq(s) => List::Cons((*n, DTy::Seq(*s)), Box::new(outs(rest))),
             _ => outs(rest),
         },
     }
@@ -5131,6 +5194,7 @@ pub fn bad_modifies(ps: &Params, cs: &Conds) -> (r: Option<Refusal>)
             match e {
                 Expr::Name(n) => match rebind(decl, ps, *n) {
                     Some((_, Ty::Mut(_))) => bad_modifies(ps, rest),
+                    Some((_, Ty::MutSeq(_))) => bad_modifies(ps, rest),
                     _ => Some(Refusal::NotRef(*n, *l)),
                 },
                 _ => Some(Refusal::Syntax(*l)),
@@ -5169,7 +5233,7 @@ pub fn unlisted(todo: &Params, ps: &Params, cs: &Conds, line: u32) -> (r: Option
     match todo {
         List::Nil => None,
         List::Cons((p, t), rest) => match t {
-            Ty::Mut(_) => if lists(ps, cs, *p) {
+            Ty::Mut(_) | Ty::MutSeq(_) => if lists(ps, cs, *p) {
                 unlisted(rest, ps, cs, line)
             } else {
                 Some(Refusal::Unlisted(*p, line))
@@ -5306,6 +5370,7 @@ pub fn param_ty(t: Ty, line: u32, sd: &Structs) -> (r: Result<DTy, Refusal>)
     match t {
         Ty::ThisAfter(_) => Err(Refusal::Syntax(line)),
         Ty::MutAfter(_) => Err(Refusal::Syntax(line)),
+        Ty::MutSeqAfter(_) => Err(Refusal::Syntax(line)),
         Ty::Opt(Scalar::Struct(k)) => if holds_seq(sd, k) {
             Err(Refusal::HoldsSeq(line))
         } else {
@@ -5380,6 +5445,7 @@ pub fn place(s: &Stmt) -> (r: u32)
         Stmt::Exit(l) => *l,
         Stmt::Assert(_, l) => *l,
         Stmt::Apply(_, _, l) => *l,
+        Stmt::SetIndex(_, _, _, l) => *l,
         Stmt::Unknown(_, l) => *l,
     }
 }
@@ -5844,6 +5910,17 @@ pub fn translate_stmt(s: &Stmt, all: &Fns, env: &Params, ps: &Params, sd: &Struc
             Ok(da) => Ok(DStmt::Apply(*f, da)),
             Err(r) => Err(r),
         },
+        Stmt::SetIndex(v, i, e, l) => match get(ps, *v) {
+            Some(Ty::MutSeq(_)) => match translate_code(i, *l) {
+                Ok(di) => match translate_code(e, *l) {
+                    Ok(de) => Ok(DStmt::SetOut(*v, DExpr::SetAt(Box::new(DExpr::Out(*v)), Box::new(di), Box::new(de)))),
+                    Err(r) => Err(r),
+                },
+                Err(r) => Err(r),
+            },
+            Some(_) => Err(Refusal::WriteParam(*v, *l)),
+            None => Err(Refusal::Syntax(*l)),
+        },
         Stmt::Unknown(k, l) => Err(Refusal::Construct(*k, *l)),
     }
 }
@@ -6246,6 +6323,7 @@ pub fn copy_dexpr(d: &DExpr) -> (r: DExpr)
         DExpr::Ite(x0, x1, x2) => DExpr::Ite(Box::new(copy_dexpr(x0)), Box::new(copy_dexpr(x1)), Box::new(copy_dexpr(x2))),
         DExpr::Temp(x0) => DExpr::Temp(*x0),
         DExpr::ShrIn(x0, x1, x2, x3) => DExpr::ShrIn(Box::new(copy_dexpr(x0)), Box::new(copy_dexpr(x1)), *x2, *x3),
+        DExpr::SetAt(x0, x1, x2) => DExpr::SetAt(Box::new(copy_dexpr(x0)), Box::new(copy_dexpr(x1)), Box::new(copy_dexpr(x2))),
     }
 }
 

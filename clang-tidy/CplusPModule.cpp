@@ -4707,6 +4707,25 @@ private:
     Pointee.removeLocalConst();
     return !Pointee.hasQualifiers() && (scalar(Pointee) || plainStruct(Pointee)) ? Pointee : QualType();
   }
+  // The scalar of a vector by reference that the function writes, decision 0145, or null: `std::vector<T>&` with no const, for a scalar `T`
+  // other than bool. A vector of bool and a vector of a struct by reference stay `Other`.
+  const char *mutSeq(QualType T) const {
+    if (!T->isLValueReferenceType())
+      return nullptr;
+    const QualType Vector = T->getPointeeType();
+    const auto *Spec = dyn_cast_or_null<ClassTemplateSpecializationDecl>(Vector->getAsCXXRecordDecl());
+    if (Vector.getCanonicalType().hasQualifiers() || !Spec || !Spec->isInStdNamespace() || Spec->getName() != "vector" || Spec->getTemplateArgs().size() == 0 ||
+        Spec->getTemplateArgs()[0].getKind() != TemplateArgument::Type)
+      return nullptr;
+    const QualType Elem = Spec->getTemplateArgs()[0].getAsType();
+    const char *S = Elem.getCanonicalType().hasQualifiers() ? nullptr : scalar(Elem);
+    return S && StringRef(S) != "Bool" ? S : nullptr;
+  }
+  // Whether an expression names a vector by reference that the function writes, decision 0145.
+  bool isMutSeq(const Expr *E) const {
+    const auto *Ref = dyn_cast<DeclRefExpr>(E->IgnoreParenImpCasts());
+    return Ref && isa<ParmVarDecl>(Ref->getDecl()) && mutSeq(Ref->getDecl()->getType());
+  }
   // The type of a parameter, or of a name that reads one. A pointer to const is a `Ptr` of what it points to, decisions 0140 and 0141.
   llvm::json::Value paramType(QualType T) const {
     llvm::json::Value Written = mutRef(T);
@@ -4714,6 +4733,8 @@ private:
       return Written;
     if (const QualType Element = constPointee(T); !Element.isNull())
       return tag("Ptr", type(Element));
+    if (const char *S = mutSeq(T))
+      return tag("MutSeq", S);
     // A `unique_ptr` parameter is read by const reference only, decision 0142. By value it has no rule: it moves.
     if (T->isLValueReferenceType() && T->getPointeeType().isConstQualified())
       if (const QualType Element = ownElement(T->getPointeeType()); !Element.isNull())
@@ -4805,6 +4826,12 @@ private:
     if (const auto *Assign = dyn_cast<BinaryOperator>(S); Assign && Assign->getOpcode() == BO_Assign) {
       if (const auto *Target = dyn_cast<DeclRefExpr>(Assign->getLHS()); Target && isVariable(Target->getDecl()))
         return tag("Assign", llvm::json::Array{Target->getDecl()->getNameAsString(), expr(Assign->getRHS(), line(S->getBeginLoc())), number(line(S->getBeginLoc()))});
+      // `v[i] = e` where `v` is a vector by reference, decision 0145. Any other write to a vector has no rule.
+      if (const auto *Subscript = dyn_cast<CXXOperatorCallExpr>(Assign->getLHS()->IgnoreParens());
+          Subscript && Subscript->getOperator() == OO_Subscript && Subscript->getNumArgs() == 2 && isMutSeq(Subscript->getArg(0)))
+        return tag("SetIndex", llvm::json::Array{cast<DeclRefExpr>(Subscript->getArg(0)->IgnoreParenImpCasts())->getDecl()->getNameAsString(),
+                                                 expr(Subscript->getArg(1), line(S->getBeginLoc())), expr(Assign->getRHS(), line(S->getBeginLoc())),
+                                                 number(line(S->getBeginLoc()))});
       // A write of a field of a reference parameter, decision 0108.
       if (const auto [Param, Field] = refField(Assign->getLHS()); Param)
         return tag("SetRefField", llvm::json::Array{Param->getNameAsString(), Field->getNameAsString(), expr(Assign->getRHS(), line(S->getBeginLoc())), number(line(S->getBeginLoc()))});
@@ -5245,7 +5272,7 @@ private:
         return tag("Field", llvm::json::Array{expr(Member->getBase()->IgnoreParenImpCasts(), Near), Field->getNameAsString()});
     // `v.size()` and `v[i]` of a read-only sequence.
     if (const auto *Member = dyn_cast<CXXMemberCallExpr>(E); Member && Member->getNumArgs() == 0 && Member->getMethodDecl() && Member->getMethodDecl()->getNameAsString() == "size")
-      if (const Expr *Object = Member->getImplicitObjectArgument(); Object && isSeq(Object->getType()))
+      if (const Expr *Object = Member->getImplicitObjectArgument(); Object && (isSeq(Object->getType()) || isMutSeq(Object)))
         return tag("Size", expr(Object, Near));
     // `v.empty()`, and `s.subspan(k)` with no explicit second argument, decision 0078. `subspan(k, n)` and `first(n)` stay unknown.
     if (const auto *Member = dyn_cast<CXXMemberCallExpr>(E); Member && Member->getNumArgs() == 0 && Member->getMethodDecl() && Member->getMethodDecl()->getNameAsString() == "empty")
@@ -5256,7 +5283,7 @@ private:
       if (const Expr *Object = Member->getImplicitObjectArgument(); Object && isSeq(Object->getType()))
         return tag("Subspan", llvm::json::Array{expr(Object, Near), expr(Member->getArg(0), Near)});
     if (const auto *Operator = dyn_cast<CXXOperatorCallExpr>(E); Operator && Operator->getOperator() == OO_Subscript && Operator->getNumArgs() == 2 &&
-                                                                  isSeq(Operator->getArg(0)->getType()))
+                                                                  (isSeq(Operator->getArg(0)->getType()) || isMutSeq(Operator->getArg(0))))
       return tag("Index", llvm::json::Array{expr(Operator->getArg(0), Near), expr(Operator->getArg(1), Near)});
     // `v.at(i)` of a read-only sequence is `v[i]`, decision 0139. The prover proves the index in range, so `at` never throws.
     if (const auto *Member = dyn_cast<CXXMemberCallExpr>(E); Member && Member->getNumArgs() == 1 && Member->getMethodDecl() && Member->getMethodDecl()->getNameAsString() == "at")

@@ -42,6 +42,8 @@ enum JTy {
     Struct(String),
     /// A parameter of type `T&`, decision 0108.
     Mut(JScalar),
+    /// A parameter of type `std::vector<T>&` that the function writes, decision 0145.
+    MutSeq(JScalar),
     /// An enum class of the file by its key, decision 0109.
     Enum(String),
     Opt(JScalar),
@@ -120,6 +122,8 @@ enum JStmt {
     Assign(String, JExpr, u32),
     Step(String, JTy, bool, u32),
     SetField(String, JExpr, u32),
+    /// `v[i] = e` where `v` is a vector by reference, decision 0145.
+    SetIndex(String, JExpr, JExpr, u32),
     /// `p.f = e` where `p` is a reference parameter, decision 0108.
     SetRefField(String, String, JExpr, u32),
     /// A switch over an enum, decision 0109: its condition, the key of the enum, the cases as (place of the enumerator, statements), and the line.
@@ -315,6 +319,7 @@ fn ty(t: JTy, names: &mut Names) -> Ty {
         JTy::Own(s) => Ty::Own(scalar(s, names)),
         JTy::Struct(k) => Ty::Struct(names.id(&k)),
         JTy::Mut(s) => Ty::Mut(scalar(s, names)),
+        JTy::MutSeq(s) => Ty::MutSeq(scalar(s, names)),
         JTy::Enum(k) => Ty::Enum(names.id(&k)),
         JTy::This(k) => Ty::This(names.id(&k)),
         JTy::ThisMut(k) => Ty::ThisMut(names.id(&k)),
@@ -397,6 +402,7 @@ fn stmt(s: JStmt, names: &mut Names) -> Stmt {
         JStmt::Assign(n, e, line) => Stmt::Assign(names.id(&n), expr(e, names), names.here(line)),
         JStmt::Step(n, t, up, line) => Stmt::Step(names.id(&n), ty(t, names), up, names.here(line)),
         JStmt::SetField(f, e, line) => Stmt::SetField(names.id(&f), expr(e, names), names.here(line)),
+        JStmt::SetIndex(v, i, e, line) => Stmt::SetIndex(names.id(&v), expr(i, names), expr(e, names), names.here(line)),
         JStmt::Switch(e, k, cases, line) => {
             let place = names.here(line);
             let key = names.id(&k);
@@ -703,6 +709,11 @@ fn stmt_names<'a>(s: &'a JStmt, out: &mut Vec<&'a str>) {
         }
         JStmt::Step(n, ..) => out.push(n),
         JStmt::SetField(_, e, _) => expr_names(e, out),
+        JStmt::SetIndex(v, i, e, _) => {
+            out.push(v);
+            expr_names(i, out);
+            expr_names(e, out);
+        }
         JStmt::Switch(e, _, cases, _) => {
             expr_names(e, out);
             cases.iter().flat_map(|(_, body)| body).for_each(|s| stmt_names(s, out));
@@ -938,6 +949,7 @@ fn dexpr(e: &DExpr, names: &Names) -> String {
         DExpr::Ctor(k, args) => format!("{}({})", names.datatypes[k], dargs(args, names).join(", ")),
         DExpr::Len(a) => format!("|{}|", dexpr(a, names)),
         DExpr::Index(a, i) => format!("{}[{}]", dexpr(a, names), dexpr(i, names)),
+        DExpr::SetAt(a, i, e) => format!("{}[{} := {}]", dexpr(a, names), dexpr(i, names), dexpr(e, names)),
         DExpr::Drop(a, k) => format!("{}[{}..]", dexpr(a, names), dexpr(k, names)),
         DExpr::Take(a, j) => format!("{}[..{}]", dexpr(a, names), dexpr(j, names)),
         DExpr::Slice(a, i, j) => format!("{}[{}..{}]", dexpr(a, names), dexpr(i, names), dexpr(j, names)),
@@ -1441,7 +1453,7 @@ pub fn translate(lines: &str, companion: Option<(&str, &str)>) -> Result<Transla
         if matches!(f.params.first(), Some((_, JTy::ThisMut(_)))) {
             writing.insert(key);
         }
-        let mutable: Vec<u32> = f.params.iter().enumerate().filter(|(_, (_, t))| matches!(t, JTy::Mut(_))).map(|(i, (n, _))| names.id(&if n.is_empty() { format!("'{i}") } else { n.clone() })).collect();
+        let mutable: Vec<u32> = f.params.iter().enumerate().filter(|(_, (_, t))| matches!(t, JTy::Mut(_) | JTy::MutSeq(_))).map(|(i, (n, _))| names.id(&if n.is_empty() { format!("'{i}") } else { n.clone() })).collect();
         refs.insert(key, mutable);
         at.insert(key, names.place(&f.file, f.line));
         if let Some((reason, file, line)) = &f.trusted {

@@ -14,6 +14,7 @@ void write_at(std::vector<int32_t>& v, size_t i, int32_t x) {
 
 //@ requires i < v.size() && j < v.size()
 //@ modifies v
+//@ ensures v.size() == old(v.size())
 //@ ensures v[i] == old(v[j]) && v[j] == old(v[i])
 void swap_at(std::vector<int32_t>& v, size_t i, size_t j) {
   int32_t t = v[i];
