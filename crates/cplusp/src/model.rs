@@ -47,6 +47,8 @@ enum JTy {
     Opt(JScalar),
     /// A pointer to const that is a parameter, decision 0141.
     Ptr(JScalar),
+    /// A unique_ptr that the code only reads, decision 0142.
+    Own(JScalar),
     This(String),
     ThisMut(String),
     Void,
@@ -306,6 +308,7 @@ fn ty(t: JTy, names: &mut Names) -> Ty {
         JTy::Seq(s, extent) => Ty::Seq(scalar(s, names), extent.map_or(Extent::Dynamic, Extent::Fixed)),
         JTy::Opt(s) => Ty::Opt(scalar(s, names)),
         JTy::Ptr(s) => Ty::Ptr(scalar(s, names)),
+        JTy::Own(s) => Ty::Own(scalar(s, names)),
         JTy::Struct(k) => Ty::Struct(names.id(&k)),
         JTy::Mut(s) => Ty::Mut(scalar(s, names)),
         JTy::Enum(k) => Ty::Enum(names.id(&k)),

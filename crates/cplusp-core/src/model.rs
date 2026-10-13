@@ -199,6 +199,7 @@ pub enum Ty {
     Mut(Scalar),
     MutAfter(Scalar),
     Ptr(Scalar),
+    Own(Scalar),
     Enum(u32),
     Fresh(u32),
     Void,
@@ -616,6 +617,8 @@ pub open spec fn spec_ty(t: Ty, line: u32) -> Result<DTy, Refusal> {
         Ty::Opt(s) => Ok(DTy::Opt(s)),
         // A pointer to const is an Option in Dafny, decisions 0140 and 0141.
         Ty::Ptr(s) => Ok(DTy::Opt(s)),
+        // A unique_ptr is an Option in Dafny too, decision 0142.
+        Ty::Own(s) => Ok(DTy::Opt(s)),
         Ty::This(k) => Ok(DTy::Struct(k)),
         Ty::ThisMut(k) => Ok(DTy::Struct(k)),
         Ty::ThisAfter(k) => Ok(DTy::Struct(k)),
@@ -648,6 +651,11 @@ pub open spec fn spec_value_ty(t: Ty, line: u32, sd: Structs) -> Result<DTy, Ref
             },
             // An optional of a struct that holds a sequence stays out, decision 0137.
             Ty::Opt(Scalar::Struct(k)) => if spec_holds(sd, k) {
+                Err(Refusal::HoldsSeq(line))
+            } else {
+                Ok(dt)
+            },
+            Ty::Own(Scalar::Struct(k)) => if spec_holds(sd, k) {
                 Err(Refusal::HoldsSeq(line))
             } else {
                 Ok(dt)
@@ -721,7 +729,7 @@ pub fn null_test(op: BinOp, d: DExpr) -> (r: DExpr)
 // ponytail: it sees a bare variable only. The plugin refuses every other pointer operand by its type. Upgrade: look through Paren
 // and Cond, as spec_ptr_operand does.
 pub open spec fn spec_ptr_var(e: Expr) -> bool {
-    e is Var && e->Var_1 is Ptr
+    e is Var && (e->Var_1 is Ptr || e->Var_1 is Own)
 }
 
 impl Expr {
@@ -730,7 +738,7 @@ impl Expr {
             r == spec_ptr_var(*self),
     {
         match self {
-            Expr::Var(_, Ty::Ptr(_)) => true,
+            Expr::Var(_, Ty::Ptr(_)) | Expr::Var(_, Ty::Own(_)) => true,
             _ => false,
         }
     }
@@ -768,6 +776,7 @@ pub open spec fn copies(from: Ty, to: Ty) -> bool {
         (Ty::Struct(a), Ty::Struct(b)) => a == b,
         (Ty::Opt(a), Ty::Opt(b)) => a == b,
         (Ty::Ptr(a), Ty::Ptr(b)) => a == b,
+        (Ty::Own(a), Ty::Own(b)) => a == b,
         _ => false,
     }
 }
@@ -1162,12 +1171,14 @@ pub open spec fn spec_contract(e: Expr, decl: Names, ps: Params, ret: Option<Ty>
         Expr::Bin(op, a, b) if (op == BinOp::Eq || op == BinOp::Ne) && (*a is Nullopt || *b is Nullopt) => if *b is Nullopt {
             match spec_path(*a, decl, ps, ret, bound, line, sd) {
                 Ok((d, Ty::Ptr(_))) => Ok(spec_null_test(op, d)),
+                Ok((d, Ty::Own(_))) => Ok(spec_null_test(op, d)),
                 Ok(_) => Err(Refusal::Syntax(line)),
                 Err(r) => Err(r),
             }
         } else {
             match spec_path(*b, decl, ps, ret, bound, line, sd) {
                 Ok((d, Ty::Ptr(_))) => Ok(spec_null_test(op, d)),
+                Ok((d, Ty::Own(_))) => Ok(spec_null_test(op, d)),
                 Ok(_) => Err(Refusal::Syntax(line)),
                 Err(r) => Err(r),
             }
@@ -1249,6 +1260,7 @@ pub open spec fn spec_contract(e: Expr, decl: Names, ps: Params, ret: Option<Ty>
         Expr::Value(o) => match spec_path(*o, decl, ps, ret, bound, line, sd) {
             Ok((d, Ty::Opt(s))) => spec_leaf(DExpr::Get(Box::new(d)), spec_elem(s), line),
             Ok((d, Ty::Ptr(s))) => spec_leaf(DExpr::Get(Box::new(d)), spec_elem(s), line),
+            Ok((d, Ty::Own(s))) => spec_leaf(DExpr::Get(Box::new(d)), spec_elem(s), line),
             Ok(_) => Err(Refusal::Syntax(line)),
             Err(r) => Err(r),
         },
@@ -1399,7 +1411,7 @@ pub open spec fn spec_enum_operand(e: Expr, decl: Names, ps: Params, ret: Option
     }
 }
 
-/// An operand that is a pointer, decision 0141. No comparison or other operator takes one, except the test against nullptr.
+/// An operand that is a pointer, decision 0141, or a unique_ptr, decision 0142. No comparison or other operator takes one, except the test against nullptr.
 pub open spec fn spec_ptr_operand(e: Expr, decl: Names, ps: Params, ret: Option<Ty>, bound: Names, line: u32, sd: Structs) -> bool
     decreases e, 1nat,
 {
@@ -1409,6 +1421,7 @@ pub open spec fn spec_ptr_operand(e: Expr, decl: Names, ps: Params, ret: Option<
         Expr::Cond(_, a, b) => spec_ptr_operand(*a, decl, ps, ret, bound, line, sd) || spec_ptr_operand(*b, decl, ps, ret, bound, line, sd),
         _ => match spec_path(e, decl, ps, ret, bound, line, sd) {
             Ok((_, Ty::Ptr(_))) => true,
+            Ok((_, Ty::Own(_))) => true,
             _ => false,
         },
     }
@@ -1441,6 +1454,7 @@ pub open spec fn spec_path(e: Expr, decl: Names, ps: Params, ret: Option<Ty>, bo
         Expr::Value(o) => match spec_path(*o, decl, ps, ret, bound, line, sd) {
             Ok((d, Ty::Opt(Scalar::Struct(k)))) => Ok((DExpr::Get(Box::new(d)), Ty::Struct(k))),
             Ok((d, Ty::Ptr(Scalar::Struct(k)))) => Ok((DExpr::Get(Box::new(d)), Ty::Struct(k))),
+            Ok((d, Ty::Own(Scalar::Struct(k)))) => Ok((DExpr::Get(Box::new(d)), Ty::Struct(k))),
             Ok(_) => Err(Refusal::Syntax(line)),
             Err(r) => Err(r),
         },
@@ -1803,6 +1817,11 @@ pub open spec fn spec_param_ty(t: Ty, line: u32, sd: Structs) -> Result<DTy, Ref
             spec_ty(t, line)
         },
         Ty::Ptr(Scalar::Struct(k)) => if spec_holds(sd, k) {
+            Err(Refusal::HoldsSeq(line))
+        } else {
+            spec_ty(t, line)
+        },
+        Ty::Own(Scalar::Struct(k)) => if spec_holds(sd, k) {
             Err(Refusal::HoldsSeq(line))
         } else {
             spec_ty(t, line)
@@ -2699,7 +2718,7 @@ pub open spec fn spec_fields(ps: Params, line: u32) -> Result<DParams, Refusal>
     match ps {
         List::Nil => Ok(List::Nil),
         // An optional of a struct is no field yet, decision 0137.
-        List::Cons((n, t), rest) => match (if (t is Opt && t->Opt_0 is Struct) || t is Ptr { Err(Refusal::Element(line)) } else { spec_ty(t, line) }) {
+        List::Cons((n, t), rest) => match (if (t is Opt && t->Opt_0 is Struct) || t is Ptr || t is Own { Err(Refusal::Element(line)) } else { spec_ty(t, line) }) {
             Ok(dt) => match spec_fields(*rest, line) {
                 Ok(dr) => Ok(List::Cons((n, dt), Box::new(dr))),
                 Err(r) => Err(r),
@@ -3815,6 +3834,8 @@ pub fn translate_ty(t: Ty, line: u32) -> (r: Result<DTy, Refusal>)
         Ty::Opt(s) => Ok(DTy::Opt(s)),
         // A pointer to const is an Option in Dafny, decisions 0140 and 0141.
         Ty::Ptr(s) => Ok(DTy::Opt(s)),
+        // A unique_ptr is an Option in Dafny too, decision 0142.
+        Ty::Own(s) => Ok(DTy::Opt(s)),
         Ty::This(k) => Ok(DTy::Struct(k)),
         Ty::ThisMut(k) => Ok(DTy::Struct(k)),
         Ty::ThisAfter(k) => Ok(DTy::Struct(k)),
@@ -3847,6 +3868,11 @@ pub fn translate_value_ty(t: Ty, line: u32, sd: &Structs) -> (r: Result<DTy, Ref
                 Ok(dt)
             },
             Ty::Opt(Scalar::Struct(k)) => if holds_seq(sd, k) {
+                Err(Refusal::HoldsSeq(line))
+            } else {
+                Ok(dt)
+            },
+            Ty::Own(Scalar::Struct(k)) => if holds_seq(sd, k) {
                 Err(Refusal::HoldsSeq(line))
             } else {
                 Ok(dt)
@@ -3924,6 +3950,7 @@ pub fn copy_ok(from: Ty, to: Ty) -> (r: bool)
         (Ty::Struct(a), Ty::Struct(b)) => a == b,
         (Ty::Opt(a), Ty::Opt(b)) => a == b,
         (Ty::Ptr(a), Ty::Ptr(b)) => a == b,
+        (Ty::Own(a), Ty::Own(b)) => a == b,
         _ => false,
     }
 }
@@ -4338,12 +4365,14 @@ pub fn translate_contract(e: &Expr, decl: &Names, ps: &Params, ret: Option<Ty>, 
         Expr::Bin(op, a, b) if (*op == BinOp::Eq || *op == BinOp::Ne) && (a.is_nullopt() || b.is_nullopt()) => if b.is_nullopt() {
             match path(a, decl, ps, ret, bound, line, sd) {
                 Ok((d, Ty::Ptr(_))) => Ok(null_test(*op, d)),
+                Ok((d, Ty::Own(_))) => Ok(null_test(*op, d)),
                 Ok(_) => Err(Refusal::Syntax(line)),
                 Err(r) => Err(r),
             }
         } else {
             match path(b, decl, ps, ret, bound, line, sd) {
                 Ok((d, Ty::Ptr(_))) => Ok(null_test(*op, d)),
+                Ok((d, Ty::Own(_))) => Ok(null_test(*op, d)),
                 Ok(_) => Err(Refusal::Syntax(line)),
                 Err(r) => Err(r),
             }
@@ -4409,6 +4438,7 @@ pub fn translate_contract(e: &Expr, decl: &Names, ps: &Params, ret: Option<Ty>, 
         Expr::Value(o) => match path(o, decl, ps, ret, bound, line, sd) {
             Ok((d, Ty::Opt(s))) => translate_leaf(DExpr::Get(Box::new(d)), elem(s), line),
             Ok((d, Ty::Ptr(s))) => translate_leaf(DExpr::Get(Box::new(d)), elem(s), line),
+            Ok((d, Ty::Own(s))) => translate_leaf(DExpr::Get(Box::new(d)), elem(s), line),
             Ok(_) => Err(Refusal::Syntax(line)),
             Err(r) => Err(r),
         },
@@ -4565,6 +4595,7 @@ pub fn ptr_operand(e: &Expr, decl: &Names, ps: &Params, ret: Option<Ty>, bound: 
         Expr::Cond(_, a, b) => ptr_operand(a, decl, ps, ret, bound, line, sd) || ptr_operand(b, decl, ps, ret, bound, line, sd),
         _ => match path(e, decl, ps, ret, bound, line, sd) {
             Ok((_, Ty::Ptr(_))) => true,
+            Ok((_, Ty::Own(_))) => true,
             _ => false,
         },
     }
@@ -4595,6 +4626,7 @@ pub fn path(e: &Expr, decl: &Names, ps: &Params, ret: Option<Ty>, bound: &Names,
         Expr::Value(o) => match path(o, decl, ps, ret, bound, line, sd) {
             Ok((d, Ty::Opt(Scalar::Struct(k)))) => Ok((DExpr::Get(Box::new(d)), Ty::Struct(k))),
             Ok((d, Ty::Ptr(Scalar::Struct(k)))) => Ok((DExpr::Get(Box::new(d)), Ty::Struct(k))),
+            Ok((d, Ty::Own(Scalar::Struct(k)))) => Ok((DExpr::Get(Box::new(d)), Ty::Struct(k))),
             Ok(_) => Err(Refusal::Syntax(line)),
             Err(r) => Err(r),
         },
@@ -4995,6 +5027,11 @@ pub fn param_ty(t: Ty, line: u32, sd: &Structs) -> (r: Result<DTy, Refusal>)
             translate_ty(t, line)
         },
         Ty::Ptr(Scalar::Struct(k)) => if holds_seq(sd, k) {
+            Err(Refusal::HoldsSeq(line))
+        } else {
+            translate_ty(t, line)
+        },
+        Ty::Own(Scalar::Struct(k)) => if holds_seq(sd, k) {
             Err(Refusal::HoldsSeq(line))
         } else {
             translate_ty(t, line)
@@ -6042,7 +6079,7 @@ fn translate_fields(ps: &Params, line: u32) -> (r: Result<DParams, Refusal>)
 {
     match ps {
         List::Nil => Ok(List::Nil),
-        List::Cons((n, t), rest) => match if let Ty::Opt(Scalar::Struct(_)) | Ty::Ptr(_) = t { Err(Refusal::Element(line)) } else { translate_ty(*t, line) } {
+        List::Cons((n, t), rest) => match if let Ty::Opt(Scalar::Struct(_)) | Ty::Ptr(_) | Ty::Own(_) = t { Err(Refusal::Element(line)) } else { translate_ty(*t, line) } {
             Ok(dt) => match translate_fields(rest, line) {
                 Ok(dr) => Ok(List::Cons((*n, dt), Box::new(dr))),
                 Err(r) => Err(r),

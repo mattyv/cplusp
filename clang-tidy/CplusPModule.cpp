@@ -4512,6 +4512,22 @@ private:
   // Whether a type is an optional of a scalar or of a plain struct.
   bool isOpt(QualType T) const { return !optType(T).isNull(); }
 
+  // The element of a `std::unique_ptr` that the code only reads, decision 0142, or null: `std::unique_ptr<T>` with the default deleter, for a
+  // scalar or a plain struct with no qualifier. The type of a value or of a name that reads one, so no reference.
+  QualType ownElement(QualType T) const {
+    const auto *Spec = dyn_cast_or_null<ClassTemplateSpecializationDecl>(T.getUnqualifiedType()->getAsCXXRecordDecl());
+    if (T->isReferenceType() || T.isVolatileQualified() || !Spec || !Spec->isInStdNamespace() || Spec->getName() != "unique_ptr" ||
+        Spec->getTemplateArgs().size() != 2 || Spec->getTemplateArgs()[0].getKind() != TemplateArgument::Type ||
+        Spec->getTemplateArgs()[1].getKind() != TemplateArgument::Type)
+      return QualType();
+    const QualType Elem = Spec->getTemplateArgs()[0].getAsType();
+    const CXXRecordDecl *Deleter = Spec->getTemplateArgs()[1].getAsType()->getAsCXXRecordDecl();
+    if (!Deleter || !Deleter->isInStdNamespace() || Deleter->getName() != "default_delete")
+      return QualType();
+    return !Elem.getCanonicalType().hasQualifiers() && (scalar(Elem) || plainStruct(Elem)) ? Elem : QualType();
+  }
+  bool isOwn(QualType T) const { return !ownElement(T).isNull(); }
+
   // The plain struct that a type is, decision 0073, or null. A const and a reference are looked through. Plain means a definition with
   // a name, no bases, no virtual function, no destructor and no member template, and fields that are each a scalar, a small integer
   // type (decision 0138), a plain enum (decision 0109), a plain struct, an optional of a scalar (decision 0075) or a sequence (decision
@@ -4698,6 +4714,12 @@ private:
       return Written;
     if (const QualType Element = constPointee(T); !Element.isNull())
       return tag("Ptr", type(Element));
+    // A `unique_ptr` parameter is read by const reference only, decision 0142. By value it has no rule: it moves.
+    if (T->isLValueReferenceType() && T->getPointeeType().isConstQualified())
+      if (const QualType Element = ownElement(T->getPointeeType()); !Element.isNull())
+        return tag("Own", type(Element));
+    if (isOwn(T))
+      return tag("Other", T.getAsString(Context.getPrintingPolicy()));
     return type(T);
   }
   llvm::json::Value varType(const ValueDecl *D) const { return isa<ParmVarDecl>(D) ? paramType(D->getType()) : type(D->getType()); }
@@ -4738,6 +4760,8 @@ private:
       return tag("Seq", llvm::json::Array{type(E), seqExtent(T)});
     if (const QualType E = optType(T); !E.isNull())
       return tag("Opt", type(E));
+    if (const QualType E = Field ? QualType() : ownElement(T); !E.isNull())
+      return tag("Own", type(E));
     return tag("Other", T.getAsString(Context.getPrintingPolicy()));
   }
 
@@ -4952,6 +4976,45 @@ private:
     // A temporary that needs a cleanup, such as an optional made from `x + 1`, wraps the expression. The wrapper is not the construct.
     if (const auto *Cleanups = dyn_cast<ExprWithCleanups>(E))
       return expr(Cleanups->getSubExpr(), Near);
+    // A `unique_ptr` that a call gives is held in a temporary, which is not the value, decision 0142.
+    if (const auto *Bound = dyn_cast<CXXBindTemporaryExpr>(E); Bound && isOwn(Bound->getType()))
+      return expr(Bound->getSubExpr(), Near);
+    if (const auto *Held = dyn_cast<MaterializeTemporaryExpr>(E); Held && isOwn(Held->getType()))
+      return expr(Held->getSubExpr(), Near);
+    // `std::make_unique<T>(x)` of a scalar, with an argument of exactly that type, is a value of `x`, decision 0142.
+    if (const auto *Make = dyn_cast<CallExpr>(E); Make && Make->getNumArgs() == 1 && Make->getDirectCallee() && Make->getDirectCallee()->isInStdNamespace() &&
+                                                  Make->getDirectCallee()->getDeclName().isIdentifier() && Make->getDirectCallee()->getName() == "make_unique")
+      if (const QualType Elem = ownElement(Make->getType()); !Elem.isNull() && scalar(Elem)) {
+        const Expr *Arg = Make->getArg(0);
+        if (const auto *Temporary = dyn_cast<MaterializeTemporaryExpr>(Arg))
+          Arg = Temporary->getSubExpr();
+        if (Arg->getType().getUnqualifiedType().getCanonicalType() == Elem.getCanonicalType())
+          return tag("Wrap", expr(Arg, Near));
+      }
+    // `p == nullptr` and `p != nullptr` of a `unique_ptr` test for a value, also with the null on the left, decision 0142. Two `unique_ptr`s
+    // have no rule. C++20 rewrites `p != nullptr`, `nullptr != p` and `nullptr == p` to a `CXXRewrittenBinaryOperator`, and the test reads its
+    // decomposed form. `p == nullptr` is the operator call itself.
+    if (const auto *Rewritten = dyn_cast<CXXRewrittenBinaryOperator>(E)) {
+      const auto Form = Rewritten->getDecomposedForm();
+      if (Form.Opcode == BO_EQ || Form.Opcode == BO_NE) {
+        const bool NullLeft = isa<CXXNullPtrLiteralExpr>(Form.LHS->IgnoreParenImpCasts());
+        const bool NullRight = isa<CXXNullPtrLiteralExpr>(Form.RHS->IgnoreParenImpCasts());
+        const Expr *Pointer = NullLeft ? Form.RHS : Form.LHS;
+        if (NullLeft != NullRight && isOwn(Pointer->getType())) {
+          const char *Op = Form.Opcode == BO_EQ ? "Eq" : "Ne";
+          return tag("Bin", NullRight ? llvm::json::Array{Op, expr(optObject(Pointer), Near), "Nullopt"} : llvm::json::Array{Op, "Nullopt", expr(optObject(Pointer), Near)});
+        }
+      }
+    }
+    if (const auto *Test = dyn_cast<CXXOperatorCallExpr>(E); Test && Test->getNumArgs() == 2 && (Test->getOperator() == OO_EqualEqual || Test->getOperator() == OO_ExclaimEqual)) {
+      const bool NullLeft = isa<CXXNullPtrLiteralExpr>(Test->getArg(0)->IgnoreParenImpCasts());
+      const bool NullRight = isa<CXXNullPtrLiteralExpr>(Test->getArg(1)->IgnoreParenImpCasts());
+      const Expr *Pointer = NullLeft ? Test->getArg(1) : Test->getArg(0);
+      if (NullLeft != NullRight && isOwn(Pointer->getType())) {
+        const char *Op = Test->getOperator() == OO_EqualEqual ? "Eq" : "Ne";
+        return tag("Bin", NullRight ? llvm::json::Array{Op, expr(optObject(Pointer), Near), "Nullopt"} : llvm::json::Array{Op, "Nullopt", expr(optObject(Pointer), Near)});
+      }
+    }
     if (const auto *Flag = dyn_cast<CXXBoolLiteralExpr>(E))
       return tag("Bool", Flag->getValue());
     if (const auto *Literal = dyn_cast<IntegerLiteral>(E); Literal && Literal->getValue().getActiveBits() <= 64)
@@ -5126,9 +5189,9 @@ private:
         if (Method == "value")
           return tag("Value", expr(optObject(Object), Near));
       }
-    // `*o`.
+    // `*o`, and `*p` of a `unique_ptr`, decision 0142.
     if (const auto *Operator = dyn_cast<CXXOperatorCallExpr>(E); Operator && Operator->getOperator() == OO_Star && Operator->getNumArgs() == 1 &&
-                                                                  isOpt(Operator->getArg(0)->getType()))
+                                                                  (isOpt(Operator->getArg(0)->getType()) || isOwn(Operator->getArg(0)->getType())))
       return tag("Value", expr(optObject(Operator->getArg(0)), Near));
     if (const auto *List = dyn_cast<InitListExpr>(E); List && List->getNumInits() == 1 && List->getType()->isScalarType())
       return tag("Brace", expr(List->getInit(0), Near));
@@ -5148,10 +5211,10 @@ private:
       if (const Expr *Base = Member->getBase()->IgnoreParenImpCasts(); !isa<CXXThisExpr>(Base) && !constPointee(Base->getType()).isNull())
         if (const auto *Field = dyn_cast<FieldDecl>(Member->getMemberDecl()); Field && plainStruct(Context.getRecordType(Field->getParent())))
           return tag("Field", llvm::json::Array{tag("Value", expr(Base, Near)), Field->getNameAsString()});
-    // `o->f` on an optional of a plain struct reads the field of its value, decision 0137.
+    // `o->f` on an optional of a plain struct reads the field of its value, decision 0137. `p->f` on a `unique_ptr`, decision 0142.
     if (const auto *Member = dyn_cast<MemberExpr>(E); Member && Member->isArrow())
       if (const auto *Arrow = dyn_cast<CXXOperatorCallExpr>(Member->getBase()->IgnoreParenImpCasts());
-          Arrow && Arrow->getOperator() == OO_Arrow && Arrow->getNumArgs() == 1 && isOpt(Arrow->getArg(0)->getType()))
+          Arrow && Arrow->getOperator() == OO_Arrow && Arrow->getNumArgs() == 1 && (isOpt(Arrow->getArg(0)->getType()) || isOwn(Arrow->getArg(0)->getType())))
         if (const auto *Field = dyn_cast<FieldDecl>(Member->getMemberDecl()); Field && plainStruct(Context.getRecordType(Field->getParent())))
           return tag("Field", llvm::json::Array{tag("Value", expr(optObject(Arrow->getArg(0)), Near)), Field->getNameAsString()});
     // A read of a field of a plain struct, also through `this`.
