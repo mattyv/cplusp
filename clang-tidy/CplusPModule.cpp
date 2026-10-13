@@ -4722,7 +4722,13 @@ private:
       return tag("Other", T.getAsString(Context.getPrintingPolicy()));
     return type(T);
   }
-  llvm::json::Value varType(const ValueDecl *D) const { return isa<ParmVarDecl>(D) ? paramType(D->getType()) : type(D->getType()); }
+  // The loop variable of a range-for has the element type whether it is `const` or a const reference, decision 0143. The loop is written only
+  // when that type is the element's.
+  llvm::json::Value varType(const ValueDecl *D) const {
+    if (const auto *Var = dyn_cast<VarDecl>(D); Var && Var->isCXXForRangeDecl())
+      return type(Var->getType().getNonReferenceType().getUnqualifiedType());
+    return isa<ParmVarDecl>(D) ? paramType(D->getType()) : type(D->getType());
+  }
 
   llvm::json::Value type(QualType T, bool Field = false) const {
     if (const char *S = scalar(T))
@@ -4832,6 +4838,22 @@ private:
                                              number(line(S->getBeginLoc()))});
     if (const auto *While = dyn_cast<WhileStmt>(S); While && !While->getConditionVariable())
       return tag("While", llvm::json::Array{expr(While->getCond(), line(S->getBeginLoc())), loopConds(S), stmts(While->getBody()), number(line(S->getBeginLoc()))});
+    // A range-for over a read-only sequence parameter, decision 0143. The loop variable is `T x`, `const T& x`, `auto x` or `const auto& x`, with
+    // `T` the element type. The core builds the loop over the indexes. A write reference, a range that is no parameter, and an element of
+    // another type stay unknown.
+    if (const auto *Range = dyn_cast<CXXForRangeStmt>(S); Range && !Range->getInit() && Range->getLoopVariable() && Range->getLoopVariable()->getIdentifier())
+      if (const auto *Ref = dyn_cast<DeclRefExpr>(Range->getRangeInit()->IgnoreParenImpCasts()); Ref && isa<ParmVarDecl>(Ref->getDecl()) && isSeq(Ref->getType())) {
+        QualType Declared = Range->getLoopVariable()->getType();
+        bool Written = false;
+        if (Declared->isReferenceType()) {
+          Written = !Declared->isLValueReferenceType() || !Declared->getPointeeType().isConstQualified();
+          Declared = Declared->getPointeeType();
+        }
+        const QualType Element = seqElement(Ref->getType());
+        if (!Written && Declared.getCanonicalType().getUnqualifiedType() == Element.getCanonicalType().getUnqualifiedType())
+          return tag("RangeFor", llvm::json::Array{Range->getLoopVariable()->getNameAsString(), type(Element), expr(Ref, line(S->getBeginLoc())), loopConds(S),
+                                                   stmts(Range->getBody()), number(line(S->getBeginLoc()))});
+      }
     if (const auto *For = dyn_cast<ForStmt>(S); For && For->getCond() && For->getInc() && !For->getConditionVariable())
       if (const auto *Init = dyn_cast_or_null<DeclStmt>(For->getInit()); Init && Init->isSingleDecl())
         if (const auto *Var = dyn_cast<VarDecl>(Init->getSingleDecl()); Var && Var->hasLocalStorage() && Var->getInit())

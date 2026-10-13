@@ -318,6 +318,7 @@ pub enum Stmt {
     Exit(u32),
     Assert(Expr, u32),
     Apply(u32, Box<Args>, u32),
+    RangeFor(u32, u32, Ty, Expr, Box<Conds>, Box<Stmts>, u32),
     Unknown(u32, u32),
 }
 
@@ -340,6 +341,7 @@ pub enum CondKind {
     Invariant,
     Decreases,
     Modifies,
+    Index,
     Other(u32),
     Bad(Refusal),
 }
@@ -564,6 +566,7 @@ pub enum Refusal {
     Callee(u32, u32),
     Place(u32),
     Twice(u32, u32),
+    IndexName(u32, u32),
     Convert(u32),
     WriteParam(u32, u32),
     NoVar(u32, u32),
@@ -1872,6 +1875,7 @@ pub open spec fn spec_place(s: Stmt) -> u32 {
         Stmt::Step(_, _, _, l) => l,
         Stmt::While(_, _, _, l) => l,
         Stmt::For(_, _, _, _, _, l) => l,
+        Stmt::RangeFor(_, _, _, _, _, _, l) => l,
         Stmt::SetField(_, _, l) => l,
         Stmt::SetRefField(_, _, _, l) => l,
         Stmt::Switch(_, _, _, l) => l,
@@ -1892,10 +1896,61 @@ pub open spec fn spec_scope(s: Stmt, env: Params) -> Params {
     }
 }
 
+
+/// The index of a range-for, decision 0143: the name on its index line with the line, or `fresh` and 0 when there is no index line.
+/// A second index line, or an index line that holds no single name, is refused.
+pub open spec fn spec_index_of(cs: Conds, fresh: u32) -> Result<(u32, u32), Refusal>
+    decreases cs,
+{
+    match cs {
+        List::Nil => Ok((fresh, 0)),
+        List::Cons((k, e, l, _), rest) => match spec_index_of(*rest, fresh) {
+            Err(r) => Err(r),
+            Ok((n, l2)) => if k == CondKind::Index {
+                if l2 != 0 {
+                    Err(Refusal::Syntax(l2))
+                } else {
+                    match e {
+                        Expr::Name(m) => Ok((m, l)),
+                        _ => Err(Refusal::Syntax(l)),
+                    }
+                }
+            } else {
+                Ok((n, l2))
+            },
+        },
+    }
+}
+
+/// The invariant `i <= v.size()` of a range-for, decision 0143.
+pub open spec fn spec_range_bound(i: u32, v: u32) -> Expr {
+    Expr::Bin(BinOp::Le, Box::new(Expr::Name(i)), Box::new(Expr::Size(Box::new(Expr::Name(v)))))
+}
+
+/// The decreases line `v.size() - i` of a range-for, decision 0143.
+pub open spec fn spec_range_measure(i: u32, v: u32) -> Expr {
+    Expr::Bin(BinOp::Sub, Box::new(Expr::Size(Box::new(Expr::Name(v)))), Box::new(Expr::Name(i)))
+}
+
+/// The test `i < v.size()` of a range-for, in code, decision 0143.
+pub open spec fn spec_range_test(i: u32, v: u32, s: Scalar, ext: Extent) -> Expr {
+    Expr::Bin(BinOp::Lt, Box::new(Expr::Var(i, Ty::U64)), Box::new(Expr::Size(Box::new(Expr::Var(v, Ty::Seq(s, ext))))))
+}
+
+/// The element `v[i]` that starts each turn of a range-for, in code, decision 0143.
+pub open spec fn spec_range_elem(i: u32, v: u32, s: Scalar, ext: Extent) -> Expr {
+    Expr::Index(Box::new(Expr::Var(v, Ty::Seq(s, ext))), Box::new(Expr::Var(i, Ty::U64)))
+}
+
+/// The start value 0 of the index of a range-for, decision 0143.
+pub open spec fn spec_range_zero() -> DExpr {
+    DExpr::Conv(DTy::UInt64, Box::new(DExpr::Lit(0)))
+}
+
 /// The lines of one kind of the contract of a loop, in their order, decisions 0061 and 0062. Each reads the variables `env` in scope
 /// at the loop, and the object as the body leaves it, decision 0099. It has no
 /// `result`. A `requires` or an `ensures` line has no place above a loop.
-pub open spec fn spec_loop_conds(cs: Conds, want: CondKind, env: Params, sd: Structs) -> Result<DConds, Refusal>
+pub open spec fn spec_loop_conds(cs: Conds, want: CondKind, env: Params, sd: Structs, ranged: bool) -> Result<DConds, Refusal>
     decreases cs,
 {
     match cs {
@@ -1906,7 +1961,9 @@ pub open spec fn spec_loop_conds(cs: Conds, want: CondKind, env: Params, sd: Str
             CondKind::Requires => Err(Refusal::Misplaced(l)),
             CondKind::Ensures => Err(Refusal::Misplaced(l)),
             CondKind::Modifies => Err(Refusal::Misplaced(l)),
-            _ => match spec_loop_conds(*rest, want, env, sd) {
+            // An index line goes above a range-for only, decision 0143.
+            CondKind::Index if !ranged => Err(Refusal::Misplaced(l)),
+            _ => match spec_loop_conds(*rest, want, env, sd, ranged) {
                 Ok(dr) => if k == want {
                     match spec_contract(e, spec_keys(env), spec_after(env), None, List::Nil, l, sd) {
                         Ok(d) => Ok(List::Cons((d, l), Box::new(dr))),
@@ -2137,9 +2194,9 @@ pub open spec fn spec_stmt(s: Stmt, all: Fns, env: Params, ps: Params, sd: Struc
                 Ok(dt) => Ok(spec_step(n, dt, up, spec_is_mut(ps, n))),
             }
         },
-        Stmt::While(c, lc, body, l) => match spec_loop_conds(*lc, CondKind::Invariant, env, sd) {
+        Stmt::While(c, lc, body, l) => match spec_loop_conds(*lc, CondKind::Invariant, env, sd, false) {
             Err(r) => Err(r),
-            Ok(inv) => match spec_loop_conds(*lc, CondKind::Decreases, env, sd) {
+            Ok(inv) => match spec_loop_conds(*lc, CondKind::Decreases, env, sd, false) {
                 Err(r) => Err(r),
                 Ok(dec) => match spec_code(c, l) {
                     Err(r) => Err(r),
@@ -2150,9 +2207,9 @@ pub open spec fn spec_stmt(s: Stmt, all: Fns, env: Params, ps: Params, sd: Struc
                 },
             },
         },
-        Stmt::For(init, c, step, lc, body, l) => match spec_loop_conds(*lc, CondKind::Invariant, spec_scope(*init, env), sd) {
+        Stmt::For(init, c, step, lc, body, l) => match spec_loop_conds(*lc, CondKind::Invariant, spec_scope(*init, env), sd, false) {
             Err(r) => Err(r),
-            Ok(inv) => match spec_loop_conds(*lc, CondKind::Decreases, spec_scope(*init, env), sd) {
+            Ok(inv) => match spec_loop_conds(*lc, CondKind::Decreases, spec_scope(*init, env), sd, false) {
                 Err(r) => Err(r),
                 Ok(dec) => match spec_stmt(*init, all, env, ps, sd) {
                     Err(r) => Err(r),
@@ -2167,6 +2224,63 @@ pub open spec fn spec_stmt(s: Stmt, all: Fns, env: Params, ps: Params, sd: Struc
                         },
                     },
                 },
+            },
+        },
+        // A range-for is a for loop over the indexes of its sequence parameter, decision 0143. The index is new, the core adds the
+        // invariant `i <= v.size()` first, so that the invariants of the author can slice `v[..i]`, and, when the author wrote none,
+        // the decreases line `v.size() - i`. Each turn starts with `x = v[i]`.
+        Stmt::RangeFor(fresh, x, xt, seq, lc, body, l) => match spec_index_of(*lc, fresh) {
+            Err(r) => Err(r),
+            // An index is new: no variable in scope, and no field of the object, decision 0144.
+            Ok((i, il)) => if spec_has(spec_keys(env), i) || spec_this_field(ps, None, i, sd) is Some {
+                Err(Refusal::IndexName(i, il))
+            } else {
+                match seq {
+                    Expr::Var(v, Ty::Seq(s, ext)) => if xt != spec_elem(s) {
+                        Err(Refusal::Syntax(l))
+                    } else {
+                        let inner = List::Cons((i, Ty::U64), Box::new(env));
+                        match spec_loop_conds(*lc, CondKind::Invariant, inner, sd, true) {
+                            Err(r) => Err(r),
+                            Ok(inv) => match spec_loop_conds(*lc, CondKind::Decreases, inner, sd, true) {
+                                Err(r) => Err(r),
+                                Ok(dec) => match spec_contract(spec_range_bound(i, v), spec_keys(inner), spec_after(inner), None, List::Nil, l, sd) {
+                                    Err(r) => Err(r),
+                                    Ok(dbound) => match spec_contract(spec_range_measure(i, v), spec_keys(inner), spec_after(inner), None, List::Nil, l, sd) {
+                                        Err(r) => Err(r),
+                                        Ok(dmeasure) => match spec_code(spec_range_test(i, v, s, ext), l) {
+                                            Err(r) => Err(r),
+                                            Ok(dc) => match spec_value_ty(xt, l, sd) {
+                                                Err(r) => Err(r),
+                                                Ok(dt) => match spec_code(spec_range_elem(i, v, s, ext), l) {
+                                                    Err(r) => Err(r),
+                                                    Ok(de) => match spec_stmts(*body, all, List::Cons((x, xt), Box::new(inner)), ps, sd) {
+                                                        Err(r) => Err(r),
+                                                        Ok(db) => Ok(DStmt::For(
+                                                            Box::new(DStmt::Local(i, DTy::UInt64, spec_range_zero())),
+                                                            l,
+                                                            dc,
+                                                            List::Cons((dbound, l), Box::new(inv)),
+                                                            if dec is Nil {
+                                                                List::Cons((dmeasure, l), Box::new(List::Nil))
+                                                            } else {
+                                                                dec
+                                                            },
+                                                            Box::new(List::Cons((Box::new(DStmt::Local(x, dt, de)), l), Box::new(db))),
+                                                            Box::new(spec_step(i, DTy::UInt64, true, false)),
+                                                            l,
+                                                        )),
+                                                    },
+                                                },
+                                            },
+                                        },
+                                    },
+                                },
+                            },
+                        }
+                    },
+                    _ => Err(Refusal::Syntax(l)),
+                }
             },
         },
         Stmt::SetField(f, e, l) => match spec_self(ps) {
@@ -2298,6 +2412,7 @@ pub open spec fn spec_conds(cs: Conds, want: CondKind, ps: Params, ret: Ty, sd: 
             CondKind::Other(w) => Err(Refusal::Construct(w, l)),
             CondKind::Bad(r) => Err(r),
             CondKind::Invariant => Err(Refusal::Misplaced(l)),
+            CondKind::Index => Err(Refusal::Misplaced(l)),
             _ => match spec_conds(*rest, want, ps, ret, sd) {
                 Ok(dr) => if k == want && k == CondKind::Decreases && spec_has_result(e) {
                     Err(Refusal::Syntax(l))
@@ -2360,6 +2475,23 @@ pub open spec fn spec_twice_stmt(seen: Seq<u32>, s: Stmt) -> (Option<(u32, u32)>
                 } else {
                     spec_twice_stmts(after2, *body)
                 }
+            }
+        },
+        // The index of a range-for is a name of the function, so a later local cannot take it, decision 0143. An index that is
+        // already a name is refused by the translation of the loop, with its own sentence.
+        Stmt::RangeFor(fresh, x, _, _, lc, body, l) => {
+            let seen1 = match spec_index_of(*lc, fresh) {
+                Ok((i, _)) => if seen.contains(i) {
+                    seen
+                } else {
+                    seen.push(i)
+                },
+                Err(_) => seen,
+            };
+            if seen1.contains(x) {
+                (Some((x, l)), seen1)
+            } else {
+                spec_twice_stmts(seen1.push(x), *body)
             }
         },
         _ => (None, seen),
@@ -2461,6 +2593,7 @@ pub open spec fn spec_misreturn_stmt(s: Stmt, void: bool) -> Option<u32>
                 None => spec_misreturn(*body, void),
             },
         },
+        Stmt::RangeFor(_, _, _, _, _, body, _) => spec_misreturn(*body, void),
         _ => None,
     }
 }
@@ -2813,6 +2946,7 @@ pub open spec fn unknown_stmt(s: Stmt) -> bool
         Stmt::Step(_, _, _, _) => false,
         Stmt::While(c, _, body, _) => unknown_expr(c) || unknown_stmts(*body),
         Stmt::For(init, c, step, _, body, _) => unknown_stmt(*init) || unknown_expr(c) || unknown_stmt(*step) || unknown_stmts(*body),
+        Stmt::RangeFor(_, _, _, seq, _, body, _) => unknown_expr(seq) || unknown_stmts(*body),
         Stmt::SetField(_, e, _) => unknown_expr(e),
         Stmt::SetRefField(_, _, e, _) => unknown_expr(e),
         Stmt::Switch(e, _, cs, _) => unknown_expr(e) || unknown_cases(*cs),
@@ -2963,6 +3097,14 @@ pub proof fn lemma_unknown_stmt_is_refused(s: Stmt, all: Fns, env: Params, ps: P
                 lemma_unknown_stmts_is_refused(*body, all, spec_scope(*init, env), ps, sd);
             }
         },
+        Stmt::RangeFor(fresh, x, xt, seq, lc, body, l) => {
+            if !unknown_expr(seq) {
+                if let Ok((i, _)) = spec_index_of(*lc, fresh) {
+                    let turn = List::Cons((x, xt), Box::new(List::Cons((i, Ty::U64), Box::new(env))));
+                    lemma_unknown_stmts_is_refused(*body, all, turn, ps, sd);
+                }
+            }
+        },
         _ => {},
     }
 }
@@ -3034,6 +3176,8 @@ pub open spec fn count_stmt(s: Stmt) -> nat
         Stmt::While(_, _, body, _) => 1 + count_stmts(*body),
         Stmt::Switch(_, _, cs, _) => 1 + count_cases(*cs),
         Stmt::For(init, _, step, _, body, _) => 1 + count_stmt(*init) + count_stmt(*step) + count_stmts(*body),
+        // The loop, the start of its index, its step and the element that starts each turn, decision 0143.
+        Stmt::RangeFor(_, _, _, _, _, body, _) => 4 + count_stmts(*body),
         _ => 1,
     }
 }
@@ -3136,6 +3280,135 @@ pub proof fn lemma_kept_call(s: Stmt, all: Fns, env: Params, ps: Params, sd: Str
     reveal_with_fuel(count_dstmt, 2);
 }
 
+
+/// The variables in scope in the body of a range-for: its element, then its index, then those before the loop, decision 0143.
+pub open spec fn spec_range_turn(s: Stmt, env: Params) -> Params {
+    match s {
+        Stmt::RangeFor(fresh, x, xt, _, lc, _, _) => List::Cons(
+            (x, xt),
+            Box::new(List::Cons((spec_index_of(*lc, fresh).unwrap().0, Ty::U64), Box::new(env))),
+        ),
+        _ => env,
+    }
+}
+
+/// A range-for that translates has a body that translates in the scope of its turn.
+pub proof fn lemma_range_body_ok(s: Stmt, all: Fns, env: Params, ps: Params, sd: Structs)
+    requires
+        s is RangeFor,
+        spec_stmt(s, all, env, ps, sd).is_ok(),
+    ensures
+        spec_stmts(*s->RangeFor_5, all, spec_range_turn(s, env), ps, sd).is_ok(),
+{
+}
+
+/// A range-for gives one Dafny statement for the loop, the start of its index, its step and its element, and those of its body.
+/// The Dafny loop of a range-for that translates, built from the parts that translate, decision 0143.
+pub open spec fn spec_range_dstmt(s: Stmt, all: Fns, env: Params, ps: Params, sd: Structs) -> DStmt {
+    match s {
+        Stmt::RangeFor(fresh, x, xt, seq, lc, body, l) => match seq {
+            Expr::Var(v, Ty::Seq(sc, ext)) => {
+                let i = spec_index_of(*lc, fresh).unwrap().0;
+                let inner = List::Cons((i, Ty::U64), Box::new(env));
+                let inv = spec_loop_conds(*lc, CondKind::Invariant, inner, sd, true).unwrap();
+                let dec = spec_loop_conds(*lc, CondKind::Decreases, inner, sd, true).unwrap();
+                let dbound = spec_contract(spec_range_bound(i, v), spec_keys(inner), spec_after(inner), None, List::Nil, l, sd).unwrap();
+                let dmeasure = spec_contract(spec_range_measure(i, v), spec_keys(inner), spec_after(inner), None, List::Nil, l, sd).unwrap();
+                let dc = spec_code(spec_range_test(i, v, sc, ext), l).unwrap();
+                let dt = spec_value_ty(xt, l, sd).unwrap();
+                let de = spec_code(spec_range_elem(i, v, sc, ext), l).unwrap();
+                let db = spec_stmts(*body, all, spec_range_turn(s, env), ps, sd).unwrap();
+                DStmt::For(
+                    Box::new(DStmt::Local(i, DTy::UInt64, spec_range_zero())),
+                    l,
+                    dc,
+                    List::Cons((dbound, l), Box::new(inv)),
+                    if dec is Nil {
+                        List::Cons((dmeasure, l), Box::new(List::Nil))
+                    } else {
+                        dec
+                    },
+                    Box::new(List::Cons((Box::new(DStmt::Local(x, dt, de)), l), Box::new(db))),
+                    Box::new(spec_step(i, DTy::UInt64, true, false)),
+                    l,
+                )
+            },
+            _ => DStmt::Exit,
+        },
+        _ => DStmt::Exit,
+    }
+}
+
+/// A range-for that translates gives the loop of spec_range_dstmt.
+#[verifier::rlimit(60)]
+pub proof fn lemma_range_shape(s: Stmt, all: Fns, env: Params, ps: Params, sd: Structs)
+    requires
+        s is RangeFor,
+        spec_stmt(s, all, env, ps, sd).is_ok(),
+    ensures
+        s->RangeFor_3 is Var,
+        s->RangeFor_3->Var_1 is Seq,
+        spec_stmt(s, all, env, ps, sd).unwrap() == spec_range_dstmt(s, all, env, ps, sd),
+{
+}
+
+/// A range-for gives one Dafny statement for the loop, the start of its index, its step and its element, and those of its body.
+pub proof fn lemma_range_kept(s: Stmt, all: Fns, env: Params, ps: Params, sd: Structs)
+    requires
+        s is RangeFor,
+        s->RangeFor_3 is Var,
+        s->RangeFor_3->Var_1 is Seq,
+        count_dstmts(spec_stmts(*s->RangeFor_5, all, spec_range_turn(s, env), ps, sd).unwrap()) == count_stmts(*s->RangeFor_5),
+    ensures
+        count_dstmt(spec_range_dstmt(s, all, env, ps, sd)) == count_stmt(s),
+{
+    match s {
+        Stmt::RangeFor(fresh, x, xt, seq, lc, body, l) => match seq {
+            Expr::Var(v, Ty::Seq(sc, ext)) => {
+                let i = spec_index_of(*lc, fresh).unwrap().0;
+                let db = spec_stmts(*body, all, spec_range_turn(s, env), ps, sd).unwrap();
+                let first = DStmt::Local(x, spec_value_ty(xt, l, sd).unwrap(), spec_code(spec_range_elem(i, v, sc, ext), l).unwrap());
+                let b: DStmts = List::Cons((Box::new(first), l), Box::new(db));
+                assert(count_dstmt(first) == 1);
+                assert(count_dstmts(b) == count_dstmt(first) + count_dstmts(db));
+                assert(count_dstmt(DStmt::Local(i, DTy::UInt64, spec_range_zero())) == 1);
+                assert(count_dstmt(spec_step(i, DTy::UInt64, true, false)) == 1);
+                assert(count_stmt(s) == 4 + count_stmts(*body));
+            },
+            _ => {},
+        },
+        _ => {},
+    }
+}
+
+/// The calls of a range-for are those of its body.
+pub proof fn lemma_range_resolves(s: Stmt, all: Fns, env: Params, ps: Params, sd: Structs)
+    requires
+        s is RangeFor,
+        s->RangeFor_3 is Var,
+        s->RangeFor_3->Var_1 is Seq,
+        calls_resolve(spec_stmts(*s->RangeFor_5, all, spec_range_turn(s, env), ps, sd).unwrap(), all, sd),
+    ensures
+        calls_resolve_stmt(spec_range_dstmt(s, all, env, ps, sd), all, sd),
+{
+    match s {
+        Stmt::RangeFor(fresh, x, xt, seq, lc, body, l) => match seq {
+            Expr::Var(v, Ty::Seq(sc, ext)) => {
+                let i = spec_index_of(*lc, fresh).unwrap().0;
+                let db = spec_stmts(*body, all, spec_range_turn(s, env), ps, sd).unwrap();
+                let first = DStmt::Local(x, spec_value_ty(xt, l, sd).unwrap(), spec_code(spec_range_elem(i, v, sc, ext), l).unwrap());
+                let b: DStmts = List::Cons((Box::new(first), l), Box::new(db));
+                assert(calls_resolve_stmt(first, all, sd));
+                assert(calls_resolve(b, all, sd));
+                assert(calls_resolve_stmt(DStmt::Local(i, DTy::UInt64, spec_range_zero()), all, sd));
+                assert(calls_resolve_stmt(spec_step(i, DTy::UInt64, true, false), all, sd));
+            },
+            _ => {},
+        },
+        _ => {},
+    }
+}
+
 pub proof fn lemma_stmt_kept(s: Stmt, all: Fns, env: Params, ps: Params, sd: Structs)
     requires
         spec_stmt(s, all, env, ps, sd).is_ok(),
@@ -3169,6 +3442,12 @@ pub proof fn lemma_stmt_kept(s: Stmt, all: Fns, env: Params, ps: Params, sd: Str
             lemma_stmt_kept(*init, all, env, ps, sd);
             lemma_stmt_kept(*step, all, spec_scope(*init, env), ps, sd);
             lemma_statements_kept(*body, all, spec_scope(*init, env), ps, sd);
+        },
+        Stmt::RangeFor(_, _, _, _, _, body, _) => {
+            lemma_range_body_ok(s, all, env, ps, sd);
+            lemma_range_shape(s, all, env, ps, sd);
+            lemma_statements_kept(*body, all, spec_range_turn(s, env), ps, sd);
+            lemma_range_kept(s, all, env, ps, sd);
         },
         _ => {},
     }
@@ -3727,6 +4006,12 @@ pub proof fn lemma_stmt_calls_resolve(s: Stmt, all: Fns, env: Params, ps: Params
             lemma_stmt_calls_resolve(*init, all, env, ps, sd);
             lemma_stmt_calls_resolve(*step, all, spec_scope(*init, env), ps, sd);
             lemma_stmts_calls_resolve(*body, all, spec_scope(*init, env), ps, sd);
+        },
+        Stmt::RangeFor(_, _, _, _, _, body, _) => {
+            lemma_range_body_ok(s, all, env, ps, sd);
+            lemma_range_shape(s, all, env, ps, sd);
+            lemma_stmts_calls_resolve(*body, all, spec_range_turn(s, env), ps, sd);
+            lemma_range_resolves(s, all, env, ps, sd);
         },
     }
 }
@@ -5087,6 +5372,7 @@ pub fn place(s: &Stmt) -> (r: u32)
         Stmt::Step(_, _, _, l) => *l,
         Stmt::While(_, _, _, l) => *l,
         Stmt::For(_, _, _, _, _, l) => *l,
+        Stmt::RangeFor(_, _, _, _, _, _, l) => *l,
         Stmt::SetField(_, _, l) => *l,
         Stmt::SetRefField(_, _, _, l) => *l,
         Stmt::Switch(_, _, _, l) => *l,
@@ -5108,9 +5394,70 @@ pub fn scope(s: &Stmt, env: &Params) -> (r: Params)
     }
 }
 
-pub fn translate_loop_conds(cs: &Conds, want: CondKind, env: &Params, sd: &Structs) -> (r: Result<DConds, Refusal>)
+
+pub fn index_of(cs: &Conds, fresh: u32) -> (r: Result<(u32, u32), Refusal>)
     ensures
-        r == spec_loop_conds(*cs, want, *env, *sd),
+        r == spec_index_of(*cs, fresh),
+    decreases cs,
+{
+    match cs {
+        List::Nil => Ok((fresh, 0)),
+        List::Cons((k, e, l, _), rest) => match index_of(rest, fresh) {
+            Err(r) => Err(r),
+            Ok((n, l2)) => if *k == CondKind::Index {
+                if l2 != 0 {
+                    Err(Refusal::Syntax(l2))
+                } else {
+                    match e {
+                        Expr::Name(m) => Ok((*m, *l)),
+                        _ => Err(Refusal::Syntax(*l)),
+                    }
+                }
+            } else {
+                Ok((n, l2))
+            },
+        },
+    }
+}
+
+pub fn range_bound(i: u32, v: u32) -> (r: Expr)
+    ensures
+        r == spec_range_bound(i, v),
+{
+    Expr::Bin(BinOp::Le, Box::new(Expr::Name(i)), Box::new(Expr::Size(Box::new(Expr::Name(v)))))
+}
+
+pub fn range_measure(i: u32, v: u32) -> (r: Expr)
+    ensures
+        r == spec_range_measure(i, v),
+{
+    Expr::Bin(BinOp::Sub, Box::new(Expr::Size(Box::new(Expr::Name(v)))), Box::new(Expr::Name(i)))
+}
+
+pub fn range_test(i: u32, v: u32, s: Scalar, ext: Extent) -> (r: Expr)
+    ensures
+        r == spec_range_test(i, v, s, ext),
+{
+    Expr::Bin(BinOp::Lt, Box::new(Expr::Var(i, Ty::U64)), Box::new(Expr::Size(Box::new(Expr::Var(v, Ty::Seq(s, ext))))))
+}
+
+pub fn range_elem(i: u32, v: u32, s: Scalar, ext: Extent) -> (r: Expr)
+    ensures
+        r == spec_range_elem(i, v, s, ext),
+{
+    Expr::Index(Box::new(Expr::Var(v, Ty::Seq(s, ext))), Box::new(Expr::Var(i, Ty::U64)))
+}
+
+pub fn range_zero() -> (r: DExpr)
+    ensures
+        r == spec_range_zero(),
+{
+    DExpr::Conv(DTy::UInt64, Box::new(DExpr::Lit(0)))
+}
+
+pub fn translate_loop_conds(cs: &Conds, want: CondKind, env: &Params, sd: &Structs, ranged: bool) -> (r: Result<DConds, Refusal>)
+    ensures
+        r == spec_loop_conds(*cs, want, *env, *sd, ranged),
     decreases cs,
 {
     match cs {
@@ -5121,7 +5468,8 @@ pub fn translate_loop_conds(cs: &Conds, want: CondKind, env: &Params, sd: &Struc
             CondKind::Requires => Err(Refusal::Misplaced(*l)),
             CondKind::Ensures => Err(Refusal::Misplaced(*l)),
             CondKind::Modifies => Err(Refusal::Misplaced(*l)),
-            _ => match translate_loop_conds(rest, want, env, sd) {
+            CondKind::Index if !ranged => Err(Refusal::Misplaced(*l)),
+            _ => match translate_loop_conds(rest, want, env, sd, ranged) {
                 Ok(dr) => if *k == want {
                     match translate_contract(e, &keys(env), &after(env), None, &List::Nil, *l, sd) {
                         Ok(d) => Ok(List::Cons((d, *l), Box::new(dr))),
@@ -5358,9 +5706,9 @@ pub fn translate_stmt(s: &Stmt, all: &Fns, env: &Params, ps: &Params, sd: &Struc
                 Ok(dt) => Ok(step(*n, dt, *up, is_mut(ps, *n))),
             }
         },
-        Stmt::While(c, lc, body, l) => match translate_loop_conds(lc, CondKind::Invariant, env, sd) {
+        Stmt::While(c, lc, body, l) => match translate_loop_conds(lc, CondKind::Invariant, env, sd, false) {
             Err(r) => Err(r),
-            Ok(inv) => match translate_loop_conds(lc, CondKind::Decreases, env, sd) {
+            Ok(inv) => match translate_loop_conds(lc, CondKind::Decreases, env, sd, false) {
                 Err(r) => Err(r),
                 Ok(dec) => match translate_code(c, *l) {
                     Err(r) => Err(r),
@@ -5373,9 +5721,9 @@ pub fn translate_stmt(s: &Stmt, all: &Fns, env: &Params, ps: &Params, sd: &Struc
         },
         Stmt::For(init, c, step, lc, body, l) => {
             let inner = scope(init, env);
-            match translate_loop_conds(lc, CondKind::Invariant, &inner, sd) {
+            match translate_loop_conds(lc, CondKind::Invariant, &inner, sd, false) {
                 Err(r) => Err(r),
-                Ok(inv) => match translate_loop_conds(lc, CondKind::Decreases, &inner, sd) {
+                Ok(inv) => match translate_loop_conds(lc, CondKind::Decreases, &inner, sd, false) {
                     Err(r) => Err(r),
                     Ok(dec) => match translate_stmt(init, all, env, ps, sd) {
                         Err(r) => Err(r),
@@ -5392,6 +5740,66 @@ pub fn translate_stmt(s: &Stmt, all: &Fns, env: &Params, ps: &Params, sd: &Struc
                     },
                 },
             }
+        },
+        Stmt::RangeFor(fresh, x, xt, seq, lc, body, l) => match index_of(lc, *fresh) {
+            Err(r) => Err(r),
+            Ok((i, il)) => if has(&keys(env), i) || this_field(ps, None, i, sd).is_some() {
+                Err(Refusal::IndexName(i, il))
+            } else {
+                match seq {
+                    Expr::Var(v, Ty::Seq(s, ext)) => if *xt != elem(*s) {
+                        Err(Refusal::Syntax(*l))
+                    } else {
+                        let inner: Params = List::Cons((i, Ty::U64), Box::new(copy(env)));
+                        match translate_loop_conds(lc, CondKind::Invariant, &inner, sd, true) {
+                            Err(r) => Err(r),
+                            Ok(inv) => match translate_loop_conds(lc, CondKind::Decreases, &inner, sd, true) {
+                                Err(r) => Err(r),
+                                Ok(dec) => match translate_contract(&range_bound(i, *v), &keys(&inner), &after(&inner), None, &List::Nil, *l, sd) {
+                                    Err(r) => Err(r),
+                                    Ok(dbound) => match translate_contract(&range_measure(i, *v), &keys(&inner), &after(&inner), None, &List::Nil, *l, sd) {
+                                        Err(r) => Err(r),
+                                        Ok(dmeasure) => match translate_code(&range_test(i, *v, *s, *ext), *l) {
+                                            Err(r) => Err(r),
+                                            Ok(dc) => match translate_value_ty(*xt, *l, sd) {
+                                                Err(r) => Err(r),
+                                                Ok(dt) => match translate_code(&range_elem(i, *v, *s, *ext), *l) {
+                                                    Err(r) => Err(r),
+                                                    Ok(de) => {
+                                                        let turn: Params = List::Cons((*x, *xt), Box::new(copy(&inner)));
+                                                        match translate_stmts(body, all, &turn, ps, sd) {
+                                                            Err(r) => Err(r),
+                                                            Ok(db) => {
+                                                                let dec2 = match dec {
+                                                                    List::Nil => List::Cons((dmeasure, *l), Box::new(List::Nil)),
+                                                                    d => d,
+                                                                };
+                                                                Ok(
+                                                                    DStmt::For(
+                                                                        Box::new(DStmt::Local(i, DTy::UInt64, range_zero())),
+                                                                        *l,
+                                                                        dc,
+                                                                        List::Cons((dbound, *l), Box::new(inv)),
+                                                                        dec2,
+                                                                        Box::new(List::Cons((Box::new(DStmt::Local(*x, dt, de)), *l), Box::new(db))),
+                                                                        Box::new(step(i, DTy::UInt64, true, false)),
+                                                                        *l,
+                                                                    ),
+                                                                )
+                                                            },
+                                                        }
+                                                    },
+                                                },
+                                            },
+                                        },
+                                    },
+                                },
+                            },
+                        }
+                    },
+                    _ => Err(Refusal::Syntax(*l)),
+                }
+            },
         },
         Stmt::SetField(f, e, l) => match self_param(ps) {
             Some((p, t)) => match t {
@@ -5527,6 +5935,7 @@ pub fn translate_conds(cs: &Conds, want: CondKind, ps: &Params, ret: Ty, sd: &St
             CondKind::Other(w) => Err(Refusal::Construct(*w, *l)),
             CondKind::Bad(r) => Err(*r),
             CondKind::Invariant => Err(Refusal::Misplaced(*l)),
+            CondKind::Index => Err(Refusal::Misplaced(*l)),
             _ => match translate_conds(rest, want, ps, ret, sd) {
                 Ok(dr) => if *k == want && *k == CondKind::Decreases && has_result(e) {
                     Err(Refusal::Syntax(*l))
@@ -5616,6 +6025,20 @@ pub fn twice_stmt(seen: &mut Vec<u32>, s: &Stmt) -> (r: Option<(u32, u32)>)
                 } else {
                     twice_stmts(seen, body)
                 }
+            }
+        },
+        Stmt::RangeFor(fresh, x, _, _, lc, body, l) => {
+            match index_of(lc, *fresh) {
+                Ok((i, _)) => if !holds(seen, i) {
+                    seen.push(i);
+                },
+                Err(_) => {},
+            }
+            if holds(seen, *x) {
+                Some((*x, *l))
+            } else {
+                seen.push(*x);
+                twice_stmts(seen, body)
             }
         },
         _ => None,
@@ -5731,6 +6154,7 @@ pub fn misreturn_stmt(s: &Stmt, void: bool) -> (r: Option<u32>)
                 None => misreturn(body, void),
             },
         },
+        Stmt::RangeFor(_, _, _, _, _, body, _) => misreturn(body, void),
         _ => None,
     }
 }

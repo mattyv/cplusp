@@ -51,18 +51,20 @@ Treat SPARK guidance as an engineering method, not an LLM performance measuremen
 
 ## Contract lines that the translator reads
 
-This list is true at decision 0116. Read the later decisions before you rely on it.
+This list is true at decision 0144. Read the later decisions before you rely on it.
 `cplusp prove` translates the C++ and the `//@` lines to Dafny, and runs Dafny. It says `ok: proved`, or `Not proved: FILE:LINE: sentence` for a proof that fails, or `Not provable: FILE:LINE: sentence` for a form that has no rule.
 
 Where each line goes:
 - Above a function: `requires`, `ensures`, `modifies` and `decreases`.
 - Above a loop: `invariant` and `decreases`. A loop line reads the variables in scope at the loop, decision 0062.
+- Above a range-for: `index i`, which names the count of the elements before the current one, decisions 0143 and 0144. The name must be new in the function. The translator adds `i <= v.size()` and, with no decreases line, `v.size() - i`.
 - Above a statement in a body: `assert E` and `apply L(a, b)`, decision 0099. `L` is a lemma of the companion file.
 
 What a contract expression can hold:
 - The parameters, `result`, and `old(x)` in an ensures line, decision 0096. The arithmetic is on exact integers, so a contract cannot overflow.
 - `&&`, `||`, `!`, `==>`, `c ? a : b`, `forall i :: ...` and `exists i :: ...`.
-- `v.size()`, `v[i]`, `v[i..]`, `v[..j]` and `v[i..j]` of a sequence, and `o.has_value()` and `o.value()` of an optional.
+- `v.size()`, `v[i]`, `v[i..]`, `v[..j]` and `v[i..j]` of a sequence, and `o.has_value()`, `o.value()`, `*o` and `o->f` of an optional, decisions 0131 and 0137.
+- `p == nullptr`, `p != nullptr`, `*p` and `p->f` of a pointer to const or a unique_ptr, decisions 0140 to 0142. Two pointers do not compare.
 - Hex literals, `true`, `false` and a character such as `'0'`, decision 0106.
 - A `constexpr` integer constant of the file, when C++ finds it from the function, decisions 0106 and 0107.
 - An enumerator such as `Kind::Small`, decision 0109.

@@ -131,6 +131,8 @@ enum JStmt {
     Apply(JCond),
     While(JExpr, Vec<JCond>, Vec<JStmt>, u32),
     For(Box<JStmt>, JExpr, Box<JStmt>, Vec<JCond>, Vec<JStmt>, u32),
+    /// A range-for over a sequence parameter, decision 0143: the loop variable, its type, the sequence, the loop's lines, the body and the line.
+    RangeFor(String, JTy, JExpr, Vec<JCond>, Vec<JStmt>, u32),
     Unknown(String, u32),
 }
 
@@ -250,6 +252,8 @@ struct Names {
     enums: Vec<(String, u32, Vec<String>)>,
     /// The names of the parameters and locals of the function that is being converted. They hide a constant of the same name.
     shadow: Vec<String>,
+    /// The number of range-fors converted so far, for the name of an index that no line names, decision 0144.
+    ranges: u32,
 }
 
 impl Names {
@@ -413,6 +417,14 @@ fn stmt(s: JStmt, names: &mut Names) -> Stmt {
             let init = Box::new(stmt(*init, names));
             let c = expr(c, names);
             Stmt::For(init, c, Box::new(stmt(*step, names)), Box::new(conds(cs, names)), Box::new(stmts(body, names)), names.here(line))
+        }
+        JStmt::RangeFor(x, t, seq, cs, body, line) => {
+            // The index that no index line names. It starts with a digit, so no C++ name is the same, decision 0143. The count of range-fors
+            // before it makes it new for each loop, decision 0144.
+            names.ranges += 1;
+            let fresh = names.id(&format!("{line}_{}_index", names.ranges));
+            let (x, t) = (names.id(&x), ty(t, names));
+            Stmt::RangeFor(fresh, x, t, expr(seq, names), Box::new(conds(cs, names)), Box::new(stmts(body, names)), names.here(line))
         }
         JStmt::Unknown(k, line) => Stmt::Unknown(names.id(&k), names.here(line)),
     }
@@ -590,6 +602,21 @@ fn conds(v: Vec<JCond>, names: &mut Names) -> Conds {
                         }
                     }
                 }
+                // The index of a range-for, decision 0143: one name. Any other form is one the translator cannot read.
+                "index" => {
+                    let name = c.text.trim();
+                    if name.starts_with(|ch: char| ch.is_ascii_alphabetic() || ch == '_') && readable(name) {
+                        // The shell folds a constant and an enumerator before the core sees them, so a name of one is not new, decision 0144.
+                        let taken = names.constants.iter().any(|(k, _)| k == name) || names.enums.iter().any(|e| e.2.iter().any(|m| m == name));
+                        if taken {
+                            (CondKind::Bad(Refusal::IndexName(names.id(name), line)), Expr::Int(0))
+                        } else {
+                            (CondKind::Index, Expr::Name(names.id(name)))
+                        }
+                    } else {
+                        (CondKind::Bad(Refusal::Syntax(line)), Expr::Int(0))
+                    }
+                }
                 word => (CondKind::Other(names.id(word)), Expr::Int(0)),
             }]
         };
@@ -694,6 +721,11 @@ fn stmt_names<'a>(s: &'a JStmt, out: &mut Vec<&'a str>) {
             stmt_names(init, out);
             expr_names(c, out);
             stmt_names(step, out);
+            body.iter().for_each(|s| stmt_names(s, out));
+        }
+        JStmt::RangeFor(x, _, seq, _, body, _) => {
+            out.push(x);
+            expr_names(seq, out);
             body.iter().for_each(|s| stmt_names(s, out));
         }
         JStmt::Unknown(..) => {}
@@ -1275,9 +1307,10 @@ fn sentence(r: Refusal, names: &Names) -> (u32, String) {
         Refusal::Extent(line) => (line, "a sequence or an optional made from one of another type or length.".to_string()),
         Refusal::NoTarget(line) => (line, "the call writes a value back, and the translator writes back only to a local or a reference parameter.".to_string()),
         Refusal::NoObject(n, line) => (line, format!("{} is a member of the struct. A requires line of a constructor has no object yet.", names.text(n))),
+        Refusal::IndexName(n, line) => (line, format!("{} on the index line is a name the function already has.", names.text(n))),
         Refusal::Misplaced(line) => (
             line,
-            "a contract line in the wrong place. A requires, an ensures, a modifies or a decreases line goes above a function. An invariant or a decreases line goes above a loop."
+            "a contract line in the wrong place. A requires, an ensures, a modifies or a decreases line goes above a function. An invariant or a decreases line goes above a loop, and an index line above a range-for."
                 .to_string(),
         ),
     }
