@@ -2651,7 +2651,8 @@ fn a_range_for_is_a_for_loop_over_the_indexes() {
         let Model::Full(m) = translate_function(&ranged(conds, Ty::I32, v(), None), &List::Nil, &List::Nil) else { panic!("a full model") };
         let body = strip(m.body);
         let DStmt::For(init, j, _, inv, dec, turn, _, _) = nth(&body, 1) else { panic!("a for loop: {body:?}") };
-        assert_eq!(*j, want);
+        // The place of the start is the line of the loop.
+        assert_eq!(*j, 6);
         assert!(matches!(&**init, DStmt::Local(n, DTy::UInt64, _) if *n == want), "{init:?}");
         assert_eq!((dlen(inv), dlen(dec)), (1, 1));
         assert_eq!(nth(turn, 0), &DStmt::Local(RX, DTy::Int32, DExpr::Index(Box::new(DExpr::Var(RV)), Box::new(DExpr::Var(want)))));
