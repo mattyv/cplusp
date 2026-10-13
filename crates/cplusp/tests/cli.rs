@@ -1855,7 +1855,7 @@ fn loops_and_writes_with_no_rule_are_refused_at_their_lines() {
     assert_eq!(o.status.code(), Some(1), "stdout: {text} stderr: {}", stderr(&o));
     let refusals: Vec<&str> = text.lines().filter(|l| l.starts_with("Not provable: ")).collect();
     let misplaced =
-        "a contract line in the wrong place. A requires, an ensures, a modifies or a decreases line goes above a function. An invariant or a decreases line goes above a loop.";
+        "a contract line in the wrong place. A requires, an ensures, a modifies or a decreases line goes above a function. An invariant or a decreases line goes above a loop, and an index line above a range-for.";
     for (line, expected) in [
         (5, "x is a parameter. The translator writes only a local or a reference parameter."),
         (11, "BinaryOperator <<=: the translator has no rule for it yet."),
@@ -3997,4 +3997,47 @@ fn a_unique_ptr_that_is_written_or_compared_is_refused() {
     for (r, line) in refusals.iter().zip(["8: ", "12: ", "17: ", "22: "]) {
         assert!(r.starts_with(line) && r.ends_with(": the translator has no rule for it yet."), "{line}: {text}");
     }
+}
+
+/// A range-for is a loop over indexes, and an index line names the index, decision 0143. A loop with no index line proves too.
+#[test]
+fn a_range_for_is_a_loop_over_indexes() {
+    let Some(dafny) = dafny() else { return };
+    if !clang_tidy_available() {
+        return;
+    }
+    let o = prove("model-range.cpp", &[], &dafny);
+    let text = stdout(&o);
+    assert_eq!(o.status.code(), Some(0), "stdout: {text} stderr: {}", stderr(&o));
+    assert_eq!(text.lines().last(), Some("ok: proved"), "{text}");
+    let o = prove("model-range-wrong.cpp", &[], &dafny);
+    let text = stdout(&o);
+    assert_eq!(o.status.code(), Some(1), "stdout: {text} stderr: {}", stderr(&o));
+    for want in ["model-range-wrong.cpp:10: the invariant may not hold when the loop starts.", "model-range-wrong.cpp:22: the value may not fit int32_t."] {
+        assert!(text.lines().any(|l| l.starts_with("Not proved: ") && l.ends_with(want)), "{want}: {text}");
+    }
+}
+
+/// An index line above another loop or above a function, an index name that the function has, and an index line with two names,
+/// are refused, decision 0143.
+#[test]
+fn an_index_line_in_the_wrong_place_or_with_a_used_name_is_refused() {
+    if !clang_tidy_available() {
+        return;
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let (o, _) = model("model-range-refuse.cpp", dir.path());
+    let text = stdout(&o);
+    assert_eq!(o.status.code(), Some(1), "stdout: {text} stderr: {}", stderr(&o));
+    let wrong_place = "a contract line in the wrong place. A requires, an ensures, a modifies or a decreases line goes above a function. An invariant or a decreases line goes above a loop, and an index line above a range-for.";
+    assert_eq!(
+        text.lines().filter(|l| l.starts_with("Not provable: ")).map(|l| l.rsplit_once(".cpp:").unwrap().1.to_string()).collect::<Vec<_>>(),
+        vec![
+            format!("8: {wrong_place}"),
+            "17: i on the index line is a name the function already has.".to_string(),
+            "26: the contract line has a form the translator cannot read.".to_string(),
+            format!("33: {wrong_place}"),
+        ],
+        "{text}"
+    );
 }

@@ -2596,3 +2596,87 @@ fn a_unique_ptr_is_an_owned_optional() {
     assert_eq!(translate_code(&Expr::Bin(BinOp::Eq, p(), b(Expr::Var(B, own))), 3), Err(Refusal::Syntax(3)));
     assert_eq!(translate_code(&Expr::Bin(BinOp::Eq, p(), b(Expr::Nullopt)), 3), Ok(DExpr::Not(Box::new(DExpr::IsSome(Box::new(DExpr::Var(A)))))));
 }
+
+const RV: u32 = 210;
+const RX: u32 = 211;
+const RI: u32 = 212;
+const RFRESH: u32 = 213;
+const RT: u32 = 214;
+
+/// The statement at place `n` of a translated body.
+fn nth(ss: &DStmts, n: usize) -> &DStmt {
+    match ss {
+        List::Cons((s, _), rest) => if n == 0 { s } else { nth(rest, n - 1) },
+        List::Nil => panic!("no statement {n}"),
+    }
+}
+
+fn dlen<T>(l: &List<T>) -> usize {
+    match l {
+        List::Nil => 0,
+        List::Cons(_, rest) => 1 + dlen(rest),
+    }
+}
+
+/// `int32_t t = 0; //@ index i (if any) for (T x : v) { t = x; } return t;` with `v` a span parameter, decision 0143.
+fn ranged(conds: Conds, xt: Ty, seq: Expr, before: Option<Stmt>) -> Function {
+    let range = Stmt::RangeFor(RFRESH, RX, xt, seq, Box::new(conds), Box::new(one(Stmt::Assign(RT, Expr::Var(RX, Ty::I32), 7))), 6);
+    let mut body = List::Cons(Box::new(Stmt::Return(Expr::Var(RT, Ty::I32), 9)), Box::new(List::Nil));
+    body = List::Cons(Box::new(range), Box::new(body));
+    body = List::Cons(Box::new(Stmt::Local(RT, Ty::I32, Expr::Lit(0, Ty::I32), 4)), Box::new(body));
+    if let Some(s) = before {
+        body = List::Cons(Box::new(s), Box::new(body));
+    }
+    Function {
+        name: SAT,
+        line: 3,
+        params: List::Cons((RV, Ty::Seq(Scalar::I32, Extent::Dynamic)), Box::new(List::Nil)),
+        ret: Ty::I32,
+        trusted: false,
+        conds: List::Nil,
+        body,
+    }
+}
+
+fn index_line(n: u32, l: u32) -> Conds {
+    List::Cons((CondKind::Index, Expr::Name(n), l, names(&[RV, RT])), Box::new(List::Nil))
+}
+
+/// A range-for is a for loop over the indexes, decision 0143: the index from the index line or the fresh name of the shell, the
+/// invariant `i <= v.size()` and the decreases `v.size() - i` from the core, and `x` as the first statement of each turn.
+#[test]
+fn a_range_for_is_a_for_loop_over_the_indexes() {
+    let v = || Expr::Var(RV, Ty::Seq(Scalar::I32, Extent::Dynamic));
+    for (conds, want) in [(index_line(RI, 5), RI), (List::Nil, RFRESH)] {
+        let Model::Full(m) = translate_function(&ranged(conds, Ty::I32, v(), None), &List::Nil, &List::Nil) else { panic!("a full model") };
+        let body = strip(m.body);
+        let DStmt::For(init, j, _, inv, dec, turn, _, _) = nth(&body, 1) else { panic!("a for loop: {body:?}") };
+        assert_eq!(*j, want);
+        assert!(matches!(&**init, DStmt::Local(n, DTy::UInt64, _) if *n == want), "{init:?}");
+        assert_eq!((dlen(inv), dlen(dec)), (1, 1));
+        assert_eq!(nth(turn, 0), &DStmt::Local(RX, DTy::Int32, DExpr::Index(Box::new(DExpr::Var(RV)), Box::new(DExpr::Var(want)))));
+        assert!(matches!(nth(turn, 1), DStmt::Assign(t, _) if *t == RT));
+    }
+}
+
+/// An index line elsewhere is in the wrong place, an index name the function has is refused, and so are a range that is no sequence
+/// parameter and a loop variable of another type, decision 0143.
+#[test]
+fn a_range_for_refuses_what_it_cannot_read() {
+    let v = || Expr::Var(RV, Ty::Seq(Scalar::I32, Extent::Dynamic));
+    // index line above a while loop
+    let w = Stmt::While(Expr::Bool(false), Box::new(index_line(RI, 5)), Box::new(List::Nil), 6);
+    let f = Function { body: List::Cons(Box::new(w), Box::new(one(Stmt::Return(Expr::Lit(0, Ty::I32), 9)))), ..ranged(List::Nil, Ty::I32, v(), None) };
+    assert_eq!(bare_refusal(translate_function(&f, &List::Nil, &List::Nil)), Refusal::Misplaced(5));
+    // index line above a function
+    let f = Function { conds: index_line(RI, 2), ..ranged(List::Nil, Ty::I32, v(), None) };
+    assert_eq!(bare_refusal(translate_function(&f, &List::Nil, &List::Nil)), Refusal::Misplaced(2));
+    // an index that is a parameter, or a local before the loop
+    assert_eq!(bare_refusal(translate_function(&ranged(index_line(RV, 5), Ty::I32, v(), None), &List::Nil, &List::Nil)), Refusal::IndexName(RV, 5));
+    let before = Stmt::Local(RI, Ty::I32, Expr::Lit(0, Ty::I32), 2);
+    assert_eq!(bare_refusal(translate_function(&ranged(index_line(RI, 5), Ty::I32, v(), Some(before)), &List::Nil, &List::Nil)), Refusal::IndexName(RI, 5));
+    // a range that is no variable, and a loop variable of another type
+    let field = Expr::Field(b(v()), FV);
+    assert_eq!(bare_refusal(translate_function(&ranged(List::Nil, Ty::I32, field, None), &List::Nil, &List::Nil)), Refusal::Syntax(6));
+    assert_eq!(bare_refusal(translate_function(&ranged(List::Nil, Ty::I64, v(), None), &List::Nil, &List::Nil)), Refusal::Syntax(6));
+}
