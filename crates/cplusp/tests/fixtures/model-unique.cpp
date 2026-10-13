@@ -32,3 +32,25 @@ int32_t round_trip(int32_t x) {
   std::unique_ptr<int32_t> p = boxed(x);
   return unboxed(p) + *p;
 }
+
+// The test against nullptr in code, in each order, decision 0142. C++20 rewrites three of the four forms.
+//@ ensures result == (p != nullptr)
+bool present(const std::unique_ptr<int32_t>& p) {
+  return p != nullptr;
+}
+
+//@ ensures result == (p != nullptr)
+bool present_left(const std::unique_ptr<int32_t>& p) {
+  return nullptr != p;
+}
+
+//@ ensures result == (p == nullptr)
+bool absent_left(const std::unique_ptr<int32_t>& p) {
+  return nullptr == p;
+}
+
+// A call result passed straight to a const reference parameter.
+//@ ensures result == x
+int32_t direct(int32_t x) {
+  return unboxed(boxed(x));
+}
