@@ -2691,3 +2691,50 @@ fn an_index_is_no_field_of_the_object() {
     let f = Function { params: List::Cons((RSELF, Ty::This(POINT)), Box::new(f.params)), ..f };
     assert_eq!(bare_refusal(translate_function(&f, &List::Nil, &table)), Refusal::IndexName(FX, 5));
 }
+
+const WV: u32 = 220;
+const WI: u32 = 221;
+const WX: u32 = 222;
+
+/// `void write_at(std::vector<int32_t>& v, size_t i, int32_t x) { v[i] = x; }` with `modifies v`, decision 0145.
+fn write_at(body: Stmts) -> Function {
+    let vec = Ty::MutSeq(Scalar::I32);
+    Function {
+        name: SAT,
+        line: 5,
+        params: List::Cons((WV, vec), Box::new(List::Cons((WI, Ty::U64), Box::new(List::Cons((WX, Ty::I32), Box::new(List::Nil)))))),
+        ret: Ty::Void,
+        trusted: false,
+        conds: modifies(&[WV], &[WV, WI, WX], List::Nil),
+        body,
+    }
+}
+
+/// A vector by reference on the modifies line takes its value in and gives it back as a sequence, and `v[i] = x` writes one
+/// element of the value after, decision 0145.
+#[test]
+fn an_element_write_sets_one_element_of_the_vector_after() {
+    let vec = Ty::MutSeq(Scalar::I32);
+    let set = Stmt::SetIndex(WV, Expr::Var(WI, Ty::U64), Expr::Var(WX, Ty::I32), 6);
+    let Model::Full(m) = translate_function(&write_at(one(set)), &List::Nil, &List::Nil) else { panic!("a full model") };
+    assert_eq!(m.outs, List::Cons((WV, DTy::Seq(Scalar::I32)), Box::new(List::Nil)));
+    let want = DStmt::SetOut(WV, DExpr::SetAt(Box::new(DExpr::Out(WV)), Box::new(DExpr::Var(WI)), Box::new(DExpr::Var(WX))));
+    assert_eq!(strip(m.body), List::Cons((Box::new(want), 0), Box::new(List::Nil)));
+    // A read in code reads the value after.
+    let read = Stmt::Local(WX + 1, Ty::I32, Expr::Index(b(Expr::Var(WV, vec)), b(Expr::Var(WI, Ty::U64))), 6);
+    let Model::Full(m) = translate_function(&write_at(one(read)), &List::Nil, &List::Nil) else { panic!("a full model") };
+    let want = DStmt::Local(WX + 1, DTy::Int32, DExpr::Index(Box::new(DExpr::Out(WV)), Box::new(DExpr::Var(WI))));
+    assert_eq!(strip(m.body), List::Cons((Box::new(want), 0), Box::new(List::Nil)));
+}
+
+/// An element write to a read-only sequence parameter is a write to a parameter, decision 0145.
+#[test]
+fn an_element_write_to_a_read_only_sequence_is_refused() {
+    let ro = Ty::Seq(Scalar::I32, Extent::Dynamic);
+    let f = Function {
+        params: List::Cons((WV, ro), Box::new(List::Cons((WI, Ty::U64), Box::new(List::Cons((WX, Ty::I32), Box::new(List::Nil)))))),
+        conds: List::Nil,
+        ..write_at(one(Stmt::SetIndex(WV, Expr::Var(WI, Ty::U64), Expr::Var(WX, Ty::I32), 6)))
+    };
+    assert_eq!(bare_refusal(translate_function(&f, &List::Nil, &List::Nil)), Refusal::WriteParam(WV, 6));
+}

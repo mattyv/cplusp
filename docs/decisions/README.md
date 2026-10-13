@@ -149,3 +149,4 @@ Status is `decided`, `proposed` (the default until someone objects or the thin s
 | [0142](0142-a-unique-ptr-that-is-only-read.md) | A unique_ptr that the code only reads is an optional of its own kind, Own(T). Two do not compare | decided |
 | [0143](0143-a-range-for-and-its-index-line.md) | A range-for over a sequence parameter is a loop over indexes, and an index line names the index | decided |
 | [0144](0144-an-index-is-no-field-and-no-constant.md) | An index name is no field and no constant. A range-for loop variable has a name. Two range-fors on one line get their own index | decided |
+| [0145](0145-a-vector-by-reference-that-the-function-writes.md) | A vector by reference on the modifies line takes its value in and gives it back. Step one: element writes | decided |

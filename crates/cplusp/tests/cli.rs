@@ -4044,3 +4044,43 @@ fn an_index_line_in_the_wrong_place_or_with_a_used_name_is_refused() {
         "{text}"
     );
 }
+
+/// A vector by reference that the function writes takes its value in and gives it back, decision 0145: element writes, reads,
+/// and a loop that writes each element.
+#[test]
+fn a_vector_by_reference_that_the_function_writes_proves() {
+    let Some(dafny) = dafny() else { return };
+    if !clang_tidy_available() {
+        return;
+    }
+    let o = prove("model-vec-ref.cpp", &[], &dafny);
+    let text = stdout(&o);
+    assert_eq!(o.status.code(), Some(0), "stdout: {text} stderr: {}", stderr(&o));
+    assert_eq!(text.lines().last(), Some("ok: proved"), "{text}");
+    let o = prove("model-vec-ref-wrong.cpp", &[], &dafny);
+    let text = stdout(&o);
+    assert_eq!(o.status.code(), Some(1), "stdout: {text} stderr: {}", stderr(&o));
+    let failed: Vec<&str> = text.lines().filter(|l| l.starts_with("Not proved: ")).map(|l| l.rsplit_once(".cpp:").unwrap().1).collect();
+    assert_eq!(failed.len(), 2, "{text}");
+    assert_eq!(failed[0], "8: the index may be out of range.", "{text}");
+    assert!(failed[1].ends_with(": the ensures line may not hold on this return."), "{text}");
+}
+
+/// A vector by reference that the modifies line does not name, push_back, a compound write and a vector of bool are refused,
+/// decision 0145.
+#[test]
+fn a_vector_by_reference_with_no_rule_is_refused() {
+    if !clang_tidy_available() {
+        return;
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let (o, _) = model("model-vec-ref-refuse.cpp", dir.path());
+    let text = stdout(&o);
+    assert_eq!(o.status.code(), Some(1), "stdout: {text} stderr: {}", stderr(&o));
+    let refusals: Vec<&str> = text.lines().filter(|l| l.starts_with("Not provable: ")).map(|l| l.rsplit_once(".cpp:").unwrap().1).collect();
+    assert_eq!(refusals.len(), 4, "{text}");
+    assert_eq!(refusals[0], "7: v is a reference parameter that the modifies line does not name.", "{text}");
+    for (r, line) in refusals[1..].iter().zip(["12: ", "18: ", "22: "]) {
+        assert!(r.starts_with(line) && r.ends_with(": the translator has no rule for it yet."), "{line}: {text}");
+    }
+}
