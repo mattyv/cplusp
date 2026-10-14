@@ -151,3 +151,4 @@ Status is `decided`, `proposed` (the default until someone objects or the thin s
 | [0144](0144-an-index-is-no-field-and-no-constant.md) | An index name is no field and no constant. A range-for loop variable has a name. Two range-fors on one line get their own index | decided |
 | [0145](0145-a-vector-by-reference-that-the-function-writes.md) | A vector by reference on the modifies line takes its value in and gives it back. Step one: element writes | decided |
 | [0146](0146-the-author-states-the-length-of-a-vector-after-the-call.md) | The author states the length of a vector by reference after the call. The translator adds no line for it | decided |
+| [0147](0147-a-vector-by-reference-passed-on-is-refused-by-name.md) | A call that passes a vector by reference on to a writer is refused by name | decided |

@@ -4068,8 +4068,8 @@ fn a_vector_by_reference_that_the_function_writes_proves() {
     assert!(failed[1].ends_with(": the ensures line may not hold on this return."), "{text}");
 }
 
-/// A vector by reference that the modifies line does not name, push_back, a compound write and a vector of bool are refused,
-/// decision 0145.
+/// A vector by reference that the modifies line does not name, push_back, a compound write, a vector of bool and a call that
+/// passes the vector on are refused, decisions 0145 and 0147.
 #[test]
 fn a_vector_by_reference_with_no_rule_is_refused() {
     if !clang_tidy_available() {
@@ -4080,9 +4080,11 @@ fn a_vector_by_reference_with_no_rule_is_refused() {
     let text = stdout(&o);
     assert_eq!(o.status.code(), Some(1), "stdout: {text} stderr: {}", stderr(&o));
     let refusals: Vec<&str> = text.lines().filter(|l| l.starts_with("Not provable: ")).map(|l| l.rsplit_once(".cpp:").unwrap().1).collect();
-    assert_eq!(refusals.len(), 4, "{text}");
+    assert_eq!(refusals.len(), 5, "{text}");
     assert_eq!(refusals[0], "7: v is a reference parameter that the modifies line does not name.", "{text}");
-    for (r, line) in refusals[1..].iter().zip(["12: ", "18: ", "22: "]) {
+    for (r, line) in refusals[1..4].iter().zip(["12: ", "18: ", "22: "]) {
         assert!(r.starts_with(line) && r.ends_with(": the translator has no rule for it yet."), "{line}: {text}");
     }
+    // The call passes the vector on, decision 0147.
+    assert_eq!(refusals[4], "34: v is a vector by reference. A call that passes it on has no rule yet.", "{text}");
 }

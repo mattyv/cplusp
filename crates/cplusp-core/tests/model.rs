@@ -2738,3 +2738,15 @@ fn an_element_write_to_a_read_only_sequence_is_refused() {
     };
     assert_eq!(bare_refusal(translate_function(&f, &List::Nil, &List::Nil)), Refusal::WriteParam(WV, 6));
 }
+
+/// A call that passes a vector by reference on to a parameter that writes it has no rule yet, and the refusal says so, decision
+/// 0147.
+#[test]
+fn a_vector_by_reference_passed_on_to_a_writer_is_refused() {
+    let set = Stmt::SetIndex(WV, Expr::Var(WI, Ty::U64), Expr::Var(WX, Ty::I32), 6);
+    let all = fns(vec![Function { name: WX + 3, ..write_at(one(set)) }]);
+    let vec = Ty::MutSeq(Scalar::I32);
+    let args = List::Cons(b(Expr::Var(WV, vec)), Box::new(List::Cons(b(Expr::Var(WI, Ty::U64)), Box::new(List::Cons(b(Expr::Var(WX, Ty::I32)), Box::new(List::Nil))))));
+    let caller = write_at(one(Stmt::Call(WX + 3, SAT_NAME, Box::new(args), 12)));
+    assert_eq!(bare_refusal(translate_function(&caller, &all, &List::Nil)), Refusal::PassOn(WV, 12));
+}
