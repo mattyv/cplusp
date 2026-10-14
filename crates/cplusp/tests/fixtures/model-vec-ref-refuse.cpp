@@ -2,14 +2,14 @@
 #include <cstdint>
 #include <vector>
 
-// A vector by reference that the modifies line does not name, push_back, a compound write, a vector of bool, and a call that
-// passes the vector on to a writer, have no rule, decisions 0145 and 0147.
+// A vector by reference that the modifies line does not name, clear, a compound write, a vector of bool, and a call that
+// passes the vector on to a writer, have no rule, decisions 0145, 0147 and 0148.
 void unnamed(std::vector<int32_t>& v) {
 }
 
 //@ modifies v
-void append(std::vector<int32_t>& v, int32_t x) {
-  v.push_back(x);
+void wipe(std::vector<int32_t>& v) {
+  v.clear();
 }
 
 //@ requires 0 < v.size()

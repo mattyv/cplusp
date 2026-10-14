@@ -4068,8 +4068,8 @@ fn a_vector_by_reference_that_the_function_writes_proves() {
     assert!(failed[1].ends_with(": the ensures line may not hold on this return."), "{text}");
 }
 
-/// A vector by reference that the modifies line does not name, push_back, a compound write, a vector of bool and a call that
-/// passes the vector on are refused, decisions 0145 and 0147.
+/// A vector by reference that the modifies line does not name, clear, a compound write, a vector of bool and a call that
+/// passes the vector on are refused, decisions 0145, 0147 and 0148.
 #[test]
 fn a_vector_by_reference_with_no_rule_is_refused() {
     if !clang_tidy_available() {
@@ -4087,4 +4087,25 @@ fn a_vector_by_reference_with_no_rule_is_refused() {
     }
     // The call passes the vector on, decision 0147.
     assert_eq!(refusals[4], "34: v is a vector by reference. A call that passes it on has no rule yet.", "{text}");
+}
+
+/// push_back adds one element at the end of a vector by reference, and Dafny checks each index and the length after, decision
+/// 0148.
+#[test]
+fn push_back_grows_a_vector_by_reference() {
+    let Some(dafny) = dafny() else { return };
+    if !clang_tidy_available() {
+        return;
+    }
+    let o = prove("model-vec-push.cpp", &[], &dafny);
+    let text = stdout(&o);
+    assert_eq!(o.status.code(), Some(0), "stdout: {text} stderr: {}", stderr(&o));
+    assert_eq!(text.lines().last(), Some("ok: proved"), "{text}");
+    let o = prove("model-vec-push-wrong.cpp", &[], &dafny);
+    let text = stdout(&o);
+    assert_eq!(o.status.code(), Some(1), "stdout: {text} stderr: {}", stderr(&o));
+    let failed: Vec<&str> = text.lines().filter(|l| l.starts_with("Not proved: ")).map(|l| l.rsplit_once(".cpp:").unwrap().1).collect();
+    assert_eq!(failed.len(), 2, "{text}");
+    assert_eq!(failed[0], "9: the index may be out of range.", "{text}");
+    assert!(failed[1].ends_with(": the ensures line may not hold on this return."), "{text}");
 }

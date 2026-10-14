@@ -152,3 +152,4 @@ Status is `decided`, `proposed` (the default until someone objects or the thin s
 | [0145](0145-a-vector-by-reference-that-the-function-writes.md) | A vector by reference on the modifies line takes its value in and gives it back. Step one: element writes | decided |
 | [0146](0146-the-author-states-the-length-of-a-vector-after-the-call.md) | The author states the length of a vector by reference after the call. The translator adds no line for it | decided |
 | [0147](0147-a-vector-by-reference-passed-on-is-refused-by-name.md) | A call that passes a vector by reference on to a writer is refused by name | decided |
+| [0148](0148-push-back-adds-one-element-to-a-vector-by-reference.md) | push_back adds one element to a vector by reference. A multiset is a predicate of the companion file | decided |

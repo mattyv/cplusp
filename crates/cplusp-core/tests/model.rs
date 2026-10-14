@@ -2750,3 +2750,19 @@ fn a_vector_by_reference_passed_on_to_a_writer_is_refused() {
     let caller = write_at(one(Stmt::Call(WX + 3, SAT_NAME, Box::new(args), 12)));
     assert_eq!(bare_refusal(translate_function(&caller, &all, &List::Nil)), Refusal::PassOn(WV, 12));
 }
+
+/// `v.push_back(x)` appends one element to the value after, decision 0148. On a read-only sequence it is a write to a parameter.
+#[test]
+fn push_back_appends_one_element_to_the_vector_after() {
+    let push = Stmt::PushBack(WV, Expr::Var(WX, Ty::I32), 6);
+    let Model::Full(m) = translate_function(&write_at(one(push)), &List::Nil, &List::Nil) else { panic!("a full model") };
+    let want = DStmt::SetOut(WV, DExpr::Append(Box::new(DExpr::Out(WV)), Box::new(DExpr::Var(WX))));
+    assert_eq!(strip(m.body), List::Cons((Box::new(want), 0), Box::new(List::Nil)));
+    let ro = Ty::Seq(Scalar::I32, Extent::Dynamic);
+    let f = Function {
+        params: List::Cons((WV, ro), Box::new(List::Cons((WI, Ty::U64), Box::new(List::Cons((WX, Ty::I32), Box::new(List::Nil)))))),
+        conds: List::Nil,
+        ..write_at(one(Stmt::PushBack(WV, Expr::Var(WX, Ty::I32), 6)))
+    };
+    assert_eq!(bare_refusal(translate_function(&f, &List::Nil, &List::Nil)), Refusal::WriteParam(WV, 6));
+}
