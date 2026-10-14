@@ -4122,3 +4122,54 @@ fn the_sorted_insert_example_proves() {
     assert_eq!(o.status.code(), Some(0), "stdout: {text} stderr: {}", stderr(&o));
     assert_eq!(text.lines().last(), Some("ok: proved"), "{text}");
 }
+
+/// count_if with a lambda written in the call proves against a companion count that says the same test, decision 0149.
+#[test]
+fn count_if_with_a_lambda_proves() {
+    let Some(dafny) = dafny() else { return };
+    if !clang_tidy_available() {
+        return;
+    }
+    let o = prove("model-count-if.cpp", &[], &dafny);
+    let text = stdout(&o);
+    assert_eq!(o.status.code(), Some(0), "stdout: {text} stderr: {}", stderr(&o));
+    assert_eq!(text.lines().last(), Some("ok: proved"), "{text}");
+    let o = prove("model-count-if-wrong.cpp", &[], &dafny);
+    let text = stdout(&o);
+    assert_eq!(o.status.code(), Some(1), "stdout: {text} stderr: {}", stderr(&o));
+    let failed: Vec<&str> = text.lines().filter(|l| l.starts_with("Not proved: ")).map(|l| l.rsplit_once(".cpp:").unwrap().1).collect();
+    assert_eq!(failed.len(), 2, "{text}");
+    assert!(failed[0].starts_with("9: ") && failed[0].ends_with(": the ensures line may not hold on this return."), "{text}");
+    assert_eq!(failed[1], "14: the value may not fit int32_t.", "{text}");
+}
+
+/// Another algorithm, an init capture and a lambda body of two statements are refused at their lines, and the lambda is no
+/// function of its own, decision 0149.
+#[test]
+fn count_if_with_no_rule_is_refused() {
+    if !clang_tidy_available() {
+        return;
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let (o, _) = model("model-count-if-refuse.cpp", dir.path());
+    let text = stdout(&o);
+    assert_eq!(o.status.code(), Some(1), "stdout: {text} stderr: {}", stderr(&o));
+    let refusals: Vec<&str> = text.lines().filter(|l| l.starts_with("Not provable: ")).map(|l| l.rsplit_once(".cpp:").unwrap().1).collect();
+    let mut lines: Vec<&str> = refusals.iter().map(|r| r.split(':').next().unwrap()).collect();
+    lines.dedup();
+    assert_eq!(lines, ["7", "11", "15"], "{text}");
+    assert!(!text.contains("CXXMethodDecl"), "{text}");
+}
+
+/// The example lambdas proves with count_if and its companion file, decision 0149.
+#[test]
+fn the_lambdas_example_proves() {
+    let Some(dafny) = dafny() else { return };
+    if !clang_tidy_available() {
+        return;
+    }
+    let o = prove("../../../../examples/lambdas/example.cpp", &[], &dafny);
+    let text = stdout(&o);
+    assert_eq!(o.status.code(), Some(0), "stdout: {text} stderr: {}", stderr(&o));
+    assert_eq!(text.lines().last(), Some("ok: proved"), "{text}");
+}

@@ -2766,3 +2766,32 @@ fn push_back_appends_one_element_to_the_vector_after() {
     };
     assert_eq!(bare_refusal(translate_function(&f, &List::Nil, &List::Nil)), Refusal::WriteParam(WV, 6));
 }
+
+const CV: u32 = 230;
+const CK: u32 = 231;
+const CX: u32 = 232;
+
+/// `return std::count_if(v.begin(), v.end(), [k](int32_t x) { return x > k; });` is CountIf over the sequence with a Dafny
+/// lambda, as an int64, decision 0149. The parameter of the lambda has the element type.
+#[test]
+fn count_if_with_a_lambda_is_count_if_of_the_prelude() {
+    let seq = Ty::Seq(Scalar::I32, Extent::Dynamic);
+    let count = |xt: Ty| {
+        let test = Expr::Bin(BinOp::Gt, b(Expr::Var(CX, Ty::I32)), b(Expr::Var(CK, Ty::I32)));
+        Expr::CountIf(b(Expr::Var(CV, seq)), CX, xt, b(test))
+    };
+    let f = |xt: Ty| Function {
+        name: SAT,
+        line: 5,
+        params: List::Cons((CV, seq), Box::new(List::Cons((CK, Ty::I32), Box::new(List::Nil)))),
+        ret: Ty::I64,
+        trusted: false,
+        conds: List::Nil,
+        body: one(Stmt::Return(count(xt), 6)),
+    };
+    let Model::Full(m) = translate_function(&f(Ty::I32), &List::Nil, &List::Nil) else { panic!("a full model") };
+    let test = DExpr::Bin(BinOp::Gt, Box::new(DExpr::Var(CX)), Box::new(DExpr::Var(CK)));
+    let want = DStmt::Return(DExpr::Conv(DTy::Int64, Box::new(DExpr::CountIf(Box::new(DExpr::Var(CV)), CX, DTy::Int32, Box::new(test)))));
+    assert_eq!(strip(m.body), List::Cons((Box::new(want), 0), Box::new(List::Nil)));
+    assert_eq!(bare_refusal(translate_function(&f(Ty::I64), &List::Nil, &List::Nil)), Refusal::Syntax(6));
+}
