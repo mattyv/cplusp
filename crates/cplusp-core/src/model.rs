@@ -563,7 +563,8 @@ pub type Models = List<Model>;
 /// 0090. `NoTarget` is a call that writes a value back to a place that is no local and no reference parameter, by the line. `NoObject`
 /// is a field or a member function in a requires line of a constructor, before the object exists, by the id of the name, decision
 /// 0096. `NotRef` is a name on a modifies line that is no reference parameter, and `Unlisted` is a reference parameter that no
-/// modifies line names, decision 0108.
+/// modifies line names, decision 0108. `PassOn` is a vector by reference that a call passes on to a parameter that writes it, by the
+/// id of its name, decision 0147.
 #[derive(Structural, PartialEq, Eq, Clone, Copy, Debug)]
 pub enum Refusal {
     Construct(u32, u32),
@@ -588,6 +589,7 @@ pub enum Refusal {
     NoObject(u32, u32),
     NotRef(u32, u32),
     Unlisted(u32, u32),
+    PassOn(u32, u32),
 }
 
 // ------------------------------------------------------------------ the rules
@@ -2029,6 +2031,8 @@ pub open spec fn spec_target(o: Expr, ps: Params, line: u32) -> Result<Obj, Refu
             } else {
                 Err(Refusal::Syntax(line))
             },
+            // A call that passes a vector by reference on to a writer has no rule yet, decision 0147.
+            Ty::MutSeq(_) => Err(Refusal::PassOn(v, line)),
             _ => if (spec_get(ps, v) is Some) {
                 Err(Refusal::WriteParam(v, line))
             } else {
@@ -5587,6 +5591,7 @@ pub fn target(o: &Expr, ps: &Params, line: u32) -> (r: Result<Obj, Refusal>)
             } else {
                 Err(Refusal::Syntax(line))
             },
+            Ty::MutSeq(_) => Err(Refusal::PassOn(*v, line)),
             _ => if get(ps, *v).is_some() {
                 Err(Refusal::WriteParam(*v, line))
             } else {

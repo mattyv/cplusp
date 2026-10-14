@@ -1320,6 +1320,7 @@ fn sentence(r: Refusal, names: &Names) -> (u32, String) {
         Refusal::NoTarget(line) => (line, "the call writes a value back, and the translator writes back only to a local or a reference parameter.".to_string()),
         Refusal::NoObject(n, line) => (line, format!("{} is a member of the struct. A requires line of a constructor has no object yet.", names.text(n))),
         Refusal::IndexName(n, line) => (line, format!("{} on the index line is a name the function already has.", names.text(n))),
+        Refusal::PassOn(n, line) => (line, format!("{} is a vector by reference. A call that passes it on has no rule yet.", names.text(n))),
         Refusal::Misplaced(line) => (
             line,
             "a contract line in the wrong place. A requires, an ensures, a modifies or a decreases line goes above a function. An invariant or a decreases line goes above a loop, and an index line above a range-for."
