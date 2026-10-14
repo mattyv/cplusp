@@ -124,6 +124,8 @@ enum JStmt {
     SetField(String, JExpr, u32),
     /// `v[i] = e` where `v` is a vector by reference, decision 0145.
     SetIndex(String, JExpr, JExpr, u32),
+    /// `v.push_back(e)` where `v` is a vector by reference, decision 0148.
+    PushBack(String, JExpr, u32),
     /// `p.f = e` where `p` is a reference parameter, decision 0108.
     SetRefField(String, String, JExpr, u32),
     /// A switch over an enum, decision 0109: its condition, the key of the enum, the cases as (place of the enumerator, statements), and the line.
@@ -403,6 +405,7 @@ fn stmt(s: JStmt, names: &mut Names) -> Stmt {
         JStmt::Step(n, t, up, line) => Stmt::Step(names.id(&n), ty(t, names), up, names.here(line)),
         JStmt::SetField(f, e, line) => Stmt::SetField(names.id(&f), expr(e, names), names.here(line)),
         JStmt::SetIndex(v, i, e, line) => Stmt::SetIndex(names.id(&v), expr(i, names), expr(e, names), names.here(line)),
+        JStmt::PushBack(v, e, line) => Stmt::PushBack(names.id(&v), expr(e, names), names.here(line)),
         JStmt::Switch(e, k, cases, line) => {
             let place = names.here(line);
             let key = names.id(&k);
@@ -709,6 +712,10 @@ fn stmt_names<'a>(s: &'a JStmt, out: &mut Vec<&'a str>) {
         }
         JStmt::Step(n, ..) => out.push(n),
         JStmt::SetField(_, e, _) => expr_names(e, out),
+        JStmt::PushBack(v, e, _) => {
+            out.push(v);
+            expr_names(e, out);
+        }
         JStmt::SetIndex(v, i, e, _) => {
             out.push(v);
             expr_names(i, out);
@@ -949,6 +956,7 @@ fn dexpr(e: &DExpr, names: &Names) -> String {
         DExpr::Ctor(k, args) => format!("{}({})", names.datatypes[k], dargs(args, names).join(", ")),
         DExpr::Len(a) => format!("|{}|", dexpr(a, names)),
         DExpr::Index(a, i) => format!("{}[{}]", dexpr(a, names), dexpr(i, names)),
+        DExpr::Append(a, e) => format!("({} + [{}])", dexpr(a, names), dexpr(e, names)),
         DExpr::SetAt(a, i, e) => format!("{}[{} := {}]", dexpr(a, names), dexpr(i, names), dexpr(e, names)),
         DExpr::Drop(a, k) => format!("{}[{}..]", dexpr(a, names), dexpr(k, names)),
         DExpr::Take(a, j) => format!("{}[..{}]", dexpr(a, names), dexpr(j, names)),
@@ -1220,7 +1228,12 @@ impl Printer<'_> {
             gives.push(format!("v_this': {}", dty(*t, self.names)));
         }
         // The reference parameters that the method gives back follow, in the order of the parameters, decision 0108.
-        gives.extend(outs.iter().map(|(n, t)| format!("{}': {}", mangle(self.names.text(*n)), dty(*t, self.names))));
+        // A vector by reference is a plain `seq` when it is given back: `push_back` may grow it past the bound of `Vec`, as C++ may grow it past
+        // `max_size()`, and a failed `push_back` never returns, decision 0148.
+        gives.extend(outs.iter().map(|(n, t)| match t {
+            DTy::Seq(s) => format!("{}': seq<{}>", mangle(self.names.text(*n)), dscalar(*s, self.names)),
+            _ => format!("{}': {}", mangle(self.names.text(*n)), dty(*t, self.names)),
+        }));
         let returns = if gives.is_empty() { String::new() } else { format!(" returns ({})", gives.join(", ")) };
         self.out.push('\n');
         self.lines.push(None);

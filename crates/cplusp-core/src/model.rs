@@ -305,7 +305,7 @@ pub type Args = List<Box<Expr>>;
 /// enum, by the key of the enum, with its cases, decision 0109. `Call` is a call that stands alone as a statement, by the key of its callee, the id of its
 /// name and its arguments. `Exit` is `return;`, decision 0096. `Assert` is a `//@ assert` line in the body, and `Apply` is a
 /// `//@ apply` line that calls a lemma of the companion file by the id of its name, decision 0099. `RangeFor` is a range-for, decision
-/// 0143. `SetIndex` is `v[i] = e` of a vector by reference, decision 0145.
+/// 0143. `SetIndex` is `v[i] = e` of a vector by reference, decision 0145, and `PushBack` is `v.push_back(e)`, decision 0148.
 #[derive(PartialEq, Eq, Debug)]
 pub enum Stmt {
     Return(Expr, u32),
@@ -324,6 +324,7 @@ pub enum Stmt {
     Apply(u32, Box<Args>, u32),
     RangeFor(u32, u32, Ty, Expr, Box<Conds>, Box<Stmts>, u32),
     SetIndex(u32, Expr, Expr, u32),
+    PushBack(u32, Expr, u32),
     Unknown(u32, u32),
 }
 
@@ -414,7 +415,7 @@ pub enum DTy {
 /// object of a member function that writes it, as the body leaves it, decision 0096. `Out` is `x'`, a reference parameter as the body
 /// leaves it, decision 0108. `Enumerator` is the constructor of an enumerator, decision 0109. `Ite` is `if c then a else b`, decision 0098.
 /// `Temp` reads a temporary that a call before the statement set, decision 0104. `ShrIn` is `(shr(a, n, W) as T)`, a right shift
-/// of the width `W`, decision 0106. `SetAt` is `s[i := e]`, which Dafny proves is in range, decision 0145. A Dafny expression calls no
+/// of the width `W`, decision 0106. `SetAt` is `s[i := e]`, which Dafny proves is in range, decision 0145. `Append` is `s + [e]`, decision 0148. A Dafny expression calls no
 /// method.
 #[derive(PartialEq, Eq, Debug)]
 pub enum DExpr {
@@ -455,6 +456,7 @@ pub enum DExpr {
     Temp(u32),
     ShrIn(Box<DExpr>, Box<DExpr>, DTy, u32),
     SetAt(Box<DExpr>, Box<DExpr>, Box<DExpr>),
+    Append(Box<DExpr>, Box<DExpr>),
 }
 
 /// The calls that run before a statement, in the order that they run: each sets a temporary of the statement by its number, of a
@@ -1910,6 +1912,7 @@ pub open spec fn spec_place(s: Stmt) -> u32 {
         Stmt::Assert(_, l) => l,
         Stmt::Apply(_, _, l) => l,
         Stmt::SetIndex(_, _, _, l) => l,
+        Stmt::PushBack(_, _, l) => l,
         Stmt::Unknown(_, l) => l,
     }
 }
@@ -2364,6 +2367,16 @@ pub open spec fn spec_stmt(s: Stmt, all: Fns, env: Params, ps: Params, sd: Struc
                     Ok(de) => Ok(DStmt::SetOut(v, DExpr::SetAt(Box::new(DExpr::Out(v)), Box::new(di), Box::new(de)))),
                     Err(r) => Err(r),
                 },
+                Err(r) => Err(r),
+            },
+            Some(_) => Err(Refusal::WriteParam(v, l)),
+            None => Err(Refusal::Syntax(l)),
+        },
+        // `v.push_back(e)` appends one element, decision 0148. A failed push_back throws and never returns to verified code.
+        // ponytail: a call in the value is refused as out of place, as for SetIndex. Upgrade: lift the calls, decision 0104.
+        Stmt::PushBack(v, e, l) => match spec_get(ps, v) {
+            Some(Ty::MutSeq(_)) => match spec_code(e, l) {
+                Ok(de) => Ok(DStmt::SetOut(v, DExpr::Append(Box::new(DExpr::Out(v)), Box::new(de)))),
                 Err(r) => Err(r),
             },
             Some(_) => Err(Refusal::WriteParam(v, l)),
@@ -2993,6 +3006,7 @@ pub open spec fn unknown_stmt(s: Stmt) -> bool
         Stmt::SetField(_, e, _) => unknown_expr(e),
         Stmt::SetRefField(_, _, e, _) => unknown_expr(e),
         Stmt::SetIndex(_, i, e, _) => unknown_expr(i) || unknown_expr(e),
+        Stmt::PushBack(_, e, _) => unknown_expr(e),
         Stmt::Switch(e, _, cs, _) => unknown_expr(e) || unknown_cases(*cs),
         Stmt::Call(_, _, args, _) => unknown_args(*args),
         Stmt::Exit(_) => false,
@@ -3121,6 +3135,7 @@ pub proof fn lemma_unknown_stmt_is_refused(s: Stmt, all: Fns, env: Params, ps: P
                 lemma_unknown_code_is_refused(e, l);
             }
         },
+        Stmt::PushBack(_, e, l) => lemma_unknown_code_is_refused(e, l),
         Stmt::Switch(e, _, cs, l) => {
             if unknown_expr(e) {
                 lemma_unknown_lift_is_refused(e, all, l, sd, 0, true);
@@ -3969,7 +3984,7 @@ pub proof fn lemma_resolves_set_ref_field(s: Stmt, all: Fns, env: Params, ps: Pa
 pub proof fn lemma_resolves_plain(s: Stmt, all: Fns, env: Params, ps: Params, sd: Structs)
     requires
         spec_stmt(s, all, env, ps, sd).is_ok(),
-        s is Step || s is Exit || s is Assert || s is Apply || s is Unknown || s is SetIndex,
+        s is Step || s is Exit || s is Assert || s is Apply || s is Unknown || s is SetIndex || s is PushBack,
     ensures
         calls_resolve_stmt(spec_stmt(s, all, env, ps, sd).unwrap(), all, sd),
 {
@@ -4043,6 +4058,7 @@ pub proof fn lemma_stmt_calls_resolve(s: Stmt, all: Fns, env: Params, ps: Params
         Stmt::Apply(_, _, _) => lemma_resolves_plain(s, all, env, ps, sd),
         Stmt::Unknown(_, _) => lemma_resolves_plain(s, all, env, ps, sd),
         Stmt::SetIndex(_, _, _, _) => lemma_resolves_plain(s, all, env, ps, sd),
+        Stmt::PushBack(_, _, _) => lemma_resolves_plain(s, all, env, ps, sd),
         Stmt::If(c, t, f, l) => {
             lemma_stmts_calls_resolve(*t, all, env, ps, sd);
             lemma_stmts_calls_resolve(*f, all, env, ps, sd);
@@ -5450,6 +5466,7 @@ pub fn place(s: &Stmt) -> (r: u32)
         Stmt::Assert(_, l) => *l,
         Stmt::Apply(_, _, l) => *l,
         Stmt::SetIndex(_, _, _, l) => *l,
+        Stmt::PushBack(_, _, l) => *l,
         Stmt::Unknown(_, l) => *l,
     }
 }
@@ -5926,6 +5943,14 @@ pub fn translate_stmt(s: &Stmt, all: &Fns, env: &Params, ps: &Params, sd: &Struc
             Some(_) => Err(Refusal::WriteParam(*v, *l)),
             None => Err(Refusal::Syntax(*l)),
         },
+        Stmt::PushBack(v, e, l) => match get(ps, *v) {
+            Some(Ty::MutSeq(_)) => match translate_code(e, *l) {
+                Ok(de) => Ok(DStmt::SetOut(*v, DExpr::Append(Box::new(DExpr::Out(*v)), Box::new(de)))),
+                Err(r) => Err(r),
+            },
+            Some(_) => Err(Refusal::WriteParam(*v, *l)),
+            None => Err(Refusal::Syntax(*l)),
+        },
         Stmt::Unknown(k, l) => Err(Refusal::Construct(*k, *l)),
     }
 }
@@ -6329,6 +6354,7 @@ pub fn copy_dexpr(d: &DExpr) -> (r: DExpr)
         DExpr::Temp(x0) => DExpr::Temp(*x0),
         DExpr::ShrIn(x0, x1, x2, x3) => DExpr::ShrIn(Box::new(copy_dexpr(x0)), Box::new(copy_dexpr(x1)), *x2, *x3),
         DExpr::SetAt(x0, x1, x2) => DExpr::SetAt(Box::new(copy_dexpr(x0)), Box::new(copy_dexpr(x1)), Box::new(copy_dexpr(x2))),
+        DExpr::Append(x0, x1) => DExpr::Append(Box::new(copy_dexpr(x0)), Box::new(copy_dexpr(x1))),
     }
 }
 

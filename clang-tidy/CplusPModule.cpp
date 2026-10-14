@@ -4850,6 +4850,18 @@ private:
       if (llvm::json::Value Lowered = compound(Compound); !Lowered.getAsNull())
         return Lowered;
     }
+    // `v.push_back(e)` where `v` is a vector by reference, decision 0148. The other member calls of a vector have no rule.
+    // A temporary for a computed or literal argument wraps the call in a cleanup.
+    if (const auto *Push = dyn_cast<CXXMemberCallExpr>(isa<ExprWithCleanups>(S) ? cast<ExprWithCleanups>(S)->getSubExpr() : S); Push && Push->getNumArgs() == 1 && Push->getMethodDecl() && Push->getMethodDecl()->getDeclName().isIdentifier() &&
+                                                           Push->getMethodDecl()->getName() == "push_back" && Push->getImplicitObjectArgument() &&
+                                                           isMutSeq(Push->getImplicitObjectArgument())) {
+      // The argument is bound to a reference, so a computed value sits in a temporary that is not the value.
+      const Expr *Arg = Push->getArg(0);
+      if (const auto *Temporary = dyn_cast<MaterializeTemporaryExpr>(Arg))
+        Arg = Temporary->getSubExpr();
+      return tag("PushBack", llvm::json::Array{cast<DeclRefExpr>(Push->getImplicitObjectArgument()->IgnoreParenImpCasts())->getDecl()->getNameAsString(),
+                                               expr(Arg, line(S->getBeginLoc())), number(line(S->getBeginLoc()))});
+    }
     // A call that is the whole statement, `f(a);` or `o.f(a);`. Its object is the first argument, decision 0096.
     {
       const Stmt *Inner = S;

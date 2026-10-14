@@ -3,6 +3,7 @@
 #include <vector>
 
 // A write past the end after push_back, and an ensures line with the wrong length, do not prove, decision 0148.
+//@ requires v.size() < 1000
 //@ modifies v
 void past(std::vector<int32_t>& v) {
   v.push_back(1);

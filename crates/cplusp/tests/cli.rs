@@ -4106,6 +4106,19 @@ fn push_back_grows_a_vector_by_reference() {
     assert_eq!(o.status.code(), Some(1), "stdout: {text} stderr: {}", stderr(&o));
     let failed: Vec<&str> = text.lines().filter(|l| l.starts_with("Not proved: ")).map(|l| l.rsplit_once(".cpp:").unwrap().1).collect();
     assert_eq!(failed.len(), 2, "{text}");
-    assert_eq!(failed[0], "9: the index may be out of range.", "{text}");
+    assert_eq!(failed[0], "10: the index may be out of range.", "{text}");
     assert!(failed[1].ends_with(": the ensures line may not hold on this return."), "{text}");
+}
+
+/// The example sorted_insert proves with push_back, its loop invariants and its companion file, decision 0148.
+#[test]
+fn the_sorted_insert_example_proves() {
+    let Some(dafny) = dafny() else { return };
+    if !clang_tidy_available() {
+        return;
+    }
+    let o = prove("../../../../examples/sorted_insert/example.cpp", &[], &dafny);
+    let text = stdout(&o);
+    assert_eq!(o.status.code(), Some(0), "stdout: {text} stderr: {}", stderr(&o));
+    assert_eq!(text.lines().last(), Some("ok: proved"), "{text}");
 }
