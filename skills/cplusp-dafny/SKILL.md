@@ -51,7 +51,7 @@ Treat SPARK guidance as an engineering method, not an LLM performance measuremen
 
 ## Contract lines that the translator reads
 
-This list is true at decision 0148. Read the later decisions before you rely on it.
+This list is true at decision 0149. Read the later decisions before you rely on it.
 `cplusp prove` translates the C++ and the `//@` lines to Dafny, and runs Dafny. It says `ok: proved`, or `Not proved: FILE:LINE: sentence` for a proof that fails, or `Not provable: FILE:LINE: sentence` for a form that has no rule.
 
 Where each line goes:
@@ -81,6 +81,7 @@ The modifies line:
 The companion file:
 - `NAME.spec.dfy` next to `NAME.cpp` holds the functions, predicates and lemmas that the contracts name, decisions 0079, 0080 and 0099.
 - Each lemma has a body. A lemma or a function with no body is an axiom, and the translator refuses it.
+- A count with `std::count_if` names a function here that counts with `CountIf` and the same test as the lambda, such as `CountIf(s, (x: int32) => x as int > k)`, decision 0149. A companion file cannot declare the name `CountIf`.
 - A sequence parameter of a companion function or lemma is `seq<T>`, and an integer parameter is `int`. A multiset fact, such as "the same elements and x", is a predicate here, decision 0148. See `examples/sorted_insert`.
 - A name must not start with a prefix of the model: `v_`, `c_`, `S_`, `E_`, `f_`, `b_` or `trunc_`, decision 0083.
 
@@ -407,6 +408,10 @@ The gate refuses a direct call on the range, and a call that passes the range by
 
 A lambda passed to a std algorithm with by-value captures and no `mutable` is a pure function of its arguments and its captures.
 Model the algorithm and the lambda together as one function over the `seq`.
+`std::count_if(v.begin(), v.end(), [captures](T x) { return e; })` over a sequence parameter is `CountIf(v, (x: T) => e)` of the prelude, as an `int64`, decision 0149.
+The lambda has one parameter of the element type, by value or by `const&`, and its body is one `return` with no call.
+Each count needs a requires line or an invariant that keeps `v.size()` below 2^63. Without it, the fit of the `int64` fails.
+The translator refuses any other algorithm, any other range, and an init capture.
 
 ## fold_init_type
 

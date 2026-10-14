@@ -9,6 +9,7 @@ int32_t count_above(const std::vector<int32_t>& v, int32_t k) {
   return static_cast<int32_t>(std::count_if(v.begin(), v.end(), [k](int32_t x) { return x > k; }));
 }
 
+//@ requires v.size() <= 0x7FFFFFFF
 //@ ensures result == Negatives(v)
 int64_t count_negative(const std::vector<int32_t>& v) {
   return std::count_if(v.begin(), v.end(), [](const int32_t& x) { return x < 0; });

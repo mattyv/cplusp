@@ -407,6 +407,7 @@ pub open spec fn spec_model_name(t: Seq<u8>, s: int, e: int) -> bool {
     let w = t.subrange(s, e);
     w == b"Option"@ || w == b"Some"@ || w == b"None"@ || w == b"Vec"@ || w == b"value"@ || w == b"int8"@ || w == b"int16"@
         || w == b"uint16"@ || w == b"int32"@ || w == b"int64"@ || w == b"uint8"@ || w == b"uint32"@ || w == b"uint64"@ || w == b"shr"@
+        || w == b"CountIf"@
         || spec_starts(t, s, e, b"v_"@) || spec_starts(t, s, e, b"c_"@) || spec_starts(t, s, e, b"S_"@) || spec_starts(t, s, e, b"E_"@)
         || spec_starts(t, s, e, b"f_"@) || spec_starts(t, s, e, b"b_"@) || spec_starts(t, s, e, b"trunc_"@)
 }
@@ -631,7 +632,7 @@ fn model_name(t: &Vec<u8>, s: usize, e: usize) -> (r: bool)
             r == spec_starts(t@, s as int, e as int, x@),
         { starts(t, s, e, x) };
     w(b"Option") || w(b"Some") || w(b"None") || w(b"Vec") || w(b"value") || w(b"int8") || w(b"int16") || w(b"uint16") || w(b"int32")
-        || w(b"int64") || w(b"uint8") || w(b"uint32") || w(b"uint64") || w(b"shr") || p(b"v_") || p(b"c_") || p(b"S_") || p(b"E_")
+        || w(b"int64") || w(b"uint8") || w(b"uint32") || w(b"uint64") || w(b"shr") || w(b"CountIf") || p(b"v_") || p(b"c_") || p(b"S_") || p(b"E_")
         || p(b"f_") || p(b"b_") || p(b"trunc_")
 }
 

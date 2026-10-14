@@ -110,6 +110,8 @@ enum JExpr {
     Construct(String, Vec<JExpr>),
     Index(Box<JExpr>, Box<JExpr>),
     Cond(Box<JExpr>, Box<JExpr>, Box<JExpr>),
+    /// `std::count_if(v.begin(), v.end(), f)` with a lambda: the sequence, the parameter, its type and the test, decision 0149.
+    CountIf(Box<JExpr>, String, JTy, Box<JExpr>),
     Call(String, String, Vec<JExpr>, u32),
     Unknown(String, u32),
 }
@@ -386,6 +388,7 @@ fn expr(e: JExpr, names: &mut Names) -> Expr {
             Expr::Construct(names.id(&k), Box::new(args))
         }
         JExpr::Index(a, i) => Expr::Index(Box::new(expr(*a, names)), Box::new(expr(*i, names))),
+        JExpr::CountIf(v, x, xt, t) => Expr::CountIf(Box::new(expr(*v, names)), names.id(&x), ty(xt, names), Box::new(expr(*t, names))),
         JExpr::Cond(c, a, b) => Expr::Cond(Box::new(expr(*c, names)), Box::new(expr(*a, names)), Box::new(expr(*b, names))),
         JExpr::Call(key, name, args, line) => {
             let args: Vec<Expr> = args.into_iter().map(|a| expr(a, names)).collect();
@@ -688,6 +691,11 @@ fn expr_names<'a>(e: &'a JExpr, out: &mut Vec<&'a str>) {
             expr_names(a, out);
             expr_names(b, out);
         }
+        JExpr::CountIf(v, x, _, t) => {
+            out.push(x);
+            expr_names(v, out);
+            expr_names(t, out);
+        }
         JExpr::Cond(c, a, b) => {
             expr_names(c, out);
             expr_names(a, out);
@@ -854,6 +862,11 @@ function trunc_rem(a: int, b: int): int
   var r := trunc_size(a) % trunc_size(b);
   if a < 0 then -r else r
 }
+function CountIf<T>(s: seq<T>, p: T -> bool): nat
+  ensures CountIf(s, p) <= |s|
+{
+  if |s| == 0 then 0 else CountIf(s[..|s| - 1], p) + (if p(s[|s| - 1]) then 1 else 0)
+}
 ";
 
 /// The model of `a >> n`, decision 0106. It follows the methods when one of them shifts, so a file with no shift has no `decreases` line of its own.
@@ -957,6 +970,7 @@ fn dexpr(e: &DExpr, names: &Names) -> String {
         DExpr::Len(a) => format!("|{}|", dexpr(a, names)),
         DExpr::Index(a, i) => format!("{}[{}]", dexpr(a, names), dexpr(i, names)),
         DExpr::Append(a, e) => format!("({} + [{}])", dexpr(a, names), dexpr(e, names)),
+        DExpr::CountIf(s, x, t, e) => format!("CountIf({}, ({}: {}) => {})", dexpr(s, names), mangle(names.text(*x)), dty(*t, names), dexpr(e, names)),
         DExpr::SetAt(a, i, e) => format!("{}[{} := {}]", dexpr(a, names), dexpr(i, names), dexpr(e, names)),
         DExpr::Drop(a, k) => format!("{}[{}..]", dexpr(a, names), dexpr(k, names)),
         DExpr::Take(a, j) => format!("{}[..{}]", dexpr(a, names), dexpr(j, names)),

@@ -4748,6 +4748,9 @@ private:
   llvm::json::Value varType(const ValueDecl *D) const {
     if (const auto *Var = dyn_cast<VarDecl>(D); Var && Var->isCXXForRangeDecl())
       return type(Var->getType().getNonReferenceType().getUnqualifiedType());
+    // The parameter of a lambda is the element, whether it is by value or by const reference, decision 0149.
+    if (const auto *Param = dyn_cast<ParmVarDecl>(D); Param && isa<CXXMethodDecl>(Param->getDeclContext()) && cast<CXXMethodDecl>(Param->getDeclContext())->getParent()->isLambda())
+      return type(Param->getType().getNonReferenceType().getUnqualifiedType());
     return isa<ParmVarDecl>(D) ? paramType(D->getType()) : type(D->getType());
   }
 
@@ -5031,6 +5034,71 @@ private:
       else
         return Held ? Inner : E;
     }
+  }
+
+  // The `CountIf` node of a call of `std::count_if`, decision 0149, or null when the call is not of the supported shape.
+  llvm::json::Value countIf(const Expr *E, unsigned Near) const {
+    const auto *Call = dyn_cast<CallExpr>(E);
+    const FunctionDecl *Callee = Call && Call->getStmtClass() == Stmt::CallExprClass ? Call->getDirectCallee() : nullptr;
+    if (!Callee || !Callee->isInStdNamespace() || !Callee->getDeclName().isIdentifier() || Callee->getName() != "count_if" || Call->getNumArgs() != 3)
+      return nullptr;
+    // Both ends come from one sequence parameter.
+    const ParmVarDecl *Sequence = nullptr;
+    for (const char *Method : {"begin", "end"}) {
+      const auto *Member = dyn_cast<CXXMemberCallExpr>(Call->getArg(Method[0] == 'b' ? 0 : 1)->IgnoreParenImpCasts());
+      if (!Member || Member->getNumArgs() != 0 || !Member->getMethodDecl() || !Member->getMethodDecl()->getDeclName().isIdentifier() ||
+          Member->getMethodDecl()->getName() != Method)
+        return nullptr;
+      const Expr *Object = Member->getImplicitObjectArgument();
+      const auto *Ref = Object ? dyn_cast<DeclRefExpr>(Object->IgnoreParenImpCasts()) : nullptr;
+      const auto *Param = Ref ? dyn_cast<ParmVarDecl>(Ref->getDecl()) : nullptr;
+      if (!Param || !(isSeq(Object->getType()) || isMutSeq(Object)) || (Sequence && Sequence != Param))
+        return nullptr;
+      Sequence = Param;
+    }
+    // The lambda is written in the call, behind the copies and temporaries that the compiler adds.
+    const Expr *Arg = Call->getArg(2);
+    for (;;) {
+      Arg = Arg->IgnoreParenImpCasts();
+      if (const auto *Wrapper = dyn_cast<ExprWithCleanups>(Arg))
+        Arg = Wrapper->getSubExpr();
+      else if (const auto *Construct = dyn_cast<CXXConstructExpr>(Arg); Construct && Construct->getNumArgs() == 1)
+        Arg = Construct->getArg(0);
+      else if (const auto *Temporary = dyn_cast<MaterializeTemporaryExpr>(Arg))
+        Arg = Temporary->getSubExpr();
+      else if (const auto *Bound = dyn_cast<CXXBindTemporaryExpr>(Arg))
+        Arg = Bound->getSubExpr();
+      else
+        break;
+    }
+    const auto *Lambda = dyn_cast<LambdaExpr>(Arg);
+    const CXXMethodDecl *Operator = Lambda ? Lambda->getCallOperator() : nullptr;
+    if (!Operator || !Operator->isConst() || Operator->getNumParams() != 1 || Lambda->getCaptureDefault() == LCD_ByRef)
+      return nullptr;
+    for (const LambdaCapture &Capture : Lambda->captures())
+      if (Capture.getCaptureKind() != LCK_ByCopy || !Capture.capturesVariable() || Lambda->isInitCapture(&Capture))
+        return nullptr;
+    // One `return e;` of a boolean.
+    const auto *Body = dyn_cast_or_null<CompoundStmt>(Operator->getBody());
+    const auto *Return = Body && Body->size() == 1 ? dyn_cast<ReturnStmt>(Body->body_front()) : nullptr;
+    if (!Return || !Return->getRetValue() || !Return->getRetValue()->getType()->isBooleanType())
+      return nullptr;
+    // The parameter has the element type, by value or by reference to const.
+    const ParmVarDecl *Parameter = Operator->getParamDecl(0);
+    QualType Declared = Parameter->getType();
+    if (Declared->isReferenceType()) {
+      if (!Declared->isLValueReferenceType() || !Declared->getPointeeType().isConstQualified())
+        return nullptr;
+      Declared = Declared->getPointeeType();
+    }
+    QualType Element = seqElement(Sequence->getType());
+    // A vector by reference that the function writes is no const sequence, so its element comes from the vector itself, decision 0145.
+    if (Element.isNull() && mutSeq(Sequence->getType()))
+      Element = cast<ClassTemplateSpecializationDecl>(Sequence->getType()->getPointeeType()->getAsCXXRecordDecl())->getTemplateArgs()[0].getAsType();
+    if (Element.isNull() || Declared.getCanonicalType().getUnqualifiedType() != Element.getCanonicalType().getUnqualifiedType() || !Parameter->getIdentifier())
+      return nullptr;
+    return tag("CountIf", llvm::json::Array{expr(cast<CXXMemberCallExpr>(Call->getArg(0)->IgnoreParenImpCasts())->getImplicitObjectArgument()->IgnoreParenImpCasts(), Near),
+                                            Parameter->getNameAsString(), type(Element), expr(Return->getRetValue(), Near)});
   }
 
   llvm::json::Value expr(const Expr *E, unsigned Near) const {
@@ -5320,6 +5388,10 @@ private:
         Args.push_back(expr(Call->getArg(I), line(E->getBeginLoc())));
       return tag("Call", llvm::json::Array{key(Call->getDirectCallee()), name(Call->getDirectCallee()), std::move(Args), number(line(E->getBeginLoc()))});
     }
+    // `std::count_if(v.begin(), v.end(), [captures](T x) { return e; })` over a sequence parameter, decision 0149. The captures are by copy and the
+    // body is one `return`. Anything else stays a call, which has no model, and is refused.
+    if (const llvm::json::Value Counted = countIf(E, Near); !Counted.getAsNull())
+      return Counted;
     // Only a plain call by name. A member call, an operator call and the rest of the call classes stay unknown.
     if (E->getStmtClass() == Stmt::CallExprClass)
       if (const FunctionDecl *Callee = cast<CallExpr>(E)->getDirectCallee()) {
@@ -5364,6 +5436,9 @@ public:
     }
     const auto *FD = Result.Nodes.getNodeAs<FunctionDecl>("fn");
     if (!FD || FD->isDeleted())
+      return;
+    // The call operator of a lambda is no function of its own, decision 0149. The call that takes the lambda reads its body, or is refused.
+    if (const auto *Method = dyn_cast<CXXMethodDecl>(FD); Method && Method->getParent()->isLambda())
       return;
     const Contract C = contractOf(Context->getSourceManager(), FD);
     for (const Contract::Line &L : C.Lines)

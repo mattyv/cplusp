@@ -4123,7 +4123,8 @@ fn the_sorted_insert_example_proves() {
     assert_eq!(text.lines().last(), Some("ok: proved"), "{text}");
 }
 
-/// count_if with a lambda written in the call proves against a companion count that says the same test, decision 0149.
+/// count_if with a lambda written in the call proves against a companion count that says the same test, decision 0149. A lambda
+/// with another test fails its ensures line, and a count with no bound fails the int64 fit and the int32 fit at line 14.
 #[test]
 fn count_if_with_a_lambda_proves() {
     let Some(dafny) = dafny() else { return };
@@ -4138,9 +4139,10 @@ fn count_if_with_a_lambda_proves() {
     let text = stdout(&o);
     assert_eq!(o.status.code(), Some(1), "stdout: {text} stderr: {}", stderr(&o));
     let failed: Vec<&str> = text.lines().filter(|l| l.starts_with("Not proved: ")).map(|l| l.rsplit_once(".cpp:").unwrap().1).collect();
-    assert_eq!(failed.len(), 2, "{text}");
+    assert_eq!(failed.len(), 3, "{text}");
     assert!(failed[0].starts_with("9: ") && failed[0].ends_with(": the ensures line may not hold on this return."), "{text}");
-    assert_eq!(failed[1], "14: the value may not fit int32_t.", "{text}");
+    assert_eq!(failed[1], "14: the value may not fit int64_t.", "{text}");
+    assert_eq!(failed[2], "14: the value may not fit int32_t.", "{text}");
 }
 
 /// Another algorithm, an init capture and a lambda body of two statements are refused at their lines, and the lambda is no

@@ -252,8 +252,9 @@ pub enum CastKind {
 /// decision 0085. `Divide` is `/` or `%` in code, with the type of its result, decision 0088. `MApply` is `o.f(args)` in a contract,
 /// a call of a member function by the id of its name, decision 0090. `Old` is `old(e)` in an ensures line, decision 0096. `Cond` is
 /// `c ? a : b`, decision 0098. `Shr` is `a >> n` in code, with the type of its result, decision 0106. `Enumerator` is an enumerator,
-/// by the key of its enum and its place among the enumerators, decision 0109. `Unknown` is a construct with no rule, by the id of its
-/// kind and its line.
+/// by the key of its enum and its place among the enumerators, decision 0109. `CountIf` is `std::count_if(v.begin(), v.end(), f)` in
+/// code, with the sequence, the name and the type of the parameter of the lambda `f`, and the expression of its one `return`,
+/// decision 0149. `Unknown` is a construct with no rule, by the id of its kind and its line.
 #[derive(PartialEq, Eq, Debug)]
 pub enum Expr {
     Int(u64),
@@ -293,6 +294,7 @@ pub enum Expr {
     Cond(Box<Expr>, Box<Expr>, Box<Expr>),
     Shr(Box<Expr>, Box<Expr>, Ty),
     Enumerator(u32, u32),
+    CountIf(Box<Expr>, u32, Ty, Box<Expr>),
     Unknown(u32, u32),
 }
 
@@ -415,7 +417,7 @@ pub enum DTy {
 /// object of a member function that writes it, as the body leaves it, decision 0096. `Out` is `x'`, a reference parameter as the body
 /// leaves it, decision 0108. `Enumerator` is the constructor of an enumerator, decision 0109. `Ite` is `if c then a else b`, decision 0098.
 /// `Temp` reads a temporary that a call before the statement set, decision 0104. `ShrIn` is `(shr(a, n, W) as T)`, a right shift
-/// of the width `W`, decision 0106. `SetAt` is `s[i := e]`, which Dafny proves is in range, decision 0145. `Append` is `s + [e]`, decision 0148. A Dafny expression calls no
+/// of the width `W`, decision 0106. `SetAt` is `s[i := e]`, which Dafny proves is in range, decision 0145. `Append` is `s + [e]`, decision 0148. `CountIf` is `CountIf(s, (x: T) => e)` of the prelude, decision 0149. A Dafny expression calls no
 /// method.
 #[derive(PartialEq, Eq, Debug)]
 pub enum DExpr {
@@ -457,6 +459,7 @@ pub enum DExpr {
     ShrIn(Box<DExpr>, Box<DExpr>, DTy, u32),
     SetAt(Box<DExpr>, Box<DExpr>, Box<DExpr>),
     Append(Box<DExpr>, Box<DExpr>),
+    CountIf(Box<DExpr>, u32, DTy, Box<DExpr>),
 }
 
 /// The calls that run before a statement, in the order that they run: each sets a temporary of the statement by its number, of a
@@ -787,6 +790,26 @@ pub open spec fn spec_elem(s: Scalar) -> Ty {
     }
 }
 
+/// The scalar of the elements of a sequence parameter, read-only or written, decisions 0064 and 0145.
+pub open spec fn spec_seq_elem(t: Ty) -> Option<Scalar> {
+    match t {
+        Ty::Seq(s, _) => Some(s),
+        Ty::MutSeq(s) => Some(s),
+        _ => None,
+    }
+}
+
+pub fn seq_elem(t: Ty) -> (r: Option<Scalar>)
+    ensures
+        r == spec_seq_elem(t),
+{
+    match t {
+        Ty::Seq(s, _) => Some(s),
+        Ty::MutSeq(s) => Some(s),
+        _ => None,
+    }
+}
+
 /// A sequence made from a sequence keeps its value when the elements are the same and the length cannot change: the new one has no
 /// fixed extent, or the same extent as the old one, decision 0070. A copy of a struct keeps its value as the same struct, decision
 /// 0073, and a copy of an optional as an optional of the same scalar, decision 0075.
@@ -987,6 +1010,25 @@ pub open spec fn spec_lift(e: Expr, all: Fns, line: u32, sd: Structs, n: u32, op
         Expr::Size(o) => match spec_lift(*o, all, line, sd, n, open) {
             Err(r) => Err(r),
             Ok((c, d, n1)) => Ok((c, DExpr::Conv(DTy::UInt64, Box::new(DExpr::Len(Box::new(d)))), n1)),
+        },
+        // `std::count_if(v.begin(), v.end(), f)` is CountIf of the prelude, as the int64 that C++ gives, decision 0149. `v` is a
+        // sequence parameter, the parameter of the lambda has the element type, and its test holds no call.
+        Expr::CountIf(o, x, xt, t) => match *o {
+            Expr::Var(v, vt) => match spec_seq_elem(vt) {
+                Some(s) => if spec_elem(s) == xt {
+                    match spec_ty(xt, line) {
+                        Err(r) => Err(r),
+                        Ok(dx) => match spec_lift(*t, List::Nil, line, List::Nil, 0, false) {
+                            Err(r) => Err(r),
+                            Ok((_, dt, _)) => Ok((List::Nil, DExpr::Conv(DTy::Int64, Box::new(DExpr::CountIf(Box::new(spec_code_var(v, vt)), x, dx, Box::new(dt)))), n)),
+                        },
+                    }
+                } else {
+                    Err(Refusal::Syntax(line))
+                },
+                None => Err(Refusal::Syntax(line)),
+            },
+            _ => Err(Refusal::Syntax(line)),
         },
         Expr::Index(o, i) => match spec_lift(*o, all, line, sd, n, open) {
             Err(r) => Err(r),
@@ -2957,6 +2999,7 @@ pub open spec fn unknown_expr(e: Expr) -> bool
         Expr::Call(_, _, args, _) => unknown_args(*args),
         Expr::Size(a) => unknown_expr(*a),
         Expr::Index(a, i) => unknown_expr(*a) || unknown_expr(*i),
+        Expr::CountIf(a, _, _, t) => unknown_expr(*a) || unknown_expr(*t),
         Expr::Copy(a, _, _) => unknown_expr(*a),
         Expr::Field(a, _) => unknown_expr(*a),
         Expr::Construct(_, args) => unknown_args(*args),
@@ -3751,6 +3794,18 @@ pub proof fn lemma_unknown_lift_is_refused(e: Expr, all: Fns, line: u32, sd: Str
                 lemma_unknown_lift_is_refused(*b, all, line, sd, spec_lift(*a, all, line, sd, n, open).unwrap().2, open);
             }
         },
+        // The sequence of a count is a variable, so a node with no rule is in the test, which lifts with no call.
+        Expr::CountIf(a, _, _, t) => {
+            if unknown_expr(*t) {
+                lemma_unknown_lift_is_refused(*t, List::Nil, line, List::Nil, 0, false);
+            } else {
+                assert(!(*a is Var)) by {
+                    if *a is Var {
+                        assert(!unknown_expr(*a));
+                    }
+                }
+            }
+        },
         Expr::Index(a, b) => {
             if unknown_expr(*a) {
                 lemma_unknown_lift_is_refused(*a, all, line, sd, n, open);
@@ -4475,6 +4530,23 @@ pub fn lift(e: &Expr, all: &Fns, line: u32, sd: &Structs, n: u32, open: bool) ->
         Expr::Size(o) => match lift(o, all, line, sd, n, open) {
             Err(r) => Err(r),
             Ok((c, d, n1)) => Ok((c, DExpr::Conv(DTy::UInt64, Box::new(DExpr::Len(Box::new(d)))), n1)),
+        },
+        Expr::CountIf(o, x, xt, t) => match &**o {
+            Expr::Var(v, vt) => match seq_elem(*vt) {
+                Some(s) => if elem(s) == *xt {
+                    match translate_ty(*xt, line) {
+                        Err(r) => Err(r),
+                        Ok(dx) => match lift(t, &List::Nil, line, &List::Nil, 0, false) {
+                            Err(r) => Err(r),
+                            Ok((_, dt, _)) => Ok((List::Nil, DExpr::Conv(DTy::Int64, Box::new(DExpr::CountIf(Box::new(code_var(*v, *vt)), *x, dx, Box::new(dt)))), n)),
+                        },
+                    }
+                } else {
+                    Err(Refusal::Syntax(line))
+                },
+                None => Err(Refusal::Syntax(line)),
+            },
+            _ => Err(Refusal::Syntax(line)),
         },
         Expr::Index(o, i) => match lift(o, all, line, sd, n, open) {
             Err(r) => Err(r),
@@ -6355,6 +6427,7 @@ pub fn copy_dexpr(d: &DExpr) -> (r: DExpr)
         DExpr::ShrIn(x0, x1, x2, x3) => DExpr::ShrIn(Box::new(copy_dexpr(x0)), Box::new(copy_dexpr(x1)), *x2, *x3),
         DExpr::SetAt(x0, x1, x2) => DExpr::SetAt(Box::new(copy_dexpr(x0)), Box::new(copy_dexpr(x1)), Box::new(copy_dexpr(x2))),
         DExpr::Append(x0, x1) => DExpr::Append(Box::new(copy_dexpr(x0)), Box::new(copy_dexpr(x1))),
+        DExpr::CountIf(x0, x1, x2, x3) => DExpr::CountIf(Box::new(copy_dexpr(x0)), *x1, *x2, Box::new(copy_dexpr(x3))),
     }
 }
 
