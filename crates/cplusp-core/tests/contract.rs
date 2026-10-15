@@ -250,3 +250,18 @@ fn nullptr_is_a_word() {
     assert_eq!(lex("p != nullptr"), vec![name("p"), op("!=", BinOp::Ne), fixed("nullptr", Tok::Nullptr)]);
     assert_eq!(lex("nullptr_t nullptrx"), vec![name("nullptr_t"), name("nullptrx")]);
 }
+
+/// A decimal literal with a point is a real, by its digits and the count of digits after the point, and `std::isfinite` is a word,
+/// decision 0150.
+#[test]
+fn a_decimal_with_a_point_is_a_real_and_isfinite_is_a_word() {
+    assert_eq!(lex("150.0 0.5 100.25"), vec![t("150.0", LexKind::Real(1500, 1)), t("0.5", LexKind::Real(5, 1)), t("100.25", LexKind::Real(10025, 2))]);
+    assert_eq!(
+        lex("std::isfinite(a)"),
+        vec![fixed("std::isfinite", Tok::IsFinite), fixed("(", Tok::LParen), name("a"), fixed(")", Tok::RParen)]
+    );
+    // A point with no digit after it, and an exponent, have no rule.
+    assert!(lex("1.").iter().any(|(_, k)| *k == LexKind::BadChar || matches!(k, LexKind::BadNumber(_))), "{:?}", lex("1."));
+    assert!(lex("1.5e3").iter().any(|(_, k)| matches!(k, LexKind::BadNumber(_))), "{:?}", lex("1.5e3"));
+    assert_eq!(lex("std::isfinitex"), vec![name("std"), fixed("::", Tok::ColonColon), name("isfinitex")]);
+}

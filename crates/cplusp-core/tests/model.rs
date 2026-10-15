@@ -2795,3 +2795,101 @@ fn count_if_with_a_lambda_is_count_if_of_the_prelude() {
     assert_eq!(strip(m.body), List::Cons((Box::new(want), 0), Box::new(List::Nil)));
     assert_eq!(bare_refusal(translate_function(&f(Ty::I64), &List::Nil, &List::Nil)), Refusal::Syntax(6));
 }
+
+const DA: u32 = 240;
+const DB: u32 = 241;
+const DD: u32 = 242;
+
+/// A requires line that says `std::isfinite(x)` of each name, joined by `&&`.
+fn finite(ns: &[u32], line: u32, decl: &[u32]) -> Conds {
+    let mut e = Expr::Finite(b(Expr::Name(ns[0])));
+    for n in &ns[1..] {
+        e = Expr::Bin(BinOp::And, b(e), b(Expr::Finite(b(Expr::Name(*n)))));
+    }
+    List::Cons((CondKind::Requires, e, line, names(decl)), Box::new(List::Nil))
+}
+
+/// `double larger(double a, double b) { if (a < b) { return b; } return a; }` with `requires std::isfinite(a) && std::isfinite(b)`.
+fn larger(body: Stmts) -> Function {
+    Function {
+        name: SAT,
+        line: 5,
+        params: List::Cons((DA, Ty::F64), Box::new(List::Cons((DB, Ty::F64), Box::new(List::Nil)))),
+        ret: Ty::F64,
+        trusted: false,
+        conds: finite(&[DA, DB], 4, &[DA, DB]),
+        body,
+    }
+}
+
+/// A double is a real, and a comparison of two doubles is the comparison of the reals, decision 0150. `std::isfinite` is true in
+/// the model, which holds no NaN and no infinity.
+#[test]
+fn a_double_that_only_compares_is_a_real() {
+    let test = Expr::Bin(BinOp::Lt, b(Expr::Var(DA, Ty::F64)), b(Expr::Var(DB, Ty::F64)));
+    let body = List::Cons(
+        Box::new(Stmt::If(test, Box::new(one(Stmt::Return(Expr::Var(DB, Ty::F64), 7))), Box::new(List::Nil), 6)),
+        Box::new(one(Stmt::Return(Expr::Var(DA, Ty::F64), 9))),
+    );
+    let Model::Full(m) = translate_function(&larger(body), &List::Nil, &List::Nil) else { panic!("a full model") };
+    assert_eq!(m.params, List::Cons((DA, DTy::Real), Box::new(List::Cons((DB, DTy::Real), Box::new(List::Nil)))));
+    assert_eq!(m.ret, DTy::Real);
+    let fin = DExpr::Bin(BinOp::And, Box::new(DExpr::Bool(true)), Box::new(DExpr::Bool(true)));
+    assert_eq!(strip_conds(m.requires), List::Cons((fin, 0), Box::new(List::Nil)));
+    let want = DStmt::If(
+        DExpr::Bin(BinOp::Lt, Box::new(DExpr::Var(DA)), Box::new(DExpr::Var(DB))),
+        Box::new(List::Cons((Box::new(DStmt::Return(DExpr::Var(DB))), 0), Box::new(List::Nil))),
+        Box::new(List::Nil),
+    );
+    let List::Cons((first, _), _) = strip(m.body) else { panic!("a body") };
+    assert_eq!(*first, want);
+    // A literal is its digits over a power of ten, in code and in a contract.
+    let Model::Full(m) = translate_function(&larger(one(Stmt::Return(Expr::RealLit(5, 1), 6))), &List::Nil, &List::Nil) else { panic!("a full model") };
+    assert_eq!(strip(m.body), List::Cons((Box::new(DStmt::Return(DExpr::RealLit(5, 1))), 0), Box::new(List::Nil)));
+    let ens = Expr::Bin(BinOp::Le, b(Expr::RealLit(0, 0)), b(Expr::Result));
+    let f = Function { conds: List::Cons((CondKind::Ensures, ens, 4, names(&[DA, DB])), Box::new(finite(&[DA, DB], 3, &[DA, DB]))), ..larger(one(Stmt::Return(Expr::Var(DA, Ty::F64), 6))) };
+    let Model::Full(m) = translate_function(&f, &List::Nil, &List::Nil) else { panic!("a full model") };
+    assert_eq!(strip_conds(m.ensures), List::Cons((DExpr::Bin(BinOp::Le, Box::new(DExpr::RealLit(0, 0)), Box::new(DExpr::Result)), 0), Box::new(List::Nil)));
+}
+
+/// Each step that rounds is refused in the core, so the model never makes exact real arithmetic of it, decision 0150.
+#[test]
+fn a_double_operation_that_rounds_is_refused() {
+    for op in [BinOp::Add, BinOp::Sub, BinOp::Mul, BinOp::Div] {
+        let sum = Expr::Bin(op, b(Expr::Var(DA, Ty::F64)), b(Expr::Var(DB, Ty::F64)));
+        assert_eq!(bare_refusal(translate_function(&larger(one(Stmt::Return(sum, 6))), &List::Nil, &List::Nil)), Refusal::Rounds(6), "{op:?}");
+        // Through a parenthesis, a negation and a literal too.
+        let sum = Expr::Bin(op, b(Expr::Paren(b(Expr::Neg(b(Expr::Var(DA, Ty::F64)))))), b(Expr::RealLit(1, 0)));
+        assert_eq!(bare_refusal(translate_function(&larger(one(Stmt::Return(sum, 6))), &List::Nil, &List::Nil)), Refusal::Rounds(6), "{op:?}");
+    }
+    let body = List::Cons(
+        Box::new(Stmt::Local(DD, Ty::F64, Expr::Var(DA, Ty::F64), 6)),
+        Box::new(List::Cons(Box::new(Stmt::Step(DD, Ty::F64, true, 7)), Box::new(one(Stmt::Return(Expr::Var(DD, Ty::F64), 8))))),
+    );
+    assert_eq!(bare_refusal(translate_function(&larger(body), &List::Nil, &List::Nil)), Refusal::Rounds(7));
+}
+
+/// The model holds no NaN and no infinity, so each double parameter needs `std::isfinite` in a requires line, and a trusted
+/// function that gives a double needs `std::isfinite(result)` in an ensures line, decision 0150. A field of type double has no
+/// rule yet.
+#[test]
+fn a_double_needs_the_words_that_keep_nan_out() {
+    let f = Function { conds: finite(&[DA], 4, &[DA, DB]), ..larger(one(Stmt::Return(Expr::Var(DA, Ty::F64), 6))) };
+    assert_eq!(translate_function(&f, &List::Nil, &List::Nil), Model::Refused(Refusal::Finite(DB, 5)));
+    let t = Function { params: List::Nil, conds: List::Nil, trusted: true, body: List::Nil, ..larger(List::Nil) };
+    assert_eq!(translate_function(&t, &List::Nil, &List::Nil), Model::Refused(Refusal::FiniteResult(5)));
+    let ens = Expr::Bin(BinOp::And, b(Expr::Finite(b(Expr::Result))), b(Expr::Bin(BinOp::Le, b(Expr::RealLit(0, 0)), b(Expr::Result))));
+    let t = Function { conds: List::Cons((CondKind::Ensures, ens, 4, List::Nil), Box::new(List::Nil)), ..t };
+    assert!(matches!(translate_function(&t, &List::Nil, &List::Nil), Model::Full(_)));
+    let sd: Structs = List::Cons((POINT, (3, List::Cons((FX, Ty::F64), Box::new(List::Nil)), List::Nil)), Box::new(List::Nil));
+    assert!(matches!(translate_structs(&sd), List::Cons(Err(_), _)));
+}
+
+/// `std::isfinite(x)` and a decimal with a point parse in a contract, decision 0150.
+#[test]
+fn isfinite_and_a_real_parse_in_a_contract() {
+    let toks = vec![Tok::IsFinite, Tok::LParen, Tok::Ident(DA), Tok::RParen, Tok::Op(BinOp::And), Tok::Real(5, 1), Tok::Op(BinOp::Le), Tok::Ident(DA)];
+    let want = Expr::Bin(BinOp::And, b(Expr::Finite(b(Expr::Name(DA)))), b(Expr::Bin(BinOp::Le, b(Expr::RealLit(5, 1)), b(Expr::Name(DA)))));
+    assert_eq!(parse_contract(&toks, 4), Ok(want));
+}
+

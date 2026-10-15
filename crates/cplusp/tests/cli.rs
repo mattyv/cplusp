@@ -4175,3 +4175,58 @@ fn the_lambdas_example_proves() {
     assert_eq!(o.status.code(), Some(0), "stdout: {text} stderr: {}", stderr(&o));
     assert_eq!(text.lines().last(), Some("ok: proved"), "{text}");
 }
+
+/// A double that only compares proves as a real, and a clamp that misses part of its range fails at its return, decision 0150.
+#[test]
+fn a_double_that_only_compares_proves() {
+    let Some(dafny) = dafny() else { return };
+    if !clang_tidy_available() {
+        return;
+    }
+    let o = prove("model-double.cpp", &[], &dafny);
+    let text = stdout(&o);
+    assert_eq!(o.status.code(), Some(0), "stdout: {text} stderr: {}", stderr(&o));
+    assert_eq!(text.lines().last(), Some("ok: proved"), "{text}");
+    let o = prove("model-double-wrong.cpp", &[], &dafny);
+    let text = stdout(&o);
+    assert_eq!(o.status.code(), Some(1), "stdout: {text} stderr: {}", stderr(&o));
+    let failed: Vec<&str> = text.lines().filter(|l| l.starts_with("Not proved: ")).map(|l| l.rsplit_once(".cpp:").unwrap().1).collect();
+    assert_eq!(failed, ["10: the ensures line may not hold on this return."], "{text}");
+}
+
+/// A double operation that rounds, a double parameter with no isfinite, and a trusted double result with no isfinite are refused
+/// with their sentences, decision 0150.
+#[test]
+fn a_double_with_no_rule_is_refused() {
+    if !clang_tidy_available() {
+        return;
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let (o, _) = model("model-double-refuse.cpp", dir.path());
+    let text = stdout(&o);
+    assert_eq!(o.status.code(), Some(1), "stdout: {text} stderr: {}", stderr(&o));
+    let refusals: Vec<&str> = text.lines().filter(|l| l.starts_with("Not provable: ")).map(|l| l.rsplit_once(".cpp:").unwrap().1).collect();
+    assert_eq!(
+        refusals,
+        [
+            "8: a double operation rounds, and the translator has no rule for it yet.",
+            "11: x is a double. A requires line needs std::isfinite(x).",
+            "17: a trusted function that gives a double needs std::isfinite(result) in an ensures line.",
+            "22: a double operation rounds, and the translator has no rule for it yet.",
+        ],
+        "{text}"
+    );
+}
+
+/// The example double_only proves: a trusted reading, and a clamp by comparisons only, decision 0150.
+#[test]
+fn the_double_only_example_proves() {
+    let Some(dafny) = dafny() else { return };
+    if !clang_tidy_available() {
+        return;
+    }
+    let o = prove("../../../../examples/double_only/example.cpp", &[], &dafny);
+    let text = stdout(&o);
+    assert_eq!(o.status.code(), Some(0), "stdout: {text} stderr: {}", stderr(&o));
+    assert_eq!(text.lines().last(), Some("ok: proved"), "{text}");
+}
