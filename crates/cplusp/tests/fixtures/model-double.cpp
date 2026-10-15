@@ -39,3 +39,14 @@ double scaled() {
   double s = scale();
   return s;
 }
+
+// A literal in code and one in a contract with other spellings of the same value, so a printer that moves the point fails.
+//@ ensures result == 100.0
+double hundred() {
+  return 100.0;
+}
+
+//@ ensures result == 0.125
+double eighth() {
+  return 0x1p-3;
+}

@@ -51,7 +51,7 @@ Treat SPARK guidance as an engineering method, not an LLM performance measuremen
 
 ## Contract lines that the translator reads
 
-This list is true at decision 0149. Read the later decisions before you rely on it.
+This list is true at decision 0150. Read the later decisions before you rely on it.
 `cplusp prove` translates the C++ and the `//@` lines to Dafny, and runs Dafny. It says `ok: proved`, or `Not proved: FILE:LINE: sentence` for a proof that fails, or `Not provable: FILE:LINE: sentence` for a form that has no rule.
 
 Where each line goes:
@@ -66,6 +66,7 @@ What a contract expression can hold:
 - `v.size()`, `v[i]`, `v[i..]`, `v[..j]` and `v[i..j]` of a sequence, and `o.has_value()`, `o.value()`, `*o` and `o->f` of an optional, decisions 0131 and 0137.
 - `p == nullptr`, `p != nullptr`, `*p` and `p->f` of a pointer to const or a unique_ptr, decisions 0140 to 0142. Two pointers do not compare.
 - Hex literals, `true`, `false` and a character such as `'0'`, decision 0106.
+- A decimal with a point, such as `150.0` or `0.5`, is that real, and `std::isfinite(x)` reads a `double`, decision 0150. Compare a `double` with a decimal with a point, never with an integer.
 - A `constexpr` integer constant of the file, when C++ finds it from the function, decisions 0106 and 0107.
 - An enumerator such as `Kind::Small`, decision 0109.
 - A pure `const` member function, and a function or predicate of the companion file, decisions 0079 and 0090.
@@ -73,6 +74,8 @@ What a contract expression can hold:
 The modifies line:
 - It names each non-const reference parameter (`T&`) that the function writes, and nothing else, decisions 0108 and 0110. The translator refuses a function with a reference parameter that the line does not name.
 - A function that only reads a value takes it by value or by `const T&`.
+- Each `double` parameter needs `std::isfinite(x)` as a part of a requires line, joined by `&&`. A trusted function that gives a `double` needs `std::isfinite(result)` in an ensures line. The model has no NaN and no infinity, decision 0150.
+- A `double` can only compare, negate and move in step one. `+`, `-`, `*`, `/`, `+=` and `++` on a `double` are refused, because they round.
 - A `std::vector<T>&` on the line takes its value in and gives it back, decision 0145. In the body, `v[i] = e` writes one element, and `v.push_back(e)` adds one at the end, decision 0148. Neither `i` nor `e` holds a call. `v[i] += e`, `emplace_back`, `pop_back`, `resize`, `clear` and passing `v` on to a `std::vector<T>&` have no rule yet.
 - After a `push_back`, a read of `v.size()` in code needs a requires line or an invariant that bounds the length. Then the size fits `size_t`.
 - An ensures line that reads `v[i]` after the call needs a line before it that gives the length: `ensures v.size() == old(v.size())`, or `+ 1` after one `push_back`, decision 0146. A loop that writes `v` needs the same line as an invariant.

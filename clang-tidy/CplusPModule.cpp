@@ -49,6 +49,7 @@
 #include "clang/Serialization/ASTReader.h"
 #include "clang/Serialization/ModuleManager.h"
 
+#include <cmath>
 #include <algorithm>
 #include <initializer_list>
 #include <map>
@@ -4448,6 +4449,13 @@ private:
     return nullptr;
   }
 
+  // Whether a type is `double` with no qualifier, decision 0150. `float` and `long double` are refused by the gate.
+  static bool isDouble(QualType T) {
+    const QualType Canon = T.getCanonicalType();
+    const auto *Builtin = dyn_cast<BuiltinType>(Canon.getTypePtr());
+    return !Canon.hasQualifiers() && Builtin && Builtin->getKind() == BuiltinType::Double;
+  }
+
   // The element type of a read-only sequence, decision 0064, or null: a const vector or a reference to one, except `std::vector<bool>`, and
   // a span of const elements, any extent, and a const std::array, decision 0132. A reference is looked through. The element is a scalar or a plain struct, decision 0076. A
   // `Field` is a field of a struct, decision 0076: a vector with no const, and no span.
@@ -4761,6 +4769,9 @@ private:
       return S;
     if (const EnumDecl *ED = plainEnum(T))
       return enumType(ED);
+    // A `double` by value is a real that only compares, decision 0150. A field, a sequence, an optional and a reference of it stay out.
+    if (!Field && isDouble(T))
+      return "F64";
     // Decision 0074: a struct is by value or by const lvalue reference. Any other reference stays `Other`.
     const bool Writable = T->isReferenceType() && !(T->isLValueReferenceType() && T->getPointeeType().isConstQualified());
     if (const CXXRecordDecl *RD = Writable ? nullptr : plainStruct(T)) {
@@ -4988,7 +4999,8 @@ private:
     const unsigned At = line(C->getBeginLoc());
     const Expr *Left = C->getLHS();
     const char *Scalar = scalar(Left->getType());
-    if (!Scalar || StringRef(Scalar) == "Bool")
+    // `x += e` of a double is the write of `x + e`, which the core refuses as a rounding, decision 0150.
+    if (!isDouble(Left->getType()) && (!Scalar || StringRef(Scalar) == "Bool"))
       return nullptr;
     const auto *Name = dyn_cast<DeclRefExpr>(Left);
     const FieldDecl *Field = Name ? nullptr : objectField(Left);
@@ -5146,6 +5158,30 @@ private:
     }
     if (const auto *Flag = dyn_cast<CXXBoolLiteralExpr>(E))
       return tag("Bool", Flag->getValue());
+    // A literal of type double whose value is `d / 10^k` with `d` in 63 bits and `k` up to 19, decision 0150. Any other stays unknown.
+    // ponytail: the JSON of the plugin holds a number above 63 bits as a double, so `d` stops at 63 bits, not 64. Upgrade: send `d` as text.
+    if (const auto *Real = dyn_cast<FloatingLiteral>(E); Real && isDouble(Real->getType())) {
+      const double Value = Real->getValueAsApproximateDouble();
+      int Exponent = 0;
+      const double Fraction = std::frexp(Value, &Exponent);
+      uint64_t Mantissa = static_cast<uint64_t>(std::ldexp(Fraction, 53));
+      int Power = Exponent - 53;
+      while (Mantissa && Mantissa % 2 == 0)
+        Mantissa /= 2, ++Power;
+      if (!Mantissa)
+        return tag("RealLit", llvm::json::Array{number(0), number(0)});
+      unsigned __int128 Digits = Mantissa;
+      if (Power >= 0) {
+        if (Power < 64 && (Digits << Power) <= INT64_MAX)
+          return tag("RealLit", llvm::json::Array{number(static_cast<uint64_t>(Digits << Power)), number(0)});
+      } else if (-Power <= 19) {
+        for (int I = 0; I < -Power && Digits <= INT64_MAX; ++I)
+          Digits *= 5;
+        if (Digits <= INT64_MAX)
+          return tag("RealLit", llvm::json::Array{number(static_cast<uint64_t>(Digits)), number(-Power)});
+      }
+      return unknown(E, E->getStmtClassName(), Near);
+    }
     if (const auto *Literal = dyn_cast<IntegerLiteral>(E); Literal && Literal->getValue().getActiveBits() <= 64)
       return tag("Lit", llvm::json::Array{number(Literal->getValue().getZExtValue()), type(Literal->getType())});
     if (const auto *Ref = dyn_cast<DeclRefExpr>(E)) {
@@ -5214,8 +5250,9 @@ private:
           return tag("Bin", NullRight ? llvm::json::Array{Op, expr(Pointer, Near), "Nullopt"} : llvm::json::Array{Op, "Nullopt", expr(Pointer, Near)});
         return unknown(E, describe(E), Near);
       }
-      // Division and remainder of integers carry the type of their result, decision 0088. Division of floating point stays unknown.
-      if (!Op && (Binary->getOpcode() == BO_Div || Binary->getOpcode() == BO_Rem) && Binary->getType()->isIntegerType())
+      // Division and remainder of integers carry the type of their result, decision 0088. Division of a double carries `F64`, and the core refuses it as
+      // a rounding, decision 0150. Any other floating point stays unknown.
+      if (!Op && (Binary->getOpcode() == BO_Div || Binary->getOpcode() == BO_Rem) && (Binary->getType()->isIntegerType() || isDouble(Binary->getType())))
         return tag("Divide", llvm::json::Array{Binary->getOpcode() == BO_Div ? "Div" : "Rem", expr(Binary->getLHS(), Near), expr(Binary->getRHS(), Near),
                                                type(Binary->getType())});
       // Two values of an enum are compared for equality only, decision 0109.

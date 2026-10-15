@@ -170,7 +170,8 @@ pub enum Extent {
     Fixed(u64),
 }
 
-/// A type of the subset. `I8`, `I16` and `U16` are `int8_t`, `int16_t` and `uint16_t`, decision 0106. `Seq` is a read-only sequence of a scalar with its extent, a parameter only, decisions 0064 and 0070.
+/// A type of the subset. `I8`, `I16` and `U16` are `int8_t`, `int16_t` and `uint16_t`, decision 0106. `F64` is `double`, a real
+/// that is finite, decision 0150. `Seq` is a read-only sequence of a scalar with its extent, a parameter only, decisions 0064 and 0070.
 /// `Struct` is a struct of the file by its key, decision 0073. `Opt` is a `std::optional` of a scalar, decision 0075. `This` is the
 /// object of a `const` member function of the struct by its key, a parameter by value, decision 0089. `ThisMut` is the object of a
 /// member function that writes it, which takes it in and gives it back, decision 0096. `ThisAfter` is that object after the call,
@@ -190,6 +191,7 @@ pub enum Ty {
     I8,
     I16,
     U16,
+    F64,
     Bool,
     Seq(Scalar, Extent),
     Struct(u32),
@@ -254,7 +256,9 @@ pub enum CastKind {
 /// `c ? a : b`, decision 0098. `Shr` is `a >> n` in code, with the type of its result, decision 0106. `Enumerator` is an enumerator,
 /// by the key of its enum and its place among the enumerators, decision 0109. `CountIf` is `std::count_if(v.begin(), v.end(), f)` in
 /// code, with the sequence, the name and the type of the parameter of the lambda `f`, and the expression of its one `return`,
-/// decision 0149. `Unknown` is a construct with no rule, by the id of its kind and its line.
+/// decision 0149. `RealLit` is a literal of type `double`, or a decimal with a point in a contract, by its digits and the count of
+/// the digits after the point, decision 0150. `Finite` is `std::isfinite(e)` in a contract. `Unknown` is a construct with no rule,
+/// by the id of its kind and its line.
 #[derive(PartialEq, Eq, Debug)]
 pub enum Expr {
     Int(u64),
@@ -295,6 +299,8 @@ pub enum Expr {
     Shr(Box<Expr>, Box<Expr>, Ty),
     Enumerator(u32, u32),
     CountIf(Box<Expr>, u32, Ty, Box<Expr>),
+    RealLit(u64, u32),
+    Finite(Box<Expr>),
     Unknown(u32, u32),
 }
 
@@ -400,6 +406,7 @@ pub enum DTy {
     Int8,
     Int16,
     UInt16,
+    Real,
     Bool,
     Seq(Scalar),
     Struct(u32),
@@ -417,7 +424,7 @@ pub enum DTy {
 /// object of a member function that writes it, as the body leaves it, decision 0096. `Out` is `x'`, a reference parameter as the body
 /// leaves it, decision 0108. `Enumerator` is the constructor of an enumerator, decision 0109. `Ite` is `if c then a else b`, decision 0098.
 /// `Temp` reads a temporary that a call before the statement set, decision 0104. `ShrIn` is `(shr(a, n, W) as T)`, a right shift
-/// of the width `W`, decision 0106. `SetAt` is `s[i := e]`, which Dafny proves is in range, decision 0145. `Append` is `s + [e]`, decision 0148. `CountIf` is `CountIf(s, (x: T) => e)` of the prelude, decision 0149. A Dafny expression calls no
+/// of the width `W`, decision 0106. `SetAt` is `s[i := e]`, which Dafny proves is in range, decision 0145. `Append` is `s + [e]`, decision 0148. `CountIf` is `CountIf(s, (x: T) => e)` of the prelude, decision 0149. `RealLit` is the real `d / 10^k`, decision 0150. A Dafny expression calls no
 /// method.
 #[derive(PartialEq, Eq, Debug)]
 pub enum DExpr {
@@ -460,6 +467,7 @@ pub enum DExpr {
     SetAt(Box<DExpr>, Box<DExpr>, Box<DExpr>),
     Append(Box<DExpr>, Box<DExpr>),
     CountIf(Box<DExpr>, u32, DTy, Box<DExpr>),
+    RealLit(u64, u32),
 }
 
 /// The calls that run before a statement, in the order that they run: each sets a temporary of the statement by its number, of a
@@ -569,7 +577,9 @@ pub type Models = List<Model>;
 /// is a field or a member function in a requires line of a constructor, before the object exists, by the id of the name, decision
 /// 0096. `NotRef` is a name on a modifies line that is no reference parameter, and `Unlisted` is a reference parameter that no
 /// modifies line names, decision 0108. `PassOn` is a vector by reference that a call passes on to a parameter that writes it, by the
-/// id of its name, decision 0147.
+/// id of its name, decision 0147. `Rounds` is a double operation that rounds. `Finite` is a double parameter, by the id of its name,
+/// that no requires line says is finite, and `FiniteResult` is a trusted function that gives a double and no ensures line says
+/// that it is finite, decision 0150.
 #[derive(Structural, PartialEq, Eq, Clone, Copy, Debug)]
 pub enum Refusal {
     Construct(u32, u32),
@@ -595,6 +605,9 @@ pub enum Refusal {
     NotRef(u32, u32),
     Unlisted(u32, u32),
     PassOn(u32, u32),
+    Rounds(u32),
+    Finite(u32, u32),
+    FiniteResult(u32),
 }
 
 // ------------------------------------------------------------------ the rules
@@ -627,6 +640,7 @@ pub open spec fn spec_ty(t: Ty, line: u32) -> Result<DTy, Refusal> {
         Ty::I8 => Ok(DTy::Int8),
         Ty::I16 => Ok(DTy::Int16),
         Ty::U16 => Ok(DTy::UInt16),
+        Ty::F64 => Ok(DTy::Real),
         Ty::Bool => Ok(DTy::Bool),
         Ty::Seq(Scalar::Bool, _) => Err(Refusal::Element(line)),
         Ty::Seq(s, _) => Ok(DTy::Seq(s)),
@@ -862,12 +876,82 @@ pub open spec fn spec_shift(da: DExpr, dn: DExpr, t: Ty, line: u32) -> Result<DE
 
 /// An integral cast, decision 0058. Both types must be in the subset, and neither may be `bool`. The cast is `(e as T)`, so Dafny
 /// proves that the value fits `T`, and the model never wraps.
+/// A callee of the file that gives a double.
+pub open spec fn spec_callee_real(all: Fns, k: u32) -> bool {
+    match spec_find(all, k) {
+        Some(f) => f.ret == Ty::F64,
+        None => false,
+    }
+}
+
+/// An expression of code of type double, decision 0150. The forms that can give a double are a variable, a literal, a call, and
+/// the forms around them.
+pub open spec fn spec_real(e: Expr, all: Fns) -> bool
+    decreases e,
+{
+    match e {
+        Expr::Var(_, t) => t == Ty::F64,
+        Expr::RealLit(_, _) => true,
+        Expr::Neg(a) => spec_real(*a, all),
+        Expr::Paren(a) => spec_real(*a, all),
+        Expr::Brace(a) => spec_real(*a, all),
+        Expr::Cast(_, a) => spec_real(*a, all),
+        Expr::Cond(_, a, b) => spec_real(*a, all) || spec_real(*b, all),
+        Expr::Bin(op, a, b) => spec_arith(op) && (spec_real(*a, all) || spec_real(*b, all)),
+        Expr::Divide(_, _, _, t) => t == Ty::F64,
+        Expr::Call(k, _, _, _) => spec_callee_real(all, k),
+        _ => false,
+    }
+}
+
+/// An operator of arithmetic, which rounds on a double.
+pub open spec fn spec_arith(op: BinOp) -> bool {
+    op == BinOp::Add || op == BinOp::Sub || op == BinOp::Mul || op == BinOp::Div || op == BinOp::Rem
+}
+
+pub fn arith(op: BinOp) -> (r: bool)
+    ensures
+        r == spec_arith(op),
+{
+    op == BinOp::Add || op == BinOp::Sub || op == BinOp::Mul || op == BinOp::Div || op == BinOp::Rem
+}
+
+pub fn callee_real(all: &Fns, k: u32) -> (r: bool)
+    ensures
+        r == spec_callee_real(*all, k),
+{
+    match find(all, k) {
+        Some(f) => f.ret == Ty::F64,
+        None => false,
+    }
+}
+
+pub fn real(e: &Expr, all: &Fns) -> (r: bool)
+    ensures
+        r == spec_real(*e, *all),
+    decreases e,
+{
+    match e {
+        Expr::Var(_, t) => *t == Ty::F64,
+        Expr::RealLit(_, _) => true,
+        Expr::Neg(a) => real(a, all),
+        Expr::Paren(a) => real(a, all),
+        Expr::Brace(a) => real(a, all),
+        Expr::Cast(_, a) => real(a, all),
+        Expr::Cond(_, a, b) => real(a, all) || real(b, all),
+        Expr::Bin(op, a, b) => arith(*op) && (real(a, all) || real(b, all)),
+        Expr::Divide(_, _, _, t) => *t == Ty::F64,
+        Expr::Call(k, _, _, _) => callee_real(all, *k),
+        _ => false,
+    }
+}
+
 pub open spec fn spec_integral(from: Ty, to: Ty, d: DExpr, line: u32) -> Result<DExpr, Refusal> {
     match spec_ty(from, line) {
         Err(r) => Err(r),
         Ok(_) => match spec_ty(to, line) {
             Err(r) => Err(r),
-            Ok(dto) => if from == Ty::Bool || to == Ty::Bool {
+            Ok(dto) => if from == Ty::Bool || to == Ty::Bool || from == Ty::F64 || to == Ty::F64 {
                 Err(Refusal::Convert(line))
             } else {
                 Ok(DExpr::Conv(dto, Box::new(d)))
@@ -917,6 +1001,8 @@ pub open spec fn spec_lift(e: Expr, all: Fns, line: u32, sd: Structs, n: u32, op
             Err(r) => Err(r),
         },
         Expr::Bool(v) => Ok((List::Nil, DExpr::Bool(v), n)),
+        // A literal of type double, decision 0150.
+        Expr::RealLit(d, k) => Ok((List::Nil, DExpr::RealLit(d, k), n)),
         Expr::Enumerator(k, i) => Ok((List::Nil, DExpr::Enumerator(k, i), n)),
         Expr::Var(v, t) => match spec_ty(t, line) {
             Ok(_) => Ok((List::Nil, spec_code_var(v, t), n)),
@@ -951,7 +1037,10 @@ pub open spec fn spec_lift(e: Expr, all: Fns, line: u32, sd: Structs, n: u32, op
                 Ok((cb, db, n1)) => Ok((cb, spec_null_test(op, db), n1)),
             }
         },
-        Expr::Bin(op, a, b) => if op == BinOp::Div || op == BinOp::Rem || spec_ptr_var(*a) || spec_ptr_var(*b) {
+        // Arithmetic on a double rounds, and step one has no rule for it, decision 0150. The real model would make it exact.
+        Expr::Bin(op, a, b) => if spec_arith(op) && (spec_real(*a, all) || spec_real(*b, all)) {
+            Err(Refusal::Rounds(line))
+        } else if op == BinOp::Div || op == BinOp::Rem || spec_ptr_var(*a) || spec_ptr_var(*b) {
             Err(Refusal::Syntax(line))
         } else {
             match spec_lift(*a, all, line, sd, n, open) {
@@ -962,7 +1051,9 @@ pub open spec fn spec_lift(e: Expr, all: Fns, line: u32, sd: Structs, n: u32, op
                 },
             }
         },
-        Expr::Divide(op, a, b, t) => if !(op == BinOp::Div || op == BinOp::Rem) {
+        Expr::Divide(op, a, b, t) => if t == Ty::F64 || spec_real(*a, all) || spec_real(*b, all) {
+            Err(Refusal::Rounds(line))
+        } else if !(op == BinOp::Div || op == BinOp::Rem) {
             Err(Refusal::Syntax(line))
         } else {
             match spec_lift(*a, all, line, sd, n, open) {
@@ -1216,6 +1307,17 @@ pub open spec fn spec_contract(e: Expr, decl: Names, ps: Params, ret: Option<Ty>
 {
     match e {
         Expr::Int(n) => Ok(DExpr::Lit(n)),
+        // A decimal with a point is that real, and `std::isfinite` of a double is true in the model, which holds no NaN and no
+        // infinity, decision 0150.
+        Expr::RealLit(d, k) => Ok(DExpr::RealLit(d, k)),
+        Expr::Finite(a) => match spec_path(*a, decl, ps, ret, bound, line, sd) {
+            Ok((_, t)) => if t == Ty::F64 {
+                Ok(DExpr::Bool(true))
+            } else {
+                Err(Refusal::Syntax(line))
+            },
+            Err(r) => Err(r),
+        },
         Expr::Bool(b) => Ok(DExpr::Bool(b)),
         Expr::Enumerator(k, i) => Ok(DExpr::Enumerator(k, i)),
         Expr::Name(n) => if spec_has(bound, n) {
@@ -1922,7 +2024,7 @@ pub open spec fn spec_params(ps: Params, line: u32, sd: Structs) -> Result<DPara
 /// A function has a method when its parameters and its return type are in the subset, and its modifies lines name each reference
 /// parameter and nothing else, decision 0108.
 pub open spec fn has_signature(f: Function, sd: Structs) -> bool {
-    spec_params(f.params, f.line, sd).is_ok() && spec_ret_ty(f.ret, f.line, sd).is_ok() && spec_modifies(f.params, f.conds, f.line) is None
+    spec_params(f.params, f.line, sd).is_ok() && spec_ret_ty(f.ret, f.line, sd).is_ok() && spec_checks(f) is None
 }
 
 /// A key names a function of the file that has a method.
@@ -2260,7 +2362,10 @@ pub open spec fn spec_stmt(s: Stmt, all: Fns, env: Params, ps: Params, sd: Struc
                 },
             }
         },
-        Stmt::Step(n, t, up, l) => if (spec_get(ps, n) is Some) && !spec_is_mut(ps, n) {
+        // `++` and `--` on a double round, decision 0150.
+        Stmt::Step(n, t, up, l) => if t == Ty::F64 {
+            Err(Refusal::Rounds(l))
+        } else if (spec_get(ps, n) is Some) && !spec_is_mut(ps, n) {
             Err(Refusal::WriteParam(n, l))
         } else {
             match spec_ty(t, l) {
@@ -2465,6 +2570,7 @@ pub open spec fn spec_has_result(e: Expr) -> bool
 {
     match e {
         Expr::Result => true,
+        Expr::Finite(a) => spec_has_result(*a),
         Expr::Bin(_, a, b) => spec_has_result(*a) || spec_has_result(*b),
         Expr::Not(a) => spec_has_result(*a),
         Expr::Neg(a) => spec_has_result(*a),
@@ -2917,7 +3023,7 @@ pub open spec fn spec_function(f: Function, all: Fns, sd: Structs) -> Model {
         Err(r) => Model::Refused(r),
         Ok(ps) => match spec_ret_ty(f.ret, f.line, sd) {
             Err(r) => Model::Refused(r),
-            Ok(ret) => match spec_modifies(f.params, f.conds, f.line) {
+            Ok(ret) => match spec_checks(f) {
                 Some(r) => Model::Refused(r),
                 None => match spec_inside(f, all, sd) {
                     Err(r) => Model::Bare(f.name, ps, ret, r),
@@ -2942,6 +3048,187 @@ pub open spec fn spec_function(f: Function, all: Fns, sd: Structs) -> Model {
     }
 }
 
+/// The checks of a signature with its contract: the modifies lines, decision 0108, and the words that keep NaN out, decision 0150.
+pub open spec fn spec_checks(f: Function) -> Option<Refusal> {
+    match spec_modifies(f.params, f.conds, f.line) {
+        Some(r) => Some(r),
+        None => spec_finite(f.params, f.conds, f.trusted, f.ret, f.line),
+    }
+}
+
+/// The model holds no NaN and no infinity. So each double parameter needs `std::isfinite` of it in a requires line, and a trusted
+/// function that gives a double needs `std::isfinite(result)` in an ensures line, decision 0150.
+pub open spec fn spec_finite(ps: Params, cs: Conds, trusted: bool, ret: Ty, line: u32) -> Option<Refusal> {
+    match spec_unfinite(ps, ps, cs) {
+        Some(p) => Some(Refusal::Finite(p, line)),
+        None => if trusted && ret == Ty::F64 && !spec_finite_result(cs) {
+            Some(Refusal::FiniteResult(line))
+        } else {
+            None
+        },
+    }
+}
+
+/// The first double parameter among `todo` that no requires line says is finite.
+pub open spec fn spec_unfinite(todo: Params, ps: Params, cs: Conds) -> Option<u32>
+    decreases todo,
+{
+    match todo {
+        List::Nil => None,
+        List::Cons((p, t), rest) => if t == Ty::F64 && !spec_finite_said(ps, cs, p) {
+            Some(p)
+        } else {
+            spec_unfinite(*rest, ps, cs)
+        },
+    }
+}
+
+/// A requires line says that the parameter `p` is finite.
+pub open spec fn spec_finite_said(ps: Params, cs: Conds, p: u32) -> bool
+    decreases cs,
+{
+    match cs {
+        List::Nil => false,
+        List::Cons((k, e, _, decl), rest) => (k == CondKind::Requires && spec_says_finite(e, decl, ps, p)) || spec_finite_said(ps, *rest, p),
+    }
+}
+
+/// `std::isfinite(x)` of the parameter `p`, alone or as a part joined by `&&`.
+pub open spec fn spec_says_finite(e: Expr, decl: Names, ps: Params, p: u32) -> bool
+    decreases e,
+{
+    match e {
+        Expr::Finite(a) => match *a {
+            Expr::Name(n) => match spec_rebind(decl, ps, n) {
+                Some((q, _)) => q == p,
+                None => false,
+            },
+            _ => false,
+        },
+        Expr::Bin(op, a, b) => op == BinOp::And && (spec_says_finite(*a, decl, ps, p) || spec_says_finite(*b, decl, ps, p)),
+        Expr::Paren(a) => spec_says_finite(*a, decl, ps, p),
+        _ => false,
+    }
+}
+
+/// An ensures line says that the result is finite.
+pub open spec fn spec_finite_result(cs: Conds) -> bool
+    decreases cs,
+{
+    match cs {
+        List::Nil => false,
+        List::Cons((k, e, _, _), rest) => (k == CondKind::Ensures && spec_says_result_finite(e)) || spec_finite_result(*rest),
+    }
+}
+
+/// `std::isfinite(result)`, alone or as a part joined by `&&`.
+pub open spec fn spec_says_result_finite(e: Expr) -> bool
+    decreases e,
+{
+    match e {
+        Expr::Finite(a) => *a is Result,
+        Expr::Bin(op, a, b) => op == BinOp::And && (spec_says_result_finite(*a) || spec_says_result_finite(*b)),
+        Expr::Paren(a) => spec_says_result_finite(*a),
+        _ => false,
+    }
+}
+
+pub fn checks(f: &Function) -> (r: Option<Refusal>)
+    ensures
+        r == spec_checks(*f),
+{
+    match modifies(&f.params, &f.conds, f.line) {
+        Some(r) => Some(r),
+        None => finite(&f.params, &f.conds, f.trusted, f.ret, f.line),
+    }
+}
+
+pub fn finite(ps: &Params, cs: &Conds, trusted: bool, ret: Ty, line: u32) -> (r: Option<Refusal>)
+    ensures
+        r == spec_finite(*ps, *cs, trusted, ret, line),
+{
+    match unfinite(ps, ps, cs) {
+        Some(p) => Some(Refusal::Finite(p, line)),
+        None => if trusted && ret == Ty::F64 && !finite_result(cs) {
+            Some(Refusal::FiniteResult(line))
+        } else {
+            None
+        },
+    }
+}
+
+pub fn unfinite(todo: &Params, ps: &Params, cs: &Conds) -> (r: Option<u32>)
+    ensures
+        r == spec_unfinite(*todo, *ps, *cs),
+    decreases todo,
+{
+    match todo {
+        List::Nil => None,
+        List::Cons((p, t), rest) => if *t == Ty::F64 && !finite_said(ps, cs, *p) {
+            Some(*p)
+        } else {
+            unfinite(rest, ps, cs)
+        },
+    }
+}
+
+pub fn finite_said(ps: &Params, cs: &Conds, p: u32) -> (r: bool)
+    ensures
+        r == spec_finite_said(*ps, *cs, p),
+    decreases cs,
+{
+    match cs {
+        List::Nil => false,
+        List::Cons((k, e, _, decl), rest) => (*k == CondKind::Requires && says_finite(e, decl, ps, p)) || finite_said(ps, rest, p),
+    }
+}
+
+pub fn says_finite(e: &Expr, decl: &Names, ps: &Params, p: u32) -> (r: bool)
+    ensures
+        r == spec_says_finite(*e, *decl, *ps, p),
+    decreases e,
+{
+    match e {
+        Expr::Finite(a) => match &**a {
+            Expr::Name(n) => match rebind(decl, ps, *n) {
+                Some((q, _)) => q == p,
+                None => false,
+            },
+            _ => false,
+        },
+        Expr::Bin(op, a, b) => *op == BinOp::And && (says_finite(a, decl, ps, p) || says_finite(b, decl, ps, p)),
+        Expr::Paren(a) => says_finite(a, decl, ps, p),
+        _ => false,
+    }
+}
+
+pub fn finite_result(cs: &Conds) -> (r: bool)
+    ensures
+        r == spec_finite_result(*cs),
+    decreases cs,
+{
+    match cs {
+        List::Nil => false,
+        List::Cons((k, e, _, _), rest) => (*k == CondKind::Ensures && says_result_finite(e)) || finite_result(rest),
+    }
+}
+
+pub fn says_result_finite(e: &Expr) -> (r: bool)
+    ensures
+        r == spec_says_result_finite(*e),
+    decreases e,
+{
+    match e {
+        Expr::Finite(a) => match &**a {
+            Expr::Result => true,
+            _ => false,
+        },
+        Expr::Bin(op, a, b) => *op == BinOp::And && (says_result_finite(a) || says_result_finite(b)),
+        Expr::Paren(a) => says_result_finite(a),
+        _ => false,
+    }
+}
+
 /// The model of a struct: each field a type of the subset, decision 0073. A field can be a sequence, decision 0076.
 pub open spec fn spec_fields(ps: Params, line: u32) -> Result<DParams, Refusal>
     decreases ps,
@@ -2949,7 +3236,7 @@ pub open spec fn spec_fields(ps: Params, line: u32) -> Result<DParams, Refusal>
     match ps {
         List::Nil => Ok(List::Nil),
         // An optional of a struct is no field yet, decision 0137.
-        List::Cons((n, t), rest) => match (if (t is Opt && t->Opt_0 is Struct) || t is Ptr || t is Own { Err(Refusal::Element(line)) } else { spec_ty(t, line) }) {
+        List::Cons((n, t), rest) => match (if (t is Opt && t->Opt_0 is Struct) || t is Ptr || t is Own || t is F64 { Err(Refusal::Element(line)) } else { spec_ty(t, line) }) {
             Ok(dt) => match spec_fields(*rest, line) {
                 Ok(dr) => Ok(List::Cons((n, dt), Box::new(dr))),
                 Err(r) => Err(r),
@@ -2990,6 +3277,7 @@ pub open spec fn unknown_expr(e: Expr) -> bool
 {
     match e {
         Expr::Unknown(_, _) => true,
+        Expr::Finite(a) => unknown_expr(*a),
         Expr::Bin(_, a, b) => unknown_expr(*a) || unknown_expr(*b),
         Expr::Not(a) => unknown_expr(*a),
         Expr::Neg(a) => unknown_expr(*a),
@@ -4235,6 +4523,7 @@ pub fn translate_ty(t: Ty, line: u32) -> (r: Result<DTy, Refusal>)
         Ty::I8 => Ok(DTy::Int8),
         Ty::I16 => Ok(DTy::Int16),
         Ty::U16 => Ok(DTy::UInt16),
+        Ty::F64 => Ok(DTy::Real),
         Ty::Bool => Ok(DTy::Bool),
         Ty::Seq(Scalar::Bool, _) => Err(Refusal::Element(line)),
         Ty::Seq(s, _) => Ok(DTy::Seq(s)),
@@ -4385,7 +4674,7 @@ pub fn translate_integral(from: Ty, to: Ty, d: DExpr, line: u32) -> (r: Result<D
         Err(r) => Err(r),
         Ok(_) => match translate_ty(to, line) {
             Err(r) => Err(r),
-            Ok(dto) => if from == Ty::Bool || to == Ty::Bool {
+            Ok(dto) => if from == Ty::Bool || to == Ty::Bool || from == Ty::F64 || to == Ty::F64 {
                 Err(Refusal::Convert(line))
             } else {
                 Ok(DExpr::Conv(dto, Box::new(d)))
@@ -4438,6 +4727,7 @@ pub fn lift(e: &Expr, all: &Fns, line: u32, sd: &Structs, n: u32, open: bool) ->
             Err(r) => Err(r),
         },
         Expr::Bool(v) => Ok((List::Nil, DExpr::Bool(*v), n)),
+        Expr::RealLit(d, k) => Ok((List::Nil, DExpr::RealLit(*d, *k), n)),
         Expr::Enumerator(k, i) => Ok((List::Nil, DExpr::Enumerator(*k, *i), n)),
         Expr::Var(v, t) => match translate_ty(*t, line) {
             Ok(_) => Ok((List::Nil, code_var(*v, *t), n)),
@@ -4471,7 +4761,9 @@ pub fn lift(e: &Expr, all: &Fns, line: u32, sd: &Structs, n: u32, open: bool) ->
                 Ok((cb, db, n1)) => Ok((cb, null_test(*op, db), n1)),
             }
         },
-        Expr::Bin(op, a, b) => if *op == BinOp::Div || *op == BinOp::Rem || a.is_ptr_var() || b.is_ptr_var() {
+        Expr::Bin(op, a, b) => if arith(*op) && (real(a, all) || real(b, all)) {
+            Err(Refusal::Rounds(line))
+        } else if *op == BinOp::Div || *op == BinOp::Rem || a.is_ptr_var() || b.is_ptr_var() {
             Err(Refusal::Syntax(line))
         } else {
             match lift(a, all, line, sd, n, open) {
@@ -4482,7 +4774,9 @@ pub fn lift(e: &Expr, all: &Fns, line: u32, sd: &Structs, n: u32, open: bool) ->
                 },
             }
         },
-        Expr::Divide(op, a, b, t) => if !(*op == BinOp::Div || *op == BinOp::Rem) {
+        Expr::Divide(op, a, b, t) => if *t == Ty::F64 || real(a, all) || real(b, all) {
+            Err(Refusal::Rounds(line))
+        } else if !(*op == BinOp::Div || *op == BinOp::Rem) {
             Err(Refusal::Syntax(line))
         } else {
             match lift(a, all, line, sd, n, open) {
@@ -4780,6 +5074,15 @@ pub fn translate_contract(e: &Expr, decl: &Names, ps: &Params, ret: Option<Ty>, 
 {
     match e {
         Expr::Int(n) => Ok(DExpr::Lit(*n)),
+        Expr::RealLit(d, k) => Ok(DExpr::RealLit(*d, *k)),
+        Expr::Finite(a) => match path(a, decl, ps, ret, bound, line, sd) {
+            Ok((_, t)) => if t == Ty::F64 {
+                Ok(DExpr::Bool(true))
+            } else {
+                Err(Refusal::Syntax(line))
+            },
+            Err(r) => Err(r),
+        },
         Expr::Enumerator(k, i) => Ok(DExpr::Enumerator(*k, *i)),
         Expr::Bool(b) => Ok(DExpr::Bool(*b)),
         Expr::Name(n) => if has(bound, *n) {
@@ -5503,7 +5806,7 @@ pub fn signature(f: &Function, sd: &Structs) -> (r: bool)
     ensures
         r == has_signature(*f, *sd),
 {
-    translate_params(&f.params, f.line, sd).is_ok() && ret_ty(f.ret, f.line, sd).is_ok() && modifies(&f.params, &f.conds, f.line).is_none()
+    translate_params(&f.params, f.line, sd).is_ok() && ret_ty(f.ret, f.line, sd).is_ok() && checks(f).is_none()
 }
 
 pub fn callable(fs: &Fns, key: u32, sd: &Structs) -> (r: bool)
@@ -5858,7 +6161,9 @@ pub fn translate_stmt(s: &Stmt, all: &Fns, env: &Params, ps: &Params, sd: &Struc
                 },
             }
         },
-        Stmt::Step(n, t, up, l) => if get(ps, *n).is_some() && !is_mut(ps, *n) {
+        Stmt::Step(n, t, up, l) => if *t == Ty::F64 {
+            Err(Refusal::Rounds(*l))
+        } else if get(ps, *n).is_some() && !is_mut(ps, *n) {
             Err(Refusal::WriteParam(*n, *l))
         } else {
             match translate_ty(*t, *l) {
@@ -6068,6 +6373,7 @@ pub fn has_result(e: &Expr) -> (r: bool)
 {
     match e {
         Expr::Result => true,
+        Expr::Finite(a) => has_result(a),
         Expr::Bin(_, a, b) => has_result(a) || has_result(b),
         Expr::Not(a) => has_result(a),
         Expr::Neg(a) => has_result(a),
@@ -6428,6 +6734,7 @@ pub fn copy_dexpr(d: &DExpr) -> (r: DExpr)
         DExpr::SetAt(x0, x1, x2) => DExpr::SetAt(Box::new(copy_dexpr(x0)), Box::new(copy_dexpr(x1)), Box::new(copy_dexpr(x2))),
         DExpr::Append(x0, x1) => DExpr::Append(Box::new(copy_dexpr(x0)), Box::new(copy_dexpr(x1))),
         DExpr::CountIf(x0, x1, x2, x3) => DExpr::CountIf(Box::new(copy_dexpr(x0)), *x1, *x2, Box::new(copy_dexpr(x3))),
+        DExpr::RealLit(x0, x1) => DExpr::RealLit(*x0, *x1),
     }
 }
 
@@ -6638,7 +6945,7 @@ pub fn translate_function(f: &Function, all: &Fns, sd: &Structs) -> (r: Model)
         Err(r) => Model::Refused(r),
         Ok(ps) => match ret_ty(f.ret, f.line, sd) {
             Err(r) => Model::Refused(r),
-            Ok(ret) => match modifies(&f.params, &f.conds, f.line) {
+            Ok(ret) => match checks(f) {
                 Some(r) => Model::Refused(r),
                 None => match translate_inside(f, all, sd) {
                     Err(r) => Model::Bare(f.name, ps, ret, r),
@@ -6685,7 +6992,7 @@ fn translate_fields(ps: &Params, line: u32) -> (r: Result<DParams, Refusal>)
 {
     match ps {
         List::Nil => Ok(List::Nil),
-        List::Cons((n, t), rest) => match if let Ty::Opt(Scalar::Struct(_)) | Ty::Ptr(_) | Ty::Own(_) = t { Err(Refusal::Element(line)) } else { translate_ty(*t, line) } {
+        List::Cons((n, t), rest) => match if let Ty::Opt(Scalar::Struct(_)) | Ty::Ptr(_) | Ty::Own(_) | Ty::F64 = t { Err(Refusal::Element(line)) } else { translate_ty(*t, line) } {
             Ok(dt) => match translate_fields(rest, line) {
                 Ok(dr) => Ok(List::Cons((*n, dt), Box::new(dr))),
                 Err(r) => Err(r),
@@ -6760,6 +7067,8 @@ pub enum Tok {
     Colon,
     Arrow,
     Nullptr,
+    Real(u64, u32),
+    IsFinite,
     Unknown(u32, u32),
 }
 
@@ -7229,6 +7538,19 @@ fn parse_atom(toks: &Vec<Tok>, pos: usize, line: u32) -> (r: Result<(Expr, usize
     }
     match toks[pos] {
         Tok::Int(n) => Ok((Expr::Int(n), pos + 1)),
+        Tok::Real(d, k) => Ok((Expr::RealLit(d, k), pos + 1)),
+        Tok::IsFinite => if toks.len() - pos > 1 && toks[pos + 1] == Tok::LParen {
+            match parse_implies(toks, pos + 2, line) {
+                Ok((e, p)) => if p < toks.len() && toks[p] == Tok::RParen {
+                    Ok((Expr::Finite(Box::new(e)), p + 1))
+                } else {
+                    Err(Refusal::Syntax(line))
+                },
+                Err(e) => Err(e),
+            }
+        } else {
+            Err(Refusal::Syntax(line))
+        },
         Tok::Bool(b) => Ok((Expr::Bool(b), pos + 1)),
         Tok::Ident(n) => if toks.len() - pos > 2 && toks[pos + 1] == Tok::LParen && toks[pos + 2] == Tok::RParen {
             assert(!unknown_args(List::Nil));

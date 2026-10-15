@@ -28,6 +28,7 @@ pub enum LexKind {
     Field,
     Fixed(Tok),
     Int(u64),
+    Real(u64, u32),
     BadNumber(NumberFault),
     BadChar,
 }
@@ -217,6 +218,21 @@ pub open spec fn spec_number(w: Seq<u8>) -> LexKind {
     }
 }
 
+/// A decimal with a point, decision 0150: digits, `.` and digits, with no separator, suffix or exponent. `w` is the part before
+/// the point and `f` the part after it. Its value is the digits of both parts, over ten to the count of the digits in `f`.
+pub open spec fn spec_real_lit(w: Seq<u8>, f: Seq<u8>) -> LexKind {
+    let all = w + f;
+    if digits_len(all, false) != all.len() {
+        LexKind::BadNumber(NumberFault::Suffix((all.len() - digits_len(all, false)) as usize))
+    } else if w.len() > 1 && w[0] == 0x30 {
+        LexKind::BadNumber(NumberFault::Octal)
+    } else if f.len() > 19 || value(all, 10) > u64::MAX {
+        LexKind::BadNumber(NumberFault::TooBig)
+    } else {
+        LexKind::Real(value(all, 10) as u64, f.len() as u32)
+    }
+}
+
 // ------------------------------------------------------------------ one token
 
 /// The length of a UTF-8 character from its first byte. A byte that starts none is one byte.
@@ -315,12 +331,19 @@ pub open spec fn spec_word(t: Seq<u8>, i: int, e: int) -> LexKind {
 /// The token at `i`, a byte that is no white space: its end and its kind, in the order of decision 0124.
 pub open spec fn spec_token(t: Seq<u8>, i: int) -> (int, LexKind) {
     let c = t[i];
-    if name_start(c) {
+    if at(t, i, b"std::isfinite"@) && !(i + 13 < t.len() && name_byte(t[i + 13])) {
+        (i + 13, LexKind::Fixed(Tok::IsFinite))
+    } else if name_start(c) {
         let e = name_end(t, i + 1);
         (e, spec_word(t, i, e))
     } else if is_digit(c) {
         let e = num_end(t, i + 1);
-        (e, spec_number(strip(t.subrange(i, e))))
+        if e + 1 < t.len() && t[e] == 0x2e && is_digit(t[e + 1]) {
+            let f = num_end(t, e + 1);
+            (f, spec_real_lit(t.subrange(i, e), t.subrange(e + 1, f)))
+        } else {
+            (e, spec_number(strip(t.subrange(i, e))))
+        }
     } else if at(t, i, b".size()"@) {
         (i + 7, LexKind::Fixed(Tok::Size))
     } else if at(t, i, b".empty()"@) {
@@ -355,6 +378,10 @@ proof fn lemma_token(t: Seq<u8>, i: int)
         i < spec_token(t, i).0 <= t.len(),
 {
     lemma_runs(t, i + 1);
+    let e = num_end(t, i + 1);
+    if e + 1 < t.len() {
+        lemma_runs(t, e + 1);
+    }
     if let Some((n, o)) = spec_op(t, i) {
         assert(1 <= n <= 3);
     }
@@ -794,6 +821,67 @@ fn number(w: &Vec<u8>) -> (r: LexKind)
     }
 }
 
+fn real_lit(t: &Vec<u8>, i: usize, e: usize, f: usize) -> (r: LexKind)
+    requires
+        i <= e < f <= t.len(),
+    ensures
+        r == spec_real_lit(t@.subrange(i as int, e as int), t@.subrange(e + 1, f as int)),
+{
+    let mut w: Vec<u8> = Vec::new();
+    let mut k = i;
+    while k < e
+        invariant
+            i <= k <= e < f <= t.len(),
+            w@ =~= t@.subrange(i as int, k as int),
+        decreases e - k,
+    {
+        w.push(t[k]);
+        k += 1;
+    }
+    let mut k = e + 1;
+    while k < f
+        invariant
+            e + 1 <= k <= f <= t.len(),
+            i <= e,
+            w@ =~= t@.subrange(i as int, e as int) + t@.subrange(e + 1, k as int),
+        decreases f - k,
+    {
+        w.push(t[k]);
+        k += 1;
+    }
+    let ghost all = t@.subrange(i as int, e as int) + t@.subrange(e + 1, f as int);
+    proof {
+        assert(w@ =~= all);
+        assert(w@.subrange(0, w.len() as int) =~= all);
+        lemma_digits_are_digits(all, false);
+    }
+    let n = digits_len_exec(&w, 0, false);
+    if n != w.len() {
+        return LexKind::BadNumber(NumberFault::Suffix(w.len() - n));
+    }
+    if e - i > 1 && t[i] == 0x30 {
+        proof {
+            assert(t@.subrange(i as int, e as int)[0] == t@[i as int]);
+        }
+        return LexKind::BadNumber(NumberFault::Octal);
+    }
+    proof {
+        if e - i > 1 {
+            assert(t@.subrange(i as int, e as int)[0] == t@[i as int]);
+        }
+    }
+    if f - e - 1 > 19 {
+        return LexKind::BadNumber(NumberFault::TooBig);
+    }
+    proof {
+        assert(w@.subrange(0, w.len() as int) =~= all);
+    }
+    match value_exec(&w, 0, w.len(), false) {
+        None => LexKind::BadNumber(NumberFault::TooBig),
+        Some(v) => LexKind::Real(v, (f - e - 1) as u32),
+    }
+}
+
 proof fn lemma_digits_are_digits(s: Seq<u8>, hex: bool)
     ensures
         digits_len(s, hex) <= s.len(),
@@ -914,13 +1002,26 @@ fn token(t: &Vec<u8>, i: usize) -> (r: (usize, LexKind))
         lemma_runs(t@, i + 1);
     }
     let c = t[i];
-    if (0x41 <= c && c <= 0x5a) || (0x61 <= c && c <= 0x7a) || c == 0x5f {
+    if at_exec(t, i, b"std::isfinite") && !(t.len() - i > 13 && {
+        let d = t[i + 13];
+        (0x30 <= d && d <= 0x39) || (0x41 <= d && d <= 0x5a) || (0x61 <= d && d <= 0x7a) || d == 0x5f
+    }) {
+        (i + 13, LexKind::Fixed(Tok::IsFinite))
+    } else if (0x41 <= c && c <= 0x5a) || (0x61 <= c && c <= 0x7a) || c == 0x5f {
         let e = name_end_exec(t, i + 1);
         (e, word_exec(t, i, e))
     } else if 0x30 <= c && c <= 0x39 {
         let e = num_end_exec(t, i + 1);
-        let w = strip_exec(t, i, e);
-        (e, number(&w))
+        if e < t.len() && t.len() - e > 1 && t[e] == 0x2e && 0x30 <= t[e + 1] && t[e + 1] <= 0x39 {
+            proof {
+                lemma_runs(t@, e + 1);
+            }
+            let f = num_end_exec(t, e + 1);
+            (f, real_lit(t, i, e, f))
+        } else {
+            let w = strip_exec(t, i, e);
+            (e, number(&w))
+        }
     } else if at_exec(t, i, b".size()") {
         (i + 7, LexKind::Fixed(Tok::Size))
     } else if at_exec(t, i, b".empty()") {

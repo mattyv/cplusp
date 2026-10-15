@@ -29,6 +29,8 @@ enum JScalar {
 
 #[derive(Deserialize)]
 enum JTy {
+    /// `double`, decision 0150.
+    F64,
     I32,
     I64,
     U8,
@@ -110,6 +112,8 @@ enum JExpr {
     Construct(String, Vec<JExpr>),
     Index(Box<JExpr>, Box<JExpr>),
     Cond(Box<JExpr>, Box<JExpr>, Box<JExpr>),
+    /// A literal of type double, `d / 10^k`, decision 0150.
+    RealLit(u64, u32),
     /// `std::count_if(v.begin(), v.end(), f)` with a lambda: the sequence, the parameter, its type and the test, decision 0149.
     CountIf(Box<JExpr>, String, JTy, Box<JExpr>),
     Call(String, String, Vec<JExpr>, u32),
@@ -313,6 +317,7 @@ fn ty(t: JTy, names: &mut Names) -> Ty {
         JTy::U8 => Ty::U8,
         JTy::U32 => Ty::U32,
         JTy::U64 => Ty::U64,
+        JTy::F64 => Ty::F64,
         JTy::I8 => Ty::I8,
         JTy::I16 => Ty::I16,
         JTy::U16 => Ty::U16,
@@ -354,6 +359,7 @@ fn expr(e: JExpr, names: &mut Names) -> Expr {
     match e {
         JExpr::Lit(n, t) => Expr::Lit(n, ty(t, names)),
         JExpr::Bool(b) => Expr::Bool(b),
+        JExpr::RealLit(d, k) => Expr::RealLit(d, k),
         JExpr::Var(v, t) => Expr::Var(names.id(&v), ty(t, names)),
         JExpr::Bin(o, a, b) => Expr::Bin(op(o), Box::new(expr(*a, names)), Box::new(expr(*b, names))),
         JExpr::Divide(o, a, b, t) => Expr::Divide(op(o), Box::new(expr(*a, names)), Box::new(expr(*b, names)), ty(t, names)),
@@ -525,6 +531,7 @@ fn lex(text: &str, line: u32, names: &mut Names) -> Vec<Tok> {
                 LexKind::Field => Tok::Field(names.id(&word[1..])),
                 LexKind::Fixed(tok) => tok,
                 LexKind::Int(value) => Tok::Int(value),
+                LexKind::Real(digits, after) => Tok::Real(digits, after),
                 LexKind::BadNumber(fault) => {
                     // The number without its digit separators.
                     let number: String = word.chars().filter(|&ch| ch != '\'').collect();
@@ -703,7 +710,7 @@ fn expr_names<'a>(e: &'a JExpr, out: &mut Vec<&'a str>) {
         }
         JExpr::Not(a) | JExpr::Neg(a) | JExpr::Cast(_, a) | JExpr::Paren(a) | JExpr::Brace(a) | JExpr::Size(a) | JExpr::Empty(a) | JExpr::Copy(a, ..) | JExpr::Field(a, _) | JExpr::HasValue(a) | JExpr::Value(a) | JExpr::Wrap(a) => expr_names(a, out),
         JExpr::Call(_, _, args, _) | JExpr::Construct(_, args) => args.iter().for_each(|a| expr_names(a, out)),
-        JExpr::Lit(..) | JExpr::Bool(_) | JExpr::Nullopt | JExpr::Enumerator(..) | JExpr::Unknown(..) => {}
+        JExpr::Lit(..) | JExpr::Bool(_) | JExpr::RealLit(..) | JExpr::Nullopt | JExpr::Enumerator(..) | JExpr::Unknown(..) => {}
     }
 }
 
@@ -903,6 +910,7 @@ fn dty(t: DTy, names: &Names) -> String {
         DTy::Int16 => "int16".to_string(),
         DTy::UInt16 => "uint16".to_string(),
         DTy::Bool => "bool".to_string(),
+        DTy::Real => "real".to_string(),
         DTy::Seq(s) => format!("Vec<{}>", dscalar(s, names)),
         DTy::Struct(k) | DTy::Enum(k) => names.datatypes[&k].clone(),
         DTy::Opt(s) => format!("Option<{}>", dscalar(s, names)),
@@ -971,6 +979,12 @@ fn dexpr(e: &DExpr, names: &Names) -> String {
         DExpr::Index(a, i) => format!("{}[{}]", dexpr(a, names), dexpr(i, names)),
         DExpr::Append(a, e) => format!("({} + [{}])", dexpr(a, names), dexpr(e, names)),
         DExpr::CountIf(s, x, t, e) => format!("CountIf({}, ({}: {}) => {})", dexpr(s, names), mangle(names.text(*x)), dty(*t, names), dexpr(e, names)),
+        // The exact decimal: the digits `d`, with `k` of them after the point and at least one.
+        DExpr::RealLit(d, k) => {
+            let digits = format!("{:0>width$}", d, width = *k as usize + 1);
+            let (whole, fraction) = digits.split_at(digits.len() - *k as usize);
+            format!("{whole}.{}", if fraction.is_empty() { "0" } else { fraction })
+        }
         DExpr::SetAt(a, i, e) => format!("{}[{} := {}]", dexpr(a, names), dexpr(i, names), dexpr(e, names)),
         DExpr::Drop(a, k) => format!("{}[{}..]", dexpr(a, names), dexpr(k, names)),
         DExpr::Take(a, j) => format!("{}[..{}]", dexpr(a, names), dexpr(j, names)),
@@ -1347,6 +1361,9 @@ fn sentence(r: Refusal, names: &Names) -> (u32, String) {
         Refusal::NoTarget(line) => (line, "the call writes a value back, and the translator writes back only to a local or a reference parameter.".to_string()),
         Refusal::NoObject(n, line) => (line, format!("{} is a member of the struct. A requires line of a constructor has no object yet.", names.text(n))),
         Refusal::IndexName(n, line) => (line, format!("{} on the index line is a name the function already has.", names.text(n))),
+        Refusal::Rounds(line) => (line, "a double operation rounds, and the translator has no rule for it yet.".to_string()),
+        Refusal::Finite(n, line) => (line, format!("{} is a double. A requires line needs std::isfinite({}).", names.text(n), names.text(n))),
+        Refusal::FiniteResult(line) => (line, "a trusted function that gives a double needs std::isfinite(result) in an ensures line.".to_string()),
         Refusal::PassOn(n, line) => (line, format!("{} is a vector by reference. A call that passes it on has no rule yet.", names.text(n))),
         Refusal::Misplaced(line) => (
             line,

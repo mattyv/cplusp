@@ -4177,6 +4177,7 @@ fn the_lambdas_example_proves() {
 }
 
 /// A double that only compares proves as a real, and a clamp that misses part of its range fails at its return, decision 0150.
+/// Two functions pin a literal of code to a literal of the contract with another spelling of the same value.
 #[test]
 fn a_double_that_only_compares_proves() {
     let Some(dafny) = dafny() else { return };
@@ -4195,7 +4196,7 @@ fn a_double_that_only_compares_proves() {
 }
 
 /// A double operation that rounds, a double parameter with no isfinite, and a trusted double result with no isfinite are refused
-/// with their sentences, decision 0150.
+/// with their sentences, and a caller of that trusted function is refused too, decision 0150.
 #[test]
 fn a_double_with_no_rule_is_refused() {
     if !clang_tidy_available() {
@@ -4213,6 +4214,8 @@ fn a_double_with_no_rule_is_refused() {
             "11: x is a double. A requires line needs std::isfinite(x).",
             "17: a trusted function that gives a double needs std::isfinite(result) in an ensures line.",
             "22: a double operation rounds, and the translator has no rule for it yet.",
+            // A caller of the refused trusted function has no model of it.
+            "27: a call to reading, which has no model in view.",
         ],
         "{text}"
     );
