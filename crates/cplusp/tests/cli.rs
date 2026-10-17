@@ -4216,9 +4216,9 @@ fn a_double_with_no_rule_is_refused() {
     assert_eq!(
         refusals,
         [
-            "8: a double operation rounds, and the translator has no rule for it yet.",
             "11: x is a double. A requires line needs std::isfinite(x).",
             "17: a trusted function that gives a double needs std::isfinite(result) in an ensures line.",
+            // `++` on a double stays refused, decision 0154.
             "22: a double operation rounds, and the translator has no rule for it yet.",
             // A caller of the refused trusted function has no model of it.
             "27: a call to reading, which has no model in view.",
@@ -4239,3 +4239,36 @@ fn the_double_only_example_proves() {
     assert_eq!(o.status.code(), Some(0), "stdout: {text} stderr: {}", stderr(&o));
     assert_eq!(text.lines().last(), Some("ok: proved"), "{text}");
 }
+
+const AXIOM: &str = "Axiom: Double.dfy: RoundError: IEEE 754 binary64, round to nearest even, gradual underflow, one rounding per operation.";
+
+/// Each double operation is one rounding of the model, and prove names the axiom once, before its verdict. A product with no
+/// bound, an equality that the rounding breaks and a divisor that may be zero fail with their sentences, decision 0154.
+#[test]
+fn a_double_operation_is_one_rounding() {
+    let Some(dafny) = dafny() else { return };
+    if !clang_tidy_available() {
+        return;
+    }
+    let o = prove("model-double-ops.cpp", &[], &dafny);
+    let text = stdout(&o);
+    assert_eq!(o.status.code(), Some(0), "stdout: {text} stderr: {}", stderr(&o));
+    let lines: Vec<&str> = text.lines().collect();
+    assert_eq!(lines.last(), Some(&"ok: proved"), "{text}");
+    assert_eq!(lines.iter().filter(|l| **l == AXIOM).count(), 1, "{text}");
+    assert_eq!(lines[lines.len() - 2], AXIOM, "{text}");
+    let o = prove("model-double-ops-wrong.cpp", &[], &dafny);
+    let text = stdout(&o);
+    assert_eq!(o.status.code(), Some(1), "stdout: {text} stderr: {}", stderr(&o));
+    assert_eq!(text.lines().filter(|l| *l == AXIOM).count(), 1, "{text}");
+    let failed: Vec<&str> = text.lines().filter(|l| l.starts_with("Not proved: ")).map(|l| l.rsplit_once(".cpp:").unwrap().1).collect();
+    assert_eq!(
+        failed,
+        ["8: the result of the operation may exceed DBL_MAX.", "15: the ensures line may not hold on this return.", "22: the divisor may be zero."],
+        "{text}"
+    );
+    // A model with no rounding names no axiom.
+    let o = prove("model-double.cpp", &[], &dafny);
+    assert!(!stdout(&o).contains("Axiom:"), "{}", stdout(&o));
+}
+

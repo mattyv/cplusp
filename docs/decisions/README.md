@@ -158,3 +158,4 @@ Status is `decided`, `proposed` (the default until someone objects or the thin s
 | [0151](0151-a-32-bit-x86-target-and-an-unknown-attribute-are-refused.md) | A 32-bit x86 target and an unknown attribute are refused | decided |
 | [0152](0152-more-ways-to-an-x87-double-are-refused.md) | More ways to an x87 double are refused | decided |
 | [0153](0153-each-double-operation-carries-its-bound-and-its-error.md) | Each double operation carries its bound and its error | decided |
+| [0154](0154-a-double-operation-is-one-rounding-of-the-model.md) | A double operation is one rounding of the model. Step two: the four operations | decided |

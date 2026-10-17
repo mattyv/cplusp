@@ -265,3 +265,26 @@ fn a_decimal_with_a_point_is_a_real_and_isfinite_is_a_word() {
     assert!(lex("1.5e3").iter().any(|(_, k)| matches!(k, LexKind::BadNumber(_))), "{:?}", lex("1.5e3"));
     assert_eq!(lex("std::isfinitex"), vec![name("std"), fixed("::", Tok::ColonColon), name("isfinitex")]);
 }
+
+/// `|` is the bar of an absolute value, and `eps`, `eta` and `DBL_MAX` are words, decision 0154. `||` stays one operator.
+#[test]
+fn the_bar_and_the_words_of_a_double_bound() {
+    assert_eq!(
+        lex("|a| <= eps * DBL_MAX + eta || b"),
+        vec![
+            fixed("|", Tok::Bar),
+            name("a"),
+            fixed("|", Tok::Bar),
+            op("<=", BinOp::Le),
+            fixed("eps", Tok::Eps),
+            op("*", BinOp::Mul),
+            fixed("DBL_MAX", Tok::DblMax),
+            op("+", BinOp::Add),
+            fixed("eta", Tok::Eta),
+            op("||", BinOp::Or),
+            name("b"),
+        ]
+    );
+    assert_eq!(lex("epsilon DBL_MAXX"), vec![name("epsilon"), name("DBL_MAXX")]);
+}
+

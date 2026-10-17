@@ -2852,10 +2852,11 @@ fn a_double_that_only_compares_is_a_real() {
     assert_eq!(strip_conds(m.ensures), List::Cons((DExpr::Bin(BinOp::Le, Box::new(DExpr::RealLit(0, 0)), Box::new(DExpr::Result)), 0), Box::new(List::Nil)));
 }
 
-/// Each step that rounds is refused in the core, so the model never makes exact real arithmetic of it, decision 0150.
+/// A step that rounds and has no rule is refused in the core, so the model never makes exact real arithmetic of it, decision 0150.
+/// Since decision 0154 the four operations are roundings of the model, so `%` and `++` are what is left.
 #[test]
 fn a_double_operation_that_rounds_is_refused() {
-    for op in [BinOp::Add, BinOp::Sub, BinOp::Mul, BinOp::Div] {
+    for op in [BinOp::Rem] {
         let sum = Expr::Bin(op, b(Expr::Var(DA, Ty::F64)), b(Expr::Var(DB, Ty::F64)));
         assert_eq!(bare_refusal(translate_function(&larger(one(Stmt::Return(sum, 6))), &List::Nil, &List::Nil)), Refusal::Rounds(6), "{op:?}");
         // Through a parenthesis, a negation and a literal too.
@@ -2891,5 +2892,40 @@ fn isfinite_and_a_real_parse_in_a_contract() {
     let toks = vec![Tok::IsFinite, Tok::LParen, Tok::Ident(DA), Tok::RParen, Tok::Op(BinOp::And), Tok::Real(5, 1), Tok::Op(BinOp::Le), Tok::Ident(DA)];
     let want = Expr::Bin(BinOp::And, b(Expr::Finite(b(Expr::Name(DA)))), b(Expr::Bin(BinOp::Le, b(Expr::RealLit(5, 1)), b(Expr::Name(DA)))));
     assert_eq!(parse_contract(&toks, 4), Ok(want));
+}
+
+/// Each of the four operations on doubles is one rounding of the model, `fadd` to `fdiv`, decision 0154. A division of code is a
+/// `Divide` with its type.
+#[test]
+fn a_double_operation_is_one_rounding_of_the_model() {
+    for op in [BinOp::Add, BinOp::Sub, BinOp::Mul] {
+        let e = Expr::Bin(op, b(Expr::Var(DA, Ty::F64)), b(Expr::Var(DB, Ty::F64)));
+        let Model::Full(m) = translate_function(&larger(one(Stmt::Return(e, 6))), &List::Nil, &List::Nil) else { panic!("a full model") };
+        let want = DStmt::Return(DExpr::FOp(op, Box::new(DExpr::Var(DA)), Box::new(DExpr::Var(DB))));
+        assert_eq!(strip(m.body), List::Cons((Box::new(want), 0), Box::new(List::Nil)), "{op:?}");
+    }
+    let e = Expr::Divide(BinOp::Div, b(Expr::Var(DA, Ty::F64)), b(Expr::Var(DB, Ty::F64)), Ty::F64);
+    let Model::Full(m) = translate_function(&larger(one(Stmt::Return(e, 6))), &List::Nil, &List::Nil) else { panic!("a full model") };
+    let want = DStmt::Return(DExpr::FOp(BinOp::Div, Box::new(DExpr::Var(DA)), Box::new(DExpr::Var(DB))));
+    assert_eq!(strip(m.body), List::Cons((Box::new(want), 0), Box::new(List::Nil)));
+    // In a contract, the absolute value and the words of a bound.
+    let bound = Expr::Bin(BinOp::Le, b(Expr::Abs(b(Expr::Bin(BinOp::Mul, b(Expr::Name(DA)), b(Expr::Name(DB)))))), b(Expr::DblMax));
+    let err = Expr::Bin(BinOp::Add, b(Expr::Bin(BinOp::Mul, b(Expr::Eps), b(Expr::Result))), b(Expr::Eta));
+    let conds = List::Cons((CondKind::Requires, bound, 3, names(&[DA, DB])), Box::new(List::Cons((CondKind::Ensures, err, 4, names(&[DA, DB])), Box::new(finite(&[DA, DB], 2, &[DA, DB])))));
+    let f = Function { conds, ..larger(one(Stmt::Return(Expr::Var(DA, Ty::F64), 6))) };
+    let Model::Full(m) = translate_function(&f, &List::Nil, &List::Nil) else { panic!("a full model") };
+    let dbound = DExpr::Bin(BinOp::Le, Box::new(DExpr::Abs(Box::new(DExpr::Bin(BinOp::Mul, Box::new(DExpr::Var(DA)), Box::new(DExpr::Var(DB)))))), Box::new(DExpr::DblMax));
+    let List::Cons((first, _), _) = strip_conds(m.requires) else { panic!("requires") };
+    assert_eq!(first, dbound);
+    let derr = DExpr::Bin(BinOp::Add, Box::new(DExpr::Bin(BinOp::Mul, Box::new(DExpr::Eps), Box::new(DExpr::Result))), Box::new(DExpr::Eta));
+    assert_eq!(strip_conds(m.ensures), List::Cons((derr, 0), Box::new(List::Nil)));
+}
+
+/// `|e|` parses as the absolute value, decision 0154.
+#[test]
+fn the_absolute_value_parses_in_a_contract() {
+    let toks = vec![Tok::Bar, Tok::Ident(DA), Tok::Op(BinOp::Mul), Tok::Ident(DB), Tok::Bar, Tok::Op(BinOp::Le), Tok::DblMax];
+    let want = Expr::Bin(BinOp::Le, b(Expr::Abs(b(Expr::Bin(BinOp::Mul, b(Expr::Name(DA)), b(Expr::Name(DB)))))), b(Expr::DblMax));
+    assert_eq!(parse_contract(&toks, 3), Ok(want));
 }
 
