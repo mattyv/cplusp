@@ -94,7 +94,7 @@ fn policy_emit_turns_on_the_warning_of_every_diagnostic_check() {
     let o = cplusp(&["policy", "emit"]);
     assert!(o.status.success(), "stderr: {}", stderr(&o));
     let out = stdout(&o);
-    assert!(out.contains("\nExtraArgs: ['-Wreturn-stack-address', '-Wreorder-ctor', '-Wimplicit-fallthrough', '-Wswitch', '-Wunsequenced', '-Wglobal-constructors']\n"), "{out}");
+    assert!(out.contains("\nExtraArgs: ['-Wreturn-stack-address', '-Wreorder-ctor', '-Wimplicit-fallthrough', '-Wswitch', '-Wunsequenced', '-Wglobal-constructors', '-Wunknown-attributes', '-Wignored-attributes']\n"), "{out}");
 }
 
 /// A diagnostic name is a compiler flag once it is in the config. Three names must never get there:
@@ -285,6 +285,9 @@ fn gate_refuses_flags_the_proofs_cannot_follow() {
         // A 32-bit x86 target computes a double with x87, decision 0151.
         (vec!["-std=c++23", "-ffp-contract=off", "--target=i686-linux-gnu"], format!("--target=i686-linux-gnu: {float}")),
         (vec!["-std=c++23", "-ffp-contract=off", "-target", "i686-linux-gnu"], format!("-target: {float}")),
+        // More ways to an x87 double, decision 0152.
+        (vec!["-std=c++23", "-ffp-contract=off", "--target=i786-linux-gnu"], format!("--target=i786-linux-gnu: {float}")),
+        (vec!["-std=c++23", "-ffp-contract=off", "-mno-sse2"], format!("-mno-sse2: {float}")),
         (vec!["-std=c++23", "-ffp-contract=off", "-ffp-contract=on"], format!("-ffp-contract=on: {float}")),
         (vec!["-std=c++23", "-ffp-contract=off", "-ffp-model=precise"], format!("-ffp-model=precise: {float}")),
         (vec!["-std=c++23", "-ffp-contract=off", "-ffp-eval-method=extended"], format!("-ffp-eval-method=extended: {float}")),

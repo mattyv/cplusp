@@ -156,3 +156,4 @@ Status is `decided`, `proposed` (the default until someone objects or the thin s
 | [0149](0149-count-if-with-a-lambda-is-count-if-of-the-prelude.md) | count_if with a lambda is CountIf of the prelude | decided |
 | [0150](0150-a-double-that-only-compares-is-a-real.md) | A double that only compares is a real. Step one: no rounding | decided |
 | [0151](0151-a-32-bit-x86-target-and-an-unknown-attribute-are-refused.md) | A 32-bit x86 target and an unknown attribute are refused | decided |
+| [0152](0152-more-ways-to-an-x87-double-are-refused.md) | More ways to an x87 double are refused | decided |

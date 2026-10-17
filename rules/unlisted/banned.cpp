@@ -46,6 +46,8 @@ int32_t with_cleanup() {
 // results of floating point, decision 0151.
 [[gnu::optimize("fast-math")]] double fast(double a);  // BANNED
 __attribute__((optimize("-ffast-math"))) double fast_too(double a);  // BANNED
+// Clang drops a target string that it does not take, under another warning. GCC obeys it, decision 0152.
+__attribute__((target("fpmath=387"))) double fast_x87(double a);  // BANNED
 
 struct __attribute__((may_alias)) Alias {  // BANNED
   int32_t v;

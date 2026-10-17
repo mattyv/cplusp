@@ -133,3 +133,17 @@ fn a_32_bit_x86_target_is_refused() {
     }
     assert_eq!(check(&["-std=c++23", "-ffp-contract=off", "--target=x86_64-linux-gnu", "--target=aarch64-linux-gnu"], &[]), (vec![], false, false));
 }
+
+/// More ways to a double in the x87 unit: the names i786 to i986, and flags that turn SSE off, decision 0152.
+#[test]
+fn more_ways_to_an_x87_double_are_refused() {
+    for t in ["--target=i786-linux-gnu", "--target=i886-pc-linux", "--target=i986-linux", "-mno-sse", "-mno-sse2", "-mgeneral-regs-only"] {
+        assert_eq!(check(&["-std=c++23", "-ffp-contract=off", t], &[]), (vec![(2, FlagFault::Float)], false, false), "{t}");
+    }
+    assert_eq!(check(&["-std=c++23", "-ffp-contract=off", "-target", "i986-linux-gnu"], &[]), (vec![(2, FlagFault::Float)], false, false));
+    // Not a 32-bit x86: no digit, a digit below 3, or no 86 after it.
+    for t in ["--target=i86-linux", "--target=i286-linux", "--target=i7-linux", "-msoft-float", "-mx32"] {
+        assert_eq!(check(&["-std=c++23", "-ffp-contract=off", t], &[]), (vec![], false, false), "{t}");
+    }
+}
+
