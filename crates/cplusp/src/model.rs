@@ -239,6 +239,10 @@ struct Names {
     /// The number of the first temporary of the `Pre` that is being printed, decision 0104. `Temp(t)` prints as temporary `temp_base + t`.
     /// `None` outside a `Pre`.
     temp_base: std::cell::Cell<Option<u32>>,
+    /// Whether the printer wrote a call of `fadd` to `fdiv`, so a verdict rests on the rounding axiom, decision 0154.
+    rounds: std::cell::Cell<bool>,
+    /// Whether the printer wrote a name of the module `Double`: `fadd` to `fdiv`, `abs`, `EPS`, `ETA` or `MAX`, so the module is in the model.
+    double: std::cell::Cell<bool>,
     /// The functions that the companion file declares. Empty when there is no file or the scan refused it, decision 0079.
     declared: Vec<String>,
     /// The lemmas that the companion file declares, apart from the functions, decision 0099.
@@ -876,6 +880,9 @@ function CountIf<T>(s: seq<T>, p: T -> bool): nat
 }
 ";
 
+/// The model of a double operation, decision 0154: the file of the divergence tests as it is. The shell keeps no copy.
+pub const DOUBLE: &str = include_str!("../../../divergence/dafny/Double.dfy");
+
 /// The model of `a >> n`, decision 0106. It follows the methods when one of them shifts, so a file with no shift has no `decreases` line of its own.
 pub const SHR: &str = r"function shr(a: int, n: int, w: int): int
   requires 0 <= n < w
@@ -985,6 +992,33 @@ fn dexpr(e: &DExpr, names: &Names) -> String {
             let (whole, fraction) = digits.split_at(digits.len() - *k as usize);
             format!("{whole}.{}", if fraction.is_empty() { "0" } else { fraction })
         }
+        DExpr::FOp(o, a, b) => {
+            names.rounds.set(true);
+            names.double.set(true);
+            let f = match o {
+                BinOp::Add => "fadd",
+                BinOp::Sub => "fsub",
+                BinOp::Mul => "fmul",
+                _ => "fdiv",
+            };
+            format!("{f}({}, {})", dexpr(a, names), dexpr(b, names))
+        }
+        DExpr::Abs(a) => {
+            names.double.set(true);
+            format!("abs({})", dexpr(a, names))
+        }
+        DExpr::Eps => {
+            names.double.set(true);
+            "EPS".to_string()
+        }
+        DExpr::Eta => {
+            names.double.set(true);
+            "ETA".to_string()
+        }
+        DExpr::DblMax => {
+            names.double.set(true);
+            "MAX".to_string()
+        }
         DExpr::SetAt(a, i, e) => format!("{}[{} := {}]", dexpr(a, names), dexpr(i, names), dexpr(e, names)),
         DExpr::Drop(a, k) => format!("{}[{}..]", dexpr(a, names), dexpr(k, names)),
         DExpr::Take(a, j) => format!("{}[..{}]", dexpr(a, names), dexpr(j, names)),
@@ -1047,6 +1081,8 @@ pub struct Translation {
     /// Each trusted function that has a method, in the order of the file: its file, the line of its name, its name and its reason, decision 0102.
     pub trusted: Vec<(String, u32, String, String)>,
     pub refusals: Vec<Refusing>,
+    /// The model calls an operation of the module `Double`, so a verdict rests on its axiom, decision 0154.
+    pub rounds: bool,
     pub map: Map,
 }
 
@@ -1609,6 +1645,15 @@ pub fn translate(lines: &str, companion: Option<(&str, &str)>) -> Result<Transla
         p.out.push_str(SHR);
         p.lines.extend(SHR.lines().map(|_| None));
     }
+    // The model of a double operation is the file `Double.dfy` as it is, decision 0154, and the names of the module are in scope. It follows the
+    // methods that name it, as `shr` does.
+    let rounds = names.rounds.get();
+    if names.double.get() {
+        for text in [DOUBLE, "import opened Double\n"] {
+            p.out.push_str(text);
+            p.lines.extend(text.lines().map(|_| None));
+        }
+    }
     // The companion file follows the methods, so none of its comments reaches a method, decision 0083.
     let start = p.lines.len();
     p.lines.extend(companion_places);
@@ -1628,5 +1673,5 @@ pub fn translate(lines: &str, companion: Option<(&str, &str)>) -> Result<Transla
     }
     refusals.sort();
     refusals.dedup();
-    Ok(Translation { dafny, methods: printed, trusted, refusals, map: Map { lines, companion: companion_lines, decls, places: names.places, contracts: names.contracts } })
+    Ok(Translation { dafny, methods: printed, trusted, refusals, rounds, map: Map { lines, companion: companion_lines, decls, places: names.places, contracts: names.contracts } })
 }

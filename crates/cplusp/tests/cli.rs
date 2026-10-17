@@ -3219,7 +3219,7 @@ fn assert_and_apply_lines_with_no_rule_are_refused_at_their_lines() {
         "model-assert-refuse.cpp:5: the contract line has a form the translator cannot read.",
         "model-assert-refuse.cpp:10: Missing is no lemma of the companion file.",
         "model-assert-refuse.cpp:17: an assert or apply line needs a statement below it in its block.",
-        "model-assert-refuse.cpp:21: Double is no lemma of the companion file.",
+        "model-assert-refuse.cpp:21: Twice is no lemma of the companion file.",
         "model-assert-refuse.cpp:29: an assert or apply line needs a statement below it in its block.",
         "model-assert-refuse.cpp:37: y in the assert line is no variable.",
     ] {
@@ -4264,11 +4264,18 @@ fn a_double_operation_is_one_rounding() {
     let failed: Vec<&str> = text.lines().filter(|l| l.starts_with("Not proved: ")).map(|l| l.rsplit_once(".cpp:").unwrap().1).collect();
     assert_eq!(
         failed,
-        ["8: the result of the operation may exceed DBL_MAX.", "15: the ensures line may not hold on this return.", "22: the divisor may be zero."],
+        [
+            "8: the result of the operation may exceed DBL_MAX.",
+            "15: the ensures line may not hold on this return.",
+            "21: the divisor may be zero.",
+            // A contract that divides by a divisor that may be zero, decision 0154.
+            "25: the divisor may be zero.",
+        ],
         "{text}"
     );
-    // A model with no rounding names no axiom.
+    // A model with no rounding names no axiom, even with a bar in its contract.
     let o = prove("model-double.cpp", &[], &dafny);
+    assert_eq!(stdout(&o).lines().last(), Some("ok: proved"), "{}", stdout(&o));
     assert!(!stdout(&o).contains("Axiom:"), "{}", stdout(&o));
 }
 

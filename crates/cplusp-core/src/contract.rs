@@ -287,6 +287,8 @@ pub open spec fn spec_op(t: Seq<u8>, i: int) -> Option<(int, BinOp)> {
 pub open spec fn spec_single(c: u8) -> Option<Tok> {
     if c == 0x21 {
         Some(Tok::Bang)
+    } else if c == 0x7c {
+        Some(Tok::Bar)
     } else if c == 0x28 {
         Some(Tok::LParen)
     } else if c == 0x29 {
@@ -323,6 +325,12 @@ pub open spec fn spec_word(t: Seq<u8>, i: int, e: int) -> LexKind {
         LexKind::Fixed(Tok::Bool(false))
     } else if w == b"nullptr"@ {
         LexKind::Fixed(Tok::Nullptr)
+    } else if w == b"eps"@ {
+        LexKind::Fixed(Tok::Eps)
+    } else if w == b"eta"@ {
+        LexKind::Fixed(Tok::Eta)
+    } else if w == b"DBL_MAX"@ {
+        LexKind::Fixed(Tok::DblMax)
     } else {
         LexKind::Name(paren_after(t, e))
     }
@@ -947,6 +955,8 @@ fn single_exec(c: u8) -> (r: Option<Tok>)
 {
     if c == 0x21 {
         Some(Tok::Bang)
+    } else if c == 0x7c {
+        Some(Tok::Bar)
     } else if c == 0x28 {
         Some(Tok::LParen)
     } else if c == 0x29 {
@@ -986,6 +996,12 @@ fn word_exec(t: &Vec<u8>, i: usize, e: usize) -> (r: LexKind)
         LexKind::Fixed(Tok::Bool(false))
     } else if word_is(t, i, e, b"nullptr") {
         LexKind::Fixed(Tok::Nullptr)
+    } else if word_is(t, i, e, b"eps") {
+        LexKind::Fixed(Tok::Eps)
+    } else if word_is(t, i, e, b"eta") {
+        LexKind::Fixed(Tok::Eta)
+    } else if word_is(t, i, e, b"DBL_MAX") {
+        LexKind::Fixed(Tok::DblMax)
     } else {
         LexKind::Name(paren_after_exec(t, e))
     }

@@ -18,7 +18,7 @@ int32_t at_end(int32_t x) {
 }
 
 int32_t not_a_lemma(int32_t x) {
-  //@ apply Double(x)
+  //@ apply Twice(x)
   return x;
 }
 

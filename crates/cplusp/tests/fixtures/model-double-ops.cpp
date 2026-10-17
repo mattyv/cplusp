@@ -31,3 +31,11 @@ double gap(double a, double b) {
   d -= b;
   return d;
 }
+
+// A bound with no bar still rounds, and the proof names the axiom.
+//@ requires std::isfinite(a) && std::isfinite(b)
+//@ requires 0.0 <= a <= 1.0 && 0.0 <= b <= 1.0
+//@ ensures -1.0 <= result <= 3.0
+double bounded_sum(double a, double b) {
+  return a + b;
+}

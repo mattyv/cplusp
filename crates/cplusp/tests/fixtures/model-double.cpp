@@ -50,3 +50,10 @@ double hundred() {
 double eighth() {
   return 0x1p-3;
 }
+
+// A bar in the contract with no operation in code names no axiom, decision 0154.
+//@ requires std::isfinite(x) && |x| <= 1.0
+//@ ensures |result| <= 1.0
+double unit(double x) {
+  return x;
+}

@@ -56,6 +56,8 @@ fn sentence(message: &str) -> String {
         "a postcondition could not be proved on this return path" => "the ensures line may not hold on this return.".to_string(),
         "destructor 'value' can only be applied to datatype values constructed by 'Some'" => "the optional may be empty or the pointer may be null here.".to_string(),
         "assertion might not hold" => "the assert line may not hold.".to_string(),
+        // A contract that divides a real by a divisor that may be zero, decision 0154.
+        "possible division by zero" => "the divisor may be zero.".to_string(),
         "index out of range" => "the index may be out of range.".to_string(),
         "lower bound out of range" => "the offset may be past the end.".to_string(),
         "this loop invariant could not be proved on entry" => "the invariant may not hold when the loop starts.".to_string(),
@@ -173,7 +175,15 @@ pub fn run(t: &Translation, limit: u32, refused: bool, source: &str, shown: &dyn
         // A call of shr whose `requires 0 <= n < w` of the prelude fails is a shift amount that may be too wide, decision 0106.
         let shift = message == "function precondition could not be proved"
             && e.related.iter().any(|r| !map.companion.contains(&r.wrapping_sub(1)) && t.dafny.lines().nth(r.wrapping_sub(1)) == Some("  requires 0 <= n < w"));
-        let said = if zero {
+        // A call of fadd to fdiv whose bound `requires abs(...) <= MAX` of the module `Double` fails is a result that may pass DBL_MAX, and the divisor of
+        // fdiv is `requires b != 0.0`, decision 0154. The lines are found by their text in the model, outside the companion file.
+        let double_line = |r: &usize| t.dafny.lines().nth(r.wrapping_sub(1)).map(str::trim).filter(|_| !map.companion.contains(&r.wrapping_sub(1)));
+        let overflow = message == "function precondition could not be proved"
+            && e.related.iter().any(|r| double_line(r).is_some_and(|l| l.starts_with("requires abs(") && l.ends_with(") <= MAX")));
+        let double_zero = message == "function precondition could not be proved" && e.related.iter().any(|r| double_line(r) == Some("requires b != 0.0"));
+        let said = if overflow {
+            "the result of the operation may exceed DBL_MAX.".to_string()
+        } else if zero || double_zero {
             "the divisor may be zero.".to_string()
         } else if shift {
             "the shift amount may be negative or not below the width of the type.".to_string()
@@ -205,6 +215,10 @@ pub fn run(t: &Translation, limit: u32, refused: bool, source: &str, shown: &dyn
     // The count of verified items is the only fault, decision 0083.
     if let (Some((v, 0, 0)), true) = (reading.summary, found.is_empty() && !refused && axioms.is_empty() && verdict == Verdict::NotProved) {
         println!("Not provable: {source}: Dafny verified fewer items than the model has methods: {v} for {}.", t.methods);
+    }
+    // The proof rests on the rounding axiom when the model calls an operation of `Double`, decision 0154.
+    if t.rounds {
+        println!("Axiom: Double.dfy: RoundError: IEEE 754 binary64, round to nearest even, gradual underflow, one rounding per operation.");
     }
     if verdict == Verdict::Proved {
         println!("ok: proved");

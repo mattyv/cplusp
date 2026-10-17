@@ -257,7 +257,8 @@ pub enum CastKind {
 /// by the key of its enum and its place among the enumerators, decision 0109. `CountIf` is `std::count_if(v.begin(), v.end(), f)` in
 /// code, with the sequence, the name and the type of the parameter of the lambda `f`, and the expression of its one `return`,
 /// decision 0149. `RealLit` is a literal of type `double`, or a decimal with a point in a contract, by its digits and the count of
-/// the digits after the point, decision 0150. `Finite` is `std::isfinite(e)` in a contract. `Unknown` is a construct with no rule,
+/// the digits after the point, decision 0150. `Finite` is `std::isfinite(e)` in a contract. `Abs` is `|e|`, and `Eps`, `Eta` and
+/// `DblMax` are the words `eps`, `eta` and `DBL_MAX` of a contract, decision 0154. `Unknown` is a construct with no rule,
 /// by the id of its kind and its line.
 #[derive(PartialEq, Eq, Debug)]
 pub enum Expr {
@@ -301,6 +302,10 @@ pub enum Expr {
     CountIf(Box<Expr>, u32, Ty, Box<Expr>),
     RealLit(u64, u32),
     Finite(Box<Expr>),
+    Abs(Box<Expr>),
+    Eps,
+    Eta,
+    DblMax,
     Unknown(u32, u32),
 }
 
@@ -424,7 +429,9 @@ pub enum DTy {
 /// object of a member function that writes it, as the body leaves it, decision 0096. `Out` is `x'`, a reference parameter as the body
 /// leaves it, decision 0108. `Enumerator` is the constructor of an enumerator, decision 0109. `Ite` is `if c then a else b`, decision 0098.
 /// `Temp` reads a temporary that a call before the statement set, decision 0104. `ShrIn` is `(shr(a, n, W) as T)`, a right shift
-/// of the width `W`, decision 0106. `SetAt` is `s[i := e]`, which Dafny proves is in range, decision 0145. `Append` is `s + [e]`, decision 0148. `CountIf` is `CountIf(s, (x: T) => e)` of the prelude, decision 0149. `RealLit` is the real `d / 10^k`, decision 0150. A Dafny expression calls no
+/// of the width `W`, decision 0106. `SetAt` is `s[i := e]`, which Dafny proves is in range, decision 0145. `Append` is `s + [e]`, decision 0148. `CountIf` is `CountIf(s, (x: T) => e)` of the prelude, decision 0149. `RealLit` is the real `d / 10^k`, decision 0150. `FOp` is
+/// one operation of the double model, `fadd` to `fdiv`, and `Abs`, `Eps`, `Eta` and `DblMax` are `abs`, `EPS`, `ETA` and `MAX` of it,
+/// decision 0154. A Dafny expression calls no
 /// method.
 #[derive(PartialEq, Eq, Debug)]
 pub enum DExpr {
@@ -468,6 +475,11 @@ pub enum DExpr {
     Append(Box<DExpr>, Box<DExpr>),
     CountIf(Box<DExpr>, u32, DTy, Box<DExpr>),
     RealLit(u64, u32),
+    FOp(BinOp, Box<DExpr>, Box<DExpr>),
+    Abs(Box<DExpr>),
+    Eps,
+    Eta,
+    DblMax,
 }
 
 /// The calls that run before a statement, in the order that they run: each sets a temporary of the statement by its number, of a
@@ -1037,9 +1049,20 @@ pub open spec fn spec_lift(e: Expr, all: Fns, line: u32, sd: Structs, n: u32, op
                 Ok((cb, db, n1)) => Ok((cb, spec_null_test(op, db), n1)),
             }
         },
-        // Arithmetic on a double rounds, and step one has no rule for it, decision 0150. The real model would make it exact.
+        // Arithmetic on a double is one rounding of the model, decision 0154. `%` has no rule, and the real model would make it
+        // exact, decision 0150.
         Expr::Bin(op, a, b) => if spec_arith(op) && (spec_real(*a, all) || spec_real(*b, all)) {
-            Err(Refusal::Rounds(line))
+            if op == BinOp::Rem || op == BinOp::Div {
+                Err(Refusal::Rounds(line))
+            } else {
+                match spec_lift(*a, all, line, sd, n, open) {
+                    Err(r) => Err(r),
+                    Ok((ca, da, n1)) => match spec_lift(*b, all, line, sd, n1, open) {
+                        Err(r) => Err(r),
+                        Ok((cb, db, n2)) => Ok((spec_append(ca, cb), DExpr::FOp(op, Box::new(da), Box::new(db)), n2)),
+                    },
+                }
+            }
         } else if op == BinOp::Div || op == BinOp::Rem || spec_ptr_var(*a) || spec_ptr_var(*b) {
             Err(Refusal::Syntax(line))
         } else {
@@ -1052,7 +1075,17 @@ pub open spec fn spec_lift(e: Expr, all: Fns, line: u32, sd: Structs, n: u32, op
             }
         },
         Expr::Divide(op, a, b, t) => if t == Ty::F64 || spec_real(*a, all) || spec_real(*b, all) {
-            Err(Refusal::Rounds(line))
+            if op == BinOp::Div {
+                match spec_lift(*a, all, line, sd, n, open) {
+                    Err(r) => Err(r),
+                    Ok((ca, da, n1)) => match spec_lift(*b, all, line, sd, n1, open) {
+                        Err(r) => Err(r),
+                        Ok((cb, db, n2)) => Ok((spec_append(ca, cb), DExpr::FOp(op, Box::new(da), Box::new(db)), n2)),
+                    },
+                }
+            } else {
+                Err(Refusal::Rounds(line))
+            }
         } else if !(op == BinOp::Div || op == BinOp::Rem) {
             Err(Refusal::Syntax(line))
         } else {
@@ -1260,6 +1293,57 @@ pub open spec fn spec_rebind(decl: Names, ps: Params, name: u32) -> Option<(u32,
 }
 
 /// A binary operator of a contract on the exact integers. `/` and `%` truncate as in C++, decision 0088.
+/// An expression of a contract with a real in it: a double parameter or result, a decimal with a point, a word of a double bound,
+/// an absolute value, or arithmetic on one of them, decision 0154. It is never true of an expression of integers alone, so `/` on
+/// integers keeps the division of C++, decision 0088.
+pub open spec fn spec_creal(e: Expr, decl: Names, ps: Params, ret: Option<Ty>, bound: Names) -> bool
+    decreases e,
+{
+    match e {
+        Expr::Name(n) => !spec_has(bound, n) && match spec_rebind(decl, ps, n) {
+            Some((_, t)) => spec_view_ty(t) == Ty::F64,
+            None => false,
+        },
+        Expr::Result => ret == Some(Ty::F64),
+        Expr::RealLit(_, _) => true,
+        Expr::Eps => true,
+        Expr::Eta => true,
+        Expr::DblMax => true,
+        Expr::Abs(_) => true,
+        Expr::Paren(a) => spec_creal(*a, decl, ps, ret, bound),
+        Expr::Neg(a) => spec_creal(*a, decl, ps, ret, bound),
+        Expr::Old(a) => spec_creal(*a, decl, ps, ret, bound),
+        Expr::Bin(op, a, b) => spec_arith(op) && (spec_creal(*a, decl, ps, ret, bound) || spec_creal(*b, decl, ps, ret, bound)),
+        Expr::Cond(_, a, b) => spec_creal(*a, decl, ps, ret, bound) || spec_creal(*b, decl, ps, ret, bound),
+        _ => false,
+    }
+}
+
+pub fn creal(e: &Expr, decl: &Names, ps: &Params, ret: Option<Ty>, bound: &Names) -> (r: bool)
+    ensures
+        r == spec_creal(*e, *decl, *ps, ret, *bound),
+    decreases e,
+{
+    match e {
+        Expr::Name(n) => has(bound, *n) == false && match rebind(decl, ps, *n) {
+            Some((_, t)) => view_ty(t) == Ty::F64,
+            None => false,
+        },
+        Expr::Result => ret == Some(Ty::F64),
+        Expr::RealLit(_, _) => true,
+        Expr::Eps => true,
+        Expr::Eta => true,
+        Expr::DblMax => true,
+        Expr::Abs(_) => true,
+        Expr::Paren(a) => creal(a, decl, ps, ret, bound),
+        Expr::Neg(a) => creal(a, decl, ps, ret, bound),
+        Expr::Old(a) => creal(a, decl, ps, ret, bound),
+        Expr::Bin(op, a, b) => arith(*op) && (creal(a, decl, ps, ret, bound) || creal(b, decl, ps, ret, bound)),
+        Expr::Cond(_, a, b) => creal(a, decl, ps, ret, bound) || creal(b, decl, ps, ret, bound),
+        _ => false,
+    }
+}
+
 pub open spec fn spec_binary(op: BinOp, da: DExpr, db: DExpr) -> DExpr {
     if op == BinOp::Div {
         DExpr::TDiv(Box::new(da), Box::new(db))
@@ -1310,6 +1394,14 @@ pub open spec fn spec_contract(e: Expr, decl: Names, ps: Params, ret: Option<Ty>
         // A decimal with a point is that real, and `std::isfinite` of a double is true in the model, which holds no NaN and no
         // infinity, decision 0150.
         Expr::RealLit(d, k) => Ok(DExpr::RealLit(d, k)),
+        // The absolute value and the words of a double bound, decision 0154.
+        Expr::Abs(a) => match spec_contract(*a, decl, ps, ret, bound, line, sd) {
+            Ok(da) => Ok(DExpr::Abs(Box::new(da))),
+            Err(r) => Err(r),
+        },
+        Expr::Eps => Ok(DExpr::Eps),
+        Expr::Eta => Ok(DExpr::Eta),
+        Expr::DblMax => Ok(DExpr::DblMax),
         Expr::Finite(a) => match spec_path(*a, decl, ps, ret, bound, line, sd) {
             Ok((_, t)) => if t == Ty::F64 {
                 Ok(DExpr::Bool(true))
@@ -1367,7 +1459,12 @@ pub open spec fn spec_contract(e: Expr, decl: Names, ps: Params, ret: Option<Ty>
         } else {
             match spec_contract(*a, decl, ps, ret, bound, line, sd) {
                 Ok(da) => match spec_contract(*b, decl, ps, ret, bound, line, sd) {
-                    Ok(db) => Ok(spec_binary(op, da, db)),
+                    // `/` on reals is the real quotient, decision 0154.
+                    Ok(db) => Ok(if op == BinOp::Div && (spec_creal(*a, decl, ps, ret, bound) || spec_creal(*b, decl, ps, ret, bound)) {
+                        DExpr::Bin(op, Box::new(da), Box::new(db))
+                    } else {
+                        spec_binary(op, da, db)
+                    }),
                     Err(r) => Err(r),
                 },
                 Err(r) => Err(r),
@@ -2571,6 +2668,7 @@ pub open spec fn spec_has_result(e: Expr) -> bool
     match e {
         Expr::Result => true,
         Expr::Finite(a) => spec_has_result(*a),
+        Expr::Abs(a) => spec_has_result(*a),
         Expr::Bin(_, a, b) => spec_has_result(*a) || spec_has_result(*b),
         Expr::Not(a) => spec_has_result(*a),
         Expr::Neg(a) => spec_has_result(*a),
@@ -3278,6 +3376,7 @@ pub open spec fn unknown_expr(e: Expr) -> bool
     match e {
         Expr::Unknown(_, _) => true,
         Expr::Finite(a) => unknown_expr(*a),
+        Expr::Abs(a) => unknown_expr(*a),
         Expr::Bin(_, a, b) => unknown_expr(*a) || unknown_expr(*b),
         Expr::Not(a) => unknown_expr(*a),
         Expr::Neg(a) => unknown_expr(*a),
@@ -4762,7 +4861,17 @@ pub fn lift(e: &Expr, all: &Fns, line: u32, sd: &Structs, n: u32, open: bool) ->
             }
         },
         Expr::Bin(op, a, b) => if arith(*op) && (real(a, all) || real(b, all)) {
-            Err(Refusal::Rounds(line))
+            if *op == BinOp::Rem || *op == BinOp::Div {
+                Err(Refusal::Rounds(line))
+            } else {
+                match lift(a, all, line, sd, n, open) {
+                    Err(r) => Err(r),
+                    Ok((ca, da, n1)) => match lift(b, all, line, sd, n1, open) {
+                        Err(r) => Err(r),
+                        Ok((cb, db, n2)) => Ok((append(ca, cb), DExpr::FOp(*op, Box::new(da), Box::new(db)), n2)),
+                    },
+                }
+            }
         } else if *op == BinOp::Div || *op == BinOp::Rem || a.is_ptr_var() || b.is_ptr_var() {
             Err(Refusal::Syntax(line))
         } else {
@@ -4775,7 +4884,17 @@ pub fn lift(e: &Expr, all: &Fns, line: u32, sd: &Structs, n: u32, open: bool) ->
             }
         },
         Expr::Divide(op, a, b, t) => if *t == Ty::F64 || real(a, all) || real(b, all) {
-            Err(Refusal::Rounds(line))
+            if *op == BinOp::Div {
+                match lift(a, all, line, sd, n, open) {
+                    Err(r) => Err(r),
+                    Ok((ca, da, n1)) => match lift(b, all, line, sd, n1, open) {
+                        Err(r) => Err(r),
+                        Ok((cb, db, n2)) => Ok((append(ca, cb), DExpr::FOp(*op, Box::new(da), Box::new(db)), n2)),
+                    },
+                }
+            } else {
+                Err(Refusal::Rounds(line))
+            }
         } else if !(*op == BinOp::Div || *op == BinOp::Rem) {
             Err(Refusal::Syntax(line))
         } else {
@@ -5075,6 +5194,13 @@ pub fn translate_contract(e: &Expr, decl: &Names, ps: &Params, ret: Option<Ty>, 
     match e {
         Expr::Int(n) => Ok(DExpr::Lit(*n)),
         Expr::RealLit(d, k) => Ok(DExpr::RealLit(*d, *k)),
+        Expr::Abs(a) => match translate_contract(a, decl, ps, ret, bound, line, sd) {
+            Ok(da) => Ok(DExpr::Abs(Box::new(da))),
+            Err(r) => Err(r),
+        },
+        Expr::Eps => Ok(DExpr::Eps),
+        Expr::Eta => Ok(DExpr::Eta),
+        Expr::DblMax => Ok(DExpr::DblMax),
         Expr::Finite(a) => match path(a, decl, ps, ret, bound, line, sd) {
             Ok((_, t)) => if t == Ty::F64 {
                 Ok(DExpr::Bool(true))
@@ -5121,7 +5247,11 @@ pub fn translate_contract(e: &Expr, decl: &Names, ps: &Params, ret: Option<Ty>, 
         } else {
             match translate_contract(a, decl, ps, ret, bound, line, sd) {
                 Ok(da) => match translate_contract(b, decl, ps, ret, bound, line, sd) {
-                    Ok(db) => Ok(binary(*op, da, db)),
+                    Ok(db) => Ok(if *op == BinOp::Div && (creal(a, decl, ps, ret, bound) || creal(b, decl, ps, ret, bound)) {
+                        DExpr::Bin(*op, Box::new(da), Box::new(db))
+                    } else {
+                        binary(*op, da, db)
+                    }),
                     Err(r) => Err(r),
                 },
                 Err(r) => Err(r),
@@ -6374,6 +6504,7 @@ pub fn has_result(e: &Expr) -> (r: bool)
     match e {
         Expr::Result => true,
         Expr::Finite(a) => has_result(a),
+        Expr::Abs(a) => has_result(a),
         Expr::Bin(_, a, b) => has_result(a) || has_result(b),
         Expr::Not(a) => has_result(a),
         Expr::Neg(a) => has_result(a),
@@ -6735,6 +6866,11 @@ pub fn copy_dexpr(d: &DExpr) -> (r: DExpr)
         DExpr::Append(x0, x1) => DExpr::Append(Box::new(copy_dexpr(x0)), Box::new(copy_dexpr(x1))),
         DExpr::CountIf(x0, x1, x2, x3) => DExpr::CountIf(Box::new(copy_dexpr(x0)), *x1, *x2, Box::new(copy_dexpr(x3))),
         DExpr::RealLit(x0, x1) => DExpr::RealLit(*x0, *x1),
+        DExpr::FOp(x0, x1, x2) => DExpr::FOp(*x0, Box::new(copy_dexpr(x1)), Box::new(copy_dexpr(x2))),
+        DExpr::Abs(x0) => DExpr::Abs(Box::new(copy_dexpr(x0))),
+        DExpr::Eps => DExpr::Eps,
+        DExpr::Eta => DExpr::Eta,
+        DExpr::DblMax => DExpr::DblMax,
     }
 }
 
@@ -7069,6 +7205,10 @@ pub enum Tok {
     Nullptr,
     Real(u64, u32),
     IsFinite,
+    Bar,
+    Eps,
+    Eta,
+    DblMax,
     Unknown(u32, u32),
 }
 
@@ -7539,6 +7679,17 @@ fn parse_atom(toks: &Vec<Tok>, pos: usize, line: u32) -> (r: Result<(Expr, usize
     match toks[pos] {
         Tok::Int(n) => Ok((Expr::Int(n), pos + 1)),
         Tok::Real(d, k) => Ok((Expr::RealLit(d, k), pos + 1)),
+        Tok::Eps => Ok((Expr::Eps, pos + 1)),
+        Tok::Eta => Ok((Expr::Eta, pos + 1)),
+        Tok::DblMax => Ok((Expr::DblMax, pos + 1)),
+        Tok::Bar => match parse_implies(toks, pos + 1, line) {
+            Ok((e, p)) => if p < toks.len() && toks[p] == Tok::Bar {
+                Ok((Expr::Abs(Box::new(e)), p + 1))
+            } else {
+                Err(Refusal::Syntax(line))
+            },
+            Err(e) => Err(e),
+        },
         Tok::IsFinite => if toks.len() - pos > 1 && toks[pos + 1] == Tok::LParen {
             match parse_implies(toks, pos + 2, line) {
                 Ok((e, p)) => if p < toks.len() && toks[p] == Tok::RParen {

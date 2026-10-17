@@ -63,7 +63,8 @@ module Double {
   }
 
   function fdiv(a: real, b: real): real
-    requires b != 0.0 && abs(a / b) <= MAX
+    requires b != 0.0
+    requires abs(a / b) <= MAX
     ensures abs(fdiv(a, b) - a / b) <= EPS * abs(a / b) + ETA
   {
     RoundError(a / b);

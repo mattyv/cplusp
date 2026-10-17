@@ -1,5 +1,5 @@
 // A function, which an apply line cannot call.
-function Double(x: int): int
+function Twice(x: int): int
 {
   2 * x
 }

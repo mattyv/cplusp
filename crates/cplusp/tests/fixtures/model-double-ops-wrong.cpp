@@ -20,3 +20,9 @@ double exact(double a, double b) {
 double divide(double a, double b) {
   return a / b;
 }
+
+//@ requires std::isfinite(a) && std::isfinite(b)
+//@ requires |a / b| <= DBL_MAX
+double unguarded(double a, double b) {
+  return a;
+}

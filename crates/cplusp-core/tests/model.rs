@@ -2929,3 +2929,15 @@ fn the_absolute_value_parses_in_a_contract() {
     assert_eq!(parse_contract(&toks, 3), Ok(want));
 }
 
+
+/// `/` in a contract with a real operand is the real quotient, and on integers it keeps the division of C++, decision 0154.
+#[test]
+fn a_division_of_reals_in_a_contract_is_the_real_quotient() {
+    let ens = Expr::Bin(BinOp::Le, b(Expr::Bin(BinOp::Div, b(Expr::Name(DA)), b(Expr::Name(DB)))), b(Expr::RealLit(1, 0)));
+    let conds = List::Cons((CondKind::Ensures, ens, 4, names(&[DA, DB])), Box::new(finite(&[DA, DB], 3, &[DA, DB])));
+    let f = Function { conds, ..larger(one(Stmt::Return(Expr::Var(DA, Ty::F64), 6))) };
+    let Model::Full(m) = translate_function(&f, &List::Nil, &List::Nil) else { panic!("a full model") };
+    let q = DExpr::Bin(BinOp::Div, Box::new(DExpr::Var(DA)), Box::new(DExpr::Var(DB)));
+    let want = DExpr::Bin(BinOp::Le, Box::new(q), Box::new(DExpr::RealLit(1, 0)));
+    assert_eq!(strip_conds(m.ensures), List::Cons((want, 0), Box::new(List::Nil)));
+}
