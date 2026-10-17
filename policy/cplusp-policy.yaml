@@ -983,6 +983,10 @@ rules:
     use_instead: "a construct the subset lists, or ask for a row."
     stage: gate
     detect:
+      # Clang drops an attribute that it does not know, or a target string it does not take, before the list of attributes sees
+      # it, decisions 0151 and 0152.
+      - check: clang-diagnostic-unknown-attributes
+      - check: clang-diagnostic-ignored-attributes
       - check: cplusp-allowlist
         options:
           statements: AddrLabelExpr,ArraySubscriptExpr,AttributedStmt,BinaryOperator,BreakStmt,CStyleCastExpr,CXXBindTemporaryExpr,CXXBoolLiteralExpr,CXXCatchStmt,CXXConstCastExpr,CXXConstructExpr,CXXDefaultArgExpr,CXXDefaultInitExpr,CXXDeleteExpr,CXXDependentScopeMemberExpr,CXXDynamicCastExpr,CXXForRangeStmt,CXXFunctionalCastExpr,CXXMemberCallExpr,CXXNewExpr,CXXNullPtrLiteralExpr,CXXOperatorCallExpr,CXXReinterpretCastExpr,CXXRewrittenBinaryOperator,CXXScalarValueInitExpr,CXXStaticCastExpr,CXXStdInitializerListExpr,CXXTemporaryObjectExpr,CXXThisExpr,CXXThrowExpr,CXXTryStmt,CallExpr,CaseStmt,CharacterLiteral,CoawaitExpr,CompoundAssignOperator,CompoundStmt,ConceptSpecializationExpr,ConditionalOperator,ConstantExpr,ContinueStmt,CoreturnStmt,CoroutineBodyStmt,CoyieldExpr,DeclRefExpr,DeclStmt,DefaultStmt,DependentCoawaitExpr,DependentScopeDeclRefExpr,DoStmt,ExprWithCleanups,FloatingLiteral,ForStmt,GCCAsmStmt,GotoStmt,IfStmt,ImplicitCastExpr,ImplicitValueInitExpr,IndirectGotoStmt,InitListExpr,IntegerLiteral,LabelStmt,LambdaExpr,MSAsmStmt,MaterializeTemporaryExpr,MemberExpr,NullStmt,OpaqueValueExpr,ParenExpr,ParenListExpr,ReturnStmt,StringLiteral,SubstNonTypeTemplateParmExpr,SwitchStmt,UnaryExprOrTypeTraitExpr,UnaryOperator,UnresolvedLookupExpr,VAArgExpr,WhileStmt

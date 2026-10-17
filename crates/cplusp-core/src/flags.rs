@@ -73,7 +73,20 @@ pub open spec fn std_ok(v: Seq<u8>) -> bool {
 pub open spec fn float_flag(f: Seq<u8>) -> bool {
     f == b"-ffast-math"@ || f == b"-Ofast"@ || f == b"-funsafe-math-optimizations"@ || f == b"-ffinite-math-only"@ || f
         == b"-fassociative-math"@ || f == b"-freciprocal-math"@ || f == b"-fno-signed-zeros"@ || f == b"-fno-honor-nans"@ || f
-        == b"-fno-honor-infinities"@ || f == b"-ffp-model=fast"@ || f == b"-mfpmath=387"@ || f == b"-m32"@
+        == b"-fno-honor-infinities"@ || f == b"-ffp-model=fast"@ || f == b"-mfpmath=387"@ || f == b"-m32"@ || f
+        == b"-mno-sse"@ || f == b"-mno-sse2"@ || f == b"-mgeneral-regs-only"@
+}
+
+/// A triple of 32-bit x86, which computes a double with the x87 unit: `i`, a digit from 3 to 9, then `86`, decisions 0151 and 0152.
+pub open spec fn x87_triple(v: Seq<u8>) -> bool {
+    v.len() >= 4 && v[0] == 0x69 && 0x33 <= v[1] <= 0x39 && v[2] == 0x38 && v[3] == 0x36
+}
+
+/// The flag at `i` gives a 32-bit x86 build: `-m16`, `--target=X`, or `-target X` and `-arch X` with `X` the next flag, decision 0151.
+pub open spec fn x87_at(fl: Seq<Vec<u8>>, i: int) -> bool {
+    let f = fl[i]@;
+    f == b"-m16"@ || (starts(f, b"--target="@) && x87_triple(rest(f, b"--target="@))) || ((f == b"-target"@ || f == b"-arch"@) && i + 1
+        < fl.len() && x87_triple(fl[i + 1]@))
 }
 
 pub open spec fn reads(f: Seq<u8>) -> bool {
@@ -131,7 +144,7 @@ pub open spec fn fault(fl: Seq<Vec<u8>>, cs: Seq<Vec<u8>>, i: int) -> Option<Fla
     let contracts = last_contract(fl, fl.len() as int) == Some(i) && !is_off(f);
     let denormals = starts(f, b"-fdenormal-fp-math="@) && f != b"-fdenormal-fp-math=ieee"@;
     let eval = starts(f, b"-ffp-eval-method="@) && f != b"-ffp-eval-method=source"@;
-    if contracts || denormals || eval || float_flag(f) {
+    if contracts || denormals || eval || float_flag(f) || x87_at(fl, i) {
         Some(FlagFault::Float)
     } else if f == b"--std"@ || is_ansi(f) || (std_value(f) is Some && !std_ok(std_value(f).unwrap())) {
         Some(FlagFault::Std)
@@ -203,6 +216,7 @@ pub open spec fn clean(fl: Seq<Vec<u8>>, cs: Seq<Vec<u8>>) -> bool {
     &&& last_contract(fl, fl.len() as int) matches Some(j) && is_off(fl[j]@)
     &&& forall|i: int| 0 <= i < fl.len() ==> flag_clean(#[trigger] fl[i]@, cs)
     &&& forall|i: int| 0 <= i < fl.len() ==> !#[trigger] swallows(fl, i)
+    &&& forall|i: int| 0 <= i < fl.len() ==> !#[trigger] x87_at(fl, i)
 }
 
 /// One flag that changes no floating-point result, nothing that the compiler reads or reports, and no warning of the policy. It
@@ -373,7 +387,34 @@ fn float_exec(f: &Vec<u8>) -> (r: bool)
         || eq(f, b"-freciprocal-math") || eq(f, b"-fno-signed-zeros") || eq(f, b"-fno-honor-nans") || eq(f, b"-fno-honor-infinities") || eq(
         f,
         b"-ffp-model=fast",
-    ) || eq(f, b"-mfpmath=387") || eq(f, b"-m32")
+    ) || eq(f, b"-mfpmath=387") || eq(f, b"-m32") || eq(f, b"-mno-sse") || eq(f, b"-mno-sse2") || eq(f, b"-mgeneral-regs-only")
+}
+
+/// The bytes of `v` from `from` are a triple of 32-bit x86.
+fn x87_triple_exec(v: &Vec<u8>, from: usize) -> (r: bool)
+    requires
+        from <= v.len(),
+    ensures
+        r == x87_triple(v@.subrange(from as int, v.len() as int)),
+{
+    v.len() - from >= 4 && v[from] == 0x69 && 0x33 <= v[from + 1] && v[from + 1] <= 0x39 && v[from + 2] == 0x38 && v[from + 3] == 0x36
+}
+
+fn x87_exec(fl: &Vec<Vec<u8>>, i: usize) -> (r: bool)
+    requires
+        i < fl.len(),
+    ensures
+        r == x87_at(fl@, i as int),
+{
+    let f = &fl[i];
+    proof {
+        assert(fl@[i as int]@.subrange(0, fl@[i as int]@.len() as int) =~= fl@[i as int]@);
+        if i + 1 < fl.len() {
+            assert(fl@[i + 1]@.subrange(0, fl@[i + 1]@.len() as int) =~= fl@[i + 1]@);
+        }
+    }
+    eq(f, b"-m16") || (starts_exec(f, b"--target=") && x87_triple_exec(f, 9)) || ((eq(f, b"-target") || eq(f, b"-arch")) && i + 1
+        < fl.len() && x87_triple_exec(&fl[i + 1], 0))
 }
 
 fn reads_exec(f: &Vec<u8>) -> (r: bool)
@@ -497,7 +538,7 @@ fn fault_exec(fl: &Vec<Vec<u8>>, cs: &Vec<Vec<u8>>, i: usize, last: Option<usize
     let contracts = last == Some(i) && c != 1;
     let denormals = starts_exec(f, b"-fdenormal-fp-math=") && !eq(f, b"-fdenormal-fp-math=ieee");
     let eval = starts_exec(f, b"-ffp-eval-method=") && !eq(f, b"-ffp-eval-method=source");
-    if contracts || denormals || eval || float_exec(f) {
+    if contracts || denormals || eval || float_exec(f) || x87_exec(fl, i) {
         return Some(FlagFault::Float);
     }
     if eq(f, b"--std") || eq(f, b"-ansi") || eq(f, b"--ansi") {
@@ -594,6 +635,9 @@ pub fn check_flags(fl: &Vec<Vec<u8>>, cs: &Vec<Vec<u8>>) -> (r: FlagCheck)
                 assert(fault(fl@, cs@, j) is None);
             }
             assert forall|j: int| 0 <= j < n implies !#[trigger] swallows(fl@, j) by {
+                assert(fault(fl@, cs@, j) is None);
+            }
+            assert forall|j: int| 0 <= j < n implies !#[trigger] x87_at(fl@, j) by {
                 assert(fault(fl@, cs@, j) is None);
             }
         }
