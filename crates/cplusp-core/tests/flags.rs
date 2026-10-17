@@ -119,3 +119,17 @@ fn a_flag_that_would_swallow_the_next_flag_is_refused() {
         assert_eq!(check(&["-std=c++23", "-ffp-contract=off", f], &[]), (vec![(2, FlagFault::Swallows)], false, false), "{f}");
     }
 }
+
+/// A target of 32-bit x86 computes a double with the x87 unit, so it is refused as a change of floating point, and a 64-bit
+/// target is fine, decision 0151.
+#[test]
+fn a_32_bit_x86_target_is_refused() {
+    for t in ["--target=i686-linux-gnu", "--target=i386-pc-linux", "--target=i486-unknown-linux", "--target=i586-linux", "-m16"] {
+        assert_eq!(check(&["-std=c++23", "-ffp-contract=off", t], &[]), (vec![(2, FlagFault::Float)], false, false), "{t}");
+    }
+    for f in ["-target", "-arch"] {
+        assert_eq!(check(&["-std=c++23", "-ffp-contract=off", f, "i686-linux-gnu"], &[]), (vec![(2, FlagFault::Float)], false, false), "{f}");
+        assert_eq!(check(&["-std=c++23", "-ffp-contract=off", f, "x86_64-linux-gnu"], &[]), (vec![], false, false), "{f}");
+    }
+    assert_eq!(check(&["-std=c++23", "-ffp-contract=off", "--target=x86_64-linux-gnu", "--target=aarch64-linux-gnu"], &[]), (vec![], false, false));
+}

@@ -282,6 +282,9 @@ fn gate_refuses_flags_the_proofs_cannot_follow() {
         (vec!["-std=c++23", "-ffp-contract=off", "-fdenormal-fp-math=preserve-sign"], format!("-fdenormal-fp-math=preserve-sign: {float}")),
         (vec!["-std=c++23", "-ffp-contract=off", "-mfpmath=387"], format!("-mfpmath=387: {float}")),
         (vec!["-std=c++23", "-ffp-contract=off", "-m32"], format!("-m32: {float}")),
+        // A 32-bit x86 target computes a double with x87, decision 0151.
+        (vec!["-std=c++23", "-ffp-contract=off", "--target=i686-linux-gnu"], format!("--target=i686-linux-gnu: {float}")),
+        (vec!["-std=c++23", "-ffp-contract=off", "-target", "i686-linux-gnu"], format!("-target: {float}")),
         (vec!["-std=c++23", "-ffp-contract=off", "-ffp-contract=on"], format!("-ffp-contract=on: {float}")),
         (vec!["-std=c++23", "-ffp-contract=off", "-ffp-model=precise"], format!("-ffp-model=precise: {float}")),
         (vec!["-std=c++23", "-ffp-contract=off", "-ffp-eval-method=extended"], format!("-ffp-eval-method=extended: {float}")),

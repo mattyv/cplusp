@@ -42,6 +42,11 @@ int32_t with_cleanup() {
 
 [[gnu::pure]] int32_t promised_pure(int32_t x);  // BANNED
 
+// An attribute that clang does not know is dropped before the list sees it. GCC reads optimize, and fast math changes the
+// results of floating point, decision 0151.
+[[gnu::optimize("fast-math")]] double fast(double a);  // BANNED
+__attribute__((optimize("-ffast-math"))) double fast_too(double a);  // BANNED
+
 struct __attribute__((may_alias)) Alias {  // BANNED
   int32_t v;
 };
