@@ -371,6 +371,8 @@ fn the_once_brittle_proofs_hold_on_every_seed() {
 /// the bound, a method proves the error with no call of the axiom. With no bound, or a divisor that may be zero, it fails.
 #[test]
 fn each_double_operation_carries_its_bound_and_its_error() {
+    // Dafny does not verify an included file, so the model is verified on its own: each ensures follows from the axiom.
+    assert_eq!(verdict(&root().join("divergence/dafny/Double.dfy")), Verdict::Verifies);
     let dir = root().join("divergence/dafny/model");
     assert_eq!(verdict(&dir.join("bounded.dfy")), Verdict::Verifies);
     assert_eq!(verdict(&dir.join("unbounded.dfy")), Verdict::Fails);

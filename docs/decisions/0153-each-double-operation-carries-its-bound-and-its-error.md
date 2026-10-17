@@ -11,4 +11,4 @@ Date: 2026-10-17. Status: decided. Amends 0019, 0020 and 0023. The review of ste
 
 ## Why
 
-Before this, the four operations required nothing. A model that forgot the call of `RoundError` had no bound on the exact result, so it could leave the range where C++ gives infinity and still verify. With the bound on each operation, nobody can forget it, and the translator need not name the axiom. The review of step two showed that the 13 hand models that use the file verify unchanged. It also showed that the identity function satisfies both axioms, so they cannot prove false.
+Before this, the four operations required nothing. A model that forgot the call of `RoundError` had no bound on the exact result. So it could leave the range where C++ gives infinity, and still verify. With the bound on each operation, nobody can forget it, and the translator need not name the axiom. The review of step two showed that the 13 hand models that use the file verify unchanged. It also showed that the identity function satisfies both axioms, so they cannot prove false.

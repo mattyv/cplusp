@@ -35,9 +35,38 @@ module Double {
     requires -9007199254740992 <= n <= 9007199254740992
     ensures round(n as real) == n as real
 
-  // One double operation: the exact result, then one rounding.
-  function fadd(a: real, b: real): real { round(a + b) }
-  function fsub(a: real, b: real): real { round(a - b) }
-  function fmul(a: real, b: real): real { round(a * b) }
-  function fdiv(a: real, b: real): real requires b != 0.0 { round(a / b) }
+  // One double operation: the exact result, then one rounding. Each requires that the exact result is at most MAX in magnitude,
+  // where C++ gives a finite double, and ensures the error of one rounding, decision 0153. So a model calls the operation and
+  // nothing else, and it cannot forget the bound.
+  function fadd(a: real, b: real): real
+    requires abs(a + b) <= MAX
+    ensures abs(fadd(a, b) - (a + b)) <= EPS * abs(a + b) + ETA
+  {
+    RoundError(a + b);
+    round(a + b)
+  }
+
+  function fsub(a: real, b: real): real
+    requires abs(a - b) <= MAX
+    ensures abs(fsub(a, b) - (a - b)) <= EPS * abs(a - b) + ETA
+  {
+    RoundError(a - b);
+    round(a - b)
+  }
+
+  function fmul(a: real, b: real): real
+    requires abs(a * b) <= MAX
+    ensures abs(fmul(a, b) - a * b) <= EPS * abs(a * b) + ETA
+  {
+    RoundError(a * b);
+    round(a * b)
+  }
+
+  function fdiv(a: real, b: real): real
+    requires b != 0.0 && abs(a / b) <= MAX
+    ensures abs(fdiv(a, b) - a / b) <= EPS * abs(a / b) + ETA
+  {
+    RoundError(a / b);
+    round(a / b)
+  }
 }
