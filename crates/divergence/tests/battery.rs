@@ -367,6 +367,16 @@ fn the_once_brittle_proofs_hold_on_every_seed() {
     }
 }
 
+/// Each operation of the double model carries the bound on its exact result and the error of its rounding, decision 0153. With
+/// the bound, a method proves the error with no call of the axiom. With no bound, or a divisor that may be zero, it fails.
+#[test]
+fn each_double_operation_carries_its_bound_and_its_error() {
+    let dir = root().join("divergence/dafny/model");
+    assert_eq!(verdict(&dir.join("bounded.dfy")), Verdict::Verifies);
+    assert_eq!(verdict(&dir.join("unbounded.dfy")), Verdict::Fails);
+    assert_eq!(verdict(&dir.join("divide_by_zero.dfy")), Verdict::Fails);
+}
+
 /// The larger examples: each combines several rows in one piece of code a bot would write, and pushes the gate
 /// and the model where one row at a time does not. See examples/README.md.
 const LARGER_EXAMPLES: &[&str] = &["stack_template", "sorted_insert", "state_machine", "parse_digits", "dot_product", "shape_area_sum"];

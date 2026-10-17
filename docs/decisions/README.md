@@ -157,3 +157,4 @@ Status is `decided`, `proposed` (the default until someone objects or the thin s
 | [0150](0150-a-double-that-only-compares-is-a-real.md) | A double that only compares is a real. Step one: no rounding | decided |
 | [0151](0151-a-32-bit-x86-target-and-an-unknown-attribute-are-refused.md) | A 32-bit x86 target and an unknown attribute are refused | decided |
 | [0152](0152-more-ways-to-an-x87-double-are-refused.md) | More ways to an x87 double are refused | decided |
+| [0153](0153-each-double-operation-carries-its-bound-and-its-error.md) | Each double operation carries its bound and its error | decided |
