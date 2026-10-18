@@ -161,3 +161,4 @@ Status is `decided`, `proposed` (the default until someone objects or the thin s
 | [0154](0154-a-double-operation-is-one-rounding-of-the-model.md) | A double operation is one rounding of the model. Step two: the four operations | decided |
 | [0155](0155-each-refusal-names-its-own-cause.md) | Each refusal names its own cause | decided |
 | [0156](0156-a-ban-of-variable-index-covers-every-sequence.md) | A ban of variable_index covers every sequence | decided |
+| [0157](0157-a-count-if-with-no-rule-names-the-limit.md) | A count_if with no rule names the limit that it misses | decided |

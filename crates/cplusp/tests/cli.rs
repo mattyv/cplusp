@@ -4165,8 +4165,19 @@ fn count_if_with_no_rule_is_refused() {
     let refusals: Vec<&str> = text.lines().filter(|l| l.starts_with("Not provable: ")).map(|l| l.rsplit_once(".cpp:").unwrap().1).collect();
     let mut lines: Vec<&str> = refusals.iter().map(|r| r.split(':').next().unwrap()).collect();
     lines.dedup();
-    assert_eq!(lines, ["7", "11", "15"], "{text}");
+    assert_eq!(lines, ["7", "11", "15", "22", "26"], "{text}");
     assert!(!text.contains("CXXMethodDecl"), "{text}");
+    // A count_if that misses the rule names the limit that it misses, and only that, decision 0157.
+    let no_rule = ": the translator has no rule for it yet.";
+    for (line, what) in [
+        ("11", "count_if with an init capture in its lambda"),
+        ("15", "count_if with a lambda whose body is more than one return"),
+        ("22", "count_if over a range other than v.begin(), v.end() of one sequence parameter"),
+        ("26", "count_if with a lambda whose parameter is not the element type"),
+    ] {
+        let at: Vec<&&str> = refusals.iter().filter(|r| r.split(':').next() == Some(line)).collect();
+        assert_eq!(at, [&format!("{line}: {what}{no_rule}").as_str()], "{line}: {text}");
+    }
 }
 
 /// The example lambdas proves with count_if and its companion file, decision 0149.
