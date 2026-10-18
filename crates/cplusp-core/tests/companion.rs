@@ -142,3 +142,14 @@ fn for_and_array_are_refused() {
     assert_eq!(r, refused(&[(2, "word:for"), (3, "word:array")]));
     assert_eq!(d, vec![]);
 }
+
+/// Each name of the double model is a name of the model, decisions 0154 and 0159, so a companion file cannot declare one.
+#[test]
+fn a_name_of_the_double_model_is_refused() {
+    let names = ["Double", "abs", "round", "fadd", "fsub", "fmul", "fdiv", "fint", "EPS", "ETA", "MAX", "RoundError", "RoundExactInt"];
+    let text: String = names.iter().map(|n| format!("function {n}(): int {{ 1 }}\n")).collect();
+    let (r, d) = scan(&text);
+    let want: Vec<(u32, String)> = names.iter().enumerate().map(|(i, n)| (i as u32 + 1, format!("name:{n}"))).collect();
+    assert_eq!(r, want);
+    assert_eq!(d, vec![]);
+}
