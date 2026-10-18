@@ -4344,5 +4344,6 @@ fn a_ban_of_variable_index_covers_vectors_spans_and_at() {
     let text = stdout(&o);
     assert_eq!(o.status.code(), Some(1), "stdout: {text} stderr: {}", stderr(&o));
     let lines: BTreeSet<&str> = text.lines().filter(|l| l.contains("`operator[]` with a variable index")).filter_map(|l| l.split("variable-index-ban.cpp:").nth(1)).filter_map(|r| r.split(':').next()).collect();
-    assert_eq!(lines, BTreeSet::from(["8", "12", "16"]), "{text}");
+    // An explicit `operator[]` call and a C array by reference too, which the upstream check misses.
+    assert_eq!(lines, BTreeSet::from(["8", "12", "16", "24", "28"]), "{text}");
 }
