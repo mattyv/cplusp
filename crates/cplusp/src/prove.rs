@@ -198,9 +198,13 @@ pub fn run(t: &Translation, limit: u32, refused: bool, source: &str, shown: &dyn
         let double_line = |r: &usize| t.dafny.lines().nth(r.wrapping_sub(1)).map(str::trim).filter(|_| !map.companion.contains(&r.wrapping_sub(1)));
         let overflow = message == "function precondition could not be proved"
             && e.related.iter().any(|r| double_line(r).is_some_and(|l| l.starts_with("requires abs(") && l.ends_with(") <= MAX")));
+        let too_large = message == "function precondition could not be proved"
+            && e.related.iter().any(|r| double_line(r) == Some("requires -9007199254740992 <= n <= 9007199254740992"));
         let double_zero = message == "function precondition could not be proved" && e.related.iter().any(|r| double_line(r) == Some("requires b != 0.0"));
         let said = if overflow {
             "the result of the operation may exceed DBL_MAX.".to_string()
+        } else if too_large {
+            "the integer may be too large for an exact double.".to_string()
         } else if zero || double_zero {
             "the divisor may be zero.".to_string()
         } else if shift {
@@ -238,6 +242,9 @@ pub fn run(t: &Translation, limit: u32, refused: bool, source: &str, shown: &dyn
     // The proof rests on the rounding axiom when the model calls an operation of `Double`, decision 0154.
     if t.rounds {
         println!("Axiom: Double.dfy: RoundError: IEEE 754 binary64, round to nearest even, gradual underflow, one rounding per operation.");
+    }
+    if t.exact {
+        println!("Axiom: Double.dfy: RoundExactInt: an integer up to 2^53 in magnitude is a double.");
     }
     if verdict == Verdict::Proved {
         println!("ok: proved");

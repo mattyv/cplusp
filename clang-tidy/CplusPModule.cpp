@@ -5407,6 +5407,12 @@ private:
                                : Cast->getCastKind() == CK_NoOp         ? llvm::json::Value("NoOp")
                                : Cast->getCastKind() == CK_ConstructorConversion ? llvm::json::Value("Construct")
                                : Cast->getCastKind() == CK_IntegralCast && !plainEnum(Cast->getSubExpr()->getType()) && !plainEnum(Cast->getType()) ? tag("Integral", llvm::json::Array{type(Cast->getSubExpr()->getType()), type(Cast->getType())})
+                               // An integer scalar to a double, decision 0159. A bool and an enum are no integer here, and a double to an integer stays `Other`.
+                               // An enum is no scalar here.
+                               : Cast->getCastKind() == CK_IntegralToFloating && isDouble(Cast->getType()) &&
+                                     (scalar(Cast->getSubExpr()->getType().getUnqualifiedType()) || smallScalar(Cast->getSubExpr()->getType().getUnqualifiedType())) &&
+                                     !Cast->getSubExpr()->getType()->isBooleanType()
+                                   ? tag("Integral", llvm::json::Array{type(Cast->getSubExpr()->getType().getUnqualifiedType()), type(Cast->getType())})
                                                                         : tag("Other", std::string(Cast->getStmtClassName()) + " " + Cast->getCastKindName());
       return tag("Cast", llvm::json::Array{std::move(Kind), expr(Cast->getSubExpr(), Near)});
     }

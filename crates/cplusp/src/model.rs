@@ -250,6 +250,8 @@ struct Names {
     rounds: std::cell::Cell<bool>,
     /// Whether the printer wrote a name of the module `Double`: `fadd` to `fdiv`, `abs`, `EPS`, `ETA` or `MAX`, so the module is in the model.
     double: std::cell::Cell<bool>,
+    /// Whether the printer wrote `fint`, so a verdict rests on the exact-integer axiom, decision 0159.
+    exact: std::cell::Cell<bool>,
     /// The functions that the companion file declares. Empty when there is no file or the scan refused it, decision 0079.
     declared: Vec<String>,
     /// The lemmas that the companion file declares, apart from the functions, decision 0099.
@@ -1041,6 +1043,12 @@ fn dexpr(e: &DExpr, names: &Names) -> String {
             };
             format!("{f}({}, {})", dexpr(a, names), dexpr(b, names))
         }
+        DExpr::FromInt(a) => {
+            names.exact.set(true);
+            names.double.set(true);
+            format!("fint({} as int)", dexpr(a, names))
+        }
+        DExpr::IntAbs(a) => format!("trunc_size({})", dexpr(a, names)),
         DExpr::Abs(a) => {
             names.double.set(true);
             format!("abs({})", dexpr(a, names))
@@ -1121,6 +1129,8 @@ pub struct Translation {
     pub refusals: Vec<Refusing>,
     /// The model calls an operation of the module `Double`, so a verdict rests on its axiom, decision 0154.
     pub rounds: bool,
+    /// The model calls `fint`, so a verdict rests on the axiom `RoundExactInt`, decision 0159.
+    pub exact: bool,
     pub map: Map,
 }
 
@@ -1715,5 +1725,5 @@ pub fn translate(lines: &str, companion: Option<(&str, &str)>) -> Result<Transla
     }
     refusals.sort();
     refusals.dedup();
-    Ok(Translation { dafny, methods: printed, trusted, refusals, rounds, map: Map { lines, companion: companion_lines, decls, places: names.places, contracts: names.contracts } })
+    Ok(Translation { dafny, methods: printed, trusted, refusals, rounds, exact: names.exact.get(), map: Map { lines, companion: companion_lines, decls, places: names.places, contracts: names.contracts } })
 }

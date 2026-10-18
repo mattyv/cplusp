@@ -408,7 +408,7 @@ pub open spec fn spec_model_name(t: Seq<u8>, s: int, e: int) -> bool {
     w == b"Option"@ || w == b"Some"@ || w == b"None"@ || w == b"Vec"@ || w == b"value"@ || w == b"int8"@ || w == b"int16"@
         || w == b"uint16"@ || w == b"int32"@ || w == b"int64"@ || w == b"uint8"@ || w == b"uint32"@ || w == b"uint64"@ || w == b"shr"@
         || w == b"CountIf"@ || w == b"Double"@ || w == b"abs"@ || w == b"round"@ || w == b"fadd"@ || w == b"fsub"@ || w == b"fmul"@
-        || w == b"fdiv"@ || w == b"EPS"@ || w == b"ETA"@ || w == b"MAX"@ || w == b"RoundError"@ || w == b"RoundExactInt"@
+        || w == b"fdiv"@ || w == b"fint"@ || w == b"EPS"@ || w == b"ETA"@ || w == b"MAX"@ || w == b"RoundError"@ || w == b"RoundExactInt"@
         || spec_starts(t, s, e, b"v_"@) || spec_starts(t, s, e, b"c_"@) || spec_starts(t, s, e, b"S_"@) || spec_starts(t, s, e, b"E_"@)
         || spec_starts(t, s, e, b"f_"@) || spec_starts(t, s, e, b"b_"@) || spec_starts(t, s, e, b"trunc_"@)
 }
@@ -634,7 +634,7 @@ fn model_name(t: &Vec<u8>, s: usize, e: usize) -> (r: bool)
         { starts(t, s, e, x) };
     w(b"Option") || w(b"Some") || w(b"None") || w(b"Vec") || w(b"value") || w(b"int8") || w(b"int16") || w(b"uint16") || w(b"int32")
         || w(b"int64") || w(b"uint8") || w(b"uint32") || w(b"uint64") || w(b"shr") || w(b"CountIf") || w(b"Double") || w(b"abs") || w(b"round") || w(b"fadd")
-        || w(b"fsub") || w(b"fmul") || w(b"fdiv") || w(b"EPS") || w(b"ETA") || w(b"MAX") || w(b"RoundError") || w(b"RoundExactInt") || p(b"v_") || p(b"c_") || p(b"S_") || p(b"E_")
+        || w(b"fsub") || w(b"fmul") || w(b"fdiv") || w(b"fint") || w(b"EPS") || w(b"ETA") || w(b"MAX") || w(b"RoundError") || w(b"RoundExactInt") || p(b"v_") || p(b"c_") || p(b"S_") || p(b"E_")
         || p(b"f_") || p(b"b_") || p(b"trunc_")
 }
 

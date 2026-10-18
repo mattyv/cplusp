@@ -433,7 +433,8 @@ pub enum DTy {
 /// `Temp` reads a temporary that a call before the statement set, decision 0104. `ShrIn` is `(shr(a, n, W) as T)`, a right shift
 /// of the width `W`, decision 0106. `SetAt` is `s[i := e]`, which Dafny proves is in range, decision 0145. `Append` is `s + [e]`, decision 0148. `CountIf` is `CountIf(s, (x: T) => e)` of the prelude, decision 0149. `RealLit` is the real `d / 10^k`, decision 0150. `FOp` is
 /// one operation of the double model, `fadd` to `fdiv`, and `Abs`, `Eps`, `Eta` and `DblMax` are `abs`, `EPS`, `ETA` and `MAX` of it,
-/// decision 0154. A Dafny expression calls no
+/// decision 0154. `FromInt` is `fint(e as int)` of it, the conversion of an integer, and `IntAbs` is `trunc_size(e)` of the prelude,
+/// the absolute value of an integer, decision 0159. A Dafny expression calls no
 /// method.
 #[derive(PartialEq, Eq, Debug)]
 pub enum DExpr {
@@ -478,6 +479,8 @@ pub enum DExpr {
     CountIf(Box<DExpr>, u32, DTy, Box<DExpr>),
     RealLit(u64, u32),
     FOp(BinOp, Box<DExpr>, Box<DExpr>),
+    FromInt(Box<DExpr>),
+    IntAbs(Box<DExpr>),
     Abs(Box<DExpr>),
     Eps,
     Eta,
@@ -988,7 +991,10 @@ pub open spec fn spec_integral(from: Ty, to: Ty, d: DExpr, line: u32) -> Result<
         Err(r) => Err(r),
         Ok(_) => match spec_ty(to, line) {
             Err(r) => Err(r),
-            Ok(dto) => if from == Ty::Bool || to == Ty::Bool || from == Ty::F64 || to == Ty::F64 {
+            // An integer converts to a double with `fint`, decision 0159.
+            Ok(dto) => if to == Ty::F64 && from != Ty::Bool && from != Ty::F64 {
+                Ok(DExpr::FromInt(Box::new(d)))
+            } else if from == Ty::Bool || to == Ty::Bool || from == Ty::F64 || to == Ty::F64 {
                 Err(Refusal::Convert(line))
             } else {
                 Ok(DExpr::Conv(dto, Box::new(d)))
@@ -1336,7 +1342,7 @@ pub open spec fn spec_creal(e: Expr, decl: Names, ps: Params, ret: Option<Ty>, b
         Expr::Eps => true,
         Expr::Eta => true,
         Expr::DblMax => true,
-        Expr::Abs(_) => true,
+        Expr::Abs(a) => spec_creal(*a, decl, ps, ret, bound),
         Expr::Paren(a) => spec_creal(*a, decl, ps, ret, bound),
         Expr::Neg(a) => spec_creal(*a, decl, ps, ret, bound),
         Expr::Old(a) => spec_creal(*a, decl, ps, ret, bound),
@@ -1362,7 +1368,7 @@ pub fn creal(e: &Expr, decl: &Names, ps: &Params, ret: Option<Ty>, bound: &Names
         Expr::Eps => true,
         Expr::Eta => true,
         Expr::DblMax => true,
-        Expr::Abs(_) => true,
+        Expr::Abs(a) => creal(a, decl, ps, ret, bound),
         Expr::Paren(a) => creal(a, decl, ps, ret, bound),
         Expr::Neg(a) => creal(a, decl, ps, ret, bound),
         Expr::Old(a) => creal(a, decl, ps, ret, bound),
@@ -1396,13 +1402,18 @@ pub open spec fn spec_divide(op: BinOp, da: DExpr, db: DExpr, t: Ty, line: u32) 
     }
 }
 
-/// An integer literal of a contract as a real, through a minus, decision 0158. A contract gives `Lit` only for a literal, and
-/// parentheses give no node, so any other expression stays as it is.
+/// An integer literal of a contract as a real, through a minus, decision 0158, and an integer leaf too, decision 0159. A contract
+/// gives `Lit` only for a literal, `Bound` for a name that a quantifier binds, and `AsInt` only for a leaf: a name, a field,
+/// `result`, an element, a value or a pure member call. Each is an exact integer. Parentheses give no node, so any other
+/// expression stays as it is.
 pub open spec fn spec_dreal(d: DExpr) -> DExpr
     decreases d,
 {
     match d {
         DExpr::Lit(n) => DExpr::RealLit(n, 0),
+        // An integer leaf or a bound name is its exact value, so as a real it is exact too, decision 0159.
+        DExpr::AsInt(x) => DExpr::Conv(DTy::Real, Box::new(DExpr::AsInt(x))),
+        DExpr::Bound(n) => DExpr::Conv(DTy::Real, Box::new(DExpr::Bound(n))),
         DExpr::Neg(x) => DExpr::Neg(Box::new(spec_dreal(*x))),
         _ => d,
     }
@@ -1415,6 +1426,8 @@ pub fn dreal(d: DExpr) -> (r: DExpr)
 {
     match d {
         DExpr::Lit(n) => DExpr::RealLit(n, 0),
+        DExpr::AsInt(x) => DExpr::Conv(DTy::Real, Box::new(DExpr::AsInt(x))),
+        DExpr::Bound(n) => DExpr::Conv(DTy::Real, Box::new(DExpr::Bound(n))),
         DExpr::Neg(x) => DExpr::Neg(Box::new(dreal(*x))),
         _ => d,
     }
@@ -1448,8 +1461,13 @@ pub open spec fn spec_contract(e: Expr, decl: Names, ps: Params, ret: Option<Ty>
         Expr::RealLit(d, k) => Ok(DExpr::RealLit(d, k)),
         Expr::Ratio(m, q) => Ok(spec_ratio(m, q)),
         // The absolute value and the words of a double bound, decision 0154.
+        // `|e|` of an integer is the absolute value of the integer, decision 0159.
         Expr::Abs(a) => match spec_contract(*a, decl, ps, ret, bound, line, sd) {
-            Ok(da) => Ok(DExpr::Abs(Box::new(da))),
+            Ok(da) => Ok(if spec_creal(*a, decl, ps, ret, bound) {
+                DExpr::Abs(Box::new(da))
+            } else {
+                DExpr::IntAbs(Box::new(da))
+            }),
             Err(r) => Err(r),
         },
         Expr::Eps => Ok(DExpr::Eps),
@@ -4872,7 +4890,9 @@ pub fn translate_integral(from: Ty, to: Ty, d: DExpr, line: u32) -> (r: Result<D
         Err(r) => Err(r),
         Ok(_) => match translate_ty(to, line) {
             Err(r) => Err(r),
-            Ok(dto) => if from == Ty::Bool || to == Ty::Bool || from == Ty::F64 || to == Ty::F64 {
+            Ok(dto) => if to == Ty::F64 && from != Ty::Bool && from != Ty::F64 {
+                Ok(DExpr::FromInt(Box::new(d)))
+            } else if from == Ty::Bool || to == Ty::Bool || from == Ty::F64 || to == Ty::F64 {
                 Err(Refusal::Convert(line))
             } else {
                 Ok(DExpr::Conv(dto, Box::new(d)))
@@ -5296,7 +5316,11 @@ pub fn translate_contract(e: &Expr, decl: &Names, ps: &Params, ret: Option<Ty>, 
         Expr::RealLit(d, k) => Ok(DExpr::RealLit(*d, *k)),
         Expr::Ratio(m, q) => Ok(ratio(*m, *q)),
         Expr::Abs(a) => match translate_contract(a, decl, ps, ret, bound, line, sd) {
-            Ok(da) => Ok(DExpr::Abs(Box::new(da))),
+            Ok(da) => Ok(if creal(a, decl, ps, ret, bound) {
+                DExpr::Abs(Box::new(da))
+            } else {
+                DExpr::IntAbs(Box::new(da))
+            }),
             Err(r) => Err(r),
         },
         Expr::Eps => Ok(DExpr::Eps),
@@ -6981,6 +7005,8 @@ pub fn copy_dexpr(d: &DExpr) -> (r: DExpr)
         DExpr::RealLit(x0, x1) => DExpr::RealLit(*x0, *x1),
         DExpr::FOp(x0, x1, x2) => DExpr::FOp(*x0, Box::new(copy_dexpr(x1)), Box::new(copy_dexpr(x2))),
         DExpr::Abs(x0) => DExpr::Abs(Box::new(copy_dexpr(x0))),
+        DExpr::FromInt(x0) => DExpr::FromInt(Box::new(copy_dexpr(x0))),
+        DExpr::IntAbs(x0) => DExpr::IntAbs(Box::new(copy_dexpr(x0))),
         DExpr::Eps => DExpr::Eps,
         DExpr::Eta => DExpr::Eta,
         DExpr::DblMax => DExpr::DblMax,
