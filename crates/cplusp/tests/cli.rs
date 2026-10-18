@@ -4279,3 +4279,37 @@ fn a_double_operation_is_one_rounding() {
     assert!(!stdout(&o).contains("Axiom:"), "{}", stdout(&o));
 }
 
+
+/// Each refusal names its own cause: a contract line with no rule, a conversion, a long decimal, and a parameter with no name,
+/// decision 0155.
+#[test]
+fn each_refusal_names_its_own_cause() {
+    if !clang_tidy_available() {
+        return;
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let (o, _) = model("model-sentences-refuse.cpp", dir.path());
+    let text = stdout(&o);
+    assert_eq!(o.status.code(), Some(1), "stdout: {text} stderr: {}", stderr(&o));
+    let refusals: Vec<&str> = text.lines().filter(|l| l.starts_with("Not provable: ")).map(|l| l.rsplit_once(".cpp:").unwrap().1).collect();
+    assert_eq!(refusals.len(), 5, "{text}");
+    assert_eq!(refusals[0], "5: isnan is no function of the companion file.", "{text}");
+    assert!(refusals[1].starts_with("12: ") && refusals[1].contains("FloatingToIntegral") && refusals[1].ends_with(": the translator has no rule for it yet."), "{text}");
+    assert_eq!(refusals[2], "15: a decimal with more than 19 digits after the point: the translator has no rule for it yet.", "{text}");
+    assert_eq!(refusals[3], "20: a reference parameter has no name. Give it a name and put it on the modifies line.", "{text}");
+    assert_eq!(refusals[4], "23: a double parameter has no name. Give it a name and say std::isfinite of it in a requires line.", "{text}");
+}
+
+/// A check that Dafny reports twice, the condition of a loop at its start and after a turn, is printed once, decision 0155.
+#[test]
+fn a_failure_is_printed_once() {
+    let Some(dafny) = dafny() else { return };
+    if !clang_tidy_available() {
+        return;
+    }
+    let o = prove("model-dedup.cpp", &[], &dafny);
+    let text = stdout(&o);
+    assert_eq!(o.status.code(), Some(1), "stdout: {text} stderr: {}", stderr(&o));
+    let failed: Vec<&str> = text.lines().filter(|l| l.starts_with("Not proved: ")).map(|l| l.rsplit_once(".cpp:").unwrap().1).collect();
+    assert_eq!(failed, ["10: the value may not fit uint64_t."], "{text}");
+}

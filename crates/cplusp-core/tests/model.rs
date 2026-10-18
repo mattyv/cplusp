@@ -2941,3 +2941,17 @@ fn a_division_of_reals_in_a_contract_is_the_real_quotient() {
     let want = DExpr::Bin(BinOp::Le, Box::new(q), Box::new(DExpr::RealLit(1, 0)));
     assert_eq!(strip_conds(m.ensures), List::Cons((want, 0), Box::new(List::Nil)));
 }
+
+/// A requires line that the translator cannot read gets its own refusal, and the check of `std::isfinite` waits for it, decision
+/// 0155. A conversion of a double to an integer is no double, so `%` on it is refused for the conversion.
+#[test]
+fn a_refusal_names_its_own_cause() {
+    let bad = List::Cons((CondKind::Bad(Refusal::Syntax(4)), Expr::Int(0), 4, names(&[DA, DB])), Box::new(List::Nil));
+    let f = Function { conds: bad, ..larger(one(Stmt::Return(Expr::Var(DA, Ty::F64), 6))) };
+    assert_eq!(bare_refusal(translate_function(&f, &List::Nil, &List::Nil)), Refusal::Syntax(4));
+    let cast = Expr::Cast(CastKind::Other(DD), b(Expr::Var(DA, Ty::F64)));
+    let rem = Expr::Bin(BinOp::Rem, b(cast), b(Expr::Lit(2, Ty::I32)));
+    let f = Function { ret: Ty::I32, ..larger(one(Stmt::Return(rem, 6))) };
+    assert_eq!(bare_refusal(translate_function(&f, &List::Nil, &List::Nil)), Refusal::Construct(DD, 6));
+}
+

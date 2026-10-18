@@ -159,3 +159,4 @@ Status is `decided`, `proposed` (the default until someone objects or the thin s
 | [0152](0152-more-ways-to-an-x87-double-are-refused.md) | More ways to an x87 double are refused | decided |
 | [0153](0153-each-double-operation-carries-its-bound-and-its-error.md) | Each double operation carries its bound and its error | decided |
 | [0154](0154-a-double-operation-is-one-rounding-of-the-model.md) | A double operation is one rounding of the model. Step two: the four operations | decided |
+| [0155](0155-each-refusal-names-its-own-cause.md) | Each refusal names its own cause | decided |

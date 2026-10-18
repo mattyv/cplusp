@@ -288,3 +288,10 @@ fn the_bar_and_the_words_of_a_double_bound() {
     assert_eq!(lex("epsilon DBL_MAXX"), vec![name("epsilon"), name("DBL_MAXX")]);
 }
 
+/// A decimal with more than 19 digits after the point has its own fault, decision 0155.
+#[test]
+fn a_decimal_with_too_many_digits_after_the_point_has_its_own_fault() {
+    assert_eq!(lex("0.00000000000000000001"), vec![t("0.00000000000000000001", LexKind::BadNumber(NumberFault::Scale))]);
+    assert_eq!(lex("0.0000000000000000001"), vec![t("0.0000000000000000001", LexKind::Real(1, 19))]);
+}
+
