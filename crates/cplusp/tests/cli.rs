@@ -4363,15 +4363,41 @@ fn a_name_of_cpp_with_the_name_of_a_contract_word_is_refused() {
     }
 }
 
+/// An integer converts to a double with no rounding up to 2^53, and prove names the axiom of the conversion. A conversion with no
+/// bound and an absolute value that the body does not give fail at their lines, decision 0159.
+#[test]
+fn an_integer_converts_to_a_double_exactly() {
+    let Some(dafny) = dafny() else { return };
+    if !clang_tidy_available() {
+        return;
+    }
+    let exact = "Axiom: Double.dfy: RoundExactInt: an integer up to 2^53 in magnitude is a double.";
+    let o = prove("model-double-convert.cpp", &[], &dafny);
+    let text = stdout(&o);
+    assert_eq!(o.status.code(), Some(0), "stdout: {text} stderr: {}", stderr(&o));
+    let lines: Vec<&str> = text.lines().collect();
+    assert_eq!(lines.last(), Some(&"ok: proved"), "{text}");
+    assert_eq!(lines.iter().filter(|l| **l == exact).count(), 1, "{text}");
+    // `shift` also rounds once.
+    assert_eq!(lines.iter().filter(|l| **l == AXIOM).count(), 1, "{text}");
+    let o = prove("model-double-convert-wrong.cpp", &[], &dafny);
+    let text = stdout(&o);
+    assert_eq!(o.status.code(), Some(1), "stdout: {text} stderr: {}", stderr(&o));
+    let failed: Vec<&str> = text.lines().filter(|l| l.starts_with("Not proved: ")).map(|l| l.rsplit_once(".cpp:").unwrap().1).collect();
+    assert_eq!(failed, ["6: the integer may be too large for an exact double.", "11: the ensures line may not hold on this return."], "{text}");
+    // A conversion alone names its own axiom and not the one of the operations.
+    assert!(text.contains(exact) && !text.contains(AXIOM), "{text}");
+}
+
 /// The examples double and double_expression prove: a tolerance that is a named double, and one error term for each rounding,
-/// decision 0158.
+/// decision 0158. The example fixed_point converts an integer to a double, decision 0159.
 #[test]
 fn the_double_examples_prove() {
     let Some(dafny) = dafny() else { return };
     if !clang_tidy_available() {
         return;
     }
-    for example in ["double", "double_expression"] {
+    for example in ["double", "double_expression", "fixed_point"] {
         let o = prove(&format!("../../../../examples/{example}/example.cpp"), &[], &dafny);
         let text = stdout(&o);
         assert_eq!(o.status.code(), Some(0), "{example}: stdout: {text} stderr: {}", stderr(&o));

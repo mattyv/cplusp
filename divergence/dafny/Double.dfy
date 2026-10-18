@@ -62,6 +62,16 @@ module Double {
     round(a * b)
   }
 
+  // A conversion of an integer to a double, decision 0159. Up to 2^53 in magnitude it does not round. A larger integer rounds,
+  // and the model has no rule for it yet, so it requires the bound.
+  function fint(n: int): real
+    requires -9007199254740992 <= n <= 9007199254740992
+    ensures fint(n) == n as real
+  {
+    RoundExactInt(n);
+    round(n as real)
+  }
+
   function fdiv(a: real, b: real): real
     requires b != 0.0
     requires abs(a / b) <= MAX

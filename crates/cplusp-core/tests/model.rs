@@ -3022,3 +3022,41 @@ fn an_integer_literal_in_a_chain_next_to_a_real_is_a_real() {
     let int = DExpr::Chain(BinOp::Le, BinOp::Le, Box::new(DExpr::Lit(0)), Box::new(DExpr::AsInt(Box::new(DExpr::Var(DN)))), Box::new(DExpr::Lit(1)));
     assert_eq!(second, int);
 }
+
+/// A conversion of an integer to a double is `fint` of the double model, which is exact up to 2^53, decision 0159. A conversion of
+/// a double to an integer, and of a bool to a double, stay refused.
+#[test]
+fn an_integer_converts_to_a_double_with_fint() {
+    const DN: u32 = 9912;
+    let f = |e| Function { params: List::Cons((DN, Ty::I64), Box::new(List::Nil)), conds: List::Nil, ..larger(one(Stmt::Return(e, 6))) };
+    let Model::Full(m) = translate_function(&f(Expr::Cast(CastKind::Integral(Ty::I64, Ty::F64), b(Expr::Var(DN, Ty::I64)))), &List::Nil, &List::Nil) else { panic!("a full model") };
+    assert_eq!(strip(m.body), List::Cons((Box::new(DStmt::Return(DExpr::FromInt(Box::new(DExpr::Var(DN))))), 0), Box::new(List::Nil)));
+    let back = Function { ret: Ty::I64, ..larger(one(Stmt::Return(Expr::Cast(CastKind::Integral(Ty::F64, Ty::I64), b(Expr::Var(DA, Ty::F64))), 6))) };
+    assert_eq!(bare_refusal(translate_function(&back, &List::Nil, &List::Nil)), Refusal::Convert(6));
+    assert_eq!(bare_refusal(translate_function(&f(Expr::Cast(CastKind::Integral(Ty::Bool, Ty::F64), b(Expr::Bool(true)))), &List::Nil, &List::Nil)), Refusal::Convert(6));
+}
+
+/// In a contract, `|e|` of an integer is the absolute value of the integer, and an integer name next to a real is that integer as
+/// a real, decision 0159. An operation on integers alone stays an integer.
+#[test]
+fn a_contract_reads_an_integer_next_to_a_real_as_a_real() {
+    const DN: u32 = 9913;
+    let params = || List::Cons((DA, Ty::F64), Box::new(List::Cons((DN, Ty::I32), Box::new(List::Nil))));
+    let n = || DExpr::AsInt(Box::new(DExpr::Var(DN)));
+    // `|n| <= 3`, `n <= a` and `n * 2 <= a`
+    let iabs = Expr::Bin(BinOp::Le, b(Expr::Abs(b(Expr::Name(DN)))), b(Expr::Int(3)));
+    let near = Expr::Bin(BinOp::Le, b(Expr::Name(DN)), b(Expr::Name(DA)));
+    let op = Expr::Bin(BinOp::Le, b(Expr::Bin(BinOp::Mul, b(Expr::Name(DN)), b(Expr::Int(2)))), b(Expr::Name(DA)));
+    let conds = List::Cons(
+        (CondKind::Requires, iabs, 3, names(&[DA, DN])),
+        Box::new(List::Cons((CondKind::Requires, near, 4, names(&[DA, DN])), Box::new(List::Cons((CondKind::Requires, op, 5, names(&[DA, DN])), Box::new(finite(&[DA], 2, &[DA, DN])))))),
+    );
+    let f = Function { params: params(), conds, ..larger(one(Stmt::Return(Expr::Var(DA, Ty::F64), 7))) };
+    let Model::Full(m) = translate_function(&f, &List::Nil, &List::Nil) else { panic!("a full model") };
+    let List::Cons((first, _), rest) = strip_conds(m.requires) else { panic!("requires") };
+    assert_eq!(first, DExpr::Bin(BinOp::Le, Box::new(DExpr::IntAbs(Box::new(n()))), Box::new(DExpr::Lit(3))));
+    let List::Cons((second, _), rest) = *rest else { panic!("requires") };
+    assert_eq!(second, DExpr::Bin(BinOp::Le, Box::new(DExpr::Conv(DTy::Real, Box::new(n()))), Box::new(DExpr::Var(DA))));
+    let List::Cons((third, _), _) = *rest else { panic!("requires") };
+    assert!(!format!("{third:?}").contains("Conv(Real"), "{third:?}");
+}
