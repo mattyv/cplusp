@@ -4336,15 +4336,21 @@ fn a_double_that_the_model_cannot_write_is_refused() {
     );
 }
 
-/// A constant of the file, a parameter or a field with the name of a contract word is refused where a contract reads the word,
-/// because the word hides the name of C++, decision 0158. A parameter of that name is no clash where no contract reads the word.
+/// A name that C++ finds from the function with the name of a contract word is refused where a contract reads the word, because
+/// the word hides the name of C++, decision 0158. A name of that spelling is no clash where no contract reads the word.
 #[test]
 fn a_name_of_cpp_with_the_name_of_a_contract_word_is_refused() {
     if !clang_tidy_available() {
         return;
     }
     let word = |w: &str| format!("{w} in the contract is a contract word, and a C++ name too. Rename the C++ name.");
-    for (fixture, wants) in [("model-word-constant.cpp", [(8, "eps"), (13, "eta")]), ("model-word-name.cpp", [(4, "eps"), (11, "eta")])] {
+    let cases: [(&str, &[(u32, &str)]); 3] = [
+        ("model-word-constant.cpp", &[(8, "eps"), (13, "eta")]),
+        ("model-word-name.cpp", &[(4, "eps"), (11, "eta")]),
+        // A static member, a member defined out of line, a namespace constant and a global variable, and a function that finds none.
+        ("model-word-scope.cpp", &[(10, "eps"), (17, "eta"), (25, "eps"), (31, "eta")]),
+    ];
+    for (fixture, wants) in cases {
         let dir = tempfile::tempdir().unwrap();
         let (o, _) = model(fixture, dir.path());
         let text = stdout(&o);
