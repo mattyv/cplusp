@@ -4291,6 +4291,61 @@ fn a_double_operation_is_one_rounding() {
 }
 
 
+/// A named double constant, an exact double with no short decimal, and a whole number next to a real prove, and a wrong contract
+/// with them fails at its return, decision 0158.
+#[test]
+fn a_named_double_and_an_exact_double_prove() {
+    let Some(dafny) = dafny() else { return };
+    if !clang_tidy_available() {
+        return;
+    }
+    let o = prove("model-double-const.cpp", &[], &dafny);
+    let text = stdout(&o);
+    assert_eq!(o.status.code(), Some(0), "stdout: {text} stderr: {}", stderr(&o));
+    assert_eq!(text.lines().last(), Some("ok: proved"), "{text}");
+    let o = prove("model-double-const-wrong.cpp", &[], &dafny);
+    let text = stdout(&o);
+    assert_eq!(o.status.code(), Some(1), "stdout: {text} stderr: {}", stderr(&o));
+    let failed: Vec<&str> = text.lines().filter(|l| l.starts_with("Not proved: ")).map(|l| l.rsplit_once(".cpp:").unwrap().1).collect();
+    assert_eq!(failed, ["8: the ensures line may not hold on this return.", "13: the ensures line may not hold on this return."], "{text}");
+}
+
+/// A constant of a namespace hides the double constant of the file, and a double that the model cannot write exactly is refused in
+/// code and in a contract, decision 0158.
+#[test]
+fn a_double_that_the_model_cannot_write_is_refused() {
+    if !clang_tidy_available() {
+        return;
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let (o, _) = model("model-double-const-refuse.cpp", dir.path());
+    let text = stdout(&o);
+    assert_eq!(o.status.code(), Some(1), "stdout: {text} stderr: {}", stderr(&o));
+    let refusals: Vec<&str> = text.lines().filter(|l| l.starts_with("Not provable: ")).map(|l| l.rsplit_once(".cpp:").unwrap().1).collect();
+    let exact = "a double literal that the model cannot write exactly: the translator has no rule for it yet.";
+    assert_eq!(
+        refusals,
+        ["11: T in the contract is no parameter.".to_string(), format!("19: {exact}"), format!("24: {exact}"), "27: TINY in the contract is no parameter.".to_string()],
+        "{text}"
+    );
+}
+
+/// The examples double and double_expression prove: a tolerance that is a named double, and one error term for each rounding,
+/// decision 0158.
+#[test]
+fn the_double_examples_prove() {
+    let Some(dafny) = dafny() else { return };
+    if !clang_tidy_available() {
+        return;
+    }
+    for example in ["double", "double_expression"] {
+        let o = prove(&format!("../../../../examples/{example}/example.cpp"), &[], &dafny);
+        let text = stdout(&o);
+        assert_eq!(o.status.code(), Some(0), "{example}: stdout: {text} stderr: {}", stderr(&o));
+        assert_eq!(text.lines().last(), Some("ok: proved"), "{example}: {text}");
+    }
+}
+
 /// Each refusal names its own cause: a contract line with no rule, a conversion, a long decimal, and a parameter with no name,
 /// decision 0155.
 #[test]

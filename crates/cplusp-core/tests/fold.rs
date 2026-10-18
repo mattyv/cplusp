@@ -18,7 +18,12 @@ const ON: u32 = 15;
 const OFF: u32 = 16;
 
 fn run(toks: &[Tok], constants: &[(u32, i128)], shadow: &[u32], enums: &[(u32, u32)], enumerators: &[(u32, u32)]) -> Vec<Tok> {
-    let t = Folds { constants: constants.to_vec(), shadow: shadow.to_vec(), enums: enums.to_vec(), enumerators: enumerators.to_vec() };
+    reals(toks, constants, &[], shadow, enums, enumerators)
+}
+
+/// `reals` are the double constants, decision 0158: (name, negative, m, q) for the value `m / q`.
+fn reals(toks: &[Tok], constants: &[(u32, i128)], reals: &[(u32, bool, u64, u64)], shadow: &[u32], enums: &[(u32, u32)], enumerators: &[(u32, u32)]) -> Vec<Tok> {
+    let t = Folds { constants: constants.to_vec(), reals: reals.to_vec(), shadow: shadow.to_vec(), enums: enums.to_vec(), enumerators: enumerators.to_vec() };
     fold(&toks.to_vec(), &t)
 }
 
@@ -113,4 +118,26 @@ fn the_index_of_a_member_counts_its_own_enum_only() {
     let toks = [Tok::Ident(MODE), Tok::ColonColon, Tok::Ident(OFF)];
     let out = run(&toks, &[], &[], &[(KIND, 40), (MODE, 41)], &[(40, SMALL), (40, LARGE), (41, ON), (41, OFF)]);
     assert_eq!(out, vec![Tok::Enumerator(41, 1)]);
+}
+
+/// A double constant reads as the quotient of two decimals in parentheses, with a minus before a negative value, decision 0158.
+/// A parameter, a bound name, a call and a path keep the name, as for an integer constant.
+#[test]
+fn a_double_constant_reads_as_its_quotient_in_parentheses() {
+    const T: u32 = 20;
+    const U: u32 = 21;
+    let q = 1u64 << 30;
+    let quotient = |m, q| vec![Tok::LParen, Tok::Real(m, 0), Tok::Op(BinOp::Div), Tok::Real(q, 0), Tok::RParen];
+    let rs = [(T, false, 1, q), (U, true, 3, 4)];
+    let out = reals(&[Tok::Ident(T), Tok::Op(BinOp::Add), Tok::Ident(U)], &[], &rs, &[], &[], &[]);
+    let mut want = quotient(1, q);
+    want.push(Tok::Op(BinOp::Add));
+    want.extend([Tok::LParen, Tok::Op(BinOp::Sub), Tok::Real(3, 0), Tok::Op(BinOp::Div), Tok::Real(4, 0), Tok::RParen]);
+    assert_eq!(out, want);
+    assert_eq!(reals(&[Tok::Ident(T)], &[], &rs, &[T], &[], &[]), vec![Tok::Ident(T)]);
+    let toks = [Tok::Ident(T), Tok::LParen, Tok::RParen, Tok::Ident(A), Tok::ColonColon, Tok::Ident(T), Tok::Exists, Tok::Ident(U), Tok::ColonColon, Tok::Ident(U)];
+    assert_eq!(reals(&toks, &[], &rs, &[], &[], &[]), toks.to_vec());
+    // An integer constant of the name comes first, and the first double constant of a name wins.
+    assert_eq!(reals(&[Tok::Ident(T)], &[(T, 7)], &rs, &[], &[], &[]), vec![Tok::Int(7)]);
+    assert_eq!(reals(&[Tok::Ident(T)], &[], &[(T, false, 1, 2), (T, false, 1, 4)], &[], &[], &[]), quotient(1, 2));
 }

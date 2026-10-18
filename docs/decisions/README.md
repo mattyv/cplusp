@@ -162,3 +162,4 @@ Status is `decided`, `proposed` (the default until someone objects or the thin s
 | [0155](0155-each-refusal-names-its-own-cause.md) | Each refusal names its own cause | decided |
 | [0156](0156-a-ban-of-variable-index-covers-every-sequence.md) | A ban of variable_index covers every sequence | decided |
 | [0157](0157-a-count-if-with-no-rule-names-the-limit.md) | A count_if with no rule names the limit that it misses | decided |
+| [0158](0158-an-exact-double-a-named-double-and-a-whole-number-next-to-a-real.md) | An exact double with no short decimal, a named double constant, and a whole number next to a real | decided |

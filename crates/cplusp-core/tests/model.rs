@@ -2956,3 +2956,49 @@ fn a_refusal_names_its_own_cause() {
     assert_eq!(bare_refusal(translate_function(&f, &List::Nil, &List::Nil)), Refusal::Construct(DD, 6));
 }
 
+
+/// A double with no short decimal is `m / q` in code, with `q` a power of two, and the model writes the quotient of two
+/// literals, which is exact, decision 0158. It is a double, so arithmetic on it rounds.
+#[test]
+fn an_exact_double_with_no_short_decimal_is_a_quotient_of_literals() {
+    let q = 1u64 << 30;
+    let lit = || DExpr::Bin(BinOp::Div, Box::new(DExpr::RealLit(1, 0)), Box::new(DExpr::RealLit(q, 0)));
+    let Model::Full(m) = translate_function(&larger(one(Stmt::Return(Expr::Ratio(1, q), 6))), &List::Nil, &List::Nil) else { panic!("a full model") };
+    assert_eq!(strip(m.body), List::Cons((Box::new(DStmt::Return(lit())), 0), Box::new(List::Nil)));
+    let e = Expr::Bin(BinOp::Mul, b(Expr::Var(DA, Ty::F64)), b(Expr::Ratio(1, q)));
+    let Model::Full(m) = translate_function(&larger(one(Stmt::Return(e, 6))), &List::Nil, &List::Nil) else { panic!("a full model") };
+    let want = DStmt::Return(DExpr::FOp(BinOp::Mul, Box::new(DExpr::Var(DA)), Box::new(lit())));
+    assert_eq!(strip(m.body), List::Cons((Box::new(want), 0), Box::new(List::Nil)));
+}
+
+/// An integer literal next to a real in a contract is that real, through a minus and parentheses too, decision 0158. An
+/// operation on integers alone keeps its integers.
+#[test]
+fn an_integer_literal_next_to_a_real_is_a_real() {
+    let real = |n| Box::new(DExpr::RealLit(n, 0));
+    // `2 * eps <= DBL_MAX / 4`
+    let ens = Expr::Bin(BinOp::Le, b(Expr::Bin(BinOp::Mul, b(Expr::Int(2)), b(Expr::Eps))), b(Expr::Bin(BinOp::Div, b(Expr::DblMax), b(Expr::Int(4)))));
+    // `result >= (-1)`
+    let low = Expr::Bin(BinOp::Ge, b(Expr::Result), b(Expr::Paren(b(Expr::Neg(b(Expr::Int(1)))))));
+    // `1 / 2 + 3 <= 3`, integers alone.
+    let ints = || Expr::Bin(BinOp::Le, b(Expr::Bin(BinOp::Add, b(Expr::Bin(BinOp::Div, b(Expr::Int(1)), b(Expr::Int(2)))), b(Expr::Int(3)))), b(Expr::Int(3)));
+    let conds = List::Cons(
+        (CondKind::Ensures, ens, 4, names(&[DA, DB])),
+        Box::new(List::Cons((CondKind::Ensures, low, 5, names(&[DA, DB])), Box::new(List::Cons((CondKind::Ensures, ints(), 6, names(&[DA, DB])), Box::new(finite(&[DA, DB], 3, &[DA, DB])))))),
+    );
+    let f = Function { conds, ..larger(one(Stmt::Return(Expr::Var(DA, Ty::F64), 8))) };
+    let Model::Full(m) = translate_function(&f, &List::Nil, &List::Nil) else { panic!("a full model") };
+    let dens = DExpr::Bin(BinOp::Le, Box::new(DExpr::Bin(BinOp::Mul, real(2), Box::new(DExpr::Eps))), Box::new(DExpr::Bin(BinOp::Div, Box::new(DExpr::DblMax), real(4))));
+    let dlow = DExpr::Bin(BinOp::Ge, Box::new(DExpr::Result), Box::new(DExpr::Neg(real(1))));
+    let List::Cons((first, _), rest) = strip_conds(m.ensures) else { panic!("ensures") };
+    assert_eq!(first, dens);
+    let List::Cons((second, _), rest) = *rest else { panic!("ensures") };
+    assert_eq!(second, dlow);
+    // The line of integers is the one that it is with no real in the function.
+    let List::Cons((third, _), _) = *rest else { panic!("ensures") };
+    let f = Function { conds: List::Cons((CondKind::Ensures, ints(), 6, names(&[DA, DB])), Box::new(finite(&[DA, DB], 3, &[DA, DB]))), ..larger(one(Stmt::Return(Expr::Var(DA, Ty::F64), 8))) };
+    let Model::Full(m) = translate_function(&f, &List::Nil, &List::Nil) else { panic!("a full model") };
+    let List::Cons((alone, _), _) = strip_conds(m.ensures) else { panic!("ensures") };
+    assert_eq!(third, alone);
+    assert!(!format!("{alone:?}").contains("RealLit"), "{alone:?}");
+}
