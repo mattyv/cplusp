@@ -4330,3 +4330,19 @@ fn two_failures_at_one_place_are_both_printed() {
     assert_eq!(contract.len(), 2, "{text}");
     assert!(contract[0].contains("model-dedup-two.cpp:4:") && contract[1].contains("model-dedup-two.cpp:5:"), "{text}");
 }
+
+/// When a team bans variable_index, a variable index into a vector or a span, and at() with a variable index, are findings, as one
+/// into an array is. A constant index stays allowed, decision 0156.
+#[test]
+fn a_ban_of_variable_index_covers_vectors_spans_and_at() {
+    if !clang_tidy_available() {
+        return;
+    }
+    let team = fixture("team-tighten.yaml");
+    let f = fixture("variable-index-ban.cpp");
+    let o = gated(&["--policy", team.to_str().unwrap(), f.to_str().unwrap(), "--", "-std=c++23", "-ffp-contract=off"]);
+    let text = stdout(&o);
+    assert_eq!(o.status.code(), Some(1), "stdout: {text} stderr: {}", stderr(&o));
+    let lines: BTreeSet<&str> = text.lines().filter(|l| l.contains("`operator[]` with a variable index")).filter_map(|l| l.split("variable-index-ban.cpp:").nth(1)).filter_map(|r| r.split(':').next()).collect();
+    assert_eq!(lines, BTreeSet::from(["8", "12", "16"]), "{text}");
+}
