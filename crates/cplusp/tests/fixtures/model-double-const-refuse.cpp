@@ -28,3 +28,13 @@ double tiny_constant() {
 double tiny_contract() {
   return 0.0;
 }
+
+// A double constant of a namespace is no constant of the file.
+namespace inner {
+constexpr double U = 0.25;
+}  // namespace inner
+
+//@ ensures result == U
+double outside() {
+  return 0.25;
+}

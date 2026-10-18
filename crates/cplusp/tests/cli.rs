@@ -4325,9 +4325,34 @@ fn a_double_that_the_model_cannot_write_is_refused() {
     let exact = "a double literal that the model cannot write exactly: the translator has no rule for it yet.";
     assert_eq!(
         refusals,
-        ["11: T in the contract is no parameter.".to_string(), format!("19: {exact}"), format!("24: {exact}"), "27: TINY in the contract is no parameter.".to_string()],
+        [
+            "11: T in the contract is no parameter.".to_string(),
+            format!("19: {exact}"),
+            "24: a double constant that the model cannot write exactly: the translator has no rule for it yet.".to_string(),
+            "27: TINY in the contract is no parameter.".to_string(),
+            "37: U in the contract is no parameter.".to_string(),
+        ],
         "{text}"
     );
+}
+
+/// A constant of the file, a parameter or a field with the name of a contract word is refused where a contract reads the word,
+/// because the word hides the name of C++, decision 0158. A parameter of that name is no clash where no contract reads the word.
+#[test]
+fn a_name_of_cpp_with_the_name_of_a_contract_word_is_refused() {
+    if !clang_tidy_available() {
+        return;
+    }
+    let word = |w: &str| format!("{w} in the contract is a contract word, and a C++ name too. Rename the C++ name.");
+    for (fixture, wants) in [("model-word-constant.cpp", [(8, "eps"), (13, "eta")]), ("model-word-name.cpp", [(4, "eps"), (11, "eta")])] {
+        let dir = tempfile::tempdir().unwrap();
+        let (o, _) = model(fixture, dir.path());
+        let text = stdout(&o);
+        assert_eq!(o.status.code(), Some(1), "{fixture}: stdout: {text} stderr: {}", stderr(&o));
+        let refusals: Vec<&str> = text.lines().filter(|l| l.starts_with("Not provable: ")).map(|l| l.rsplit_once(".cpp:").unwrap().1).collect();
+        let wants: Vec<String> = wants.iter().map(|(line, w)| format!("{line}: {}", word(w))).collect();
+        assert_eq!(refusals, wants, "{fixture}: {text}");
+    }
 }
 
 /// The examples double and double_expression prove: a tolerance that is a named double, and one error term for each rounding,

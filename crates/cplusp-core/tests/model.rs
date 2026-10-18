@@ -3002,3 +3002,23 @@ fn an_integer_literal_next_to_a_real_is_a_real() {
     assert_eq!(third, alone);
     assert!(!format!("{alone:?}").contains("RealLit"), "{alone:?}");
 }
+
+/// A chain is two comparisons, decision 0064, so an integer literal in a chain next to a real is a real too, decision 0158. A chain
+/// on an integer keeps its integers.
+#[test]
+fn an_integer_literal_in_a_chain_next_to_a_real_is_a_real() {
+    const DN: u32 = 9911;
+    let chain = |n| Expr::Chain(BinOp::Le, BinOp::Le, b(Expr::Int(0)), b(Expr::Name(n)), b(Expr::Int(1)));
+    let params = List::Cons((DA, Ty::F64), Box::new(List::Cons((DN, Ty::I32), Box::new(List::Nil))));
+    let conds = List::Cons(
+        (CondKind::Requires, chain(DA), 3, names(&[DA, DN])),
+        Box::new(List::Cons((CondKind::Requires, chain(DN), 4, names(&[DA, DN])), Box::new(finite(&[DA], 2, &[DA, DN])))),
+    );
+    let f = Function { params, conds, ..larger(one(Stmt::Return(Expr::Var(DA, Ty::F64), 6))) };
+    let Model::Full(m) = translate_function(&f, &List::Nil, &List::Nil) else { panic!("a full model") };
+    let List::Cons((first, _), rest) = strip_conds(m.requires) else { panic!("requires") };
+    assert_eq!(first, DExpr::Chain(BinOp::Le, BinOp::Le, Box::new(DExpr::RealLit(0, 0)), Box::new(DExpr::Var(DA)), Box::new(DExpr::RealLit(1, 0))));
+    let List::Cons((second, _), _) = *rest else { panic!("requires") };
+    let int = DExpr::Chain(BinOp::Le, BinOp::Le, Box::new(DExpr::Lit(0)), Box::new(DExpr::AsInt(Box::new(DExpr::Var(DN)))), Box::new(DExpr::Lit(1)));
+    assert_eq!(second, int);
+}

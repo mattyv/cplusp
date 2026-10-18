@@ -41,3 +41,10 @@ double scaled(double x) {
 double twice(double x) {
   return 2.0 * x;
 }
+
+// A chain with whole numbers next to a real, decision 0158.
+//@ requires std::isfinite(x) && 0 <= x <= 1
+//@ ensures 0 <= result <= 1
+double unit(double x) {
+  return x;
+}
