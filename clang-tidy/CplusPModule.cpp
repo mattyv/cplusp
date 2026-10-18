@@ -4223,12 +4223,17 @@ public:
 
   std::string file(SourceLocation At) const { return SM.getFilename(SM.getFileLoc(At)).str(); }
 
+  // A `constexpr` variable declared at the scope of the file, of any type, or null. A namespace is no scope of the file, nor is a class or a template.
+  static const VarDecl *fileConstexpr(const ValueDecl *D) {
+    const auto *Var = dyn_cast<VarDecl>(D);
+    return Var && Var->isConstexpr() && Var->getDeclContext()->isTranslationUnit() && !isa<VarTemplateSpecializationDecl>(Var) && !Var->isTemplated() ? Var : nullptr;
+  }
   // The value of a named constant, decision 0106: a `constexpr` variable of an integer type, declared at the scope of the file. Null when
   // the variable is none. A namespace is no scope of the file. A constant of a namespace or of a class can hide one of the file from a
   // function, so `function` writes the names that it hides, decision 0107.
   std::optional<llvm::APSInt> constant(const ValueDecl *D) const {
-    const auto *Var = dyn_cast<VarDecl>(D);
-    if (!Var || !Var->isConstexpr() || !Var->getDeclContext()->isTranslationUnit() || isa<VarTemplateSpecializationDecl>(Var) || Var->isTemplated())
+    const auto *Var = fileConstexpr(D);
+    if (!Var)
       return std::nullopt;
     const QualType T = Var->getType().getCanonicalType().getUnqualifiedType();
     const char *S = scalar(T) ? scalar(T) : smallScalar(T);
@@ -4236,6 +4241,16 @@ public:
     if (!Value || !Value->isInt())
       return std::nullopt;
     return Value->getInt();
+  }
+  // The value of a named double constant, decision 0158: a `constexpr` variable of type double at the scope of the file, as `constant` takes an integer one.
+  std::optional<double> realConstant(const ValueDecl *D) const {
+    const auto *Var = fileConstexpr(D);
+    if (!Var || !isDouble(Var->getType().getCanonicalType().getUnqualifiedType()))
+      return std::nullopt;
+    const APValue *Value = Var->evaluateValue();
+    if (!Value || !Value->isFloat())
+      return std::nullopt;
+    return Value->getFloat().convertToDouble();
   }
   // Whether a scope declares a name, or a using-directive of the scope brings one in, decision 0107. A function holds its locals in its list of
   // declarations, not in its table of names, so its list is read. `Seen` stops a cycle of directives. The table of the translation unit holds the
@@ -4269,7 +4284,7 @@ public:
     llvm::json::Array Out;
     for (const Decl *D : Context.getTranslationUnitDecl()->decls()) {
       const auto *Var = dyn_cast<VarDecl>(D);
-      if (!Var || !Var->isConstexpr() || !constant(Var))
+      if (!Var || !Var->isConstexpr() || !(constant(Var) || realConstant(Var)))
         continue;
       const DeclarationName Name = Var->getDeclName();
       bool Hidden = false;
@@ -4289,6 +4304,28 @@ public:
       if (Hidden || std::distance(AtFile.begin(), AtFile.end()) > 1 || declares(Context.getTranslationUnitDecl(), Name, Seen, false))
         Out.push_back(Var->getNameAsString());
     }
+    // The words of a contract hide a name of C++, decision 0158. A word that C++ finds from the function as a name is listed, so a contract line that reads
+    // the word is refused. C++ looks from the function through its parameters and locals, its class and the bases of the class, the namespaces around it
+    // and the file. An out-of-line member is looked up in its class, because the semantic context is the class.
+    for (const char *Word : {"eps", "eta", "DBL_MAX"}) {
+      const DeclarationName Name = &Context.Idents.get(Word);
+      std::set<const DeclContext *> Seen;
+      bool Found = declares(FD, Name, Seen);
+      // The semantic context, and the lexical one when it differs: the body of a friend that a class defines is looked up in the class.
+      for (const DeclContext *Start : {FD->getDeclContext(), FD->getLexicalDeclContext()}) {
+        for (const DeclContext *DC = Start; DC && !Found; DC = DC->getParent()) {
+          std::set<const DeclContext *> Visited;
+          Found = declares(DC, Name, Visited);
+          if (const auto *RD = dyn_cast<CXXRecordDecl>(DC); RD && !Found && RD->hasDefinition())
+            Found = !RD->forallBases([&](const CXXRecordDecl *Base) {
+              std::set<const DeclContext *> BaseSeen;
+              return !declares(Base, Name, BaseSeen);
+            });
+        }
+      }
+      if (Found)
+        Out.push_back(Word);
+    }
     return Out;
   }
   // Writes the item of an enum class of the file, so a contract can name its enumerators though no code names its type, decision 0114.
@@ -4298,6 +4335,13 @@ public:
   }
   // The line of the tree for a named constant, or null.
   llvm::json::Value constantLine(const VarDecl *Var) const {
+    // A double constant has a line when its value is `m / q`, decision 0158: the sign, `m` and `q`.
+    if (const std::optional<double> Real = realConstant(Var)) {
+      uint64_t M, Q;
+      if (!std::isfinite(*Real) || !dyadic(std::fabs(*Real), M, Q))
+        return nullptr;
+      return llvm::json::Object{{"constant", Var->getNameAsString()}, {"real", llvm::json::Array{std::signbit(*Real) && *Real != 0.0, number(M), number(Q)}}};
+    }
     const std::optional<llvm::APSInt> Value = constant(Var);
     if (!Value)
       return nullptr;
@@ -5050,6 +5094,58 @@ private:
     }
   }
 
+  // A positive double as `m * 2^p` with `m` odd, or zero as (0, 0).
+  static void splitDouble(double Value, uint64_t &Mantissa, int &Power) {
+    int Exponent = 0;
+    const double Fraction = std::frexp(Value, &Exponent);
+    Mantissa = static_cast<uint64_t>(std::ldexp(Fraction, 53));
+    Power = Exponent - 53;
+    while (Mantissa && Mantissa % 2 == 0)
+      Mantissa /= 2, ++Power;
+  }
+  // The value of a non-negative double as `m / q` with `q` a power of two and both in 64 bits, or false, decision 0158.
+  static bool dyadic(double Value, uint64_t &M, uint64_t &Q) {
+    uint64_t Mantissa;
+    int Power;
+    splitDouble(Value, Mantissa, Power);
+    if (!Mantissa)
+      return M = 0, Q = 1, true;
+    if (Power >= 0) {
+      const unsigned __int128 Whole = static_cast<unsigned __int128>(Mantissa) << (Power < 64 ? Power : 64);
+      return Power < 64 && Whole <= UINT64_MAX ? (M = static_cast<uint64_t>(Whole), Q = 1, true) : false;
+    }
+    return -Power <= 63 ? (M = Mantissa, Q = uint64_t(1) << -Power, true) : false;
+  }
+  // The expression of a double value, or null when no form fits: `RealLit` for `d / 10^k` with `k` up to 19 and `d` in 64 bits, decision 0150, else
+  // `Ratio` for `m / q`, decision 0158. A negative value is the negation of one.
+  llvm::json::Value realForm(double Value) const {
+    if (!std::isfinite(Value))
+      return nullptr;
+    if (std::signbit(Value) && Value != 0.0) {
+      llvm::json::Value Inner = realForm(-Value);
+      return Inner.getAsNull() ? Inner : tag("Neg", std::move(Inner));
+    }
+    uint64_t Mantissa;
+    int Power;
+    splitDouble(Value, Mantissa, Power);
+    if (!Mantissa)
+      return tag("RealLit", llvm::json::Array{number(0), number(0)});
+    unsigned __int128 Digits = Mantissa;
+    if (Power >= 0) {
+      if (Power < 64 && (Digits << Power) <= UINT64_MAX)
+        return tag("RealLit", llvm::json::Array{number(static_cast<uint64_t>(Digits << Power)), number(0)});
+      return nullptr;
+    }
+    if (-Power <= 19) {
+      for (int I = 0; I < -Power && Digits <= UINT64_MAX; ++I)
+        Digits *= 5;
+      if (Digits <= UINT64_MAX)
+        return tag("RealLit", llvm::json::Array{number(static_cast<uint64_t>(Digits)), number(-Power)});
+    }
+    uint64_t M, Q;
+    return dyadic(Value, M, Q) ? tag("Ratio", llvm::json::Array{number(M), number(Q)}) : llvm::json::Value(nullptr);
+  }
+
   // The `CountIf` node of a call of `std::count_if` from the library, decision 0149, or null. When the call misses a limit of 0149, `Limit` names the first
   // limit that it misses, in the order of decision 0157. A miss that fits none of them leaves `Limit` empty, and the call stays a call with no model.
   llvm::json::Value countIf(const Expr *E, unsigned Near, std::string &Limit) const {
@@ -5178,28 +5274,11 @@ private:
     }
     if (const auto *Flag = dyn_cast<CXXBoolLiteralExpr>(E))
       return tag("Bool", Flag->getValue());
-    // A literal of type double whose value is `d / 10^k` with `d` in 64 bits and `k` up to 19, decision 0150. Any other stays unknown.
+    // A literal of type double is `d / 10^k` of decision 0150, or `m / q` with `q` a power of two, decision 0158. Any other stays unknown.
     if (const auto *Real = dyn_cast<FloatingLiteral>(E); Real && isDouble(Real->getType())) {
-      const double Value = Real->getValueAsApproximateDouble();
-      int Exponent = 0;
-      const double Fraction = std::frexp(Value, &Exponent);
-      uint64_t Mantissa = static_cast<uint64_t>(std::ldexp(Fraction, 53));
-      int Power = Exponent - 53;
-      while (Mantissa && Mantissa % 2 == 0)
-        Mantissa /= 2, ++Power;
-      if (!Mantissa)
-        return tag("RealLit", llvm::json::Array{number(0), number(0)});
-      unsigned __int128 Digits = Mantissa;
-      if (Power >= 0) {
-        if (Power < 64 && (Digits << Power) <= UINT64_MAX)
-          return tag("RealLit", llvm::json::Array{number(static_cast<uint64_t>(Digits << Power)), number(0)});
-      } else if (-Power <= 19) {
-        for (int I = 0; I < -Power && Digits <= UINT64_MAX; ++I)
-          Digits *= 5;
-        if (Digits <= UINT64_MAX)
-          return tag("RealLit", llvm::json::Array{number(static_cast<uint64_t>(Digits)), number(-Power)});
-      }
-      return unknown(E, E->getStmtClassName(), Near);
+      if (llvm::json::Value Form = realForm(Real->getValueAsApproximateDouble()); !Form.getAsNull())
+        return Form;
+      return unknown(E, "a double literal that the model cannot write exactly", Near);
     }
     if (const auto *Literal = dyn_cast<IntegerLiteral>(E); Literal && Literal->getValue().getActiveBits() <= 64)
       return tag("Lit", llvm::json::Array{number(Literal->getValue().getZExtValue()), type(Literal->getType())});
@@ -5213,6 +5292,12 @@ private:
           enumType(ED);
           return tag("Enumerator", llvm::json::Array{enumKey(ED), number(enumeratorPlace(ED, Enumerator))});
         }
+      // A named double constant is its value as a literal is, decision 0158.
+      if (const std::optional<double> Real = realConstant(D)) {
+        if (llvm::json::Value Form = realForm(*Real); !Form.getAsNull())
+          return Form;
+        return unknown(E, "a double constant that the model cannot write exactly", Near);
+      }
       // A named constant is its value, decision 0106. A negative one is the negation of a literal, as `-5` is.
       if (const std::optional<llvm::APSInt> Value = constant(D)) {
         // The magnitude of a negative value, taken one bit wider so that the minimum of a type does not overflow.

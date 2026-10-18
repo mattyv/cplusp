@@ -51,7 +51,7 @@ Treat SPARK guidance as an engineering method, not an LLM performance measuremen
 
 ## Contract lines that the translator reads
 
-This list is true at decision 0154. Read the later decisions before you rely on it.
+This list is true at decision 0158. Read the later decisions before you rely on it.
 `cplusp prove` translates the C++ and the `//@` lines to Dafny, and runs Dafny. It says `ok: proved`, or `Not proved: FILE:LINE: sentence` for a proof that fails, or `Not provable: FILE:LINE: sentence` for a form that has no rule.
 
 Where each line goes:
@@ -66,8 +66,8 @@ What a contract expression can hold:
 - `v.size()`, `v[i]`, `v[i..]`, `v[..j]` and `v[i..j]` of a sequence, and `o.has_value()`, `o.value()`, `*o` and `o->f` of an optional, decisions 0131 and 0137.
 - `p == nullptr`, `p != nullptr`, `*p` and `p->f` of a pointer to const or a unique_ptr, decisions 0140 to 0142. Two pointers do not compare.
 - Hex literals, `true`, `false` and a character such as `'0'`, decision 0106.
-- A decimal with a point, such as `150.0` or `0.5`, is that real, and `std::isfinite(x)` reads a `double`, decision 0150. `|e|` is the absolute value of a real, and `eps`, `eta` and `DBL_MAX` are words, decision 0154. Do not name a parameter `eps`, `eta` or `DBL_MAX`, because the contract reads the word and not the parameter. Compare a `double` with a decimal with a point, never with an integer.
-- A `constexpr` integer constant of the file, when C++ finds it from the function, decisions 0106 and 0107.
+- A decimal with a point, such as `150.0` or `0.5`, is that real, and `std::isfinite(x)` reads a `double`, decision 0150. `|e|` is the absolute value of a real, and `eps`, `eta` and `DBL_MAX` are words, decision 0154. The translator refuses a contract line with one of these words when C++ finds a name of that spelling from the function, decision 0158. A whole number next to a real is that real, so you can write `2 * eps`, `DBL_MAX / 4` and `0 <= x <= 1`.
+- A `constexpr` integer or `double` constant of the file, when C++ finds it from the function, decisions 0106, 0107 and 0158. A `double` constant is exact when its value is `m / 2^p` with `p` up to 63, such as `0x1p-30`. A contract cannot write a hexadecimal double, so give it a name.
 - An enumerator such as `Kind::Small`, decision 0109.
 - A pure `const` member function, and a function or predicate of the companion file, decisions 0079 and 0090.
 
@@ -77,7 +77,7 @@ The modifies line:
 - Each `double` parameter needs `std::isfinite(x)` as a part of a requires line, joined by `&&`. A trusted function that gives a `double` needs `std::isfinite(result)` in an ensures line. The model has no NaN and no infinity, decision 0150.
 - `+`, `-`, `*` and `/` on a `double` are one rounding each, `fadd` to `fdiv` of `Double.dfy`, decision 0154. Each needs a bound in the contract, such as `requires |a * b| <= DBL_MAX`, and a division needs `b != 0.0`. The translator refuses `++`, `--` and `%` on a `double`.
 - Write the bound on the exact result itself, `|a * b| <= DBL_MAX`. Dafny does not find it from bounds on `a` and `b`. A bound on the result also needs the error: `|result| <= 2.0` does not follow from `|a| <= 1.0 && |b| <= 1.0`, but `|result| <= 2.0 + eps * 2.0 + eta` does.
-- A bound on a double result reads `ensures |result - a * b| <= eps * |a * b| + eta`. Write `2.0`, never `2`, next to a real. `prove` prints an `Axiom:` line when the proof rests on the rounding axiom.
+- A bound on a double result reads `ensures |result - a * b| <= eps * |a * b| + eta`. `prove` prints an `Axiom:` line when the proof rests on the rounding axiom.
 - A `std::vector<T>&` on the line takes its value in and gives it back, decision 0145. In the body, `v[i] = e` writes one element, and `v.push_back(e)` adds one at the end, decision 0148. Neither `i` nor `e` holds a call. `v[i] += e`, `emplace_back`, `pop_back`, `resize`, `clear` and passing `v` on to a `std::vector<T>&` have no rule yet.
 - After a `push_back`, a read of `v.size()` in code needs a requires line or an invariant that bounds the length. Then the size fits `size_t`.
 - An ensures line that reads `v[i]` after the call needs a line before it that gives the length: `ensures v.size() == old(v.size())`, or `+ 1` after one `push_back`, decision 0146. A loop that writes `v` needs the same line as an invariant.

@@ -114,6 +114,8 @@ enum JExpr {
     Cond(Box<JExpr>, Box<JExpr>, Box<JExpr>),
     /// A literal of type double, `d / 10^k`, decision 0150.
     RealLit(u64, u32),
+    /// A literal of type double, `m / q` with `q` a power of two, decision 0158.
+    Ratio(u64, u64),
     /// `std::count_if(v.begin(), v.end(), f)` with a lambda: the sequence, the parameter, its type and the test, decision 0149.
     CountIf(Box<JExpr>, String, JTy, Box<JExpr>),
     Call(String, String, Vec<JExpr>, u32),
@@ -172,6 +174,11 @@ enum Item {
     Constant {
         constant: String,
         value: String,
+    },
+    /// A named double constant of the file, decision 0158: its name, and its sign, `m` and `q` for the value `m / q`.
+    Real {
+        constant: String,
+        real: (bool, u64, u64),
     },
     Enum(JEnum),
     Struct(JStruct),
@@ -264,6 +271,8 @@ struct Names {
     struct_fields: HashMap<String, Vec<String>>,
     /// The named constants of the file, as (name, value), decision 0106. A contract reads such a name as its value.
     constants: Vec<(String, i128)>,
+    /// The named double constants of the file as (name, negative, m, q) for the value `m / q`, decision 0158.
+    reals: Vec<(String, bool, u64, u64)>,
     /// The enums of the file as (plain name, id of key, enumerators), for `Kind::Small` in a contract, decision 0109.
     enums: Vec<(String, u32, Vec<String>)>,
     /// The names of the parameters and locals of the function that is being converted. They hide a constant of the same name.
@@ -364,6 +373,7 @@ fn expr(e: JExpr, names: &mut Names) -> Expr {
         JExpr::Lit(n, t) => Expr::Lit(n, ty(t, names)),
         JExpr::Bool(b) => Expr::Bool(b),
         JExpr::RealLit(d, k) => Expr::RealLit(d, k),
+        JExpr::Ratio(m, q) => Expr::Ratio(m, q),
         JExpr::Var(v, t) => Expr::Var(names.id(&v), ty(t, names)),
         JExpr::Bin(o, a, b) => Expr::Bin(op(o), Box::new(expr(*a, names)), Box::new(expr(*b, names))),
         JExpr::Divide(o, a, b, t) => Expr::Divide(op(o), Box::new(expr(*a, names)), Box::new(expr(*b, names)), ty(t, names)),
@@ -494,6 +504,9 @@ fn body_line(c: JCond, apply: bool, names: &mut Names) -> Stmt {
     };
     let mut toks: Vec<Tok> = head.into_iter().flat_map(|h| [Tok::Ident(names.id(h)), Tok::LParen]).collect();
     let lexed = lex(text, line, names);
+    if let Some(word) = word_clash(&lexed, &c.params, names) {
+        return syntax(line, Some(word_clash_sentence(word)), names);
+    }
     toks.extend(fold_names(lexed, names));
     // A call to an undeclared name is refused by `sentence` at this line.
     if names.bad_calls.contains_key(&line) {
@@ -563,8 +576,9 @@ fn lex(text: &str, line: u32, names: &mut Names) -> Vec<Tok> {
 /// words cannot be in the tokens, so it is left out. An enumerator that is not in the table still takes its place among the members of its enum.
 fn fold_names(toks: Vec<Tok>, names: &Names) -> Vec<Tok> {
     let mut missing = u32::MAX;
-    let mut folds = cplusp_core::fold::Folds { constants: Vec::new(), shadow: Vec::new(), enums: Vec::new(), enumerators: Vec::new() };
+    let mut folds = cplusp_core::fold::Folds { constants: Vec::new(), reals: Vec::new(), shadow: Vec::new(), enums: Vec::new(), enumerators: Vec::new() };
     folds.constants = names.constants.iter().filter_map(|(c, v)| Some((names.find(c)?, *v))).collect();
+    folds.reals = names.reals.iter().filter_map(|(c, negative, m, q)| Some((names.find(c)?, *negative, *m, *q))).collect();
     folds.shadow = names.shadow.iter().filter_map(|n| names.find(n)).collect();
     for (plain, key, list) in &names.enums {
         folds.enums.extend(names.find(plain).map(|id| (id, *key)));
@@ -582,6 +596,24 @@ fn fold_names(toks: Vec<Tok>, names: &Names) -> Vec<Tok> {
 fn param_names(v: Vec<String>, names: &mut Names) -> CNames {
     let ids: Vec<u32> = v.into_iter().enumerate().map(|(i, n)| names.id(&if n.is_empty() { format!("'{i}") } else { n })).collect();
     ids.into_iter().rev().fold(CNames::Nil, |rest, n| CNames::Cons(n, Box::new(rest)))
+}
+
+/// The contract word that a line reads when C++ finds a name of that spelling from the function, or none, decision 0158. The plugin lists such a word
+/// as hidden, and the hidden names are in `shadow`. A parameter of the declaration that the line is above is in `params`, though the definition may name it
+/// otherwise. A name of C++ with no line that reads the word is no clash.
+fn word_clash(toks: &[Tok], params: &[String], names: &Names) -> Option<&'static str> {
+    toks.iter()
+        .filter_map(|t| match t {
+            Tok::Eps => Some("eps"),
+            Tok::Eta => Some("eta"),
+            Tok::DblMax => Some("DBL_MAX"),
+            _ => None,
+        })
+        .find(|w| params.iter().chain(&names.shadow).any(|n| n == w))
+}
+
+fn word_clash_sentence(word: &str) -> String {
+    format!("{word} in the contract is a contract word, and a C++ name too. Rename the C++ name.")
 }
 
 /// The contract lines as the core's list. A word other than the four of the grammar has no rule, so its text is not parsed.
@@ -615,9 +647,14 @@ fn conds(v: Vec<JCond>, names: &mut Names) -> Conds {
                         _ => CondKind::Decreases,
                     };
                     let toks = lex(&c.text, line, names);
+                    // A contract word that a name of C++ also spells is refused, decision 0158.
+                    let clash = word_clash(&toks, &c.params, names);
                     let toks = fold_names(toks, names);
+                    if let Some(word) = clash {
+                        names.said.insert(line, word_clash_sentence(word));
+                        (CondKind::Bad(Refusal::Syntax(line)), Expr::Int(0))
                     // A call to an undeclared name is refused by `sentence` at this line, so the core refuses the line as a form it cannot read.
-                    if names.bad_calls.contains_key(&line) {
+                    } else if names.bad_calls.contains_key(&line) {
                         (CondKind::Bad(Refusal::Syntax(line)), Expr::Int(0))
                     } else {
                         match parse_contract(&toks, line) {
@@ -715,7 +752,7 @@ fn expr_names<'a>(e: &'a JExpr, out: &mut Vec<&'a str>) {
         }
         JExpr::Not(a) | JExpr::Neg(a) | JExpr::Cast(_, a) | JExpr::Paren(a) | JExpr::Brace(a) | JExpr::Size(a) | JExpr::Empty(a) | JExpr::Copy(a, ..) | JExpr::Field(a, _) | JExpr::HasValue(a) | JExpr::Value(a) | JExpr::Wrap(a) => expr_names(a, out),
         JExpr::Call(_, _, args, _) | JExpr::Construct(_, args) => args.iter().for_each(|a| expr_names(a, out)),
-        JExpr::Lit(..) | JExpr::Bool(_) | JExpr::RealLit(..) | JExpr::Nullopt | JExpr::Enumerator(..) | JExpr::Unknown(..) => {}
+        JExpr::Lit(..) | JExpr::Bool(_) | JExpr::RealLit(..) | JExpr::Ratio(..) | JExpr::Nullopt | JExpr::Enumerator(..) | JExpr::Unknown(..) => {}
     }
 }
 
@@ -1494,6 +1531,7 @@ pub fn translate(lines: &str, companion: Option<(&str, &str)>) -> Result<Transla
                 refusals.push((file, orphan, said.to_string()));
             }
             Item::Constant { constant, value } => names.constants.extend(value.parse().ok().map(|v| (constant, v))),
+            Item::Real { constant, real } => names.reals.push((constant, real.0, real.1, real.2)),
             Item::Enum(en) => match unreadable_enum_name(&en) {
                 Some(n) => refusals.push((en.file.clone(), en.line, format!("{n}: a name with a character Dafny cannot read."))),
                 None => enums.push(en),

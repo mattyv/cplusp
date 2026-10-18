@@ -257,7 +257,8 @@ pub enum CastKind {
 /// by the key of its enum and its place among the enumerators, decision 0109. `CountIf` is `std::count_if(v.begin(), v.end(), f)` in
 /// code, with the sequence, the name and the type of the parameter of the lambda `f`, and the expression of its one `return`,
 /// decision 0149. `RealLit` is a literal of type `double`, or a decimal with a point in a contract, by its digits and the count of
-/// the digits after the point, decision 0150. `Finite` is `std::isfinite(e)` in a contract. `Abs` is `|e|`, and `Eps`, `Eta` and
+/// the digits after the point, decision 0150. `Ratio` is a literal of type `double` that is `m / q`, with `q` a power of two, and
+/// no such decimal, decision 0158. `Finite` is `std::isfinite(e)` in a contract. `Abs` is `|e|`, and `Eps`, `Eta` and
 /// `DblMax` are the words `eps`, `eta` and `DBL_MAX` of a contract, decision 0154. `Unknown` is a construct with no rule,
 /// by the id of its kind and its line.
 #[derive(PartialEq, Eq, Debug)]
@@ -301,6 +302,7 @@ pub enum Expr {
     Enumerator(u32, u32),
     CountIf(Box<Expr>, u32, Ty, Box<Expr>),
     RealLit(u64, u32),
+    Ratio(u64, u64),
     Finite(Box<Expr>),
     Abs(Box<Expr>),
     Eps,
@@ -896,6 +898,18 @@ pub open spec fn spec_callee_real(all: Fns, k: u32) -> bool {
     }
 }
 
+/// The exact double `m / q`: the quotient of two literals of the model, which does not round, decision 0158.
+pub open spec fn spec_ratio(m: u64, q: u64) -> DExpr {
+    DExpr::Bin(BinOp::Div, Box::new(DExpr::RealLit(m, 0)), Box::new(DExpr::RealLit(q, 0)))
+}
+
+pub fn ratio(m: u64, q: u64) -> (r: DExpr)
+    ensures
+        r == spec_ratio(m, q),
+{
+    DExpr::Bin(BinOp::Div, Box::new(DExpr::RealLit(m, 0)), Box::new(DExpr::RealLit(q, 0)))
+}
+
 /// An expression of code of type double, decision 0150. The forms that can give a double are a variable, a literal, a call, and
 /// the forms around them.
 pub open spec fn spec_real(e: Expr, all: Fns) -> bool
@@ -904,6 +918,7 @@ pub open spec fn spec_real(e: Expr, all: Fns) -> bool
     match e {
         Expr::Var(_, t) => t == Ty::F64,
         Expr::RealLit(_, _) => true,
+        Expr::Ratio(_, _) => true,
         Expr::Neg(a) => spec_real(*a, all),
         Expr::Paren(a) => spec_real(*a, all),
         Expr::Brace(a) => spec_real(*a, all),
@@ -951,6 +966,7 @@ pub fn real(e: &Expr, all: &Fns) -> (r: bool)
     match e {
         Expr::Var(_, t) => *t == Ty::F64,
         Expr::RealLit(_, _) => true,
+        Expr::Ratio(_, _) => true,
         Expr::Neg(a) => real(a, all),
         Expr::Paren(a) => real(a, all),
         Expr::Brace(a) => real(a, all),
@@ -1024,6 +1040,7 @@ pub open spec fn spec_lift(e: Expr, all: Fns, line: u32, sd: Structs, n: u32, op
         Expr::Bool(v) => Ok((List::Nil, DExpr::Bool(v), n)),
         // A literal of type double, decision 0150.
         Expr::RealLit(d, k) => Ok((List::Nil, DExpr::RealLit(d, k), n)),
+        Expr::Ratio(m, q) => Ok((List::Nil, spec_ratio(m, q), n)),
         Expr::Enumerator(k, i) => Ok((List::Nil, DExpr::Enumerator(k, i), n)),
         Expr::Var(v, t) => match spec_ty(t, line) {
             Ok(_) => Ok((List::Nil, spec_code_var(v, t), n)),
@@ -1315,6 +1332,7 @@ pub open spec fn spec_creal(e: Expr, decl: Names, ps: Params, ret: Option<Ty>, b
         },
         Expr::Result => ret == Some(Ty::F64),
         Expr::RealLit(_, _) => true,
+        Expr::Ratio(_, _) => true,
         Expr::Eps => true,
         Expr::Eta => true,
         Expr::DblMax => true,
@@ -1340,6 +1358,7 @@ pub fn creal(e: &Expr, decl: &Names, ps: &Params, ret: Option<Ty>, bound: &Names
         },
         Expr::Result => ret == Some(Ty::F64),
         Expr::RealLit(_, _) => true,
+        Expr::Ratio(_, _) => true,
         Expr::Eps => true,
         Expr::Eta => true,
         Expr::DblMax => true,
@@ -1377,6 +1396,30 @@ pub open spec fn spec_divide(op: BinOp, da: DExpr, db: DExpr, t: Ty, line: u32) 
     }
 }
 
+/// An integer literal of a contract as a real, through a minus, decision 0158. A contract gives `Lit` only for a literal, and
+/// parentheses give no node, so any other expression stays as it is.
+pub open spec fn spec_dreal(d: DExpr) -> DExpr
+    decreases d,
+{
+    match d {
+        DExpr::Lit(n) => DExpr::RealLit(n, 0),
+        DExpr::Neg(x) => DExpr::Neg(Box::new(spec_dreal(*x))),
+        _ => d,
+    }
+}
+
+pub fn dreal(d: DExpr) -> (r: DExpr)
+    ensures
+        r == spec_dreal(d),
+    decreases d,
+{
+    match d {
+        DExpr::Lit(n) => DExpr::RealLit(n, 0),
+        DExpr::Neg(x) => DExpr::Neg(Box::new(dreal(*x))),
+        _ => d,
+    }
+}
+
 /// A leaf of a contract: an integer reads as its exact value, `(x as int)`, and a bool as itself.
 pub open spec fn spec_leaf(d: DExpr, t: Ty, line: u32) -> Result<DExpr, Refusal> {
     match spec_ty(t, line) {
@@ -1403,6 +1446,7 @@ pub open spec fn spec_contract(e: Expr, decl: Names, ps: Params, ret: Option<Ty>
         // A decimal with a point is that real, and `std::isfinite` of a double is true in the model, which holds no NaN and no
         // infinity, decision 0150.
         Expr::RealLit(d, k) => Ok(DExpr::RealLit(d, k)),
+        Expr::Ratio(m, q) => Ok(spec_ratio(m, q)),
         // The absolute value and the words of a double bound, decision 0154.
         Expr::Abs(a) => match spec_contract(*a, decl, ps, ret, bound, line, sd) {
             Ok(da) => Ok(DExpr::Abs(Box::new(da))),
@@ -1469,11 +1513,18 @@ pub open spec fn spec_contract(e: Expr, decl: Names, ps: Params, ret: Option<Ty>
             match spec_contract(*a, decl, ps, ret, bound, line, sd) {
                 Ok(da) => match spec_contract(*b, decl, ps, ret, bound, line, sd) {
                     // `/` on reals is the real quotient, decision 0154.
-                    Ok(db) => Ok(if op == BinOp::Div && (spec_creal(*a, decl, ps, ret, bound) || spec_creal(*b, decl, ps, ret, bound)) {
-                        DExpr::Bin(op, Box::new(da), Box::new(db))
-                    } else {
-                        spec_binary(op, da, db)
-                    }),
+                    // An integer literal next to a real is that real, decision 0158.
+                    Ok(db) => {
+                        let ra = spec_creal(*a, decl, ps, ret, bound);
+                        let rb = spec_creal(*b, decl, ps, ret, bound);
+                        let da = if rb { spec_dreal(da) } else { da };
+                        let db = if ra { spec_dreal(db) } else { db };
+                        Ok(if op == BinOp::Div && (ra || rb) {
+                            DExpr::Bin(op, Box::new(da), Box::new(db))
+                        } else {
+                            spec_binary(op, da, db)
+                        })
+                    },
                     Err(r) => Err(r),
                 },
                 Err(r) => Err(r),
@@ -1615,7 +1666,14 @@ pub open spec fn spec_contract(e: Expr, decl: Names, ps: Params, ret: Option<Ty>
             match spec_contract(*a, decl, ps, ret, bound, line, sd) {
                 Ok(da) => match spec_contract(*b, decl, ps, ret, bound, line, sd) {
                     Ok(db) => match spec_contract(*c, decl, ps, ret, bound, line, sd) {
-                        Ok(dc) => Ok(DExpr::Chain(o1, o2, Box::new(da), Box::new(db), Box::new(dc))),
+                        // A chain is two comparisons, so a literal next to a real in it is that real, decision 0158.
+                        Ok(dc) => {
+                            let rb = spec_creal(*b, decl, ps, ret, bound);
+                            let da = if rb { spec_dreal(da) } else { da };
+                            let dc = if rb { spec_dreal(dc) } else { dc };
+                            let db = if spec_creal(*a, decl, ps, ret, bound) || spec_creal(*c, decl, ps, ret, bound) { spec_dreal(db) } else { db };
+                            Ok(DExpr::Chain(o1, o2, Box::new(da), Box::new(db), Box::new(dc)))
+                        },
                         Err(r) => Err(r),
                     },
                     Err(r) => Err(r),
@@ -4868,6 +4926,7 @@ pub fn lift(e: &Expr, all: &Fns, line: u32, sd: &Structs, n: u32, open: bool) ->
         },
         Expr::Bool(v) => Ok((List::Nil, DExpr::Bool(*v), n)),
         Expr::RealLit(d, k) => Ok((List::Nil, DExpr::RealLit(*d, *k), n)),
+        Expr::Ratio(m, q) => Ok((List::Nil, ratio(*m, *q), n)),
         Expr::Enumerator(k, i) => Ok((List::Nil, DExpr::Enumerator(*k, *i), n)),
         Expr::Var(v, t) => match translate_ty(*t, line) {
             Ok(_) => Ok((List::Nil, code_var(*v, *t), n)),
@@ -5235,6 +5294,7 @@ pub fn translate_contract(e: &Expr, decl: &Names, ps: &Params, ret: Option<Ty>, 
     match e {
         Expr::Int(n) => Ok(DExpr::Lit(*n)),
         Expr::RealLit(d, k) => Ok(DExpr::RealLit(*d, *k)),
+        Expr::Ratio(m, q) => Ok(ratio(*m, *q)),
         Expr::Abs(a) => match translate_contract(a, decl, ps, ret, bound, line, sd) {
             Ok(da) => Ok(DExpr::Abs(Box::new(da))),
             Err(r) => Err(r),
@@ -5288,11 +5348,17 @@ pub fn translate_contract(e: &Expr, decl: &Names, ps: &Params, ret: Option<Ty>, 
         } else {
             match translate_contract(a, decl, ps, ret, bound, line, sd) {
                 Ok(da) => match translate_contract(b, decl, ps, ret, bound, line, sd) {
-                    Ok(db) => Ok(if *op == BinOp::Div && (creal(a, decl, ps, ret, bound) || creal(b, decl, ps, ret, bound)) {
-                        DExpr::Bin(*op, Box::new(da), Box::new(db))
-                    } else {
-                        binary(*op, da, db)
-                    }),
+                    Ok(db) => {
+                        let ra = creal(a, decl, ps, ret, bound);
+                        let rb = creal(b, decl, ps, ret, bound);
+                        let da = if rb { dreal(da) } else { da };
+                        let db = if ra { dreal(db) } else { db };
+                        Ok(if *op == BinOp::Div && (ra || rb) {
+                            DExpr::Bin(*op, Box::new(da), Box::new(db))
+                        } else {
+                            binary(*op, da, db)
+                        })
+                    },
                     Err(r) => Err(r),
                 },
                 Err(r) => Err(r),
@@ -5420,7 +5486,13 @@ pub fn translate_contract(e: &Expr, decl: &Names, ps: &Params, ret: Option<Ty>, 
             match translate_contract(a, decl, ps, ret, bound, line, sd) {
                 Ok(da) => match translate_contract(b, decl, ps, ret, bound, line, sd) {
                     Ok(db) => match translate_contract(c, decl, ps, ret, bound, line, sd) {
-                        Ok(dc) => Ok(DExpr::Chain(*o1, *o2, Box::new(da), Box::new(db), Box::new(dc))),
+                        Ok(dc) => {
+                            let rb = creal(b, decl, ps, ret, bound);
+                            let da = if rb { dreal(da) } else { da };
+                            let dc = if rb { dreal(dc) } else { dc };
+                            let db = if creal(a, decl, ps, ret, bound) || creal(c, decl, ps, ret, bound) { dreal(db) } else { db };
+                            Ok(DExpr::Chain(*o1, *o2, Box::new(da), Box::new(db), Box::new(dc)))
+                        },
                         Err(r) => Err(r),
                     },
                     Err(r) => Err(r),

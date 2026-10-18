@@ -7,11 +7,13 @@ use vstd::prelude::*;
 
 verus! {
 
-/// What the fold reads. `constants` are (name, value) in the order of the file. `shadow` are the parameters and locals of the
+/// What the fold reads. `constants` are (name, value) in the order of the file. `reals` are the double constants, (name,
+/// negative, m, q) for the value `m / q`, decision 0158. `shadow` are the parameters and locals of the
 /// function. `enums` are (name, key). `enumerators` are (key, member) in the order of the enum, so the index of a member is the
 /// count of the entries of its key before it.
 pub struct Folds {
     pub constants: Vec<(u32, i128)>,
+    pub reals: Vec<(u32, bool, u64, u64)>,
     pub shadow: Vec<u32>,
     pub enums: Vec<(u32, u32)>,
     pub enumerators: Vec<(u32, u32)>,
@@ -159,14 +161,22 @@ pub open spec fn spec_value_toks(v: i128) -> Seq<Tok> {
     }
 }
 
-/// The name at `i` as its value, decision 0106: it is a constant, no parameter, local or bound name hides it, and no call or
-/// `::` stands next to it.
-pub open spec fn spec_const_at(toks: Seq<Tok>, i: int, cs: Seq<(u32, i128)>, shadow: Seq<u32>, bound: Seq<u32>) -> Option<i128> {
-    if 0 <= i < toks.len() && toks[i] is Ident {
+/// The name at `i` can be a constant, decision 0106: no parameter, local or bound name hides it, and no call or `::` stands next
+/// to it.
+pub open spec fn spec_free_at(toks: Seq<Tok>, i: int, shadow: Seq<u32>, bound: Seq<u32>) -> bool {
+    0 <= i < toks.len() && toks[i] is Ident && {
         let n = toks[i]->Ident_0;
         let next_ok = !(i + 1 < toks.len() && (toks[i + 1] == Tok::LParen || toks[i + 1] == Tok::ColonColon));
         let prev_ok = i == 0 || toks[i - 1] != Tok::ColonColon;
-        if !bound.contains(n) && next_ok && prev_ok && !shadow.contains(n) {
+        !bound.contains(n) && next_ok && prev_ok && !shadow.contains(n)
+    }
+}
+
+/// The name at `i` as its value, decision 0106: it is a constant, and it is free at `i`.
+pub open spec fn spec_const_at(toks: Seq<Tok>, i: int, cs: Seq<(u32, i128)>, shadow: Seq<u32>, bound: Seq<u32>) -> Option<i128> {
+    if 0 <= i < toks.len() && toks[i] is Ident {
+        let n = toks[i]->Ident_0;
+        if spec_free_at(toks, i, shadow, bound) {
             match const_of(cs, n) {
                 Some(v) => if fits(v) { Some(v) } else { None },
                 None => None,
@@ -179,25 +189,63 @@ pub open spec fn spec_const_at(toks: Seq<Tok>, i: int, cs: Seq<(u32, i128)>, sha
     }
 }
 
-pub open spec fn spec_consts_from(toks: Seq<Tok>, i: int, cs: Seq<(u32, i128)>, shadow: Seq<u32>, bound: Seq<u32>) -> Seq<Tok>
+/// The value of the first double constant with the name `n`.
+pub open spec fn real_of(rs: Seq<(u32, bool, u64, u64)>, n: u32) -> Option<(bool, u64, u64)>
+    decreases rs.len(),
+{
+    if rs.len() == 0 {
+        None
+    } else if rs[0].0 == n {
+        Some((rs[0].1, rs[0].2, rs[0].3))
+    } else {
+        real_of(rs.drop_first(), n)
+    }
+}
+
+/// The name at `i` as the value of a double constant, decision 0158: it is a double constant, and it is free at `i`.
+pub open spec fn spec_real_at(toks: Seq<Tok>, i: int, rs: Seq<(u32, bool, u64, u64)>, shadow: Seq<u32>, bound: Seq<u32>) -> Option<
+    (bool, u64, u64),
+> {
+    if spec_free_at(toks, i, shadow, bound) {
+        real_of(rs, toks[i]->Ident_0)
+    } else {
+        None
+    }
+}
+
+/// The tokens of a double value: `(m / q)` as two decimals, which is the real quotient, decision 0154. A negative value has a minus
+/// before `m`.
+pub open spec fn spec_real_toks(neg: bool, m: u64, q: u64) -> Seq<Tok> {
+    if neg {
+        seq![Tok::LParen, Tok::Op(BinOp::Sub), Tok::Real(m, 0), Tok::Op(BinOp::Div), Tok::Real(q, 0), Tok::RParen]
+    } else {
+        seq![Tok::LParen, Tok::Real(m, 0), Tok::Op(BinOp::Div), Tok::Real(q, 0), Tok::RParen]
+    }
+}
+
+/// An integer constant of a name comes before a double constant of it.
+pub open spec fn spec_consts_from(toks: Seq<Tok>, i: int, cs: Seq<(u32, i128)>, rs: Seq<(u32, bool, u64, u64)>, shadow: Seq<u32>, bound: Seq<u32>) -> Seq<Tok>
     decreases toks.len() - i,
 {
     if i < 0 || i >= toks.len() {
         Seq::empty()
     } else {
         match spec_const_at(toks, i, cs, shadow, bound) {
-            Some(v) => spec_value_toks(v) + spec_consts_from(toks, i + 1, cs, shadow, bound),
-            None => seq![toks[i]] + spec_consts_from(toks, i + 1, cs, shadow, bound),
+            Some(v) => spec_value_toks(v) + spec_consts_from(toks, i + 1, cs, rs, shadow, bound),
+            None => match spec_real_at(toks, i, rs, shadow, bound) {
+                Some((neg, m, q)) => spec_real_toks(neg, m, q) + spec_consts_from(toks, i + 1, cs, rs, shadow, bound),
+                None => seq![toks[i]] + spec_consts_from(toks, i + 1, cs, rs, shadow, bound),
+            },
         }
     }
 }
 
 /// The fold of a contract line: the enumerators first, then the constants, each with the names that the line binds.
-pub open spec fn spec_fold(toks: Seq<Tok>, cs: Seq<(u32, i128)>, shadow: Seq<u32>, enums: Seq<(u32, u32)>, es: Seq<(u32, u32)>) -> Seq<
+pub open spec fn spec_fold(toks: Seq<Tok>, cs: Seq<(u32, i128)>, rs: Seq<(u32, bool, u64, u64)>, shadow: Seq<u32>, enums: Seq<(u32, u32)>, es: Seq<(u32, u32)>) -> Seq<
     Tok,
 > {
     let e = spec_enums_from(toks, 0, enums, es, spec_bound(toks));
-    spec_consts_from(e, 0, cs, shadow, spec_bound(e))
+    spec_consts_from(e, 0, cs, rs, shadow, spec_bound(e))
 }
 
 // ------------------------------------------------------------------ the code
@@ -388,6 +436,31 @@ fn const_of_exec(cs: &Vec<(u32, i128)>, n: u32) -> (r: Option<i128>)
     None
 }
 
+fn real_of_exec(rs: &Vec<(u32, bool, u64, u64)>, n: u32) -> (r: Option<(bool, u64, u64)>)
+    ensures
+        r == real_of(rs@, n),
+{
+    let mut i = 0;
+    proof {
+        assert(rs@.subrange(0, rs.len() as int) =~= rs@);
+    }
+    while i < rs.len()
+        invariant
+            i <= rs.len(),
+            real_of(rs@, n) == real_of(rs@.subrange(i as int, rs.len() as int), n),
+        decreases rs.len() - i,
+    {
+        proof {
+            assert(rs@.subrange(i as int, rs.len() as int).drop_first() =~= rs@.subrange(i + 1, rs.len() as int));
+        }
+        if rs[i].0 == n {
+            return Some((rs[i].1, rs[i].2, rs[i].3));
+        }
+        i += 1;
+    }
+    None
+}
+
 fn enum_at(toks: &Vec<Tok>, i: usize, t: &Folds, bound: &Vec<u32>) -> (r: Option<Tok>)
     requires
         i < toks.len(),
@@ -408,6 +481,21 @@ fn enum_at(toks: &Vec<Tok>, i: usize, t: &Folds, bound: &Vec<u32>) -> (r: Option
     None
 }
 
+fn free_at(toks: &Vec<Tok>, i: usize, t: &Folds, bound: &Vec<u32>) -> (r: bool)
+    requires
+        i < toks.len(),
+    ensures
+        r == spec_free_at(toks@, i as int, t.shadow@, bound@),
+{
+    if let Tok::Ident(n) = toks[i] {
+        let next_ok = !(i + 1 < toks.len() && (toks[i + 1] == Tok::LParen || toks[i + 1] == Tok::ColonColon));
+        let prev_ok = i == 0 || toks[i - 1] != Tok::ColonColon;
+        !contains(bound, n) && next_ok && prev_ok && !contains(&t.shadow, n)
+    } else {
+        false
+    }
+}
+
 fn const_at(toks: &Vec<Tok>, i: usize, t: &Folds, bound: &Vec<u32>) -> (r: Option<i128>)
     requires
         i < toks.len(),
@@ -415,14 +503,26 @@ fn const_at(toks: &Vec<Tok>, i: usize, t: &Folds, bound: &Vec<u32>) -> (r: Optio
         r == spec_const_at(toks@, i as int, t.constants@, t.shadow@, bound@),
 {
     if let Tok::Ident(n) = toks[i] {
-        let next_ok = !(i + 1 < toks.len() && (toks[i + 1] == Tok::LParen || toks[i + 1] == Tok::ColonColon));
-        let prev_ok = i == 0 || toks[i - 1] != Tok::ColonColon;
-        if !contains(bound, n) && next_ok && prev_ok && !contains(&t.shadow, n) {
+        if free_at(toks, i, t, bound) {
             if let Some(v) = const_of_exec(&t.constants, n) {
                 if -(u64::MAX as i128) <= v && v <= u64::MAX as i128 {
                     return Some(v);
                 }
             }
+        }
+    }
+    None
+}
+
+fn real_at(toks: &Vec<Tok>, i: usize, t: &Folds, bound: &Vec<u32>) -> (r: Option<(bool, u64, u64)>)
+    requires
+        i < toks.len(),
+    ensures
+        r == spec_real_at(toks@, i as int, t.reals@, t.shadow@, bound@),
+{
+    if let Tok::Ident(n) = toks[i] {
+        if free_at(toks, i, t, bound) {
+            return real_of_exec(&t.reals, n);
         }
     }
     None
@@ -486,7 +586,7 @@ fn enums_pass(toks: &Vec<Tok>, t: &Folds) -> (r: Vec<Tok>)
 
 fn consts_pass(toks: &Vec<Tok>, t: &Folds) -> (r: Vec<Tok>)
     ensures
-        r@ == spec_consts_from(toks@, 0, t.constants@, t.shadow@, spec_bound(toks@)),
+        r@ == spec_consts_from(toks@, 0, t.constants@, t.reals@, t.shadow@, spec_bound(toks@)),
 {
     let b = bound(toks);
     let mut out: Vec<Tok> = Vec::new();
@@ -495,10 +595,11 @@ fn consts_pass(toks: &Vec<Tok>, t: &Folds) -> (r: Vec<Tok>)
         invariant
             i <= toks.len(),
             b@ == spec_bound(toks@),
-            out@ + spec_consts_from(toks@, i as int, t.constants@, t.shadow@, b@) == spec_consts_from(
+            out@ + spec_consts_from(toks@, i as int, t.constants@, t.reals@, t.shadow@, b@) == spec_consts_from(
                 toks@,
                 0,
                 t.constants@,
+                t.reals@,
                 t.shadow@,
                 b@,
             ),
@@ -517,32 +618,56 @@ fn consts_pass(toks: &Vec<Tok>, t: &Folds) -> (r: Vec<Tok>)
                     out.push(Tok::Int(v as u64));
                 }
                 proof {
-                    assert(before + spec_consts_from(toks@, i as int, t.constants@, t.shadow@, b@) =~= out@ + spec_consts_from(
+                    assert(before + spec_consts_from(toks@, i as int, t.constants@, t.reals@, t.shadow@, b@) =~= out@ + spec_consts_from(
                         toks@,
                         i + 1,
                         t.constants@,
+                        t.reals@,
                         t.shadow@,
                         b@,
                     ));
                 }
             },
-            None => {
+            None => match real_at(toks, i, t, &b) {
+                Some((neg, m, q)) => {
+                    out.push(Tok::LParen);
+                    if neg {
+                        out.push(Tok::Op(BinOp::Sub));
+                    }
+                    out.push(Tok::Real(m, 0));
+                    out.push(Tok::Op(BinOp::Div));
+                    out.push(Tok::Real(q, 0));
+                    out.push(Tok::RParen);
+                    proof {
+                        assert(before + spec_consts_from(toks@, i as int, t.constants@, t.reals@, t.shadow@, b@) =~= out@ + spec_consts_from(
+                            toks@,
+                            i + 1,
+                            t.constants@,
+                            t.reals@,
+                            t.shadow@,
+                            b@,
+                        ));
+                    }
+                },
+                None => {
                 out.push(toks[i]);
                 proof {
-                    assert(before + spec_consts_from(toks@, i as int, t.constants@, t.shadow@, b@) =~= out@ + spec_consts_from(
+                    assert(before + spec_consts_from(toks@, i as int, t.constants@, t.reals@, t.shadow@, b@) =~= out@ + spec_consts_from(
                         toks@,
                         i + 1,
                         t.constants@,
+                        t.reals@,
                         t.shadow@,
                         b@,
                     ));
                 }
+                },
             },
         }
         i = i + 1;
     }
     proof {
-        assert(out@ + spec_consts_from(toks@, i as int, t.constants@, t.shadow@, b@) =~= out@);
+        assert(out@ + spec_consts_from(toks@, i as int, t.constants@, t.reals@, t.shadow@, b@) =~= out@);
     }
     out
 }
@@ -550,7 +675,7 @@ fn consts_pass(toks: &Vec<Tok>, t: &Folds) -> (r: Vec<Tok>)
 /// The fold of a contract line, decisions 0106, 0109 and 0124.
 pub fn fold(toks: &Vec<Tok>, t: &Folds) -> (r: Vec<Tok>)
     ensures
-        r@ == spec_fold(toks@, t.constants@, t.shadow@, t.enums@, t.enumerators@),
+        r@ == spec_fold(toks@, t.constants@, t.reals@, t.shadow@, t.enums@, t.enumerators@),
 {
     let e = enums_pass(toks, t);
     consts_pass(&e, t)
