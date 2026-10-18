@@ -4313,3 +4313,20 @@ fn a_failure_is_printed_once() {
     let failed: Vec<&str> = text.lines().filter(|l| l.starts_with("Not proved: ")).map(|l| l.rsplit_once(".cpp:").unwrap().1).collect();
     assert_eq!(failed, ["10: the value may not fit uint64_t."], "{text}");
 }
+
+/// Two failures at one place of the model, each with its own contract line, are both printed, decision 0155.
+#[test]
+fn two_failures_at_one_place_are_both_printed() {
+    let Some(dafny) = dafny() else { return };
+    if !clang_tidy_available() {
+        return;
+    }
+    let o = prove("model-dedup-two.cpp", &[], &dafny);
+    let text = stdout(&o);
+    assert_eq!(o.status.code(), Some(1), "stdout: {text} stderr: {}", stderr(&o));
+    let failed: Vec<&str> = text.lines().filter(|l| l.starts_with("Not proved: ")).map(|l| l.rsplit_once(".cpp:").unwrap().1).collect();
+    assert_eq!(failed, ["7: the ensures line may not hold on this return.", "7: the ensures line may not hold on this return."], "{text}");
+    let contract: Vec<&str> = text.lines().filter(|l| l.trim_start().starts_with("The contract line: ")).collect();
+    assert_eq!(contract.len(), 2, "{text}");
+    assert!(contract[0].contains("model-dedup-two.cpp:4:") && contract[1].contains("model-dedup-two.cpp:5:"), "{text}");
+}
