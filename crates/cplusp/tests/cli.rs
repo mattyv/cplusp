@@ -4346,9 +4346,11 @@ fn a_name_of_cpp_with_the_name_of_a_contract_word_is_refused() {
     let word = |w: &str| format!("{w} in the contract is a contract word, and a C++ name too. Rename the C++ name.");
     let cases: [(&str, &[(u32, &str)]); 3] = [
         ("model-word-constant.cpp", &[(8, "eps"), (13, "eta")]),
-        ("model-word-name.cpp", &[(4, "eps"), (11, "eta")]),
-        // A static member, a member defined out of line, a namespace constant and a global variable, and a function that finds none.
-        ("model-word-scope.cpp", &[(10, "eps"), (17, "eta"), (25, "eps"), (31, "eta")]),
+        // A parameter, a field, and a parameter of the declaration that the definition names in another way.
+        ("model-word-name.cpp", &[(4, "eps"), (11, "eta"), (24, "eps")]),
+        // A static member, a member defined out of line, a namespace constant, a global variable, a function that finds none, and a
+        // friend that a class defines.
+        ("model-word-scope.cpp", &[(10, "eps"), (17, "eta"), (25, "eps"), (31, "eta"), (44, "eta")]),
     ];
     for (fixture, wants) in cases {
         let dir = tempfile::tempdir().unwrap();

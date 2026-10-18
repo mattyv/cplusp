@@ -19,3 +19,11 @@ struct Band {
 double tolerance(int32_t eps) {
   return 1.0;
 }
+
+// A parameter of the declaration with the name of a word, and a parameter of another name in the definition.
+//@ ensures result > eps
+double below(int32_t eps);
+
+double below(int32_t e) {
+  return 1.0;
+}

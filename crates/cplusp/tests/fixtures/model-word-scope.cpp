@@ -37,3 +37,12 @@ double h() {
 double clear() {
   return 1.0;
 }
+
+// C++ looks up the body of a friend that a class defines in that class.
+struct F {
+  static constexpr double eta = 5.0;
+  //@ ensures result > eta
+  friend double friendly() {
+    return 1.0;
+  }
+};
