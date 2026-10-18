@@ -3060,3 +3060,16 @@ fn a_contract_reads_an_integer_next_to_a_real_as_a_real() {
     let List::Cons((third, _), _) = *rest else { panic!("requires") };
     assert!(!format!("{third:?}").contains("Conv(Real"), "{third:?}");
 }
+
+/// A name that a `forall` binds is an exact integer, so next to a real it is that integer as a real, decision 0159.
+#[test]
+fn a_bound_name_next_to_a_real_is_a_real() {
+    const DI: u32 = 9914;
+    let all = Expr::Forall(DI, b(Expr::Bin(BinOp::Le, b(Expr::Name(DI)), b(Expr::Name(DA)))));
+    let conds = List::Cons((CondKind::Requires, all, 3, names(&[DA, DB])), Box::new(finite(&[DA, DB], 2, &[DA, DB])));
+    let f = Function { conds, ..larger(one(Stmt::Return(Expr::Var(DA, Ty::F64), 6))) };
+    let Model::Full(m) = translate_function(&f, &List::Nil, &List::Nil) else { panic!("a full model") };
+    let List::Cons((first, _), _) = strip_conds(m.requires) else { panic!("requires") };
+    let want = DExpr::Forall(DI, Box::new(DExpr::Bin(BinOp::Le, Box::new(DExpr::Conv(DTy::Real, Box::new(DExpr::Bound(DI)))), Box::new(DExpr::Var(DA)))));
+    assert_eq!(first, want);
+}
