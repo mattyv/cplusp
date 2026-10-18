@@ -30,3 +30,8 @@ double thousand() {
 double unit_roundoff() {
   return std::numeric_limits<double>::epsilon() / 2.0;
 }
+
+// 2^63 is a double, though it is above the largest int64_t.
+double two_to_63() {
+  return 9223372036854775808.0;
+}
