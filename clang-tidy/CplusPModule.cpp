@@ -1188,13 +1188,17 @@ public:
     llvm::erase(Spelling, '\'');
     Spelling = Spelling.substr(0, Spelling.find('_'));
     StringRef Text = StringRef(Spelling).rtrim("fFlL");
-    llvm::APFloat Value(Result.Context->getFloatTypeSemantics(Literal->getType()));
+    // Parse in quad precision first, then convert to the type of the literal. Parsing straight into a double does not report an integer above 2^63 that a
+    // double cannot hold, such as 9223372036854775809.0, decision 0027. Either step may lose information.
+    llvm::APFloat Value(llvm::APFloat::IEEEquad());
     auto Status = Value.convertFromString(Text, llvm::APFloat::rmNearestTiesToEven);
     if (!Status) {
       llvm::consumeError(Status.takeError());
       return;
     }
-    if (*Status & llvm::APFloat::opInexact)
+    bool LosesInfo = false;
+    const llvm::APFloat::opStatus Converted = Value.convert(Result.Context->getFloatTypeSemantics(Literal->getType()), llvm::APFloat::rmNearestTiesToEven, &LosesInfo);
+    if ((*Status & llvm::APFloat::opInexact) || (Converted & llvm::APFloat::opInexact) || LosesInfo)
       diag(Result.SourceManager->getFileLoc(Loc), "floating-point literal is not exactly a double");
   }
 };

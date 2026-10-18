@@ -430,6 +430,13 @@ rules:
     stage: prover
     detect:
       - check: cppcoreguidelines-pro-bounds-constant-array-index
+      # The check above sees only an index into some C arrays. The three matchers below see every built-in subscript, every
+      # overloaded `operator[]`, and every method named `at` or `operator[]`, on any type, decision 0156. A ban refuses more and never
+      # less.
+      # ponytail: a subscript with two or more indices, `g[0, j]`, is judged by its first index only. Upgrade: judge each argument.
+      - matcher: arraySubscriptExpr(hasIndex(expr(unless(ignoringImpCasts(anyOf(integerLiteral(), declRefExpr(to(varDecl(isConstexpr())))))))))
+      - matcher: cxxOperatorCallExpr(hasOverloadedOperatorName("[]"), hasArgument(1, expr(unless(ignoringImpCasts(anyOf(integerLiteral(), declRefExpr(to(varDecl(isConstexpr())))))))))
+      - matcher: cxxMemberCallExpr(callee(cxxMethodDecl(anyOf(hasName("at"), hasOverloadedOperatorName("[]")))), hasArgument(0, expr(unless(ignoringImpCasts(anyOf(integerLiteral(), declRefExpr(to(varDecl(isConstexpr())))))))))
 
   - id: accumulate_init
     construct: Fold with an init value narrower than the elements
