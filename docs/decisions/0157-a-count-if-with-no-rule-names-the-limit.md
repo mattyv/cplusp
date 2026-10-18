@@ -11,6 +11,7 @@ Date: 2026-10-18. Status: decided. Amends 0149 and 0155.
   - `count_if with an init capture in its lambda`
   - `count_if with a lambda whose body is more than one return`
 - The plugin gives the first limit that the call misses, in the order of the list, and no other line for the call.
+- A miss that fits none of the five keeps the sentence of a call with no model. Examples are an execution policy, a body that is not of type `bool`, and a lambda that the gate refuses. A lambda with two parameters gets the sentence of the parameter.
 
 ## Why
 

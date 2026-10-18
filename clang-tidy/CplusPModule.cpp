@@ -5050,8 +5050,9 @@ private:
     }
   }
 
-  // The `CountIf` node of a call of `std::count_if`, decision 0149, or null when the call is not of the supported shape.
-  llvm::json::Value countIf(const Expr *E, unsigned Near) const {
+  // The `CountIf` node of a call of `std::count_if` from the library, decision 0149, or null. When the call misses a limit of 0149, `Limit` names the first
+  // limit that it misses, in the order of decision 0157. A miss that fits none of them leaves `Limit` empty, and the call stays a call with no model.
+  llvm::json::Value countIf(const Expr *E, unsigned Near, std::string &Limit) const {
     const auto *Call = dyn_cast<CallExpr>(E);
     const FunctionDecl *Callee = Call && Call->getStmtClass() == Stmt::CallExprClass ? Call->getDirectCallee() : nullptr;
     if (!Callee || !Callee->isInStdNamespace() || !Callee->getDeclName().isIdentifier() || Callee->getName() != "count_if" || Call->getNumArgs() != 3 ||
@@ -5061,14 +5062,14 @@ private:
     const ParmVarDecl *Sequence = nullptr;
     for (const char *Method : {"begin", "end"}) {
       const auto *Member = dyn_cast<CXXMemberCallExpr>(Call->getArg(Method[0] == 'b' ? 0 : 1)->IgnoreParenImpCasts());
-      if (!Member || Member->getNumArgs() != 0 || !Member->getMethodDecl() || !Member->getMethodDecl()->getDeclName().isIdentifier() ||
-          Member->getMethodDecl()->getName() != Method)
-        return nullptr;
-      const Expr *Object = Member->getImplicitObjectArgument();
+      const Expr *Object = Member ? Member->getImplicitObjectArgument() : nullptr;
       const auto *Ref = Object ? dyn_cast<DeclRefExpr>(Object->IgnoreParenImpCasts()) : nullptr;
       const auto *Param = Ref ? dyn_cast<ParmVarDecl>(Ref->getDecl()) : nullptr;
-      if (!Param || !(isSeq(Object->getType()) || isMutSeq(Object)) || (Sequence && Sequence != Param))
+      if (!Member || Member->getNumArgs() != 0 || !Member->getMethodDecl() || !Member->getMethodDecl()->getDeclName().isIdentifier() ||
+          Member->getMethodDecl()->getName() != Method || !Param || !(isSeq(Object->getType()) || isMutSeq(Object)) || (Sequence && Sequence != Param)) {
+        Limit = "count_if over a range other than v.begin(), v.end() of one sequence parameter";
         return nullptr;
+      }
       Sequence = Param;
     }
     // The lambda is written in the call, behind the copies and temporaries that the compiler adds.
@@ -5087,30 +5088,46 @@ private:
         break;
     }
     const auto *Lambda = dyn_cast<LambdaExpr>(Arg);
-    const CXXMethodDecl *Operator = Lambda ? Lambda->getCallOperator() : nullptr;
-    if (!Operator || !Operator->isConst() || Operator->getNumParams() != 1 || Lambda->getCaptureDefault() == LCD_ByRef)
+    if (!Lambda) {
+      Limit = "count_if with a function or a functor in place of a lambda written in the call";
       return nullptr;
-    for (const LambdaCapture &Capture : Lambda->captures())
-      if (Capture.getCaptureKind() != LCK_ByCopy || !Capture.capturesVariable() || Lambda->isInitCapture(&Capture))
-        return nullptr;
-    // One `return e;` of a boolean.
-    const auto *Body = dyn_cast_or_null<CompoundStmt>(Operator->getBody());
-    const auto *Return = Body && Body->size() == 1 ? dyn_cast<ReturnStmt>(Body->body_front()) : nullptr;
-    if (!Return || !Return->getRetValue() || !Return->getRetValue()->getType()->isBooleanType())
-      return nullptr;
-    // The parameter has the element type, by value or by reference to const.
-    const ParmVarDecl *Parameter = Operator->getParamDecl(0);
-    QualType Declared = Parameter->getType();
-    if (Declared->isReferenceType()) {
-      if (!Declared->isLValueReferenceType() || !Declared->getPointeeType().isConstQualified())
-        return nullptr;
-      Declared = Declared->getPointeeType();
     }
+    const CXXMethodDecl *Operator = Lambda->getCallOperator();
+    // The parameter has the element type, by value or by reference to const. A lambda with another count of parameters misses this limit too.
     QualType Element = seqElement(Sequence->getType());
     // A vector by reference that the function writes is no const sequence, so its element comes from the vector itself, decision 0145.
     if (Element.isNull() && mutSeq(Sequence->getType()))
       Element = cast<ClassTemplateSpecializationDecl>(Sequence->getType()->getPointeeType()->getAsCXXRecordDecl())->getTemplateArgs()[0].getAsType();
-    if (Element.isNull() || Declared.getCanonicalType().getUnqualifiedType() != Element.getCanonicalType().getUnqualifiedType() || !Parameter->getIdentifier())
+    const ParmVarDecl *Parameter = Operator->getNumParams() == 1 ? Operator->getParamDecl(0) : nullptr;
+    QualType Declared = Parameter ? Parameter->getType() : QualType();
+    if (!Declared.isNull() && Declared->isReferenceType()) {
+      const bool ConstRef = Declared->isLValueReferenceType() && Declared->getPointeeType().isConstQualified();
+      Declared = ConstRef ? Declared->getPointeeType() : QualType();
+    }
+    if (!Parameter || Declared.isNull() || Element.isNull() || !Parameter->getIdentifier() ||
+        Declared.getCanonicalType().getUnqualifiedType() != Element.getCanonicalType().getUnqualifiedType()) {
+      Limit = "count_if with a lambda whose parameter is not the element type";
+      return nullptr;
+    }
+    // The captures are by copy, and none has an initializer. A capture by reference, of `this`, and a mutable lambda stay a call with no model.
+    if (Lambda->getCaptureDefault() == LCD_ByRef || !Operator->isConst())
+      return nullptr;
+    for (const LambdaCapture &Capture : Lambda->captures()) {
+      if (Capture.capturesVariable() && Lambda->isInitCapture(&Capture)) {
+        Limit = "count_if with an init capture in its lambda";
+        return nullptr;
+      }
+      if (Capture.getCaptureKind() != LCK_ByCopy || !Capture.capturesVariable())
+        return nullptr;
+    }
+    // One `return e;` of a boolean.
+    const auto *Body = dyn_cast_or_null<CompoundStmt>(Operator->getBody());
+    const auto *Return = Body && Body->size() == 1 ? dyn_cast<ReturnStmt>(Body->body_front()) : nullptr;
+    if (!Return || !Return->getRetValue()) {
+      Limit = "count_if with a lambda whose body is more than one return";
+      return nullptr;
+    }
+    if (!Return->getRetValue()->getType()->isBooleanType())
       return nullptr;
     return tag("CountIf", llvm::json::Array{expr(cast<CXXMemberCallExpr>(Call->getArg(0)->IgnoreParenImpCasts())->getImplicitObjectArgument()->IgnoreParenImpCasts(), Near),
                                             Parameter->getNameAsString(), type(Element), expr(Return->getRetValue(), Near)});
@@ -5429,8 +5446,12 @@ private:
     }
     // `std::count_if(v.begin(), v.end(), [captures](T x) { return e; })` over a sequence parameter, decision 0149. The captures are by copy and the
     // body is one `return`. Anything else stays a call, which has no model, and is refused.
-    if (const llvm::json::Value Counted = countIf(E, Near); !Counted.getAsNull())
+    std::string Limit;
+    if (const llvm::json::Value Counted = countIf(E, Near, Limit); !Counted.getAsNull())
       return Counted;
+    // A count_if that misses a limit names it, decision 0157.
+    if (!Limit.empty())
+      return unknown(E, Limit, Near);
     // Only a plain call by name. A member call, an operator call and the rest of the call classes stay unknown.
     if (E->getStmtClass() == Stmt::CallExprClass)
       if (const FunctionDecl *Callee = cast<CallExpr>(E)->getDirectCallee()) {
