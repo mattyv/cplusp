@@ -541,6 +541,7 @@ fn lex(text: &str, line: u32, names: &mut Names) -> Vec<Tok> {
                     let number: String = word.chars().filter(|&ch| ch != '\'').collect();
                     let kind = match fault {
                         NumberFault::NoDigits => format!("a number with no digits after {}", &number[..2]),
+                        NumberFault::Scale => "a decimal with more than 19 digits after the point".to_string(),
                         NumberFault::Octal => "an octal number".to_string(),
                         NumberFault::Suffix(length) => format!("a number with the suffix {}", &number[number.len() - length..]),
                         NumberFault::TooBig => "a number above 18446744073709551615".to_string(),
@@ -1388,6 +1389,8 @@ fn sentence(r: Refusal, names: &Names) -> (u32, String) {
         Refusal::Convert(line) => (line, "a conversion between bool and a number.".to_string()),
         Refusal::WriteParam(n, line) => (line, format!("{} is a parameter. The translator writes only a local or a reference parameter.", names.text(n))),
         Refusal::NotRef(n, line) => (line, format!("{} on the modifies line is no reference parameter.", names.text(n))),
+        // A parameter with no name has the name `'N`, so no author wrote it, decision 0155.
+        Refusal::Unlisted(n, line) if names.text(n).starts_with('\'') => (line, "a reference parameter has no name. Give it a name and put it on the modifies line.".to_string()),
         Refusal::Unlisted(n, line) => (line, format!("{} is a reference parameter that the modifies line does not name.", names.text(n))),
         Refusal::NoVar(n, line) => (line, format!("{} in the {} line is no variable.", names.text(n), names.contracts.get(&line).map_or("contract", |c| c.0.as_str()))),
         Refusal::SeqParam(line) => (line, "a sequence is in the subset only as a parameter.".to_string()),
@@ -1398,6 +1401,7 @@ fn sentence(r: Refusal, names: &Names) -> (u32, String) {
         Refusal::NoObject(n, line) => (line, format!("{} is a member of the struct. A requires line of a constructor has no object yet.", names.text(n))),
         Refusal::IndexName(n, line) => (line, format!("{} on the index line is a name the function already has.", names.text(n))),
         Refusal::Rounds(line) => (line, "a double operation rounds, and the translator has no rule for it yet.".to_string()),
+        Refusal::Finite(n, line) if names.text(n).starts_with('\'') => (line, "a double parameter has no name. Give it a name and say std::isfinite of it in a requires line.".to_string()),
         Refusal::Finite(n, line) => (line, format!("{} is a double. A requires line needs std::isfinite({}).", names.text(n), names.text(n))),
         Refusal::FiniteResult(line) => (line, "a trusted function that gives a double needs std::isfinite(result) in an ensures line.".to_string()),
         Refusal::PassOn(n, line) => (line, format!("{} is a vector by reference. A call that passes it on has no rule yet.", names.text(n))),

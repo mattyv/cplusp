@@ -16,6 +16,8 @@ const INSTALLED: &str = "/opt/dafny/dafny/dafny";
 /// An error of Dafny: the line of the Dafny text, the message, and the lines of its related locations.
 struct Error {
     line: usize,
+    /// The column of the error in the Dafny text, from its header `(LINE,COLUMN): Error: `, or none when the header is not there.
+    column: Option<usize>,
     message: String,
     related: Vec<usize>,
 }
@@ -42,6 +44,12 @@ fn quoted_type(message: &str) -> Option<&'static str> {
         "uint64" => "uint64_t",
         _ => return None,
     })
+}
+
+/// The column in the header that ends a text, `(LINE,COLUMN): Error: `.
+fn column_of(before: &str) -> Option<usize> {
+    let header = before.rsplit_once('(')?.1;
+    header.split_once(',')?.1.split_once(')')?.0.parse().ok()
 }
 
 fn timed_out(message: &str) -> bool {
@@ -102,7 +110,7 @@ pub fn run(t: &Translation, limit: u32, refused: bool, source: &str, shown: &dyn
         .errors
         .iter()
         .enumerate()
-        .map(|(k, &(line, start, end))| Error { line, message: output[start..end].to_string(), related: reading.related.iter().filter(|(of, _)| *of == k).map(|&(_, line)| line).collect() })
+        .map(|(k, &(line, start, end))| Error { line, column: column_of(&output[..start]), message: output[start..end].to_string(), related: reading.related.iter().filter(|(of, _)| *of == k).map(|&(_, line)| line).collect() })
         .collect();
     // A warning on a line of the companion file refuses the file, decisions 0079, 0099 and 0101. A declaration, a forall statement or a loop with no body is
     // an axiom. A lemma with no body is named at its own name, because Dafny warns at its first ensures line. Any other is named at its own line.
@@ -145,8 +153,18 @@ pub fn run(t: &Translation, limit: u32, refused: bool, source: &str, shown: &dyn
         println!("Not provable: {}:{line}: {said}", shown(path));
     }
     let here = |line: usize| line.checked_sub(1).and_then(|n| map.lines.get(n)).and_then(Option::as_ref);
+    // Dafny can report one check twice, the condition of a loop at its start and after a turn. An error at the same line and column with the same
+    // message and the same related lines as one already seen is dropped. Two checks at one position with different contract lines both stay, decision 0155.
+    let mut seen: Vec<(usize, usize, String, Vec<usize>)> = Vec::new();
     for e in &found {
         let message = e.message.trim();
+        if let Some(column) = e.column {
+            let key = (e.line, column, message.to_string(), e.related.clone());
+            if seen.contains(&key) {
+                continue;
+            }
+            seen.push(key);
+        }
         // Dafny could not read the file, so no proof ran. Each error is named at its place in the words of Dafny, decision 0080.
         if unread.is_some() {
             let at = in_companion(e.line).unwrap_or(e.line);
@@ -192,12 +210,12 @@ pub fn run(t: &Translation, limit: u32, refused: bool, source: &str, shown: &dyn
         } else {
             sentence(message)
         };
-        println!("Not proved: {}:{line}: {said}", shown(path));
+        let mut block = format!("Not proved: {}:{line}: {said}", shown(path));
         let mut told = vec![*place];
         for l in e.related.iter().filter_map(|r| here(*r)) {
             if !told.contains(&l.place) {
                 if let Some(text) = contract(map, l.place, shown) {
-                    println!("  The contract line: {text}");
+                    block.push_str(&format!("\n  The contract line: {text}"));
                     told.push(l.place);
                 }
             }
@@ -207,10 +225,11 @@ pub fn run(t: &Translation, limit: u32, refused: bool, source: &str, shown: &dyn
             let own = own.iter().filter(|_| !message.starts_with("this loop invariant could not be proved on entry"));
             for p in scope.iter().chain(own) {
                 if let Some(text) = contract(map, *p, shown) {
-                    println!("  It assumes: {text}");
+                    block.push_str(&format!("\n  It assumes: {text}"));
                 }
             }
         }
+        println!("{block}");
     }
     // The count of verified items is the only fault, decision 0083.
     if let (Some((v, 0, 0)), true) = (reading.summary, found.is_empty() && !refused && axioms.is_empty() && verdict == Verdict::NotProved) {

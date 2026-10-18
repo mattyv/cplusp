@@ -907,7 +907,12 @@ pub open spec fn spec_real(e: Expr, all: Fns) -> bool
         Expr::Neg(a) => spec_real(*a, all),
         Expr::Paren(a) => spec_real(*a, all),
         Expr::Brace(a) => spec_real(*a, all),
-        Expr::Cast(_, a) => spec_real(*a, all),
+        // A conversion is of type double only when it gives a double, decision 0155.
+        Expr::Cast(c, a) => match c {
+            CastKind::Integral(_, to) => to == Ty::F64,
+            CastKind::Other(_) => false,
+            _ => spec_real(*a, all),
+        },
         Expr::Cond(_, a, b) => spec_real(*a, all) || spec_real(*b, all),
         Expr::Bin(op, a, b) => spec_arith(op) && (spec_real(*a, all) || spec_real(*b, all)),
         Expr::Divide(_, _, _, t) => t == Ty::F64,
@@ -949,7 +954,11 @@ pub fn real(e: &Expr, all: &Fns) -> (r: bool)
         Expr::Neg(a) => real(a, all),
         Expr::Paren(a) => real(a, all),
         Expr::Brace(a) => real(a, all),
-        Expr::Cast(_, a) => real(a, all),
+        Expr::Cast(c, a) => match c {
+            CastKind::Integral(_, to) => *to == Ty::F64,
+            CastKind::Other(_) => false,
+            _ => real(a, all),
+        },
         Expr::Cond(_, a, b) => real(a, all) || real(b, all),
         Expr::Bin(op, a, b) => arith(*op) && (real(a, all) || real(b, all)),
         Expr::Divide(_, _, _, t) => *t == Ty::F64,
@@ -3157,6 +3166,10 @@ pub open spec fn spec_checks(f: Function) -> Option<Refusal> {
 /// The model holds no NaN and no infinity. So each double parameter needs `std::isfinite` of it in a requires line, and a trusted
 /// function that gives a double needs `std::isfinite(result)` in an ensures line, decision 0150.
 pub open spec fn spec_finite(ps: Params, cs: Conds, trusted: bool, ret: Ty, line: u32) -> Option<Refusal> {
+    // A line that the translator cannot read gets its own refusal first, decision 0155.
+    if spec_any_bad(cs) {
+        None
+    } else {
     match spec_unfinite(ps, ps, cs) {
         Some(p) => Some(Refusal::Finite(p, line)),
         None => if trusted && ret == Ty::F64 && !spec_finite_result(cs) {
@@ -3164,6 +3177,31 @@ pub open spec fn spec_finite(ps: Params, cs: Conds, trusted: bool, ret: Ty, line
         } else {
             None
         },
+    }
+    }
+}
+
+/// A contract line that the shell could not cut or parse.
+pub open spec fn spec_any_bad(cs: Conds) -> bool
+    decreases cs,
+{
+    match cs {
+        List::Nil => false,
+        List::Cons((k, _, _, _), rest) => k is Bad || spec_any_bad(*rest),
+    }
+}
+
+pub fn any_bad(cs: &Conds) -> (r: bool)
+    ensures
+        r == spec_any_bad(*cs),
+    decreases cs,
+{
+    match cs {
+        List::Nil => false,
+        List::Cons((k, _, _, _), rest) => (match k {
+            CondKind::Bad(_) => true,
+            _ => false,
+        }) || any_bad(rest),
     }
 }
 
@@ -3245,6 +3283,9 @@ pub fn finite(ps: &Params, cs: &Conds, trusted: bool, ret: Ty, line: u32) -> (r:
     ensures
         r == spec_finite(*ps, *cs, trusted, ret, line),
 {
+    if any_bad(cs) {
+        return None;
+    }
     match unfinite(ps, ps, cs) {
         Some(p) => Some(Refusal::Finite(p, line)),
         None => if trusted && ret == Ty::F64 && !finite_result(cs) {

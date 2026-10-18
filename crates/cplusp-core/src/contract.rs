@@ -18,6 +18,7 @@ pub enum NumberFault {
     Octal,
     Suffix(usize),
     TooBig,
+    Scale,
 }
 
 /// What a token is. A name has a mark when a `(` follows it. A field is `.` and a name, and its span holds the `.`. A
@@ -226,7 +227,9 @@ pub open spec fn spec_real_lit(w: Seq<u8>, f: Seq<u8>) -> LexKind {
         LexKind::BadNumber(NumberFault::Suffix((all.len() - digits_len(all, false)) as usize))
     } else if w.len() > 1 && w[0] == 0x30 {
         LexKind::BadNumber(NumberFault::Octal)
-    } else if f.len() > 19 || value(all, 10) > u64::MAX {
+    } else if f.len() > 19 {
+        LexKind::BadNumber(NumberFault::Scale)
+    } else if value(all, 10) > u64::MAX {
         LexKind::BadNumber(NumberFault::TooBig)
     } else {
         LexKind::Real(value(all, 10) as u64, f.len() as u32)
@@ -879,7 +882,7 @@ fn real_lit(t: &Vec<u8>, i: usize, e: usize, f: usize) -> (r: LexKind)
         }
     }
     if f - e - 1 > 19 {
-        return LexKind::BadNumber(NumberFault::TooBig);
+        return LexKind::BadNumber(NumberFault::Scale);
     }
     proof {
         assert(w@.subrange(0, w.len() as int) =~= all);

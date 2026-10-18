@@ -18,5 +18,5 @@ rule: |
   Model `a + b` as `fadd(a, b)`, and state the result as a bound, `abs(result - (a + b)) <= EPS * abs(a + b) + ETA`.
   Never state equality of two double results.
   The bound holds up to `MAX`, so require `abs(a) <= MAX / 4.0` and `abs(b) <= MAX / 4.0`.
-  Dafny does not apply a lemma by itself, so call `RoundError(a + b)` in the body before `fadd`.
+  Each operation carries the bound of its one rounding, so `fadd(a, b)` gives the bound with no call of `RoundError`, decision 0153.
   In the C++ contract, write the bound as `|result - (a + b)| <= eps * |a + b| + eta`, with `eps` as `DBL_EPSILON / 2` and `eta` as `DBL_TRUE_MIN / 2`, and the magnitude bound `|a| <= DBL_MAX / 4` as a `requires`.

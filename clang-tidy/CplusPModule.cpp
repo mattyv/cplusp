@@ -4864,9 +4864,12 @@ private:
       if (llvm::json::Value Lowered = compound(Compound); !Lowered.getAsNull())
         return Lowered;
     }
+    // A temporary for a computed or literal argument wraps a call in a cleanup. The statement is the call inside it.
+    const Stmt *Inner = S;
+    if (const auto *Cleanups = dyn_cast<ExprWithCleanups>(Inner))
+      Inner = Cleanups->getSubExpr();
     // `v.push_back(e)` where `v` is a vector by reference, decision 0148. The other member calls of a vector have no rule.
-    // A temporary for a computed or literal argument wraps the call in a cleanup.
-    if (const auto *Push = dyn_cast<CXXMemberCallExpr>(isa<ExprWithCleanups>(S) ? cast<ExprWithCleanups>(S)->getSubExpr() : S); Push && Push->getNumArgs() == 1 && Push->getMethodDecl() && Push->getMethodDecl()->getDeclName().isIdentifier() &&
+    if (const auto *Push = dyn_cast<CXXMemberCallExpr>(Inner); Push && Push->getNumArgs() == 1 && Push->getMethodDecl() && Push->getMethodDecl()->getDeclName().isIdentifier() &&
                                                            Push->getMethodDecl()->getName() == "push_back" && Push->getImplicitObjectArgument() &&
                                                            isMutSeq(Push->getImplicitObjectArgument())) {
       // The argument is bound to a reference, so a computed value sits in a temporary that is not the value.
@@ -4877,14 +4880,9 @@ private:
                                                expr(Arg, line(S->getBeginLoc())), number(line(S->getBeginLoc()))});
     }
     // A call that is the whole statement, `f(a);` or `o.f(a);`. Its object is the first argument, decision 0096.
-    {
-      const Stmt *Inner = S;
-      if (const auto *Cleanups = dyn_cast<ExprWithCleanups>(Inner))
-        Inner = Cleanups->getSubExpr();
-      if (const auto *Call = dyn_cast<CallExpr>(Inner))
-        if (llvm::json::Value Written = expr(Call, line(S->getBeginLoc())); Written.getAsObject() && Written.getAsObject()->get("Call"))
-          return Written;
-    }
+    if (const auto *Call = dyn_cast<CallExpr>(Inner))
+      if (llvm::json::Value Written = expr(Call, line(S->getBeginLoc())); Written.getAsObject() && Written.getAsObject()->get("Call"))
+        return Written;
     if (const auto *Step = dyn_cast<UnaryOperator>(S); Step && Step->isIncrementDecrementOp())
       if (const auto *Target = dyn_cast<DeclRefExpr>(Step->getSubExpr()); Target && isVariable(Target->getDecl()))
         return tag("Step", llvm::json::Array{Target->getDecl()->getNameAsString(), varType(Target->getDecl()), Step->isIncrementOp(),
@@ -5052,7 +5050,8 @@ private:
   llvm::json::Value countIf(const Expr *E, unsigned Near) const {
     const auto *Call = dyn_cast<CallExpr>(E);
     const FunctionDecl *Callee = Call && Call->getStmtClass() == Stmt::CallExprClass ? Call->getDirectCallee() : nullptr;
-    if (!Callee || !Callee->isInStdNamespace() || !Callee->getDeclName().isIdentifier() || Callee->getName() != "count_if" || Call->getNumArgs() != 3)
+    if (!Callee || !Callee->isInStdNamespace() || !Callee->getDeclName().isIdentifier() || Callee->getName() != "count_if" || Call->getNumArgs() != 3 ||
+        !SM.isInSystemHeader(Callee->getLocation()))
       return nullptr;
     // Both ends come from one sequence parameter.
     const ParmVarDecl *Sequence = nullptr;
@@ -5158,8 +5157,7 @@ private:
     }
     if (const auto *Flag = dyn_cast<CXXBoolLiteralExpr>(E))
       return tag("Bool", Flag->getValue());
-    // A literal of type double whose value is `d / 10^k` with `d` in 63 bits and `k` up to 19, decision 0150. Any other stays unknown.
-    // ponytail: the JSON of the plugin holds a number above 63 bits as a double, so `d` stops at 63 bits, not 64. Upgrade: send `d` as text.
+    // A literal of type double whose value is `d / 10^k` with `d` in 64 bits and `k` up to 19, decision 0150. Any other stays unknown.
     if (const auto *Real = dyn_cast<FloatingLiteral>(E); Real && isDouble(Real->getType())) {
       const double Value = Real->getValueAsApproximateDouble();
       int Exponent = 0;
@@ -5172,12 +5170,12 @@ private:
         return tag("RealLit", llvm::json::Array{number(0), number(0)});
       unsigned __int128 Digits = Mantissa;
       if (Power >= 0) {
-        if (Power < 64 && (Digits << Power) <= INT64_MAX)
+        if (Power < 64 && (Digits << Power) <= UINT64_MAX)
           return tag("RealLit", llvm::json::Array{number(static_cast<uint64_t>(Digits << Power)), number(0)});
       } else if (-Power <= 19) {
-        for (int I = 0; I < -Power && Digits <= INT64_MAX; ++I)
+        for (int I = 0; I < -Power && Digits <= UINT64_MAX; ++I)
           Digits *= 5;
-        if (Digits <= INT64_MAX)
+        if (Digits <= UINT64_MAX)
           return tag("RealLit", llvm::json::Array{number(static_cast<uint64_t>(Digits)), number(-Power)});
       }
       return unknown(E, E->getStmtClassName(), Near);

@@ -16,5 +16,5 @@ witness:
 rule: |
   Every operation rounds, and the errors add.
   State the bound from the magnitudes of the operands, not from the result the mathematics would give.
-  Call `RoundError` once for each operation, on the exact value that the operation rounds.
+  Each operation rounds once, and `fadd` to `fdiv` each carry the bound of that one rounding, decision 0153.
   Each rounding adds `eta`, so a chain of roundings carries a small multiple of `eta` in its bound.

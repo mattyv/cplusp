@@ -2950,7 +2950,8 @@ fn a_refusal_names_its_own_cause() {
     let f = Function { conds: bad, ..larger(one(Stmt::Return(Expr::Var(DA, Ty::F64), 6))) };
     assert_eq!(bare_refusal(translate_function(&f, &List::Nil, &List::Nil)), Refusal::Syntax(4));
     let cast = Expr::Cast(CastKind::Other(DD), b(Expr::Var(DA, Ty::F64)));
-    let rem = Expr::Bin(BinOp::Rem, b(cast), b(Expr::Lit(2, Ty::I32)));
+    // The plugin sends `%` of code as a Divide with its type, decision 0088.
+    let rem = Expr::Divide(BinOp::Rem, b(cast), b(Expr::Lit(2, Ty::I32)), Ty::I32);
     let f = Function { ret: Ty::I32, ..larger(one(Stmt::Return(rem, 6))) };
     assert_eq!(bare_refusal(translate_function(&f, &List::Nil, &List::Nil)), Refusal::Construct(DD, 6));
 }
