@@ -4455,8 +4455,8 @@ fn std_sort_of_a_vector_of_integers_is_std_sort() {
     assert!(!stdout(&o).contains("Algorithm.dfy"), "{}", stdout(&o));
 }
 
-/// A std::sort of a part of a range, with a comparator, or over two vectors is refused with one sentence that names std::sort,
-/// decision 0161.
+/// A std::sort of a part of a range, with a comparator that is no lambda of the element type and one return, or over two vectors is
+/// refused with one sentence that names std::sort, decisions 0161 and 0162.
 #[test]
 fn std_sort_of_another_form_is_refused() {
     if !clang_tidy_available() {
@@ -4468,7 +4468,31 @@ fn std_sort_of_another_form_is_refused() {
     assert_eq!(o.status.code(), Some(1), "stdout: {text} stderr: {}", stderr(&o));
     let refusals: Vec<&str> = text.lines().filter(|l| l.starts_with("Not provable: ")).map(|l| l.rsplit_once(".cpp:").unwrap().1).collect();
     let other = "std::sort of another form: the translator has no rule for it yet.";
-    assert_eq!(refusals, [format!("9: {other}"), format!("15: {other}"), format!("22: {other}")], "{text}");
+    // A named function as a comparator, a lambda of another type and a lambda of two statements, decision 0162.
+    let lines = [13, 19, 26, 32, 38];
+    assert_eq!(refusals, lines.map(|l| format!("{l}: {other}")), "{text}");
+}
+
+/// std::sort with a comparator lambda is StdSort with the lambda: an order down and a capture by copy prove,
+/// decision 0162. A comparator that is not a strict weak order fails at the call with its own sentence.
+#[test]
+fn std_sort_with_a_comparator_lambda_is_std_sort_with_the_lambda() {
+    let Some(dafny) = dafny() else { return };
+    if !clang_tidy_available() {
+        return;
+    }
+    let o = prove("model-sort-by.cpp", &[], &dafny);
+    let text = stdout(&o);
+    assert_eq!(o.status.code(), Some(0), "stdout: {text} stderr: {}", stderr(&o));
+    let lines: Vec<&str> = text.lines().collect();
+    assert_eq!(lines.last(), Some(&"ok: proved"), "{text}");
+    assert_eq!(lines.iter().filter(|l| **l == SORT_AXIOM).count(), 1, "{text}");
+    let o = prove("model-sort-by-wrong.cpp", &[], &dafny);
+    let text = stdout(&o);
+    assert_eq!(o.status.code(), Some(1), "stdout: {text} stderr: {}", stderr(&o));
+    let failed: Vec<&str> = text.lines().filter(|l| l.starts_with("Not proved: ")).map(|l| l.rsplit_once(".cpp:").unwrap().1).collect();
+    let order = "the comparator may not be a strict weak order.";
+    assert_eq!(failed, [format!("9: {order}"), format!("16: {order}")], "{text}");
 }
 
 /// The examples double and double_expression prove: a tolerance that is a named double, and one error term for each rounding,

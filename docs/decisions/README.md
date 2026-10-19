@@ -166,3 +166,4 @@ Status is `decided`, `proposed` (the default until someone objects or the thin s
 | [0159](0159-an-integer-converts-to-a-double-and-a-contract-reads-it-as-a-real.md) | An integer converts to a double, and a contract reads an integer next to a real as a real | decided |
 | [0160](0160-local-vectors-and-std-sort-in-four-slices.md) | Local vectors and std::sort, in four slices. Slice one: a local vector is a copy | decided |
 | [0161](0161-std-sort-of-a-vector-of-integers.md) | std::sort of a vector of integers. Slice two of 0160 | decided |
+| [0162](0162-std-sort-with-a-comparator-lambda.md) | std::sort with a comparator lambda. Slice three of 0160 | decided |

@@ -3174,3 +3174,41 @@ fn a_sort_of_a_vector_is_std_sort() {
     let f = write_at(one(Stmt::Sort(LX, 6)));
     assert_eq!(bare_refusal(translate_function(&f, &List::Nil, &List::Nil)), Refusal::SortForm(6));
 }
+
+const CA: u32 = 260;
+const CB: u32 = 261;
+
+/// `std::sort(v.begin(), v.end(), [](T a, T b) { return e; })` is StdSort with the lambda as its comparator, decision 0162. Each
+/// parameter has the element type, and the test holds no call. A vector of a struct by reference sorts by a field.
+#[test]
+fn a_sort_with_a_comparator_is_std_sort_with_the_lambda() {
+    let down = || Expr::Bin(BinOp::Gt, b(Expr::Var(CA, Ty::I32)), b(Expr::Var(CB, Ty::I32)));
+    let body = List::Cons(Box::new(Stmt::SortBy(LX, CA, CB, Ty::I32, down(), 7)), Box::new(one(Stmt::Return(Expr::Var(WX, Ty::I32), 8))));
+    let Model::Full(m) = translate_function(&with_copy(body), &List::Nil, &List::Nil) else { panic!("a full model") };
+    let List::Cons(_, rest) = strip(m.body) else { panic!("the copy") };
+    let List::Cons((sort, _), _) = *rest else { panic!("the sort") };
+    let want = DStmt::SortBy(Box::new(DExpr::Var(LX)), CA, CB, DTy::Int32, Box::new(translate_code(&down(), 7).unwrap()));
+    assert_eq!(*sort, want);
+    // A vector of a struct by reference, by a field.
+    let key = || Expr::Bin(BinOp::Lt, b(Expr::Field(b(Expr::Var(CA, Ty::Struct(POINT))), FX)), b(Expr::Field(b(Expr::Var(CB, Ty::Struct(POINT))), FX)));
+    let points = Ty::MutSeq(Scalar::Struct(POINT));
+    let sd: Structs = List::Cons((POINT, (3, List::Cons((FX, Ty::I32), Box::new(List::Nil)), List::Nil)), Box::new(List::Nil));
+    let by_key = |t, e| Function {
+        params: List::Cons((WV, points), Box::new(List::Nil)),
+        conds: modifies(&[WV], &[WV], List::Nil),
+        ..write_at(one(Stmt::SortBy(WV, CA, CB, t, e, 6)))
+    };
+    let Model::Full(m) = translate_function(&by_key(Ty::Struct(POINT), key()), &List::Nil, &sd) else { panic!("a full model") };
+    let want = DStmt::SortBy(Box::new(DExpr::Out(WV)), CA, CB, DTy::Struct(POINT), Box::new(translate_code(&key(), 6).unwrap()));
+    assert_eq!(strip(m.body), List::Cons((Box::new(want), 0), Box::new(List::Nil)));
+    // A parameter of another type is another form.
+    assert_eq!(bare_refusal(translate_function(&by_key(Ty::I32, key()), &List::Nil, &sd)), Refusal::SortForm(6));
+    // A read-only sequence is a parameter that the sort writes.
+    let ro = Ty::Seq(Scalar::I32, Extent::Dynamic);
+    let f = Function { params: List::Cons((WV, ro), Box::new(List::Nil)), conds: List::Nil, ..write_at(one(Stmt::SortBy(WV, CA, CB, Ty::I32, down(), 6))) };
+    assert_eq!(bare_refusal(translate_function(&f, &List::Nil, &List::Nil)), Refusal::WriteParam(WV, 6));
+    // A test with a call is refused.
+    let call = Expr::Call(SAT, SAT_NAME, Box::new(List::Nil), 6);
+    let f = with_copy(List::Cons(Box::new(Stmt::SortBy(LX, CA, CB, Ty::I32, call, 7)), Box::new(one(Stmt::Return(Expr::Var(WX, Ty::I32), 8)))));
+    assert!(matches!(translate_function(&f, &List::Nil, &List::Nil), Model::Refused(_)));
+}
