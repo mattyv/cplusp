@@ -76,7 +76,9 @@ fn sentence(message: &str) -> String {
         "a precondition for this call could not be proved" => "a requires line of the callee may not hold.".to_string(),
         m if m.starts_with("cannot prove termination") => "the prover cannot show that this ends.".to_string(),
         m if timed_out(m) => "the prover reached its time limit. The result is unknown.".to_string(),
-        m if m.starts_with("result of operation might violate newtype constraint for '") || m.starts_with("value does not satisfy the subset constraints of '") => {
+        // A vector longer than the bound of `Vec`, decision 0164. `Vec` is the only subset type of the model.
+        m if m.starts_with("value does not satisfy the subset constraints of '") => "the vector may be too long.".to_string(),
+        m if m.starts_with("result of operation might violate newtype constraint for '") => {
             quoted_type(m).map_or_else(|| format!("Dafny says: {}.", m.trim_end_matches('.')), fit)
         }
         m => format!("Dafny says: {}.", m.trim_end_matches('.')),
@@ -153,34 +155,47 @@ pub fn run(t: &Translation, limit: u32, refused: bool, source: &str, shown: &dyn
         println!("Not provable: {}:{line}: {said}", shown(path));
     }
     let here = |line: usize| line.checked_sub(1).and_then(|n| map.lines.get(n)).and_then(Option::as_ref);
-    // Dafny can report one check twice, the condition of a loop at its start and after a turn. An error at the same line and column with the same
-    // message and the same related lines as one already seen is dropped. Two checks at one position with different contract lines both stay, decision 0155.
-    let mut seen: Vec<(usize, usize, String, Vec<usize>)> = Vec::new();
-    for e in &found {
-        let message = e.message.trim();
-        if let Some(column) = e.column {
-            let key = (e.line, column, message.to_string(), e.related.clone());
-            if seen.contains(&key) {
-                continue;
-            }
+    // Dafny can report one check twice, and one check as several errors with Dafny's own related locations, such as the clauses of a strict weak order.
+    // A failure prints one block for each position, sentence and set of contract lines that it shows, decisions 0155 and 0164. Two checks at one position
+    // with different contract lines both stay, and so do two positions on one C++ line.
+    let mut seen: Vec<(usize, Option<usize>, String)> = Vec::new();
+    let mut emit = |e: &Error, block: String| {
+        let key = (e.line, e.column, block);
+        if !seen.contains(&key) {
+            println!("{}", key.2);
             seen.push(key);
         }
+    };
+    // A related location in the companion file is a line of it that the failure breaks. It is shown as a contract line, as the lines of a method are, decision 0164.
+    // ponytail: a clause that goes on to the next line shows its first line only, the line that Dafny names. Upgrade: read on while the next line starts
+    // with `&&`, `||` or `==>`.
+    let companion_clause = |r: usize| -> Option<String> {
+        let at = in_companion(r)?;
+        let (path, line) = map.places[here(at)?.place as usize].clone();
+        Some(format!("\n  The contract line: {}:{line}: {}", shown(&path), t.dafny.lines().nth(at.checked_sub(1)?)?.trim()))
+    };
+    for e in &found {
+        let message = e.message.trim();
         // Dafny could not read the file, so no proof ran. Each error is named at its place in the words of Dafny, decision 0080.
         if unread.is_some() {
             let at = in_companion(e.line).unwrap_or(e.line);
             let (path, line) = here(at).map_or_else(|| ("model.dfy".to_string(), at as u32), |l| map.places[l.place as usize].clone());
-            println!("Not provable: {}:{line}: Dafny says: {}.", shown(&path), message.trim_end_matches('.'));
+            emit(e, format!("Not provable: {}:{line}: Dafny says: {}.", shown(&path), message.trim_end_matches('.')));
             continue;
         }
-        // An error on a line of the companion file has no return, call or loop of a method, so it keeps the words of Dafny, decision 0084.
+        // An error on a line of the companion file has no return, call or loop of a method, decisions 0084 and 0164.
         if let Some(at) = in_companion(e.line) {
             let (path, line) = here(at).map_or_else(|| ("model.dfy".to_string(), at as u32), |l| map.places[l.place as usize].clone());
-            println!("Not proved: {}:{line}: Dafny says: {}.", shown(&path), message.trim_end_matches('.'));
+            // A lemma has the sentence of the same failure in the model. A function or a predicate keeps the words of Dafny, decision 0084.
+            let in_lemma = map.decls.iter().rev().find(|(start, _)| *start <= e.line).is_some_and(|(_, lemma)| *lemma);
+            let said = if in_lemma { sentence(message) } else { format!("Dafny says: {}.", message.trim_end_matches('.')) };
+            let clauses: String = e.related.iter().filter_map(|r| companion_clause(*r)).collect();
+            emit(e, format!("Not proved: {}:{line}: {said}{clauses}", shown(&path)));
             continue;
         }
         let Some(Line { place, scope, own }) = here(e.line) else {
             // ponytail: an error on a line with no C++ place, such as a resolution error, is named by its Dafny line. Upgrade: map it to the function.
-            println!("Not proved: model.dfy:{}: {}", e.line, sentence(message));
+            emit(e, format!("Not proved: model.dfy:{}: {}", e.line, sentence(message)));
             continue;
         };
         let (path, line) = &map.places[*place as usize];
@@ -221,7 +236,12 @@ pub fn run(t: &Translation, limit: u32, refused: bool, source: &str, shown: &dyn
         };
         let mut block = format!("Not proved: {}:{line}: {said}", shown(path));
         let mut told = vec![*place];
-        for l in e.related.iter().filter_map(|r| here(*r)) {
+        for r in &e.related {
+            if let Some(clause) = companion_clause(*r) {
+                block.push_str(&clause);
+                continue;
+            }
+            let Some(l) = here(*r) else { continue };
             if !told.contains(&l.place) {
                 if let Some(text) = contract(map, l.place, shown) {
                     block.push_str(&format!("\n  The contract line: {text}"));
@@ -238,7 +258,7 @@ pub fn run(t: &Translation, limit: u32, refused: bool, source: &str, shown: &dyn
                 }
             }
         }
-        println!("{block}");
+        emit(e, block);
     }
     // The count of verified items is the only fault, decision 0083.
     if let (Some((v, 0, 0)), true) = (reading.summary, found.is_empty() && !refused && axioms.is_empty() && verdict == Verdict::NotProved) {

@@ -988,6 +988,14 @@ fn dty(t: DTy, names: &Names) -> String {
     }
 }
 
+/// The type of a local. A local sequence is a plain `seq`, because `push_back` may grow it past the bound of `Vec`, decision 0160.
+fn local_ty(t: DTy, names: &Names) -> String {
+    match t {
+        DTy::Seq(s) => format!("seq<{}>", dscalar(s, names)),
+        _ => dty(t, names),
+    }
+}
+
 fn dop(o: BinOp) -> &'static str {
     match o {
         BinOp::Add => "+",
@@ -1326,15 +1334,11 @@ impl Printer<'_> {
                 self.put(depth, format!("{target} := StdSort({target}, ({a}: {t}, {b}: {t}) => {});", dexpr(body, names)), place)
             }
             DStmt::Local(x, t, e) => {
-                let shown = match t {
-                    DTy::Seq(s) => format!("seq<{}>", dscalar(*s, names)),
-                    _ => dty(*t, names),
-                };
-                self.put(depth, format!("var {}: {} := {};", mangle(names.text(*x)), shown, dexpr(e, names)), place)
+                self.put(depth, format!("var {}: {} := {};", mangle(names.text(*x)), local_ty(*t, names), dexpr(e, names)), place)
             }
             DStmt::LocalCall(x, t, m, args) => {
                 let call = self.call(*m, args);
-                self.put(depth, format!("var {}: {} := {call};", mangle(names.text(*x)), dty(*t, names)), place);
+                self.put(depth, format!("var {}: {} := {call};", mangle(names.text(*x)), local_ty(*t, names)), place);
             }
             DStmt::ReturnCall(m, args) => {
                 let call = self.call(*m, args);
@@ -1484,7 +1488,7 @@ fn sentence(r: Refusal, names: &Names) -> (u32, String) {
         Refusal::Unlisted(n, line) => (line, format!("{} is a reference parameter that the modifies line does not name.", names.text(n))),
         Refusal::NoVar(n, line) => (line, format!("{} in the {} line is no variable.", names.text(n), names.contracts.get(&line).map_or("contract", |c| c.0.as_str()))),
         Refusal::SeqParam(line) => (line, "a sequence is in the subset only as a parameter.".to_string()),
-        Refusal::HoldsSeq(line) => (line, "a struct that holds a sequence is in the subset only as a parameter.".to_string()),
+        Refusal::HoldsSeq(line) => (line, "a struct that holds a sequence is in the subset only as a parameter that the function does not write.".to_string()),
         Refusal::Element(line) => (line, "an optional of a struct or a sequence of bool has no rule yet.".to_string()),
         Refusal::Extent(line) => (line, "a sequence or an optional made from one of another type or length.".to_string()),
         Refusal::NoTarget(line) => (line, "the call writes a value back, and the translator writes back only to a local or a reference parameter.".to_string()),

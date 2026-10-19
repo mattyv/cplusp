@@ -2264,6 +2264,12 @@ pub open spec fn spec_param_ty(t: Ty, line: u32, sd: Structs) -> Result<DTy, Ref
         } else {
             spec_ty(t, line)
         },
+        // A vector by reference of a struct that holds a sequence, decision 0164.
+        Ty::MutSeq(Scalar::Struct(k)) => if spec_holds(sd, k) {
+            Err(Refusal::HoldsSeq(line))
+        } else {
+            spec_ty(t, line)
+        },
         _ => spec_ty(t, line),
     }
 }
@@ -2602,7 +2608,11 @@ pub open spec fn spec_stmt(s: Stmt, all: Fns, env: Params, ps: Params, sd: Struc
             Err(r) => Err(r),
             Ok(dt) => match e {
                 Expr::Call(k, nm, args, at) => spec_local_call(n, dt, k, nm, *args, at, all, l, ps, sd),
-                Expr::Copy(_, from, _) => if spec_seq_elem(from) == Some(s) {
+                // The source is a name in scope, decision 0164.
+                Expr::Copy(a, from, _) => if spec_seq_elem(from) == Some(s) && match *a {
+                    Expr::Var(w, _) => spec_get(env, w) is Some || spec_get(ps, w) is Some,
+                    _ => false,
+                } {
                     match spec_lift(e, all, l, sd, 0, true) {
                         Ok((c, d, _)) => Ok(spec_pre(c, DStmt::Local(n, dt, d))),
                         Err(r) => Err(r),
@@ -6198,6 +6208,11 @@ pub fn param_ty(t: Ty, line: u32, sd: &Structs) -> (r: Result<DTy, Refusal>)
         } else {
             translate_ty(t, line)
         },
+        Ty::MutSeq(Scalar::Struct(k)) => if holds_seq(sd, k) {
+            Err(Refusal::HoldsSeq(line))
+        } else {
+            translate_ty(t, line)
+        },
         _ => translate_ty(t, line),
     }
 }
@@ -6552,7 +6567,10 @@ pub fn translate_stmt(s: &Stmt, all: &Fns, env: &Params, ps: &Params, sd: &Struc
             Err(r) => Err(r),
             Ok(dt) => match e {
                 Expr::Call(k, nm, args, at) => local_call(*n, dt, *k, *nm, args, *at, all, *l, ps, sd),
-                Expr::Copy(_, from, _) => if seq_elem(*from) == Some(*s) {
+                Expr::Copy(a, from, _) => if seq_elem(*from) == Some(*s) && match &**a {
+                    Expr::Var(w, _) => get(env, *w).is_some() || get(ps, *w).is_some(),
+                    _ => false,
+                } {
                     match lift(e, all, *l, sd, 0, true) {
                         Ok((c, d, _)) => Ok(pre(c, DStmt::Local(*n, dt, d))),
                         Err(r) => Err(r),

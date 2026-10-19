@@ -3263,7 +3263,8 @@ fn a_vector_of_a_struct_that_holds_a_sequence_and_a_copy_of_no_name_are_refused(
         conds: modifies(&[WV], &[WV], List::Nil),
         ..write_at(List::Nil)
     };
-    assert_eq!(bare_refusal(translate_function(&f, &List::Nil, &holds)), Refusal::HoldsSeq(f.line));
+    // The signature is refused, so the function has no model at all.
+    assert_eq!(translate_function(&f, &List::Nil, &holds), Model::Refused(Refusal::HoldsSeq(f.line)));
     let seq = Ty::Seq(Scalar::I32, Extent::Dynamic);
     let own = Stmt::Local(LX, Ty::Vec(Scalar::I32), Expr::Copy(b(Expr::Var(LX, Ty::Vec(Scalar::I32))), seq, seq), 6);
     let f = Function { ret: Ty::I32, ..write_at(List::Cons(Box::new(own), Box::new(one(Stmt::Return(Expr::Var(WX, Ty::I32), 7))))) };
