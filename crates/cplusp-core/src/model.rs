@@ -323,6 +323,7 @@ pub type Args = List<Box<Expr>>;
 /// name and its arguments. `Exit` is `return;`, decision 0096. `Assert` is a `//@ assert` line in the body, and `Apply` is a
 /// `//@ apply` line that calls a lemma of the companion file by the id of its name, decision 0099. `RangeFor` is a range-for, decision
 /// 0143. `SetIndex` is `v[i] = e` of a vector by reference, decision 0145, and `PushBack` is `v.push_back(e)`, decision 0148.
+/// `Sort` is `std::sort(v.begin(), v.end())`, decision 0161.
 #[derive(PartialEq, Eq, Debug)]
 pub enum Stmt {
     Return(Expr, u32),
@@ -342,6 +343,7 @@ pub enum Stmt {
     RangeFor(u32, u32, Ty, Expr, Box<Conds>, Box<Stmts>, u32),
     SetIndex(u32, Expr, Expr, u32),
     PushBack(u32, Expr, u32),
+    Sort(u32, u32),
     Unknown(u32, u32),
 }
 
@@ -502,7 +504,8 @@ pub type DArgs = List<DExpr>;
 /// `x' := e;` and `SetOutField` is `x' := x'.(f := e);` of a reference parameter, decision 0108. `Update` calls a method that writes
 /// back, `o, x := m(o, x, args);`, and `LocalUpdate` also sets a new local to the value it gives, decisions 0096 and 0108. The
 /// arguments hold each argument of the call. `CallStmt` is `m(args);` of a method that gives no value, and `Exit` is `return;`, decision 0096. `Assert` is
-/// `assert e;` and `Apply` is `l(args);` of a lemma, decision 0099. `Match` is a match over the enum with the key, decision 0109. `Pre` is a statement with the calls that run before it, decision
+/// `assert e;` and `Apply` is `l(args);` of a lemma, decision 0099. `Sort` is `p := StdSort(p, (a: T, b: T) => a < b);` of a place
+/// and the type of its elements, decision 0161. `Match` is a match over the enum with the key, decision 0109. `Pre` is a statement with the calls that run before it, decision
 /// 0104.
 #[derive(PartialEq, Eq, Debug)]
 pub enum DStmt {
@@ -526,6 +529,7 @@ pub enum DStmt {
     Apply(u32, DArgs),
     Match(DExpr, u32, Box<DCases>),
     Pre(DCalls, Box<DStmt>),
+    Sort(Box<DExpr>, DTy),
 }
 
 /// A place that a call writes back: a local by its name, the object of the member function that makes the call, or a reference
@@ -599,7 +603,8 @@ pub type Models = List<Model>;
 /// id of its name, decision 0147. `Rounds` is a double operation that rounds. `Finite` is a double parameter, by the id of its name,
 /// that no requires line says is finite, and `FiniteResult` is a trusted function that gives a double and no ensures line says
 /// that it is finite, decision 0150. `VecLocal` is a local vector that is no copy of a vector in scope, and `PassLocal` is a local
-/// vector that a call passes by reference, by the id of its name, decision 0160.
+/// vector that a call passes by reference, by the id of its name, decision 0160. `SortForm` is a `std::sort` with no rule,
+/// decision 0161.
 #[derive(Structural, PartialEq, Eq, Clone, Copy, Debug)]
 pub enum Refusal {
     Construct(u32, u32),
@@ -630,6 +635,7 @@ pub enum Refusal {
     FiniteResult(u32),
     VecLocal(u32),
     PassLocal(u32, u32),
+    SortForm(u32),
 }
 
 // ------------------------------------------------------------------ the rules
@@ -687,6 +693,27 @@ pub open spec fn spec_ty(t: Ty, line: u32) -> Result<DTy, Refusal> {
         Ty::Fresh(_) => Err(Refusal::Syntax(line)),
         Ty::Void => Err(Refusal::Syntax(line)),
         Ty::Other(k) => Err(Refusal::Construct(k, line)),
+    }
+}
+
+/// A sort of a place whose elements are `s`, decision 0161. The default `<` is a strict weak order on integers only, so a vector of a
+/// struct needs a comparator.
+pub open spec fn spec_sort(p: DExpr, s: Scalar, line: u32) -> Result<DStmt, Refusal> {
+    if s is Struct {
+        Err(Refusal::SortForm(line))
+    } else {
+        Ok(DStmt::Sort(Box::new(p), spec_scalar_dty(s)))
+    }
+}
+
+pub fn sort(p: DExpr, s: Scalar, line: u32) -> (r: Result<DStmt, Refusal>)
+    ensures
+        r == spec_sort(p, s, line),
+{
+    if matches!(s, Scalar::Struct(_)) {
+        Err(Refusal::SortForm(line))
+    } else {
+        Ok(DStmt::Sort(Box::new(p), scalar_dty(s)))
     }
 }
 
@@ -2250,6 +2277,7 @@ pub open spec fn spec_place(s: Stmt) -> u32 {
         Stmt::Apply(_, _, l) => l,
         Stmt::SetIndex(_, _, _, l) => l,
         Stmt::PushBack(_, _, l) => l,
+        Stmt::Sort(_, l) => l,
         Stmt::Unknown(_, l) => l,
     }
 }
@@ -2753,6 +2781,15 @@ pub open spec fn spec_stmt(s: Stmt, all: Fns, env: Params, ps: Params, sd: Struc
                     Err(r) => Err(r),
                 },
                 _ => Err(Refusal::Syntax(l)),
+            },
+        },
+        // `std::sort(v.begin(), v.end())` of a vector of integers, decision 0161.
+        Stmt::Sort(v, l) => match spec_get(ps, v) {
+            Some(Ty::MutSeq(s)) => spec_sort(DExpr::Out(v), s, l),
+            Some(_) => Err(Refusal::WriteParam(v, l)),
+            None => match spec_get(env, v) {
+                Some(Ty::Vec(s)) => spec_sort(DExpr::Var(v), s, l),
+                _ => Err(Refusal::SortForm(l)),
             },
         },
         Stmt::Unknown(k, l) => Err(Refusal::Construct(k, l)),
@@ -3598,6 +3635,7 @@ pub open spec fn unknown_stmt(s: Stmt) -> bool
         Stmt::SetRefField(_, _, e, _) => unknown_expr(e),
         Stmt::SetIndex(_, i, e, _) => unknown_expr(i) || unknown_expr(e),
         Stmt::PushBack(_, e, _) => unknown_expr(e),
+        Stmt::Sort(_, _) => false,
         Stmt::Switch(e, _, cs, _) => unknown_expr(e) || unknown_cases(*cs),
         Stmt::Call(_, _, args, _) => unknown_args(*args),
         Stmt::Exit(_) => false,
@@ -3727,6 +3765,7 @@ pub proof fn lemma_unknown_stmt_is_refused(s: Stmt, all: Fns, env: Params, ps: P
             }
         },
         Stmt::PushBack(_, e, l) => lemma_unknown_code_is_refused(e, l),
+        Stmt::Sort(_, _) => {},
         Stmt::Switch(e, _, cs, l) => {
             if unknown_expr(e) {
                 lemma_unknown_lift_is_refused(e, all, l, sd, 0, true);
@@ -4587,7 +4626,7 @@ pub proof fn lemma_resolves_set_ref_field(s: Stmt, all: Fns, env: Params, ps: Pa
 pub proof fn lemma_resolves_plain(s: Stmt, all: Fns, env: Params, ps: Params, sd: Structs)
     requires
         spec_stmt(s, all, env, ps, sd).is_ok(),
-        s is Step || s is Exit || s is Assert || s is Apply || s is Unknown || s is SetIndex || s is PushBack,
+        s is Step || s is Exit || s is Assert || s is Apply || s is Unknown || s is SetIndex || s is PushBack || s is Sort,
     ensures
         calls_resolve_stmt(spec_stmt(s, all, env, ps, sd).unwrap(), all, sd),
 {
@@ -4662,6 +4701,7 @@ pub proof fn lemma_stmt_calls_resolve(s: Stmt, all: Fns, env: Params, ps: Params
         Stmt::Unknown(_, _) => lemma_resolves_plain(s, all, env, ps, sd),
         Stmt::SetIndex(_, _, _, _) => lemma_resolves_plain(s, all, env, ps, sd),
         Stmt::PushBack(_, _, _) => lemma_resolves_plain(s, all, env, ps, sd),
+        Stmt::Sort(_, _) => lemma_resolves_plain(s, all, env, ps, sd),
         Stmt::If(c, t, f, l) => {
             lemma_stmts_calls_resolve(*t, all, env, ps, sd);
             lemma_stmts_calls_resolve(*f, all, env, ps, sd);
@@ -6156,6 +6196,7 @@ pub fn place(s: &Stmt) -> (r: u32)
         Stmt::Apply(_, _, l) => *l,
         Stmt::SetIndex(_, _, _, l) => *l,
         Stmt::PushBack(_, _, l) => *l,
+        Stmt::Sort(_, l) => *l,
         Stmt::Unknown(_, l) => *l,
     }
 }
@@ -6670,6 +6711,14 @@ pub fn translate_stmt(s: &Stmt, all: &Fns, env: &Params, ps: &Params, sd: &Struc
                     Err(r) => Err(r),
                 },
                 _ => Err(Refusal::Syntax(*l)),
+            },
+        },
+        Stmt::Sort(v, l) => match get(ps, *v) {
+            Some(Ty::MutSeq(s)) => sort(DExpr::Out(*v), s, *l),
+            Some(_) => Err(Refusal::WriteParam(*v, *l)),
+            None => match get(env, *v) {
+                Some(Ty::Vec(s)) => sort(DExpr::Var(*v), s, *l),
+                _ => Err(Refusal::SortForm(*l)),
             },
         },
         Stmt::Unknown(k, l) => Err(Refusal::Construct(*k, *l)),

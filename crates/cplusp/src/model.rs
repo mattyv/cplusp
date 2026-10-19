@@ -136,6 +136,8 @@ enum JStmt {
     SetIndex(String, JExpr, JExpr, u32),
     /// `v.push_back(e)` where `v` is a vector by reference, decision 0148.
     PushBack(String, JExpr, u32),
+    /// `std::sort(v.begin(), v.end())`, decision 0161.
+    Sort(String, u32),
     /// `p.f = e` where `p` is a reference parameter, decision 0108.
     SetRefField(String, String, JExpr, u32),
     /// A switch over an enum, decision 0109: its condition, the key of the enum, the cases as (place of the enumerator, statements), and the line.
@@ -254,6 +256,8 @@ struct Names {
     double: std::cell::Cell<bool>,
     /// Whether the printer wrote `fint`, so a verdict rests on the exact-integer axiom, decision 0159.
     exact: std::cell::Cell<bool>,
+    /// Whether the printer wrote `StdSort`, so a verdict rests on its contract, decision 0161.
+    sorted: std::cell::Cell<bool>,
     /// The functions that the companion file declares. Empty when there is no file or the scan refused it, decision 0079.
     declared: Vec<String>,
     /// The lemmas that the companion file declares, apart from the functions, decision 0099.
@@ -434,6 +438,7 @@ fn stmt(s: JStmt, names: &mut Names) -> Stmt {
         JStmt::SetField(f, e, line) => Stmt::SetField(names.id(&f), expr(e, names), names.here(line)),
         JStmt::SetIndex(v, i, e, line) => Stmt::SetIndex(names.id(&v), expr(i, names), expr(e, names), names.here(line)),
         JStmt::PushBack(v, e, line) => Stmt::PushBack(names.id(&v), expr(e, names), names.here(line)),
+        JStmt::Sort(v, line) => Stmt::Sort(names.id(&v), names.here(line)),
         JStmt::Switch(e, k, cases, line) => {
             let place = names.here(line);
             let key = names.id(&k);
@@ -774,6 +779,7 @@ fn stmt_names<'a>(s: &'a JStmt, out: &mut Vec<&'a str>) {
         }
         JStmt::Step(n, ..) => out.push(n),
         JStmt::SetField(_, e, _) => expr_names(e, out),
+        JStmt::Sort(v, _) => out.push(v),
         JStmt::PushBack(v, e, _) => {
             out.push(v);
             expr_names(e, out);
@@ -922,6 +928,9 @@ function CountIf<T>(s: seq<T>, p: T -> bool): nat
   if |s| == 0 then 0 else CountIf(s[..|s| - 1], p) + (if p(s[|s| - 1]) then 1 else 0)
 }
 ";
+
+/// The model of std::sort, decision 0161: the file of the divergence tests as it is. The shell keeps no copy.
+pub const ALGORITHM: &str = include_str!("../../../divergence/dafny/Algorithm.dfy");
 
 /// The model of a double operation, decision 0154: the file of the divergence tests as it is. The shell keeps no copy.
 pub const DOUBLE: &str = include_str!("../../../divergence/dafny/Double.dfy");
@@ -1134,6 +1143,8 @@ pub struct Translation {
     pub rounds: bool,
     /// The model calls `fint`, so a verdict rests on the axiom `RoundExactInt`, decision 0159.
     pub exact: bool,
+    /// The model calls `StdSort`, so a verdict rests on its contract, decision 0161.
+    pub sorted: bool,
     pub map: Map,
 }
 
@@ -1291,6 +1302,12 @@ impl Printer<'_> {
             }
             DStmt::Assert(e) => self.put(depth, format!("assert {};", dexpr(e, names)), place),
             DStmt::Apply(l, args) => self.put(depth, format!("{}({});", names.text(*l), dargs(args, names).join(", ")), place),
+            // `std::sort` of a whole vector with the default `<`, decision 0161. `StdSort` is the method of the module `Algorithm`.
+            DStmt::Sort(target, t) => {
+                names.sorted.set(true);
+                let (target, t) = (dexpr(target, names), dty(*t, names));
+                self.put(depth, format!("{target} := StdSort({target}, (a: {t}, b: {t}) => a < b);"), place)
+            }
             // A local vector is a plain `seq`, because `push_back` may grow it past the bound of `Vec`, as for a vector given back, decision 0160.
             DStmt::Local(x, t, e) => {
                 let shown = match t {
@@ -1461,6 +1478,7 @@ fn sentence(r: Refusal, names: &Names) -> (u32, String) {
         Refusal::Finite(n, line) if names.text(n).starts_with('\'') => (line, "a double parameter has no name. Give it a name and say std::isfinite of it in a requires line.".to_string()),
         Refusal::Finite(n, line) => (line, format!("{} is a double. A requires line needs std::isfinite({}).", names.text(n), names.text(n))),
         Refusal::FiniteResult(line) => (line, "a trusted function that gives a double needs std::isfinite(result) in an ensures line.".to_string()),
+        Refusal::SortForm(line) => (line, "std::sort of another form: the translator has no rule for it yet.".to_string()),
         Refusal::VecLocal(line) => (line, "a local vector has a rule only as a copy of a vector in scope.".to_string()),
         Refusal::PassLocal(n, line) => (line, format!("{} is a local vector. A call that passes it by reference has no rule yet.", names.text(n))),
         Refusal::PassOn(n, line) => (line, format!("{} is a vector by reference. A call that passes it on has no rule yet.", names.text(n))),
@@ -1718,6 +1736,13 @@ pub fn translate(lines: &str, companion: Option<(&str, &str)>) -> Result<Transla
             p.lines.extend(text.lines().map(|_| None));
         }
     }
+    // The model of `std::sort` is the file `Algorithm.dfy` as it is, decision 0161, with the module in scope.
+    if names.sorted.get() {
+        for text in [ALGORITHM, "import opened Algorithm\n"] {
+            p.out.push_str(text);
+            p.lines.extend(text.lines().map(|_| None));
+        }
+    }
     // The companion file follows the methods, so none of its comments reaches a method, decision 0083.
     let start = p.lines.len();
     p.lines.extend(companion_places);
@@ -1737,5 +1762,5 @@ pub fn translate(lines: &str, companion: Option<(&str, &str)>) -> Result<Transla
     }
     refusals.sort();
     refusals.dedup();
-    Ok(Translation { dafny, methods: printed, trusted, refusals, rounds, exact: names.exact.get(), map: Map { lines, companion: companion_lines, decls, places: names.places, contracts: names.contracts } })
+    Ok(Translation { dafny, methods: printed, trusted, refusals, rounds, exact: names.exact.get(), sorted: names.sorted.get(), map: Map { lines, companion: companion_lines, decls, places: names.places, contracts: names.contracts } })
 }

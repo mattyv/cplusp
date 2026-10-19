@@ -243,6 +243,9 @@ pub fn run(t: &Translation, limit: u32, refused: bool, source: &str, shown: &dyn
     if t.rounds {
         println!("Axiom: Double.dfy: RoundError: IEEE 754 binary64, round to nearest even, gradual underflow, one rounding per operation.");
     }
+    if t.sorted {
+        println!("Axiom: Algorithm.dfy: StdSort: std::sort with a strict weak order gives a permutation of its range, and no later element compares less than an earlier one, C++23 [sort] and [alg.sorting.general].");
+    }
     if t.exact {
         println!("Axiom: Double.dfy: RoundExactInt: an integer up to 2^53 in magnitude is a double.");
     }

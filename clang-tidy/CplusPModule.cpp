@@ -4951,6 +4951,26 @@ private:
                                                expr(Arg, line(S->getBeginLoc())), number(line(S->getBeginLoc()))});
     }
     // A call that is the whole statement, `f(a);` or `o.f(a);`. Its object is the first argument, decision 0096.
+    // `std::sort(v.begin(), v.end())` of a vector that the function writes is a sort of the whole of `v`, decision 0161. Any other call of `std::sort`, a part of a
+    // range, a comparator, a policy or two vectors, is named by what it is. The comparator is not looked at.
+    if (const auto *Sort = dyn_cast<CallExpr>(Inner); Sort && Sort->getStmtClass() == Stmt::CallExprClass && Sort->getDirectCallee() &&
+                                                       Sort->getDirectCallee()->isInStdNamespace() && Sort->getDirectCallee()->getDeclName().isIdentifier() &&
+                                                       Sort->getDirectCallee()->getName() == "sort" && SM.isInSystemHeader(Sort->getDirectCallee()->getLocation())) {
+      const VarDecl *Whole = nullptr;
+      bool Same = Sort->getNumArgs() == 2;
+      for (unsigned I = 0; Same && I < 2; ++I) {
+        const auto *Member = dyn_cast<CXXMemberCallExpr>(Sort->getArg(I)->IgnoreParenImpCasts());
+        const Expr *Object = Member ? Member->getImplicitObjectArgument() : nullptr;
+        const auto *Ref = Object ? dyn_cast<DeclRefExpr>(Object->IgnoreParenImpCasts()) : nullptr;
+        const auto *Var = Ref ? dyn_cast<VarDecl>(Ref->getDecl()) : nullptr;
+        Same = Member && Member->getNumArgs() == 0 && Member->getMethodDecl() && Member->getMethodDecl()->getDeclName().isIdentifier() &&
+               Member->getMethodDecl()->getName() == (I == 0 ? "begin" : "end") && Var && (isa<ParmVarDecl>(Var) || Var->hasLocalStorage()) && (!Whole || Whole == Var);
+        Whole = Var;
+      }
+      if (Same)
+        return tag("Sort", llvm::json::Array{Whole->getNameAsString(), number(line(S->getBeginLoc()))});
+      return unknown(S, "std::sort of another form", line(S->getBeginLoc()));
+    }
     if (const auto *Call = dyn_cast<CallExpr>(Inner))
       if (llvm::json::Value Written = expr(Call, line(S->getBeginLoc())); Written.getAsObject() && Written.getAsObject()->get("Call"))
         return Written;
