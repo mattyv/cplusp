@@ -4212,7 +4212,7 @@ public:
                               {"file", file(FD->getLocation())},
                               {"line", number(line(FD->getLocation()))},
                               {"params", std::move(Params)},
-                              {"ret", Opaque ? tag("Other", Opaque) : FD->getReturnType()->isVoidType() ? llvm::json::Value("Void") : type(FD->getReturnType())},
+                              {"ret", Opaque ? tag("Other", Opaque) : FD->getReturnType()->isVoidType() ? llvm::json::Value("Void") : resultType(FD->getReturnType())},
                               {"trusted", TrustedJson},
                               {"hidden", std::move(Hidden)},
                               {"conds", std::move(Conds)},
@@ -4763,33 +4763,36 @@ private:
     Pointee.removeLocalConst();
     return !Pointee.hasQualifiers() && (scalar(Pointee) || plainStruct(Pointee)) ? Pointee : QualType();
   }
-  // The scalar of a vector by reference that the function writes, decision 0145, or null: `std::vector<T>&` with no const, for a scalar `T`
-  // other than bool. A vector of bool and a vector of a struct by reference stay `Other`.
-  const char *mutSeq(QualType T) const {
+  // The element of a vector by reference that the function writes, decision 0145, or null: `std::vector<T>&` with no const, for a scalar `T` other
+  // than bool, or a plain struct, decision 0163. A vector of bool stays `Other`.
+  QualType mutSeq(QualType T) const {
     if (!T->isLValueReferenceType())
-      return nullptr;
+      return QualType();
     const QualType Vector = T->getPointeeType();
     const auto *Spec = dyn_cast_or_null<ClassTemplateSpecializationDecl>(Vector->getAsCXXRecordDecl());
     if (Vector.getCanonicalType().hasQualifiers() || !Spec || !Spec->isInStdNamespace() || Spec->getName() != "vector" || Spec->getTemplateArgs().size() == 0 ||
         Spec->getTemplateArgs()[0].getKind() != TemplateArgument::Type)
-      return nullptr;
-    const QualType Elem = Spec->getTemplateArgs()[0].getAsType();
-    const char *S = Elem.getCanonicalType().hasQualifiers() ? nullptr : scalar(Elem);
-    return S && StringRef(S) != "Bool" ? S : nullptr;
+      return QualType();
+    return vectorElement(Spec->getTemplateArgs()[0].getAsType());
   }
-  // The scalar of a local `std::vector<T>` by value, which the function owns, decision 0160, or null: no reference, and a scalar `T` other than bool.
+  // The element of a vector that the function owns or writes: a scalar other than bool, or a plain struct, with no qualifier, or null.
+  QualType vectorElement(QualType Elem) const {
+    if (Elem.getCanonicalType().hasQualifiers())
+      return QualType();
+    const char *S = scalar(Elem);
+    return (S ? StringRef(S) != "Bool" : plainStruct(Elem) != nullptr) ? Elem : QualType();
+  }
+  // The element of a local `std::vector<T>` by value, which the function owns, decision 0160, or null: no reference, and a scalar `T` other than bool.
   // A `const` on the vector is looked through. A span is a view, not a vector, so it is none.
-  const char *localVec(QualType T) const {
+  QualType localVec(QualType T) const {
     if (T->isReferenceType())
-      return nullptr;
+      return QualType();
     const QualType Vector = T.getUnqualifiedType();
     const auto *Spec = dyn_cast_or_null<ClassTemplateSpecializationDecl>(Vector->getAsCXXRecordDecl());
     if (T.isVolatileQualified() || !Spec || !Spec->isInStdNamespace() || Spec->getName() != "vector" || Spec->getTemplateArgs().size() == 0 ||
         Spec->getTemplateArgs()[0].getKind() != TemplateArgument::Type)
-      return nullptr;
-    const QualType Elem = Spec->getTemplateArgs()[0].getAsType();
-    const char *S = Elem.getCanonicalType().hasQualifiers() ? nullptr : scalar(Elem);
-    return S && StringRef(S) != "Bool" ? S : nullptr;
+      return QualType();
+    return vectorElement(Spec->getTemplateArgs()[0].getAsType());
   }
   // Whether an expression names a vector that the function writes: a vector by reference, decision 0145, or a local vector, decision 0160.
   bool isMutSeq(const Expr *E) const {
@@ -4797,9 +4800,9 @@ private:
     if (!Ref)
       return false;
     if (isa<ParmVarDecl>(Ref->getDecl()))
-      return mutSeq(Ref->getDecl()->getType());
+      return !mutSeq(Ref->getDecl()->getType()).isNull();
     const auto *Var = dyn_cast<VarDecl>(Ref->getDecl());
-    return Var && Var->hasLocalStorage() && localVec(Var->getType());
+    return Var && Var->hasLocalStorage() && !localVec(Var->getType()).isNull();
   }
   // The type of a parameter, or of a name that reads one. A pointer to const is a `Ptr` of what it points to, decisions 0140 and 0141.
   llvm::json::Value paramType(QualType T) const {
@@ -4808,14 +4811,21 @@ private:
       return Written;
     if (const QualType Element = constPointee(T); !Element.isNull())
       return tag("Ptr", type(Element));
-    if (const char *S = mutSeq(T))
-      return tag("MutSeq", S);
+    if (const QualType Element = mutSeq(T); !Element.isNull())
+      return tag("MutSeq", type(Element));
     // A `unique_ptr` parameter is read by const reference only, decision 0142. By value it has no rule: it moves.
     if (T->isLValueReferenceType() && T->getPointeeType().isConstQualified())
       if (const QualType Element = ownElement(T->getPointeeType()); !Element.isNull())
         return tag("Own", type(Element));
     if (isOwn(T))
       return tag("Other", T.getAsString(Context.getPrintingPolicy()));
+    return type(T);
+  }
+  // The type of a result. A `std::vector<T>` by value with no qualifier is a `Vec`, decision 0163: the function gives a copy. A span stays `Other`.
+  llvm::json::Value resultType(QualType T) const {
+    if (!T.hasQualifiers())
+      if (const QualType Element = localVec(T); !Element.isNull())
+        return tag("Vec", type(Element));
     return type(T);
   }
   // The loop variable of a range-for has the element type whether it is `const` or a const reference, decision 0143. The loop is written only
@@ -4825,8 +4835,8 @@ private:
       return type(Var->getType().getNonReferenceType().getUnqualifiedType());
     // A local vector is a `Vec`, decision 0160.
     if (const auto *Var = dyn_cast<VarDecl>(D); Var && Var->hasLocalStorage() && !isa<ParmVarDecl>(Var))
-      if (const char *V = localVec(Var->getType()))
-        return tag("Vec", V);
+      if (const QualType Element = localVec(Var->getType()); !Element.isNull())
+        return tag("Vec", type(Element));
     // The parameter of a lambda is the element, whether it is by value or by const reference, decision 0149.
     if (const auto *Param = dyn_cast<ParmVarDecl>(D); Param && isa<CXXMethodDecl>(Param->getDeclContext()) && cast<CXXMethodDecl>(Param->getDeclContext())->getParent()->isLambda())
       return type(Param->getType().getNonReferenceType().getUnqualifiedType());
@@ -5273,7 +5283,7 @@ private:
     // The parameter has the element type, by value or by reference to const. A lambda with another count of parameters misses this limit too.
     QualType Element = seqElement(Sequence->getType());
     // A vector by reference that the function writes is no const sequence, so its element comes from the vector itself, decision 0145.
-    if (Element.isNull() && mutSeq(Sequence->getType()))
+    if (Element.isNull() && !mutSeq(Sequence->getType()).isNull())
       Element = cast<ClassTemplateSpecializationDecl>(Sequence->getType()->getPointeeType()->getAsCXXRecordDecl())->getTemplateArgs()[0].getAsType();
     const ParmVarDecl *Parameter = Operator->getNumParams() == 1 ? Operator->getParamDecl(0) : nullptr;
     QualType Declared = Parameter ? Parameter->getType() : QualType();
@@ -5314,6 +5324,9 @@ private:
     // A temporary that needs a cleanup, such as an optional made from `x + 1`, wraps the expression. The wrapper is not the construct.
     if (const auto *Cleanups = dyn_cast<ExprWithCleanups>(E))
       return expr(Cleanups->getSubExpr(), Near);
+    // A vector that a call gives is held in a temporary, which is not the value, decision 0163.
+    if (const auto *Bound = dyn_cast<CXXBindTemporaryExpr>(E); Bound && !localVec(Bound->getType()).isNull())
+      return expr(Bound->getSubExpr(), Near);
     // A `unique_ptr` that a call gives is held in a temporary, which is not the value, decision 0142.
     if (const auto *Bound = dyn_cast<CXXBindTemporaryExpr>(E); Bound && isOwn(Bound->getType()))
       return expr(Bound->getSubExpr(), Near);
@@ -5504,15 +5517,15 @@ private:
       return tag("Cond", llvm::json::Array{expr(Choice->getCond(), Near), expr(Choice->getTrueExpr(), Near), expr(Choice->getFalseExpr(), Near)});
     // A local vector made from a sequence in scope is a copy, decision 0160: a parameter or another local vector. A copy from any other expression, a call or
     // a list, stays unknown, and the core refuses the local.
-    if (const auto *Construct = dyn_cast<CXXConstructExpr>(E); Construct && Construct->getNumArgs() == 1 && localVec(Construct->getType())) {
+    if (const auto *Construct = dyn_cast<CXXConstructExpr>(E); Construct && Construct->getNumArgs() == 1 && !localVec(Construct->getType()).isNull()) {
       const auto *Source = dyn_cast<DeclRefExpr>(Construct->getArg(0)->IgnoreParenImpCasts());
       const auto *Named = Source ? dyn_cast<VarDecl>(Source->getDecl()) : nullptr;
       if (Named && (isSeq(Source->getType()) || isMutSeq(Source)) && (isa<ParmVarDecl>(Named) || Named->hasLocalStorage()))
       {
         // The core judges a copy of a sequence by two `Seq` types. A vector the function writes is a dynamic sequence of its element.
-        const char *Written = isa<ParmVarDecl>(Named) ? mutSeq(Named->getType()) : localVec(Named->getType());
-        llvm::json::Value From = Written ? tag("Seq", llvm::json::Array{Written, nullptr}) : type(Source->getType());
-        return tag("Copy", llvm::json::Array{expr(Source, Near), std::move(From), tag("Seq", llvm::json::Array{localVec(Construct->getType()), nullptr})});
+        const QualType Written = isa<ParmVarDecl>(Named) ? mutSeq(Named->getType()) : localVec(Named->getType());
+        llvm::json::Value From = !Written.isNull() ? tag("Seq", llvm::json::Array{type(Written), nullptr}) : type(Source->getType());
+        return tag("Copy", llvm::json::Array{expr(Source, Near), std::move(From), tag("Seq", llvm::json::Array{type(localVec(Construct->getType())), nullptr})});
       }
     }
     // A sequence made from one sequence, decision 0070, or a struct made from one struct, decision 0073. The core judges the two types.

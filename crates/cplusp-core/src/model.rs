@@ -784,6 +784,12 @@ pub open spec fn spec_value_ty(t: Ty, line: u32, sd: Structs) -> Result<DTy, Ref
             } else {
                 Ok(dt)
             },
+            // A local vector or a vector as a result, decisions 0160 and 0163.
+            Ty::Vec(Scalar::Struct(k)) => if spec_holds(sd, k) {
+                Err(Refusal::HoldsSeq(line))
+            } else {
+                Ok(dt)
+            },
             _ => Ok(dt),
         },
     }
@@ -1869,8 +1875,9 @@ pub open spec fn spec_path(e: Expr, decl: Names, ps: Params, ret: Option<Ty>, bo
                 },
             }
         },
+        // A vector as a result reads as a sequence, decision 0163.
         Expr::Result => match ret {
-            Some(t) => Ok((DExpr::Result, t)),
+            Some(t) => Ok((DExpr::Result, spec_view_ty(t))),
             None => Err(Refusal::Syntax(line)),
         },
         Expr::Paren(a) => spec_path(*a, decl, ps, ret, bound, line, sd),
@@ -2589,11 +2596,13 @@ pub open spec fn spec_stmt(s: Stmt, all: Fns, env: Params, ps: Params, sd: Struc
             },
             Err(r) => Err(r),
         },
-        // A local vector is a copy of a sequence in scope of the same element, decision 0160.
-        Stmt::Local(n, Ty::Vec(s), e, l) => match spec_ty(Ty::Vec(s), l) {
+        // A local vector is a copy of a sequence in scope of the same element, decision 0160, or the vector that a call gives,
+        // decision 0163.
+        Stmt::Local(n, Ty::Vec(s), e, l) => match spec_value_ty(Ty::Vec(s), l, sd) {
             Err(r) => Err(r),
             Ok(dt) => match e {
-                Expr::Copy(_, from, _) => if !(s is Struct) && spec_seq_elem(from) == Some(s) {
+                Expr::Call(k, nm, args, at) => spec_local_call(n, dt, k, nm, *args, at, all, l, ps, sd),
+                Expr::Copy(_, from, _) => if spec_seq_elem(from) == Some(s) {
                     match spec_lift(e, all, l, sd, 0, true) {
                         Ok((c, d, _)) => Ok(spec_pre(c, DStmt::Local(n, dt, d))),
                         Err(r) => Err(r),
@@ -4931,6 +4940,11 @@ pub fn translate_value_ty(t: Ty, line: u32, sd: &Structs) -> (r: Result<DTy, Ref
             } else {
                 Ok(dt)
             },
+            Ty::Vec(Scalar::Struct(k)) => if holds_seq(sd, k) {
+                Err(Refusal::HoldsSeq(line))
+            } else {
+                Ok(dt)
+            },
             _ => Ok(dt),
         },
     }
@@ -5760,7 +5774,7 @@ pub fn path(e: &Expr, decl: &Names, ps: &Params, ret: Option<Ty>, bound: &Names,
             }
         },
         Expr::Result => match ret {
-            Some(t) => Ok((DExpr::Result, t)),
+            Some(t) => Ok((DExpr::Result, view_ty(t))),
             None => Err(Refusal::Syntax(line)),
         },
         Expr::Paren(a) => path(a, decl, ps, ret, bound, line, sd),
@@ -6534,10 +6548,11 @@ pub fn translate_stmt(s: &Stmt, all: &Fns, env: &Params, ps: &Params, sd: &Struc
             },
             Err(r) => Err(r),
         },
-        Stmt::Local(n, Ty::Vec(s), e, l) => match translate_ty(Ty::Vec(*s), *l) {
+        Stmt::Local(n, Ty::Vec(s), e, l) => match translate_value_ty(Ty::Vec(*s), *l, sd) {
             Err(r) => Err(r),
             Ok(dt) => match e {
-                Expr::Copy(_, from, _) => if !matches!(s, Scalar::Struct(_)) && seq_elem(*from) == Some(*s) {
+                Expr::Call(k, nm, args, at) => local_call(*n, dt, *k, *nm, args, *at, all, *l, ps, sd),
+                Expr::Copy(_, from, _) => if seq_elem(*from) == Some(*s) {
                     match lift(e, all, *l, sd, 0, true) {
                         Ok((c, d, _)) => Ok(pre(c, DStmt::Local(*n, dt, d))),
                         Err(r) => Err(r),

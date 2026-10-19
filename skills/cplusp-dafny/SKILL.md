@@ -51,7 +51,7 @@ Treat SPARK guidance as an engineering method, not an LLM performance measuremen
 
 ## Contract lines that the translator reads
 
-This list is true at decision 0162. Read the later decisions before you rely on it.
+This list is true at decision 0163. Read the later decisions before you rely on it.
 `cplusp prove` translates the C++ and the `//@` lines to Dafny, and runs Dafny. It says `ok: proved`, or `Not proved: FILE:LINE: sentence` for a proof that fails, or `Not provable: FILE:LINE: sentence` for a form that has no rule.
 
 Where each line goes:
@@ -79,6 +79,7 @@ The modifies line:
 - Write the bound on the exact result itself, `|a * b| <= DBL_MAX`. Dafny does not find it from bounds on `a` and `b`. A bound on the result also needs the error: `|result| <= 2.0` does not follow from `|a| <= 1.0 && |b| <= 1.0`, but `|result| <= 2.0 + eps * 2.0 + eta` does.
 - A bound on a double result reads `ensures |result - a * b| <= eps * |a * b| + eta`. `prove` prints an `Axiom:` line when the proof rests on the rounding axiom.
 - A `std::vector<T>&` on the line takes its value in and gives it back, decision 0145. In the body, `v[i] = e` writes one element, and `v.push_back(e)` adds one at the end, decision 0148. Neither `i` nor `e` holds a call. `v[i] += e`, `emplace_back`, `pop_back`, `resize`, `clear` and passing `v` on to a `std::vector<T>&` have no rule yet.
+- A vector of a plain struct is a sequence of its datatype, decision 0163. A function can give a `std::vector<T>` by value, and a contract reads `result.size()` and `result[i]`. A local can take the vector that a call gives. A contract has no `multiset`, so it names a predicate of the companion file.
 - A local `std::vector<T> x = v;` of integers is a copy of a vector in scope, decision 0160. The body can write `x[i] = e` and `x.push_back(e)`, and the vector of the caller stays as it was. A local vector with no initial value, from a list, from a call or from `std::move` has no rule yet. Neither has a local `std::span`, a vector of a struct or of bool, or a call that passes the local by reference.
 - `std::sort(v.begin(), v.end())` sorts a local vector or a vector by reference of integers, decision 0161. After it, `v` has the same elements and the same length, and no later element is below an earlier one. A fact about the old vector, such as its smallest element, needs a lemma of the companion file with `//@ apply`. The lemma reads `SortedBy` and `multiset`. `prove` prints an `Axiom:` line for the contract of the sort. With a comparator lambda `[c](T a, T b) { return e; }` of the element type, the sort uses that lambda, decision 0162. Dafny proves that the comparator is a strict weak order on every value of `T`, and `prove` says `the comparator may not be a strict weak order.` when it cannot. A comparator that reads an index or divides must hold for every value, not only for the values in the vector. A sort of any other form has no rule yet.
 - After a `push_back`, a read of `v.size()` in code needs a requires line or an invariant that bounds the length. Then the size fits `size_t`.
