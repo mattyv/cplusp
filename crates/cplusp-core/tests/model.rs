@@ -3073,3 +3073,75 @@ fn a_bound_name_next_to_a_real_is_a_real() {
     let want = DExpr::Forall(DI, Box::new(DExpr::Bin(BinOp::Le, Box::new(DExpr::Conv(DTy::Real, Box::new(DExpr::Bound(DI)))), Box::new(DExpr::Var(DA)))));
     assert_eq!(first, want);
 }
+
+const LX: u32 = 250;
+
+/// `int32_t f(std::vector<int32_t>& v, size_t i, int32_t x)` with `modifies v`, whose body starts with `std::vector<int32_t> copy = v;`,
+/// decision 0160.
+fn with_copy(rest: Stmts) -> Function {
+    let seq = Ty::Seq(Scalar::I32, Extent::Dynamic);
+    let copy = Stmt::Local(LX, Ty::Vec(Scalar::I32), Expr::Copy(b(Expr::Var(WV, Ty::MutSeq(Scalar::I32))), seq, seq), 6);
+    Function { ret: Ty::I32, ..write_at(List::Cons(Box::new(copy), Box::new(rest))) }
+}
+
+/// A local vector is a copy of a vector in scope, decision 0160. A write to the vector after the copy leaves the copy as it was,
+/// and a write to the copy is a new value of the local.
+#[test]
+fn a_local_vector_is_a_copy() {
+    let local = Ty::Vec(Scalar::I32);
+    let body = List::Cons(
+        Box::new(Stmt::SetIndex(WV, Expr::Var(WI, Ty::U64), Expr::Var(WX, Ty::I32), 7)),
+        Box::new(List::Cons(
+            Box::new(Stmt::SetIndex(LX, Expr::Var(WI, Ty::U64), Expr::Var(WX, Ty::I32), 8)),
+            Box::new(List::Cons(
+                Box::new(Stmt::PushBack(LX, Expr::Var(WX, Ty::I32), 9)),
+                Box::new(one(Stmt::Return(Expr::Index(b(Expr::Var(LX, local)), b(Expr::Var(WI, Ty::U64))), 10))),
+            )),
+        )),
+    );
+    let Model::Full(m) = translate_function(&with_copy(body), &List::Nil, &List::Nil) else { panic!("a full model") };
+    let x = || Box::new(DExpr::Var(LX));
+    let i = || Box::new(DExpr::Var(WI));
+    let e = || Box::new(DExpr::Var(WX));
+    let want = [
+        DStmt::Local(LX, DTy::Seq(Scalar::I32), DExpr::Out(WV)),
+        DStmt::SetOut(WV, DExpr::SetAt(Box::new(DExpr::Out(WV)), i(), e())),
+        DStmt::Assign(LX, DExpr::SetAt(x(), i(), e())),
+        DStmt::Assign(LX, DExpr::Append(x(), e())),
+        DStmt::Return(DExpr::Index(x(), i())),
+    ];
+    let mut body = strip(m.body);
+    for w in want {
+        let List::Cons((s, _), rest) = body else { panic!("a statement for {w:?}") };
+        assert_eq!(*s, w);
+        body = *rest;
+    }
+    assert_eq!(body, List::Nil);
+}
+
+/// A local vector has a rule only as a copy of a vector in scope of the same element, decision 0160. A local span is a view, and a
+/// call that passes a local vector by reference has no rule yet.
+#[test]
+fn a_local_vector_that_is_no_copy_is_refused() {
+    let seq = Ty::Seq(Scalar::I32, Extent::Dynamic);
+    let local = |t, e| Function { ret: Ty::I32, ..write_at(List::Cons(Box::new(Stmt::Local(LX, t, e, 6)), Box::new(one(Stmt::Return(Expr::Var(WX, Ty::I32), 7))))) };
+    let copy = || Expr::Copy(b(Expr::Var(WV, Ty::MutSeq(Scalar::I32))), seq, seq);
+    let refused = |f: Function| bare_refusal(translate_function(&f, &List::Nil, &List::Nil));
+    // Not from a copy.
+    assert_eq!(refused(local(Ty::Vec(Scalar::I32), Expr::Var(WV, Ty::MutSeq(Scalar::I32)))), Refusal::VecLocal(6));
+    // A copy of a sequence of another element.
+    let bytes = Ty::Seq(Scalar::U8, Extent::Dynamic);
+    let f = local(Ty::Vec(Scalar::I32), Expr::Copy(b(Expr::Var(WI, bytes)), bytes, bytes));
+    assert_eq!(refused(f), Refusal::VecLocal(6));
+    // A vector of bool, and of a struct.
+    assert_eq!(refused(local(Ty::Vec(Scalar::Bool), copy())), Refusal::Element(6));
+    assert_eq!(refused(local(Ty::Vec(Scalar::Struct(POINT)), copy())), Refusal::VecLocal(6));
+    // A span is a view.
+    assert_eq!(refused(local(seq, copy())), Refusal::SeqParam(6));
+    // A call that passes the local by reference to a writer.
+    let set = Stmt::SetIndex(WV, Expr::Var(WI, Ty::U64), Expr::Var(WX, Ty::I32), 6);
+    let all = fns(vec![Function { name: WX + 3, ..write_at(one(set)) }]);
+    let args = List::Cons(b(Expr::Var(LX, Ty::Vec(Scalar::I32))), Box::new(List::Cons(b(Expr::Var(WI, Ty::U64)), Box::new(List::Cons(b(Expr::Var(WX, Ty::I32)), Box::new(List::Nil))))));
+    let caller = with_copy(List::Cons(Box::new(Stmt::Call(WX + 3, SAT_NAME, Box::new(args), 12)), Box::new(one(Stmt::Return(Expr::Var(WX, Ty::I32), 13)))));
+    assert_eq!(bare_refusal(translate_function(&caller, &all, &List::Nil)), Refusal::PassLocal(LX, 12));
+}

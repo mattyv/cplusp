@@ -4389,6 +4389,45 @@ fn an_integer_converts_to_a_double_exactly() {
     assert!(text.contains(exact) && !text.contains(AXIOM), "{text}");
 }
 
+/// A local vector is a copy: a write to the copy leaves the vector of the caller as it was, and a write to the vector after the copy
+/// leaves the copy as it was, decision 0160. A contract that reads the copy as the vector, or the vector as a view, fails.
+#[test]
+fn a_local_vector_is_a_copy() {
+    let Some(dafny) = dafny() else { return };
+    if !clang_tidy_available() {
+        return;
+    }
+    let o = prove("model-vec-local.cpp", &[], &dafny);
+    let text = stdout(&o);
+    assert_eq!(o.status.code(), Some(0), "stdout: {text} stderr: {}", stderr(&o));
+    assert_eq!(text.lines().last(), Some("ok: proved"), "{text}");
+    let o = prove("model-vec-local-wrong.cpp", &[], &dafny);
+    let text = stdout(&o);
+    assert_eq!(o.status.code(), Some(1), "stdout: {text} stderr: {}", stderr(&o));
+    let failed: Vec<&str> = text.lines().filter(|l| l.starts_with("Not proved: ")).map(|l| l.rsplit_once(".cpp:").unwrap().1).collect();
+    assert_eq!(failed, ["10: the ensures line may not hold on this return.", "20: the ensures line may not hold on this return."], "{text}");
+}
+
+/// A local vector with no initial value, one from a list of values, and a call that passes one by reference have no rule yet,
+/// decision 0160.
+#[test]
+fn a_local_vector_with_no_rule_is_refused() {
+    if !clang_tidy_available() {
+        return;
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let (o, _) = model("model-vec-local-refuse.cpp", dir.path());
+    let text = stdout(&o);
+    assert_eq!(o.status.code(), Some(1), "stdout: {text} stderr: {}", stderr(&o));
+    let refusals: Vec<&str> = text.lines().filter(|l| l.starts_with("Not provable: ")).map(|l| l.rsplit_once(".cpp:").unwrap().1).collect();
+    let copy = "a local vector has a rule only as a copy of a vector in scope.";
+    assert_eq!(
+        refusals,
+        [format!("8: {copy}"), format!("13: {copy}"), "19: x is a local vector. A call that passes it by reference has no rule yet.".to_string()],
+        "{text}"
+    );
+}
+
 /// The examples double and double_expression prove: a tolerance that is a named double, and one error term for each rounding,
 /// decision 0158. The example fixed_point converts an integer to a double, decision 0159.
 #[test]

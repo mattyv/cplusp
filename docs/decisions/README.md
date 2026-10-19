@@ -164,3 +164,4 @@ Status is `decided`, `proposed` (the default until someone objects or the thin s
 | [0157](0157-a-count-if-with-no-rule-names-the-limit.md) | A count_if with no rule names the limit that it misses | decided |
 | [0158](0158-an-exact-double-a-named-double-and-a-whole-number-next-to-a-real.md) | An exact double with no short decimal, a named double constant, and a whole number next to a real | decided |
 | [0159](0159-an-integer-converts-to-a-double-and-a-contract-reads-it-as-a-real.md) | An integer converts to a double, and a contract reads an integer next to a real as a real | decided |
+| [0160](0160-local-vectors-and-std-sort-in-four-slices.md) | Local vectors and std::sort, in four slices. Slice one: a local vector is a copy | decided |
