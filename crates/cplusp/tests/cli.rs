@@ -2521,7 +2521,7 @@ fn a_struct_that_holds_a_sequence_is_a_parameter_only() {
     assert_eq!(o.status.code(), Some(1), "stdout: {text} stderr: {}", stderr(&o));
     let refusals: Vec<&str> = text.lines().filter(|l| l.starts_with("Not provable: ")).collect();
     for line in [15, 19, 24] {
-        let want = format!("model-nodes-refuse.cpp:{line}: a struct that holds a sequence is in the subset only as a parameter.");
+        let want = format!("model-nodes-refuse.cpp:{line}: a struct that holds a sequence is in the subset only as a parameter that the function does not write.");
         assert!(refusals.iter().any(|l| l.ends_with(&want)), "{want}: {text}");
     }
     assert_eq!(refusals.len(), 3, "{text}");
@@ -3863,7 +3863,7 @@ fn an_optional_of_a_struct_that_holds_a_sequence_is_refused() {
     assert_eq!(o.status.code(), Some(1), "stdout: {text} stderr: {}", stderr(&o));
     assert_eq!(
         text.lines().filter(|l| l.starts_with("Not provable: ")).map(|l| l.rsplit_once(".cpp:").unwrap().1).collect::<Vec<_>>(),
-        vec!["11: a struct that holds a sequence is in the subset only as a parameter."],
+        vec!["11: a struct that holds a sequence is in the subset only as a parameter that the function does not write."],
         "{text}"
     );
 }
@@ -4516,7 +4516,8 @@ fn a_vector_of_a_struct_and_a_vector_as_a_result_prove() {
 }
 
 /// A vector that may outgrow its bound, a lemma of the companion file whose proof fails, and a comparator that breaks two clauses
-/// of a strict weak order each have a plain sentence, and a failure prints one line, decision 0164.
+/// of a strict weak order each have a plain sentence, and a failure prints one line, decision 0164. The ensures failure of the lemma
+/// names its ensures line.
 #[test]
 fn a_vector_too_long_and_a_failed_lemma_have_plain_sentences() {
     let Some(dafny) = dafny() else { return };
@@ -4537,6 +4538,55 @@ fn a_vector_too_long_and_a_failed_lemma_have_plain_sentences() {
     assert!(lemmas.iter().all(|l| l.contains("model-companion-fail.spec.dfy:")), "{lemmas:?}");
     let said: Vec<&str> = lemmas.iter().map(|l| l.rsplit_once(": ").unwrap().1).collect();
     assert_eq!(said, ["the ensures line may not hold on this return.", "the assert line may not hold."], "{lemmas:?}");
+    let o = prove("model-companion-fail.cpp", &[], &dafny);
+    let named = blocks(&stdout(&o))
+        .into_iter()
+        .any(|(h, under)| h.ends_with("the ensures line may not hold on this return.") && under.iter().any(|u| u.ends_with("model-companion-fail.spec.dfy:2: ensures x > 0")));
+    assert!(named, "{}", stdout(&o));
+}
+
+/// The blocks of `Not proved` lines: each head with the lines under it.
+fn blocks(text: &str) -> Vec<(String, Vec<String>)> {
+    let mut out: Vec<(String, Vec<String>)> = Vec::new();
+    for l in text.lines() {
+        if l.starts_with("Not proved: ") {
+            out.push((l.to_string(), Vec::new()));
+        } else if l.starts_with("  ") {
+            if let Some(last) = out.last_mut() {
+                last.1.push(l.to_string());
+            }
+        }
+    }
+    out
+}
+
+/// Two clauses of a lemma of the companion file that fail, as ensures lines or as requires lines at an apply, give two lines, each
+/// with the line of the companion file that it breaks, decision 0164. Two reads on one line that may each be out of range give two
+/// lines.
+#[test]
+fn two_failures_at_one_place_stay_two_lines() {
+    let Some(dafny) = dafny() else { return };
+    if !clang_tidy_available() {
+        return;
+    }
+    let o = prove("model-companion-two.cpp", &[], &dafny);
+    let text = stdout(&o);
+    assert_eq!(o.status.code(), Some(1), "stdout: {text} stderr: {}", stderr(&o));
+    let found = blocks(&text);
+    let broken = |head: &str, clause: &str| {
+        found.iter().filter(|(h, under)| h.ends_with(head) && under.iter().any(|u| u.starts_with("  The contract line: ") && u.ends_with(clause))).count()
+    };
+    let ensures = "the ensures line may not hold on this return.";
+    assert_eq!(broken(ensures, "model-companion-two.spec.dfy:2: ensures x > 0"), 1, "{text}");
+    assert_eq!(broken(ensures, "model-companion-two.spec.dfy:3: ensures x < 0"), 1, "{text}");
+    let callee = "model-companion-two.cpp:7: a requires line of the callee may not hold.";
+    assert_eq!(broken(callee, "model-companion-two.spec.dfy:8: requires x > 0"), 1, "{text}");
+    assert_eq!(broken(callee, "model-companion-two.spec.dfy:9: requires x < 0"), 1, "{text}");
+    assert_eq!(found.len(), 4, "{text}");
+    let o = prove("model-two-index.cpp", &[], &dafny);
+    let text = stdout(&o);
+    let index = text.lines().filter(|l| l.starts_with("Not proved: ") && l.ends_with("model-two-index.cpp:9: the index may be out of range.")).count();
+    assert_eq!(index, 2, "{text}");
 }
 
 /// The examples double and double_expression prove: a tolerance that is a named double, and one error term for each rounding,
