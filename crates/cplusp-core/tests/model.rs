@@ -3207,8 +3207,8 @@ fn a_sort_with_a_comparator_is_std_sort_with_the_lambda() {
     let ro = Ty::Seq(Scalar::I32, Extent::Dynamic);
     let f = Function { params: List::Cons((WV, ro), Box::new(List::Nil)), conds: List::Nil, ..write_at(one(Stmt::SortBy(WV, CA, CB, Ty::I32, down(), 6))) };
     assert_eq!(bare_refusal(translate_function(&f, &List::Nil, &List::Nil)), Refusal::WriteParam(WV, 6));
-    // A test with a call is refused.
+    // A test with a call is refused as a call out of place.
     let call = Expr::Call(SAT, SAT_NAME, Box::new(List::Nil), 6);
     let f = with_copy(List::Cons(Box::new(Stmt::SortBy(LX, CA, CB, Ty::I32, call, 7)), Box::new(one(Stmt::Return(Expr::Var(WX, Ty::I32), 8)))));
-    assert!(matches!(translate_function(&f, &List::Nil, &List::Nil), Model::Refused(_)));
+    assert_eq!(bare_refusal(translate_function(&f, &List::Nil, &List::Nil)), Refusal::Place(6));
 }

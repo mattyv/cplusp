@@ -4468,8 +4468,9 @@ fn std_sort_of_another_form_is_refused() {
     assert_eq!(o.status.code(), Some(1), "stdout: {text} stderr: {}", stderr(&o));
     let refusals: Vec<&str> = text.lines().filter(|l| l.starts_with("Not provable: ")).map(|l| l.rsplit_once(".cpp:").unwrap().1).collect();
     let other = "std::sort of another form: the translator has no rule for it yet.";
-    // A named function as a comparator, a lambda of another type and a lambda of two statements, decision 0162.
-    let lines = [13, 19, 26, 32, 38];
+    // A named function as a comparator, a lambda of another type, a lambda of two statements, a lambda of two types and a lambda
+    // with a parameter that it can write, decision 0162.
+    let lines = [13, 19, 26, 32, 38, 47, 53];
     assert_eq!(refusals, lines.map(|l| format!("{l}: {other}")), "{text}");
 }
 

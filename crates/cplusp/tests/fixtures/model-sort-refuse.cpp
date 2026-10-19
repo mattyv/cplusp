@@ -41,3 +41,15 @@ int32_t two_statements(const std::vector<int32_t>& v) {
   });
   return 0;
 }
+
+int32_t two_types(const std::vector<int32_t>& v) {
+  std::vector<int32_t> x = v;
+  std::sort(x.begin(), x.end(), [](int32_t a, int64_t b) { return a < b; });
+  return 0;
+}
+
+int32_t writable_parameter(const std::vector<int32_t>& v) {
+  std::vector<int32_t> x = v;
+  std::sort(x.begin(), x.end(), [](int32_t a, int32_t& b) { return a < b; });
+  return 0;
+}

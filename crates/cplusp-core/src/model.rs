@@ -323,7 +323,8 @@ pub type Args = List<Box<Expr>>;
 /// name and its arguments. `Exit` is `return;`, decision 0096. `Assert` is a `//@ assert` line in the body, and `Apply` is a
 /// `//@ apply` line that calls a lemma of the companion file by the id of its name, decision 0099. `RangeFor` is a range-for, decision
 /// 0143. `SetIndex` is `v[i] = e` of a vector by reference, decision 0145, and `PushBack` is `v.push_back(e)`, decision 0148.
-/// `Sort` is `std::sort(v.begin(), v.end())`, decision 0161.
+/// `Sort` is `std::sort(v.begin(), v.end())`, decision 0161, and `SortBy` is the same with a comparator lambda, by the names and the
+/// type of its two parameters and the expression of its one `return`, decision 0162.
 #[derive(PartialEq, Eq, Debug)]
 pub enum Stmt {
     Return(Expr, u32),
@@ -344,6 +345,7 @@ pub enum Stmt {
     SetIndex(u32, Expr, Expr, u32),
     PushBack(u32, Expr, u32),
     Sort(u32, u32),
+    SortBy(u32, u32, u32, Ty, Expr, u32),
     Unknown(u32, u32),
 }
 
@@ -505,7 +507,7 @@ pub type DArgs = List<DExpr>;
 /// back, `o, x := m(o, x, args);`, and `LocalUpdate` also sets a new local to the value it gives, decisions 0096 and 0108. The
 /// arguments hold each argument of the call. `CallStmt` is `m(args);` of a method that gives no value, and `Exit` is `return;`, decision 0096. `Assert` is
 /// `assert e;` and `Apply` is `l(args);` of a lemma, decision 0099. `Sort` is `p := StdSort(p, (a: T, b: T) => a < b);` of a place
-/// and the type of its elements, decision 0161. `Match` is a match over the enum with the key, decision 0109. `Pre` is a statement with the calls that run before it, decision
+/// and the type of its elements, decision 0161. `SortBy` is `p := StdSort(p, (a: T, b: T) => e);` with a comparator, decision 0162. `Match` is a match over the enum with the key, decision 0109. `Pre` is a statement with the calls that run before it, decision
 /// 0104.
 #[derive(PartialEq, Eq, Debug)]
 pub enum DStmt {
@@ -530,6 +532,7 @@ pub enum DStmt {
     Match(DExpr, u32, Box<DCases>),
     Pre(DCalls, Box<DStmt>),
     Sort(Box<DExpr>, DTy),
+    SortBy(Box<DExpr>, u32, u32, DTy, Box<DExpr>),
 }
 
 /// A place that a call writes back: a local by its name, the object of the member function that makes the call, or a reference
@@ -714,6 +717,39 @@ pub fn sort(p: DExpr, s: Scalar, line: u32) -> (r: Result<DStmt, Refusal>)
         Err(Refusal::SortForm(line))
     } else {
         Ok(DStmt::Sort(Box::new(p), scalar_dty(s)))
+    }
+}
+
+/// A sort of a place whose elements are `s` with a comparator, decision 0162. Each parameter of the lambda has the element type, and
+/// its test is code with no call. Dafny proves at the call that the comparator is a strict weak order.
+pub open spec fn spec_sort_by(p: DExpr, s: Scalar, a: u32, b: u32, t: Ty, e: Expr, line: u32) -> Result<DStmt, Refusal> {
+    if spec_elem(s) == t {
+        match spec_ty(t, line) {
+            Ok(dt) => match spec_code(e, line) {
+                Ok(de) => Ok(DStmt::SortBy(Box::new(p), a, b, dt, Box::new(de))),
+                Err(r) => Err(r),
+            },
+            Err(r) => Err(r),
+        }
+    } else {
+        Err(Refusal::SortForm(line))
+    }
+}
+
+pub fn sort_by(p: DExpr, s: Scalar, a: u32, b: u32, t: Ty, e: &Expr, line: u32) -> (r: Result<DStmt, Refusal>)
+    ensures
+        r == spec_sort_by(p, s, a, b, t, *e, line),
+{
+    if elem(s) == t {
+        match translate_ty(t, line) {
+            Ok(dt) => match translate_code(e, line) {
+                Ok(de) => Ok(DStmt::SortBy(Box::new(p), a, b, dt, Box::new(de))),
+                Err(r) => Err(r),
+            },
+            Err(r) => Err(r),
+        }
+    } else {
+        Err(Refusal::SortForm(line))
     }
 }
 
@@ -2278,6 +2314,7 @@ pub open spec fn spec_place(s: Stmt) -> u32 {
         Stmt::SetIndex(_, _, _, l) => l,
         Stmt::PushBack(_, _, l) => l,
         Stmt::Sort(_, l) => l,
+        Stmt::SortBy(_, _, _, _, _, l) => l,
         Stmt::Unknown(_, l) => l,
     }
 }
@@ -2789,6 +2826,15 @@ pub open spec fn spec_stmt(s: Stmt, all: Fns, env: Params, ps: Params, sd: Struc
             Some(_) => Err(Refusal::WriteParam(v, l)),
             None => match spec_get(env, v) {
                 Some(Ty::Vec(s)) => spec_sort(DExpr::Var(v), s, l),
+                _ => Err(Refusal::SortForm(l)),
+            },
+        },
+        // `std::sort` with a comparator lambda, decision 0162.
+        Stmt::SortBy(v, a, b, t, e, l) => match spec_get(ps, v) {
+            Some(Ty::MutSeq(s)) => spec_sort_by(DExpr::Out(v), s, a, b, t, e, l),
+            Some(_) => Err(Refusal::WriteParam(v, l)),
+            None => match spec_get(env, v) {
+                Some(Ty::Vec(s)) => spec_sort_by(DExpr::Var(v), s, a, b, t, e, l),
                 _ => Err(Refusal::SortForm(l)),
             },
         },
@@ -3636,6 +3682,7 @@ pub open spec fn unknown_stmt(s: Stmt) -> bool
         Stmt::SetIndex(_, i, e, _) => unknown_expr(i) || unknown_expr(e),
         Stmt::PushBack(_, e, _) => unknown_expr(e),
         Stmt::Sort(_, _) => false,
+        Stmt::SortBy(_, _, _, _, e, _) => unknown_expr(e),
         Stmt::Switch(e, _, cs, _) => unknown_expr(e) || unknown_cases(*cs),
         Stmt::Call(_, _, args, _) => unknown_args(*args),
         Stmt::Exit(_) => false,
@@ -3766,6 +3813,7 @@ pub proof fn lemma_unknown_stmt_is_refused(s: Stmt, all: Fns, env: Params, ps: P
         },
         Stmt::PushBack(_, e, l) => lemma_unknown_code_is_refused(e, l),
         Stmt::Sort(_, _) => {},
+        Stmt::SortBy(_, _, _, _, e, l) => lemma_unknown_code_is_refused(e, l),
         Stmt::Switch(e, _, cs, l) => {
             if unknown_expr(e) {
                 lemma_unknown_lift_is_refused(e, all, l, sd, 0, true);
@@ -4626,7 +4674,7 @@ pub proof fn lemma_resolves_set_ref_field(s: Stmt, all: Fns, env: Params, ps: Pa
 pub proof fn lemma_resolves_plain(s: Stmt, all: Fns, env: Params, ps: Params, sd: Structs)
     requires
         spec_stmt(s, all, env, ps, sd).is_ok(),
-        s is Step || s is Exit || s is Assert || s is Apply || s is Unknown || s is SetIndex || s is PushBack || s is Sort,
+        s is Step || s is Exit || s is Assert || s is Apply || s is Unknown || s is SetIndex || s is PushBack || s is Sort || s is SortBy,
     ensures
         calls_resolve_stmt(spec_stmt(s, all, env, ps, sd).unwrap(), all, sd),
 {
@@ -4702,6 +4750,7 @@ pub proof fn lemma_stmt_calls_resolve(s: Stmt, all: Fns, env: Params, ps: Params
         Stmt::SetIndex(_, _, _, _) => lemma_resolves_plain(s, all, env, ps, sd),
         Stmt::PushBack(_, _, _) => lemma_resolves_plain(s, all, env, ps, sd),
         Stmt::Sort(_, _) => lemma_resolves_plain(s, all, env, ps, sd),
+        Stmt::SortBy(_, _, _, _, _, _) => lemma_resolves_plain(s, all, env, ps, sd),
         Stmt::If(c, t, f, l) => {
             lemma_stmts_calls_resolve(*t, all, env, ps, sd);
             lemma_stmts_calls_resolve(*f, all, env, ps, sd);
@@ -6197,6 +6246,7 @@ pub fn place(s: &Stmt) -> (r: u32)
         Stmt::SetIndex(_, _, _, l) => *l,
         Stmt::PushBack(_, _, l) => *l,
         Stmt::Sort(_, l) => *l,
+        Stmt::SortBy(_, _, _, _, _, l) => *l,
         Stmt::Unknown(_, l) => *l,
     }
 }
@@ -6718,6 +6768,14 @@ pub fn translate_stmt(s: &Stmt, all: &Fns, env: &Params, ps: &Params, sd: &Struc
             Some(_) => Err(Refusal::WriteParam(*v, *l)),
             None => match get(env, *v) {
                 Some(Ty::Vec(s)) => sort(DExpr::Var(*v), s, *l),
+                _ => Err(Refusal::SortForm(*l)),
+            },
+        },
+        Stmt::SortBy(v, a, b, t, e, l) => match get(ps, *v) {
+            Some(Ty::MutSeq(s)) => sort_by(DExpr::Out(*v), s, *a, *b, *t, e, *l),
+            Some(_) => Err(Refusal::WriteParam(*v, *l)),
+            None => match get(env, *v) {
+                Some(Ty::Vec(s)) => sort_by(DExpr::Var(*v), s, *a, *b, *t, e, *l),
                 _ => Err(Refusal::SortForm(*l)),
             },
         },

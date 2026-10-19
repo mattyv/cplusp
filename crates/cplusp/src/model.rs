@@ -138,6 +138,8 @@ enum JStmt {
     PushBack(String, JExpr, u32),
     /// `std::sort(v.begin(), v.end())`, decision 0161.
     Sort(String, u32),
+    /// `std::sort(v.begin(), v.end(), [captures](T a, T b) { return e; })`: the vector, the two parameters, their type, the test and the line, decision 0162.
+    SortBy(String, String, String, JTy, JExpr, u32),
     /// `p.f = e` where `p` is a reference parameter, decision 0108.
     SetRefField(String, String, JExpr, u32),
     /// A switch over an enum, decision 0109: its condition, the key of the enum, the cases as (place of the enumerator, statements), and the line.
@@ -439,6 +441,10 @@ fn stmt(s: JStmt, names: &mut Names) -> Stmt {
         JStmt::SetIndex(v, i, e, line) => Stmt::SetIndex(names.id(&v), expr(i, names), expr(e, names), names.here(line)),
         JStmt::PushBack(v, e, line) => Stmt::PushBack(names.id(&v), expr(e, names), names.here(line)),
         JStmt::Sort(v, line) => Stmt::Sort(names.id(&v), names.here(line)),
+        JStmt::SortBy(v, a, b, t, e, line) => {
+            let (v, a, b, t) = (names.id(&v), names.id(&a), names.id(&b), ty(t, names));
+            Stmt::SortBy(v, a, b, t, expr(e, names), names.here(line))
+        }
         JStmt::Switch(e, k, cases, line) => {
             let place = names.here(line);
             let key = names.id(&k);
@@ -780,6 +786,10 @@ fn stmt_names<'a>(s: &'a JStmt, out: &mut Vec<&'a str>) {
         JStmt::Step(n, ..) => out.push(n),
         JStmt::SetField(_, e, _) => expr_names(e, out),
         JStmt::Sort(v, _) => out.push(v),
+        JStmt::SortBy(v, a, b, _, e, _) => {
+            out.extend([v, a, b].map(String::as_str));
+            expr_names(e, out);
+        }
         JStmt::PushBack(v, e, _) => {
             out.push(v);
             expr_names(e, out);
@@ -1309,6 +1319,12 @@ impl Printer<'_> {
                 self.put(depth, format!("{target} := StdSort({target}, (a: {t}, b: {t}) => a < b);"), place)
             }
             // A local vector is a plain `seq`, because `push_back` may grow it past the bound of `Vec`, as for a vector given back, decision 0160.
+            DStmt::SortBy(target, a, b, t, body) => {
+                names.sorted.set(true);
+                let (target, t) = (dexpr(target, names), dty(*t, names));
+                let (a, b) = (mangle(names.text(*a)), mangle(names.text(*b)));
+                self.put(depth, format!("{target} := StdSort({target}, ({a}: {t}, {b}: {t}) => {});", dexpr(body, names)), place)
+            }
             DStmt::Local(x, t, e) => {
                 let shown = match t {
                     DTy::Seq(s) => format!("seq<{}>", dscalar(*s, names)),

@@ -4951,13 +4951,14 @@ private:
                                                expr(Arg, line(S->getBeginLoc())), number(line(S->getBeginLoc()))});
     }
     // A call that is the whole statement, `f(a);` or `o.f(a);`. Its object is the first argument, decision 0096.
-    // `std::sort(v.begin(), v.end())` of a vector that the function writes is a sort of the whole of `v`, decision 0161. Any other call of `std::sort`, a part of a
-    // range, a comparator, a policy or two vectors, is named by what it is. The comparator is not looked at.
+    // `std::sort(v.begin(), v.end())` of a vector that the function writes is a sort of the whole of `v`, decision 0161. A comparator lambda of the element type
+    // with one return is `SortBy`, decision 0162. Any other call of `std::sort`, a part of a range, another comparator, a policy or two vectors, is named by
+    // what it is.
     if (const auto *Sort = dyn_cast<CallExpr>(Inner); Sort && Sort->getStmtClass() == Stmt::CallExprClass && Sort->getDirectCallee() &&
                                                        Sort->getDirectCallee()->isInStdNamespace() && Sort->getDirectCallee()->getDeclName().isIdentifier() &&
                                                        Sort->getDirectCallee()->getName() == "sort" && SM.isInSystemHeader(Sort->getDirectCallee()->getLocation())) {
       const VarDecl *Whole = nullptr;
-      bool Same = Sort->getNumArgs() == 2;
+      bool Same = Sort->getNumArgs() == 2 || Sort->getNumArgs() == 3;
       for (unsigned I = 0; Same && I < 2; ++I) {
         const auto *Member = dyn_cast<CXXMemberCallExpr>(Sort->getArg(I)->IgnoreParenImpCasts());
         const Expr *Object = Member ? Member->getImplicitObjectArgument() : nullptr;
@@ -4967,8 +4968,18 @@ private:
                Member->getMethodDecl()->getName() == (I == 0 ? "begin" : "end") && Var && (isa<ParmVarDecl>(Var) || Var->hasLocalStorage()) && (!Whole || Whole == Var);
         Whole = Var;
       }
-      if (Same)
+      if (Same && Sort->getNumArgs() == 2)
         return tag("Sort", llvm::json::Array{Whole->getNameAsString(), number(line(S->getBeginLoc()))});
+      // A comparator lambda with two parameters of one type, decision 0162. The core compares that type with the element.
+      if (Same && Sort->getNumArgs() == 3)
+        if (const LambdaExpr *Lambda = lambdaArgument(Sort->getArg(2)); Lambda && Lambda->getCallOperator()->getNumParams() == 2)
+          if (const ReturnStmt *Return = lambdaReturn(Lambda)) {
+            const CXXMethodDecl *Operator = Lambda->getCallOperator();
+            const QualType First = comparatorParameter(Operator->getParamDecl(0)), Second = comparatorParameter(Operator->getParamDecl(1));
+            if (!First.isNull() && First == Second)
+              return tag("SortBy", llvm::json::Array{Whole->getNameAsString(), Operator->getParamDecl(0)->getNameAsString(), Operator->getParamDecl(1)->getNameAsString(), type(First),
+                                                     expr(Return->getRetValue(), line(S->getBeginLoc())), number(line(S->getBeginLoc()))});
+          }
       return unknown(S, "std::sort of another form", line(S->getBeginLoc()));
     }
     if (const auto *Call = dyn_cast<CallExpr>(Inner))
@@ -5189,6 +5200,47 @@ private:
     return dyadic(Value, M, Q) ? tag("Ratio", llvm::json::Array{number(M), number(Q)}) : llvm::json::Value(nullptr);
   }
 
+  // The lambda written in a call, behind the copies and temporaries that the compiler adds, or null.
+  static const LambdaExpr *lambdaArgument(const Expr *Arg) {
+    for (;;) {
+      Arg = Arg->IgnoreParenImpCasts();
+      if (const auto *Wrapper = dyn_cast<ExprWithCleanups>(Arg))
+        Arg = Wrapper->getSubExpr();
+      else if (const auto *Construct = dyn_cast<CXXConstructExpr>(Arg); Construct && Construct->getNumArgs() == 1)
+        Arg = Construct->getArg(0);
+      else if (const auto *Temporary = dyn_cast<MaterializeTemporaryExpr>(Arg))
+        Arg = Temporary->getSubExpr();
+      else if (const auto *Bound = dyn_cast<CXXBindTemporaryExpr>(Arg))
+        Arg = Bound->getSubExpr();
+      else
+        return dyn_cast<LambdaExpr>(Arg);
+    }
+  }
+  // The limits of a comparator lambda, decision 0162: captures by copy with no initializer, a call operator that is const, and a body of one
+  // `return e;` of a boolean. The return statement, or null. ponytail: `countIf` keeps its own copy of these checks, because it names the limit
+  // that each miss breaks, decision 0157. Upgrade: one helper that gives the first missed limit, and `countIf` maps it to its sentence.
+  static const ReturnStmt *lambdaReturn(const LambdaExpr *Lambda) {
+    const CXXMethodDecl *Operator = Lambda->getCallOperator();
+    if (Lambda->getCaptureDefault() == LCD_ByRef || !Operator->isConst())
+      return nullptr;
+    for (const LambdaCapture &Capture : Lambda->captures())
+      if (Capture.getCaptureKind() != LCK_ByCopy || !Capture.capturesVariable() || Lambda->isInitCapture(&Capture))
+        return nullptr;
+    const auto *Body = dyn_cast_or_null<CompoundStmt>(Operator->getBody());
+    const auto *Return = Body && Body->size() == 1 ? dyn_cast<ReturnStmt>(Body->body_front()) : nullptr;
+    return Return && Return->getRetValue() && Return->getRetValue()->getType()->isBooleanType() ? Return : nullptr;
+  }
+  // The type of a comparator parameter, by value or by reference to const, with no qualifier, or null.
+  static QualType comparatorParameter(const ParmVarDecl *Parameter) {
+    QualType Declared = Parameter->getType();
+    if (Declared->isReferenceType()) {
+      if (!Declared->isLValueReferenceType() || !Declared->getPointeeType().isConstQualified())
+        return QualType();
+      Declared = Declared->getPointeeType();
+    }
+    return Parameter->getIdentifier() ? Declared.getCanonicalType().getUnqualifiedType() : QualType();
+  }
+
   // The `CountIf` node of a call of `std::count_if` from the library, decision 0149, or null. When the call misses a limit of 0149, `Limit` names the first
   // limit that it misses, in the order of decision 0157. A miss that fits none of them leaves `Limit` empty, and the call stays a call with no model.
   llvm::json::Value countIf(const Expr *E, unsigned Near, std::string &Limit) const {
@@ -5212,21 +5264,7 @@ private:
       Sequence = Param;
     }
     // The lambda is written in the call, behind the copies and temporaries that the compiler adds.
-    const Expr *Arg = Call->getArg(2);
-    for (;;) {
-      Arg = Arg->IgnoreParenImpCasts();
-      if (const auto *Wrapper = dyn_cast<ExprWithCleanups>(Arg))
-        Arg = Wrapper->getSubExpr();
-      else if (const auto *Construct = dyn_cast<CXXConstructExpr>(Arg); Construct && Construct->getNumArgs() == 1)
-        Arg = Construct->getArg(0);
-      else if (const auto *Temporary = dyn_cast<MaterializeTemporaryExpr>(Arg))
-        Arg = Temporary->getSubExpr();
-      else if (const auto *Bound = dyn_cast<CXXBindTemporaryExpr>(Arg))
-        Arg = Bound->getSubExpr();
-      else
-        break;
-    }
-    const auto *Lambda = dyn_cast<LambdaExpr>(Arg);
+    const LambdaExpr *Lambda = lambdaArgument(Call->getArg(2));
     if (!Lambda) {
       Limit = "count_if with a function or a functor in place of a lambda written in the call";
       return nullptr;

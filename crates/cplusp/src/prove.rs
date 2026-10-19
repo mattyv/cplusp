@@ -200,9 +200,14 @@ pub fn run(t: &Translation, limit: u32, refused: bool, source: &str, shown: &dyn
             && e.related.iter().any(|r| double_line(r).is_some_and(|l| l.starts_with("requires abs(") && l.ends_with(") <= MAX")));
         let too_large = message == "function precondition could not be proved"
             && e.related.iter().any(|r| double_line(r) == Some("requires -9007199254740992 <= n <= 9007199254740992"));
+        // StdSort is a method, so Dafny says "a precondition for this call".
+        let comparator = message == "a precondition for this call could not be proved"
+            && e.related.iter().any(|r| double_line(r) == Some("requires StrictWeakOrder(cmp)"));
         let double_zero = message == "function precondition could not be proved" && e.related.iter().any(|r| double_line(r) == Some("requires b != 0.0"));
         let said = if overflow {
             "the result of the operation may exceed DBL_MAX.".to_string()
+        } else if comparator {
+            "the comparator may not be a strict weak order.".to_string()
         } else if too_large {
             "the integer may be too large for an exact double.".to_string()
         } else if zero || double_zero {
