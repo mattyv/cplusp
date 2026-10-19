@@ -2,14 +2,16 @@
 #include <cstdint>
 #include <vector>
 
-// std::sort is on the trusted list, and its contract is a sorted permutation. The function sorts a copy and reads its first element,
-// so the vector of the caller stays as it was. The proof that the result is the smallest comes from the contract of sort alone.
+// std::sort is on the trusted list, and its contract is a sorted permutation, decision 0161. The function sorts a copy and reads
+// its first element, so the vector of the caller stays as it was. The lemma SortedMin of example.spec.dfy proves from the contract
+// of sort alone that the first element is the smallest.
 //@ requires !v.empty()
 //@ ensures forall j :: 0 <= j < v.size() ==> result <= v[j]
 //@ ensures exists j :: 0 <= j < v.size() && v[j] == result
 int32_t minimum(const std::vector<int32_t>& v) {
   std::vector<int32_t> sorted = v;
   std::sort(sorted.begin(), sorted.end());
+  //@ apply SortedMin(sorted, v)
   return sorted[0];
 }
 

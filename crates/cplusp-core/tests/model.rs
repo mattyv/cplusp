@@ -3148,3 +3148,29 @@ fn a_local_vector_that_is_no_copy_is_refused() {
     let caller = with_copy(List::Cons(Box::new(Stmt::Call(WX + 3, SAT_NAME, Box::new(args), 12)), Box::new(one(Stmt::Return(Expr::Var(WX, Ty::I32), 13)))));
     assert_eq!(bare_refusal(translate_function(&caller, &all, &List::Nil)), Refusal::PassLocal(LX, 12));
 }
+
+/// `std::sort(v.begin(), v.end())` of a local vector or of a vector by reference is StdSort with `<` on its elements, decision
+/// 0161. A sort of a read-only sequence is a write to a parameter, and a sort of a vector of a struct needs a comparator.
+#[test]
+fn a_sort_of_a_vector_is_std_sort() {
+    let body = List::Cons(Box::new(Stmt::Sort(LX, 7)), Box::new(one(Stmt::Return(Expr::Index(b(Expr::Var(LX, Ty::Vec(Scalar::I32))), b(Expr::Var(WI, Ty::U64))), 8))));
+    let Model::Full(m) = translate_function(&with_copy(body), &List::Nil, &List::Nil) else { panic!("a full model") };
+    let List::Cons(_, rest) = strip(m.body) else { panic!("the copy") };
+    let List::Cons((sort, _), _) = *rest else { panic!("the sort") };
+    assert_eq!(*sort, DStmt::Sort(Box::new(DExpr::Var(LX)), DTy::Int32));
+    // A vector by reference sorts its value after.
+    let Model::Full(m) = translate_function(&write_at(one(Stmt::Sort(WV, 6))), &List::Nil, &List::Nil) else { panic!("a full model") };
+    assert_eq!(strip(m.body), List::Cons((Box::new(DStmt::Sort(Box::new(DExpr::Out(WV)), DTy::Int32)), 0), Box::new(List::Nil)));
+    // A read-only sequence.
+    let ro = Ty::Seq(Scalar::I32, Extent::Dynamic);
+    let f = Function { params: List::Cons((WV, ro), Box::new(List::Nil)), conds: List::Nil, ..write_at(one(Stmt::Sort(WV, 6))) };
+    assert_eq!(bare_refusal(translate_function(&f, &List::Nil, &List::Nil)), Refusal::WriteParam(WV, 6));
+    // A vector of a struct.
+    let points = Ty::MutSeq(Scalar::Struct(POINT));
+    let f = Function { params: List::Cons((WV, points), Box::new(List::Nil)), conds: modifies(&[WV], &[WV], List::Nil), ..write_at(one(Stmt::Sort(WV, 6))) };
+    let sd: Structs = List::Cons((POINT, (3, List::Cons((FX, Ty::I32), Box::new(List::Nil)), List::Nil)), Box::new(List::Nil));
+    assert_eq!(bare_refusal(translate_function(&f, &List::Nil, &sd)), Refusal::SortForm(6));
+    // A name that is no vector.
+    let f = write_at(one(Stmt::Sort(LX, 6)));
+    assert_eq!(bare_refusal(translate_function(&f, &List::Nil, &List::Nil)), Refusal::Syntax(6));
+}

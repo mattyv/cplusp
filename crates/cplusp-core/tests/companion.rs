@@ -153,3 +153,14 @@ fn a_name_of_the_double_model_is_refused() {
     assert_eq!(r, want);
     assert_eq!(d, vec![]);
 }
+
+/// Each name of the sort model is a name of the model, decision 0161, so a companion file cannot declare one.
+#[test]
+fn a_name_of_the_sort_model_is_refused() {
+    let names = ["Algorithm", "StdSort", "StrictWeakOrder", "SortedBy"];
+    let text: String = names.iter().map(|n| format!("predicate {n}() {{ true }}\n")).collect();
+    let (r, d) = scan(&text);
+    let want: Vec<(u32, String)> = names.iter().enumerate().map(|(i, n)| (i as u32 + 1, format!("name:{n}"))).collect();
+    assert_eq!(r, want);
+    assert_eq!(d, vec![]);
+}

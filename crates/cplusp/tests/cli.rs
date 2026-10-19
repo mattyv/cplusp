@@ -4428,15 +4428,59 @@ fn a_local_vector_with_no_rule_is_refused() {
     );
 }
 
+const SORT_AXIOM: &str = "Axiom: Algorithm.dfy: StdSort: std::sort with a strict weak order gives a permutation of its range, and no later element compares less than an earlier one, C++23 [sort] and [alg.sorting.general].";
+
+/// std::sort of a vector of integers is StdSort: the order, the length and the multiset hold after the call, and prove names the
+/// trusted contract once, decision 0161. A claim of the other order, or of the old first element, fails at its return.
+#[test]
+fn std_sort_of_a_vector_of_integers_is_std_sort() {
+    let Some(dafny) = dafny() else { return };
+    if !clang_tidy_available() {
+        return;
+    }
+    let o = prove("model-sort.cpp", &[], &dafny);
+    let text = stdout(&o);
+    assert_eq!(o.status.code(), Some(0), "stdout: {text} stderr: {}", stderr(&o));
+    let lines: Vec<&str> = text.lines().collect();
+    assert_eq!(lines.last(), Some(&"ok: proved"), "{text}");
+    assert_eq!(lines.iter().filter(|l| **l == SORT_AXIOM).count(), 1, "{text}");
+    assert!(!text.contains("Axiom: Double.dfy"), "{text}");
+    let o = prove("model-sort-wrong.cpp", &[], &dafny);
+    let text = stdout(&o);
+    assert_eq!(o.status.code(), Some(1), "stdout: {text} stderr: {}", stderr(&o));
+    let failed: Vec<&str> = text.lines().filter(|l| l.starts_with("Not proved: ")).map(|l| l.rsplit_once(".cpp:").unwrap().1).collect();
+    assert_eq!(failed, ["11: the ensures line may not hold on this return.", "19: the ensures line may not hold on this return."], "{text}");
+    // A model with no sort names no axiom of the sort.
+    let o = prove("model-vec-local.cpp", &[], &dafny);
+    assert!(!stdout(&o).contains("Algorithm.dfy"), "{}", stdout(&o));
+}
+
+/// A std::sort of a part of a range, with a comparator, or over two vectors is refused with one sentence that names std::sort,
+/// decision 0161.
+#[test]
+fn std_sort_of_another_form_is_refused() {
+    if !clang_tidy_available() {
+        return;
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let (o, _) = model("model-sort-refuse.cpp", dir.path());
+    let text = stdout(&o);
+    assert_eq!(o.status.code(), Some(1), "stdout: {text} stderr: {}", stderr(&o));
+    let refusals: Vec<&str> = text.lines().filter(|l| l.starts_with("Not provable: ")).map(|l| l.rsplit_once(".cpp:").unwrap().1).collect();
+    let other = "std::sort of another form: the translator has no rule for it yet.";
+    assert_eq!(refusals, [format!("9: {other}"), format!("15: {other}"), format!("22: {other}")], "{text}");
+}
+
 /// The examples double and double_expression prove: a tolerance that is a named double, and one error term for each rounding,
-/// decision 0158. The example fixed_point converts an integer to a double, decision 0159.
+/// decision 0158. The example fixed_point converts an integer to a double, decision 0159. The example algorithms sorts a copy,
+/// decision 0161.
 #[test]
 fn the_double_examples_prove() {
     let Some(dafny) = dafny() else { return };
     if !clang_tidy_available() {
         return;
     }
-    for example in ["double", "double_expression", "fixed_point"] {
+    for example in ["double", "double_expression", "fixed_point", "algorithms"] {
         let o = prove(&format!("../../../../examples/{example}/example.cpp"), &[], &dafny);
         let text = stdout(&o);
         assert_eq!(o.status.code(), Some(0), "{example}: stdout: {text} stderr: {}", stderr(&o));

@@ -379,6 +379,14 @@ fn each_double_operation_carries_its_bound_and_its_error() {
     assert_eq!(verdict(&dir.join("divide_by_zero.dfy")), Verdict::Fails);
 }
 
+/// The model of std::sort verifies on its own: an insertion sort meets its contract, so no caller can prove false from it. A
+/// comparator that is not a strict weak order fails at the call, decision 0160.
+#[test]
+fn the_sort_model_meets_its_contract_and_requires_a_strict_weak_order() {
+    assert_eq!(verdict(&root().join("divergence/dafny/Algorithm.dfy")), Verdict::Verifies);
+    assert_eq!(verdict(&root().join("divergence/dafny/model/sort_any_comparator.dfy")), Verdict::Fails);
+}
+
 /// The larger examples: each combines several rows in one piece of code a bot would write, and pushes the gate
 /// and the model where one row at a time does not. See examples/README.md.
 const LARGER_EXAMPLES: &[&str] = &["stack_template", "sorted_insert", "state_machine", "parse_digits", "dot_product", "shape_area_sum"];
