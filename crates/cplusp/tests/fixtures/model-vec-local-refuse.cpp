@@ -2,7 +2,9 @@
 #include <vector>
 
 // A local vector with no rule yet, decision 0160.
-void fill(std::vector<int32_t>& v);
+//@ modifies v
+void fill(std::vector<int32_t>& v) {
+}
 
 int32_t empty() {
   std::vector<int32_t> x;

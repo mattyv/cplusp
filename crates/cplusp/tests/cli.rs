@@ -4423,7 +4423,7 @@ fn a_local_vector_with_no_rule_is_refused() {
     let copy = "a local vector has a rule only as a copy of a vector in scope.";
     assert_eq!(
         refusals,
-        [format!("8: {copy}"), format!("13: {copy}"), "19: x is a local vector. A call that passes it by reference has no rule yet.".to_string()],
+        [format!("10: {copy}"), format!("15: {copy}"), "21: x is a local vector. A call that passes it by reference has no rule yet.".to_string()],
         "{text}"
     );
 }
