@@ -3170,7 +3170,7 @@ fn a_sort_of_a_vector_is_std_sort() {
     let f = Function { params: List::Cons((WV, points), Box::new(List::Nil)), conds: modifies(&[WV], &[WV], List::Nil), ..write_at(one(Stmt::Sort(WV, 6))) };
     let sd: Structs = List::Cons((POINT, (3, List::Cons((FX, Ty::I32), Box::new(List::Nil)), List::Nil)), Box::new(List::Nil));
     assert_eq!(bare_refusal(translate_function(&f, &List::Nil, &sd)), Refusal::SortForm(6));
-    // A name that is no vector.
+    // A name that is no vector is another form.
     let f = write_at(one(Stmt::Sort(LX, 6)));
-    assert_eq!(bare_refusal(translate_function(&f, &List::Nil, &List::Nil)), Refusal::Syntax(6));
+    assert_eq!(bare_refusal(translate_function(&f, &List::Nil, &List::Nil)), Refusal::SortForm(6));
 }
