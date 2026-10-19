@@ -3136,9 +3136,11 @@ fn a_local_vector_that_is_no_copy_is_refused() {
     // A vector of bool, and of a struct.
     assert_eq!(refused(local(Ty::Vec(Scalar::Bool), copy())), Refusal::Element(6));
     assert_eq!(refused(local(Ty::Vec(Scalar::Struct(POINT)), copy())), Refusal::VecLocal(6));
-    // A copy of a vector of the same struct has no rule yet either, slice four.
+    // A copy of a vector of a struct that holds a sequence, decisions 0076 and 0163.
     let points = Ty::Seq(Scalar::Struct(POINT), Extent::Dynamic);
-    assert_eq!(refused(local(Ty::Vec(Scalar::Struct(POINT)), Expr::Copy(b(Expr::Var(WI, points)), points, points))), Refusal::VecLocal(6));
+    let holds: Structs = List::Cons((POINT, (3, List::Cons((FX, Ty::Seq(Scalar::I32, Extent::Dynamic)), Box::new(List::Nil)), List::Nil)), Box::new(List::Nil));
+    let f = local(Ty::Vec(Scalar::Struct(POINT)), Expr::Copy(b(Expr::Var(WI, points)), points, points));
+    assert_eq!(bare_refusal(translate_function(&f, &List::Nil, &holds)), Refusal::HoldsSeq(6));
     // A span is a view.
     assert_eq!(refused(local(seq, copy())), Refusal::SeqParam(6));
     // A call that passes the local by reference to a writer.
@@ -3211,4 +3213,42 @@ fn a_sort_with_a_comparator_is_std_sort_with_the_lambda() {
     let call = Expr::Call(SAT, SAT_NAME, Box::new(List::Nil), 6);
     let f = with_copy(List::Cons(Box::new(Stmt::SortBy(LX, CA, CB, Ty::I32, call, 7)), Box::new(one(Stmt::Return(Expr::Var(WX, Ty::I32), 8)))));
     assert_eq!(bare_refusal(translate_function(&f, &List::Nil, &List::Nil)), Refusal::Place(6));
+}
+
+/// A vector of a struct is a sequence of its datatype: a local copy, decision 0163. A function gives a vector as a sequence, a
+/// return of a local vector gives its value, and a local can take the vector that a call gives.
+#[test]
+fn a_vector_of_a_struct_and_a_vector_as_a_result() {
+    let points = Ty::Seq(Scalar::Struct(POINT), Extent::Dynamic);
+    let sd: Structs = List::Cons((POINT, (3, List::Cons((FX, Ty::I32), Box::new(List::Nil)), List::Nil)), Box::new(List::Nil));
+    let copy = Stmt::Local(LX, Ty::Vec(Scalar::Struct(POINT)), Expr::Copy(b(Expr::Var(WV, points)), points, points), 6);
+    let give = |body| Function {
+        params: List::Cons((WV, points), Box::new(List::Nil)),
+        ret: Ty::Vec(Scalar::Struct(POINT)),
+        conds: List::Nil,
+        ..write_at(body)
+    };
+    let f = give(List::Cons(Box::new(copy), Box::new(one(Stmt::Return(Expr::Var(LX, Ty::Vec(Scalar::Struct(POINT))), 7)))));
+    let Model::Full(m) = translate_function(&f, &List::Nil, &sd) else { panic!("a full model") };
+    assert_eq!(m.ret, DTy::Seq(Scalar::Struct(POINT)));
+    let want = List::Cons(
+        (Box::new(DStmt::Local(LX, DTy::Seq(Scalar::Struct(POINT)), DExpr::Var(WV))), 0),
+        Box::new(List::Cons((Box::new(DStmt::Return(DExpr::Var(LX))), 0), Box::new(List::Nil))),
+    );
+    assert_eq!(strip(m.body), want);
+    // A contract reads the size of the result.
+    let ens = Expr::Bin(BinOp::Eq, b(Expr::Size(b(Expr::Result))), b(Expr::Size(b(Expr::Name(WV)))));
+    let f = Function { conds: List::Cons((CondKind::Ensures, ens, 4, names(&[WV])), Box::new(List::Nil)), ..f };
+    let Model::Full(m) = translate_function(&f, &List::Nil, &sd) else { panic!("a full model") };
+    let List::Cons((e, _), _) = strip_conds(m.ensures) else { panic!("ensures") };
+    assert!(format!("{e:?}").contains("Len(Result)"), "{e:?}");
+    // A local from a call that gives a vector.
+    let callee = Function { name: WX + 5, ..give(one(Stmt::Return(Expr::Var(WV, points), 7))) };
+    let all = fns(vec![callee]);
+    let args = List::Cons(b(Expr::Var(WV, points)), Box::new(List::Nil));
+    let call = Stmt::Local(LX, Ty::Vec(Scalar::Struct(POINT)), Expr::Call(WX + 5, SAT_NAME, Box::new(args), 6), 6);
+    let caller = Function { ret: Ty::I32, ..give(List::Cons(Box::new(call), Box::new(one(Stmt::Return(Expr::Lit(0, Ty::I32), 7))))) };
+    let Model::Full(m) = translate_function(&caller, &all, &sd) else { panic!("a full model") };
+    let List::Cons((first, _), _) = strip(m.body) else { panic!("a body") };
+    assert!(matches!(*first, DStmt::LocalCall(LX, DTy::Seq(Scalar::Struct(POINT)), _, _)), "{first:?}");
 }

@@ -4496,16 +4496,35 @@ fn std_sort_with_a_comparator_lambda_is_std_sort_with_the_lambda() {
     assert_eq!(failed, [format!("9: {order}"), format!("16: {order}")], "{text}");
 }
 
+/// A vector of a struct by reference, as a local and as a result, a sort of it by a field, a local from a call that gives a vector,
+/// and a vector of integers as a result prove, decision 0163. A wrong size of a result fails at its return.
+#[test]
+fn a_vector_of_a_struct_and_a_vector_as_a_result_prove() {
+    let Some(dafny) = dafny() else { return };
+    if !clang_tidy_available() {
+        return;
+    }
+    let o = prove("model-vec-struct.cpp", &[], &dafny);
+    let text = stdout(&o);
+    assert_eq!(o.status.code(), Some(0), "stdout: {text} stderr: {}", stderr(&o));
+    assert_eq!(text.lines().last(), Some("ok: proved"), "{text}");
+    let o = prove("model-vec-struct-wrong.cpp", &[], &dafny);
+    let text = stdout(&o);
+    assert_eq!(o.status.code(), Some(1), "stdout: {text} stderr: {}", stderr(&o));
+    let failed: Vec<&str> = text.lines().filter(|l| l.starts_with("Not proved: ")).map(|l| l.rsplit_once(".cpp:").unwrap().1).collect();
+    assert_eq!(failed, ["10: the ensures line may not hold on this return."], "{text}");
+}
+
 /// The examples double and double_expression prove: a tolerance that is a named double, and one error term for each rounding,
 /// decision 0158. The example fixed_point converts an integer to a double, decision 0159. The example algorithms sorts a copy,
-/// decision 0161.
+/// decision 0161, and sort_with_comparator sorts a copy of a vector of a struct by a field and gives it back, decision 0163.
 #[test]
 fn the_double_examples_prove() {
     let Some(dafny) = dafny() else { return };
     if !clang_tidy_available() {
         return;
     }
-    for example in ["double", "double_expression", "fixed_point", "algorithms"] {
+    for example in ["double", "double_expression", "fixed_point", "algorithms", "sort_with_comparator"] {
         let o = prove(&format!("../../../../examples/{example}/example.cpp"), &[], &dafny);
         let text = stdout(&o);
         assert_eq!(o.status.code(), Some(0), "{example}: stdout: {text} stderr: {}", stderr(&o));
