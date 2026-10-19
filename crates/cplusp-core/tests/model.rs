@@ -3252,3 +3252,20 @@ fn a_vector_of_a_struct_and_a_vector_as_a_result() {
     let List::Cons((first, _), _) = strip(m.body) else { panic!("a body") };
     assert!(matches!(*first, DStmt::LocalCall(LX, DTy::Seq(Scalar::Struct(POINT)), _, _)), "{first:?}");
 }
+
+/// A vector by reference of a struct that holds a sequence is refused, and a local vector that copies a name not in scope is no
+/// copy of a vector in scope, decision 0164.
+#[test]
+fn a_vector_of_a_struct_that_holds_a_sequence_and_a_copy_of_no_name_are_refused() {
+    let holds: Structs = List::Cons((POINT, (3, List::Cons((FX, Ty::Seq(Scalar::I32, Extent::Dynamic)), Box::new(List::Nil)), List::Nil)), Box::new(List::Nil));
+    let f = Function {
+        params: List::Cons((WV, Ty::MutSeq(Scalar::Struct(POINT))), Box::new(List::Nil)),
+        conds: modifies(&[WV], &[WV], List::Nil),
+        ..write_at(List::Nil)
+    };
+    assert_eq!(bare_refusal(translate_function(&f, &List::Nil, &holds)), Refusal::HoldsSeq(f.line));
+    let seq = Ty::Seq(Scalar::I32, Extent::Dynamic);
+    let own = Stmt::Local(LX, Ty::Vec(Scalar::I32), Expr::Copy(b(Expr::Var(LX, Ty::Vec(Scalar::I32))), seq, seq), 6);
+    let f = Function { ret: Ty::I32, ..write_at(List::Cons(Box::new(own), Box::new(one(Stmt::Return(Expr::Var(WX, Ty::I32), 7))))) };
+    assert_eq!(bare_refusal(translate_function(&f, &List::Nil, &List::Nil)), Refusal::VecLocal(6));
+}

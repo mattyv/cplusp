@@ -168,3 +168,4 @@ Status is `decided`, `proposed` (the default until someone objects or the thin s
 | [0161](0161-std-sort-of-a-vector-of-integers.md) | std::sort of a vector of integers. Slice two of 0160 | decided |
 | [0162](0162-std-sort-with-a-comparator-lambda.md) | std::sort with a comparator lambda. Slice three of 0160 | decided |
 | [0163](0163-a-vector-of-a-struct-and-a-vector-as-a-result.md) | A vector of a struct, and a vector as a result. Slice four of 0160 | decided |
+| [0164](0164-plain-sentences-for-vectors-and-companion-lemmas.md) | Plain sentences for a vector that may be too long and for a companion lemma, one line per failure, and two refusals | decided |

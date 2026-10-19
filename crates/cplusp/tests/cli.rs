@@ -4515,6 +4515,30 @@ fn a_vector_of_a_struct_and_a_vector_as_a_result_prove() {
     assert_eq!(failed, ["10: the ensures line may not hold on this return."], "{text}");
 }
 
+/// A vector that may outgrow its bound, a lemma of the companion file whose proof fails, and a comparator that breaks two clauses
+/// of a strict weak order each have a plain sentence, and a failure prints one line, decision 0164.
+#[test]
+fn a_vector_too_long_and_a_failed_lemma_have_plain_sentences() {
+    let Some(dafny) = dafny() else { return };
+    if !clang_tidy_available() {
+        return;
+    }
+    let failed = |name: &str| {
+        let o = prove(name, &[], &dafny);
+        let text = stdout(&o);
+        assert_eq!(o.status.code(), Some(1), "{name}: stdout: {text} stderr: {}", stderr(&o));
+        text.lines().filter(|l| l.starts_with("Not proved: ")).map(|l| l.to_string()).collect::<Vec<String>>()
+    };
+    let at = |lines: Vec<String>| -> Vec<String> { lines.iter().map(|l| l.rsplit_once(".cpp:").unwrap().1.to_string()).collect() };
+    assert_eq!(at(failed("model-vec-result-bound-wrong.cpp")), ["15: the vector may be too long.", "22: the vector may be too long."]);
+    assert_eq!(at(failed("model-sort-by-once.cpp")), ["13: the comparator may not be a strict weak order."]);
+    // The lemma failures name the companion file, and each says what failed in the words of the model.
+    let lemmas = failed("model-companion-fail.cpp");
+    assert!(lemmas.iter().all(|l| l.contains("model-companion-fail.spec.dfy:")), "{lemmas:?}");
+    let said: Vec<&str> = lemmas.iter().map(|l| l.rsplit_once(": ").unwrap().1).collect();
+    assert_eq!(said, ["the ensures line may not hold on this return.", "the assert line may not hold."], "{lemmas:?}");
+}
+
 /// The examples double and double_expression prove: a tolerance that is a named double, and one error term for each rounding,
 /// decision 0158. The example fixed_point converts an integer to a double, decision 0159. The example algorithms sorts a copy,
 /// decision 0161, and sort_with_comparator sorts a copy of a vector of a struct by a field and gives it back, decision 0163.
