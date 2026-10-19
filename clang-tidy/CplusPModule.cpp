@@ -4777,10 +4777,29 @@ private:
     const char *S = Elem.getCanonicalType().hasQualifiers() ? nullptr : scalar(Elem);
     return S && StringRef(S) != "Bool" ? S : nullptr;
   }
-  // Whether an expression names a vector by reference that the function writes, decision 0145.
+  // The scalar of a local `std::vector<T>` by value, which the function owns, decision 0160, or null: no reference, and a scalar `T` other than bool.
+  // A `const` on the vector is looked through. A span is a view, not a vector, so it is none.
+  const char *localVec(QualType T) const {
+    if (T->isReferenceType())
+      return nullptr;
+    const QualType Vector = T.getUnqualifiedType();
+    const auto *Spec = dyn_cast_or_null<ClassTemplateSpecializationDecl>(Vector->getAsCXXRecordDecl());
+    if (T.isVolatileQualified() || !Spec || !Spec->isInStdNamespace() || Spec->getName() != "vector" || Spec->getTemplateArgs().size() == 0 ||
+        Spec->getTemplateArgs()[0].getKind() != TemplateArgument::Type)
+      return nullptr;
+    const QualType Elem = Spec->getTemplateArgs()[0].getAsType();
+    const char *S = Elem.getCanonicalType().hasQualifiers() ? nullptr : scalar(Elem);
+    return S && StringRef(S) != "Bool" ? S : nullptr;
+  }
+  // Whether an expression names a vector that the function writes: a vector by reference, decision 0145, or a local vector, decision 0160.
   bool isMutSeq(const Expr *E) const {
     const auto *Ref = dyn_cast<DeclRefExpr>(E->IgnoreParenImpCasts());
-    return Ref && isa<ParmVarDecl>(Ref->getDecl()) && mutSeq(Ref->getDecl()->getType());
+    if (!Ref)
+      return false;
+    if (isa<ParmVarDecl>(Ref->getDecl()))
+      return mutSeq(Ref->getDecl()->getType());
+    const auto *Var = dyn_cast<VarDecl>(Ref->getDecl());
+    return Var && Var->hasLocalStorage() && localVec(Var->getType());
   }
   // The type of a parameter, or of a name that reads one. A pointer to const is a `Ptr` of what it points to, decisions 0140 and 0141.
   llvm::json::Value paramType(QualType T) const {
@@ -4804,6 +4823,10 @@ private:
   llvm::json::Value varType(const ValueDecl *D) const {
     if (const auto *Var = dyn_cast<VarDecl>(D); Var && Var->isCXXForRangeDecl())
       return type(Var->getType().getNonReferenceType().getUnqualifiedType());
+    // A local vector is a `Vec`, decision 0160.
+    if (const auto *Var = dyn_cast<VarDecl>(D); Var && Var->hasLocalStorage() && !isa<ParmVarDecl>(Var))
+      if (const char *V = localVec(Var->getType()))
+        return tag("Vec", V);
     // The parameter of a lambda is the element, whether it is by value or by const reference, decision 0149.
     if (const auto *Param = dyn_cast<ParmVarDecl>(D); Param && isa<CXXMethodDecl>(Param->getDeclContext()) && cast<CXXMethodDecl>(Param->getDeclContext())->getParent()->isLambda())
       return type(Param->getType().getNonReferenceType().getUnqualifiedType());
@@ -4884,7 +4907,7 @@ private:
       return switchOf(Switch);
     if (const auto *Decl = dyn_cast<DeclStmt>(S); Decl && Decl->isSingleDecl())
       if (const auto *Var = dyn_cast<VarDecl>(Decl->getSingleDecl()); Var && Var->hasLocalStorage() && Var->getInit())
-        return tag("Local", llvm::json::Array{Var->getNameAsString(), type(Var->getType()), expr(Var->getInit(), line(S->getBeginLoc())), number(line(S->getBeginLoc()))});
+        return tag("Local", llvm::json::Array{Var->getNameAsString(), varType(Var), expr(Var->getInit(), line(S->getBeginLoc())), number(line(S->getBeginLoc()))});
     if (const auto *Assign = dyn_cast<BinaryOperator>(S); Assign && Assign->getOpcode() == BO_Assign) {
       if (const auto *Target = dyn_cast<DeclRefExpr>(Assign->getLHS()); Target && isVariable(Target->getDecl()))
         return tag("Assign", llvm::json::Array{Target->getDecl()->getNameAsString(), expr(Assign->getRHS(), line(S->getBeginLoc())), number(line(S->getBeginLoc()))});
@@ -5421,6 +5444,19 @@ private:
     // `c ? a : b`, decision 0098. The GNU form `c ?: b` stays unknown.
     if (const auto *Choice = dyn_cast<ConditionalOperator>(E))
       return tag("Cond", llvm::json::Array{expr(Choice->getCond(), Near), expr(Choice->getTrueExpr(), Near), expr(Choice->getFalseExpr(), Near)});
+    // A local vector made from a sequence in scope is a copy, decision 0160: a parameter or another local vector. A copy from any other expression, a call or
+    // a list, stays unknown, and the core refuses the local.
+    if (const auto *Construct = dyn_cast<CXXConstructExpr>(E); Construct && Construct->getNumArgs() == 1 && localVec(Construct->getType())) {
+      const auto *Source = dyn_cast<DeclRefExpr>(Construct->getArg(0)->IgnoreParenImpCasts());
+      const auto *Named = Source ? dyn_cast<VarDecl>(Source->getDecl()) : nullptr;
+      if (Named && (isSeq(Source->getType()) || isMutSeq(Source)) && (isa<ParmVarDecl>(Named) || Named->hasLocalStorage()))
+      {
+        // The core judges a copy of a sequence by two `Seq` types. A vector the function writes is a dynamic sequence of its element.
+        const char *Written = isa<ParmVarDecl>(Named) ? mutSeq(Named->getType()) : localVec(Named->getType());
+        llvm::json::Value From = Written ? tag("Seq", llvm::json::Array{Written, nullptr}) : type(Source->getType());
+        return tag("Copy", llvm::json::Array{expr(Source, Near), std::move(From), tag("Seq", llvm::json::Array{localVec(Construct->getType()), nullptr})});
+      }
+    }
     // A sequence made from one sequence, decision 0070, or a struct made from one struct, decision 0073. The core judges the two types.
     if (const auto *Construct = dyn_cast<CXXConstructExpr>(E);
         Construct && Construct->getNumArgs() == 1 &&

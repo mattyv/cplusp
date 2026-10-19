@@ -3136,6 +3136,9 @@ fn a_local_vector_that_is_no_copy_is_refused() {
     // A vector of bool, and of a struct.
     assert_eq!(refused(local(Ty::Vec(Scalar::Bool), copy())), Refusal::Element(6));
     assert_eq!(refused(local(Ty::Vec(Scalar::Struct(POINT)), copy())), Refusal::VecLocal(6));
+    // A copy of a vector of the same struct has no rule yet either, slice four.
+    let points = Ty::Seq(Scalar::Struct(POINT), Extent::Dynamic);
+    assert_eq!(refused(local(Ty::Vec(Scalar::Struct(POINT)), Expr::Copy(b(Expr::Var(WI, points)), points, points))), Refusal::VecLocal(6));
     // A span is a view.
     assert_eq!(refused(local(seq, copy())), Refusal::SeqParam(6));
     // A call that passes the local by reference to a writer.

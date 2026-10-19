@@ -178,7 +178,8 @@ pub enum Extent {
 /// as an ensures line reads it, and `Fresh` is the result of a constructor before it exists, as its requires line reads it. The
 /// translator makes these two views itself. `Mut` is a reference parameter that the function writes, which takes a value in and
 /// gives it back, and `MutAfter` is its value after the call, as an ensures line reads it, decision 0108. `MutSeq` is a vector by
-/// reference that the function writes, as a sequence, and `MutSeqAfter` is its value after the call, decision 0145. `Enum` is an enum class of
+/// reference that the function writes, as a sequence, and `MutSeqAfter` is its value after the call, decision 0145. `Vec` is a local
+/// `std::vector` that the function owns, a copy, decision 0160. `Enum` is an enum class of
 /// the file by its key, decision 0109. `Void` is the result type
 /// of a function that gives no value. `Other` is a type the translator has no rule for, by the id of its name.
 #[derive(Structural, PartialEq, Eq, Clone, Copy, Debug)]
@@ -203,6 +204,7 @@ pub enum Ty {
     MutAfter(Scalar),
     MutSeq(Scalar),
     MutSeqAfter(Scalar),
+    Vec(Scalar),
     Ptr(Scalar),
     Own(Scalar),
     Enum(u32),
@@ -596,7 +598,8 @@ pub type Models = List<Model>;
 /// modifies line names, decision 0108. `PassOn` is a vector by reference that a call passes on to a parameter that writes it, by the
 /// id of its name, decision 0147. `Rounds` is a double operation that rounds. `Finite` is a double parameter, by the id of its name,
 /// that no requires line says is finite, and `FiniteResult` is a trusted function that gives a double and no ensures line says
-/// that it is finite, decision 0150.
+/// that it is finite, decision 0150. `VecLocal` is a local vector that is no copy of a vector in scope, and `PassLocal` is a local
+/// vector that a call passes by reference, by the id of its name, decision 0160.
 #[derive(Structural, PartialEq, Eq, Clone, Copy, Debug)]
 pub enum Refusal {
     Construct(u32, u32),
@@ -625,6 +628,8 @@ pub enum Refusal {
     Rounds(u32),
     Finite(u32, u32),
     FiniteResult(u32),
+    VecLocal(u32),
+    PassLocal(u32, u32),
 }
 
 // ------------------------------------------------------------------ the rules
@@ -676,6 +681,8 @@ pub open spec fn spec_ty(t: Ty, line: u32) -> Result<DTy, Refusal> {
         Ty::MutSeqAfter(Scalar::Bool) => Err(Refusal::Element(line)),
         Ty::MutSeq(s) => Ok(DTy::Seq(s)),
         Ty::MutSeqAfter(s) => Ok(DTy::Seq(s)),
+        Ty::Vec(Scalar::Bool) => Err(Refusal::Element(line)),
+        Ty::Vec(s) => Ok(DTy::Seq(s)),
         Ty::Enum(k) => Ok(DTy::Enum(k)),
         Ty::Fresh(_) => Err(Refusal::Syntax(line)),
         Ty::Void => Err(Refusal::Syntax(line)),
@@ -821,11 +828,13 @@ pub open spec fn spec_elem(s: Scalar) -> Ty {
     }
 }
 
-/// The scalar of the elements of a sequence parameter, read-only or written, decisions 0064 and 0145.
+/// The scalar of the elements of a sequence parameter, read-only or written, decisions 0064 and 0145, or of a local vector, decision
+/// 0160.
 pub open spec fn spec_seq_elem(t: Ty) -> Option<Scalar> {
     match t {
         Ty::Seq(s, _) => Some(s),
         Ty::MutSeq(s) => Some(s),
+        Ty::Vec(s) => Some(s),
         _ => None,
     }
 }
@@ -837,6 +846,7 @@ pub fn seq_elem(t: Ty) -> (r: Option<Scalar>)
     match t {
         Ty::Seq(s, _) => Some(s),
         Ty::MutSeq(s) => Some(s),
+        Ty::Vec(s) => Some(s),
         _ => None,
     }
 }
@@ -1303,6 +1313,7 @@ pub open spec fn spec_view_ty(t: Ty) -> Ty {
         Ty::MutAfter(s) => spec_elem(s),
         Ty::MutSeq(s) => Ty::Seq(s, Extent::Dynamic),
         Ty::MutSeqAfter(s) => Ty::Seq(s, Extent::Dynamic),
+        Ty::Vec(s) => Ty::Seq(s, Extent::Dynamic),
         _ => t,
     }
 }
@@ -2360,8 +2371,10 @@ pub open spec fn spec_target(o: Expr, ps: Params, line: u32) -> Result<Obj, Refu
             } else {
                 Err(Refusal::Syntax(line))
             },
-            // A call that passes a vector by reference on to a writer has no rule yet, decision 0147.
+            // A call that passes a vector by reference on to a writer has no rule yet, decision 0147, nor one that passes a local
+            // vector by reference, decision 0160.
             Ty::MutSeq(_) => Err(Refusal::PassOn(v, line)),
+            Ty::Vec(_) => Err(Refusal::PassLocal(v, line)),
             _ => if (spec_get(ps, v) is Some) {
                 Err(Refusal::WriteParam(v, line))
             } else {
@@ -2510,6 +2523,21 @@ pub open spec fn spec_stmt(s: Stmt, all: Fns, env: Params, ps: Params, sd: Struc
                 Err(r) => Err(r),
             },
             Err(r) => Err(r),
+        },
+        // A local vector is a copy of a sequence in scope of the same element, decision 0160.
+        Stmt::Local(n, Ty::Vec(s), e, l) => match spec_ty(Ty::Vec(s), l) {
+            Err(r) => Err(r),
+            Ok(dt) => match e {
+                Expr::Copy(_, from, _) => if !(s is Struct) && spec_seq_elem(from) == Some(s) {
+                    match spec_lift(e, all, l, sd, 0, true) {
+                        Ok((c, d, _)) => Ok(spec_pre(c, DStmt::Local(n, dt, d))),
+                        Err(r) => Err(r),
+                    }
+                } else {
+                    Err(Refusal::VecLocal(l))
+                },
+                _ => Err(Refusal::VecLocal(l)),
+            },
         },
         Stmt::Local(n, t, e, l) => match spec_value_ty(t, l, sd) {
             Err(r) => Err(r),
@@ -2699,7 +2727,17 @@ pub open spec fn spec_stmt(s: Stmt, all: Fns, env: Params, ps: Params, sd: Struc
                 Err(r) => Err(r),
             },
             Some(_) => Err(Refusal::WriteParam(v, l)),
-            None => Err(Refusal::Syntax(l)),
+            // A write to a local vector is a new value of the local, decision 0160.
+            None => match spec_get(env, v) {
+                Some(Ty::Vec(_)) => match spec_code(i, l) {
+                    Ok(di) => match spec_code(e, l) {
+                        Ok(de) => Ok(DStmt::Assign(v, DExpr::SetAt(Box::new(DExpr::Var(v)), Box::new(di), Box::new(de)))),
+                        Err(r) => Err(r),
+                    },
+                    Err(r) => Err(r),
+                },
+                _ => Err(Refusal::Syntax(l)),
+            },
         },
         // `v.push_back(e)` appends one element, decision 0148. A failed push_back throws and never returns to verified code.
         // ponytail: a call in the value is refused as out of place, as for SetIndex. Upgrade: lift the calls, decision 0104.
@@ -2709,7 +2747,13 @@ pub open spec fn spec_stmt(s: Stmt, all: Fns, env: Params, ps: Params, sd: Struc
                 Err(r) => Err(r),
             },
             Some(_) => Err(Refusal::WriteParam(v, l)),
-            None => Err(Refusal::Syntax(l)),
+            None => match spec_get(env, v) {
+                Some(Ty::Vec(_)) => match spec_code(e, l) {
+                    Ok(de) => Ok(DStmt::Assign(v, DExpr::Append(Box::new(DExpr::Var(v)), Box::new(de)))),
+                    Err(r) => Err(r),
+                },
+                _ => Err(Refusal::Syntax(l)),
+            },
         },
         Stmt::Unknown(k, l) => Err(Refusal::Construct(k, l)),
     }
@@ -4758,6 +4802,8 @@ pub fn translate_ty(t: Ty, line: u32) -> (r: Result<DTy, Refusal>)
         Ty::MutSeqAfter(Scalar::Bool) => Err(Refusal::Element(line)),
         Ty::MutSeq(s) => Ok(DTy::Seq(s)),
         Ty::MutSeqAfter(s) => Ok(DTy::Seq(s)),
+        Ty::Vec(Scalar::Bool) => Err(Refusal::Element(line)),
+        Ty::Vec(s) => Ok(DTy::Seq(s)),
         Ty::Enum(k) => Ok(DTy::Enum(k)),
         Ty::Fresh(_) => Err(Refusal::Syntax(line)),
         Ty::Void => Err(Refusal::Syntax(line)),
@@ -5205,6 +5251,7 @@ pub fn view_ty(t: Ty) -> (r: Ty)
         Ty::MutAfter(s) => elem(s),
         Ty::MutSeq(s) => Ty::Seq(s, Extent::Dynamic),
         Ty::MutSeqAfter(s) => Ty::Seq(s, Extent::Dynamic),
+        Ty::Vec(s) => Ty::Seq(s, Extent::Dynamic),
         _ => t,
     }
 }
@@ -6251,6 +6298,7 @@ pub fn target(o: &Expr, ps: &Params, line: u32) -> (r: Result<Obj, Refusal>)
                 Err(Refusal::Syntax(line))
             },
             Ty::MutSeq(_) => Err(Refusal::PassOn(*v, line)),
+            Ty::Vec(_) => Err(Refusal::PassLocal(*v, line)),
             _ => if get(ps, *v).is_some() {
                 Err(Refusal::WriteParam(*v, line))
             } else {
@@ -6394,6 +6442,20 @@ pub fn translate_stmt(s: &Stmt, all: &Fns, env: &Params, ps: &Params, sd: &Struc
                 Err(r) => Err(r),
             },
             Err(r) => Err(r),
+        },
+        Stmt::Local(n, Ty::Vec(s), e, l) => match translate_ty(Ty::Vec(*s), *l) {
+            Err(r) => Err(r),
+            Ok(dt) => match e {
+                Expr::Copy(_, from, _) => if !matches!(s, Scalar::Struct(_)) && seq_elem(*from) == Some(*s) {
+                    match lift(e, all, *l, sd, 0, true) {
+                        Ok((c, d, _)) => Ok(pre(c, DStmt::Local(*n, dt, d))),
+                        Err(r) => Err(r),
+                    }
+                } else {
+                    Err(Refusal::VecLocal(*l))
+                },
+                _ => Err(Refusal::VecLocal(*l)),
+            },
         },
         Stmt::Local(n, t, e, l) => match translate_value_ty(*t, *l, sd) {
             Err(r) => Err(r),
@@ -6585,7 +6647,16 @@ pub fn translate_stmt(s: &Stmt, all: &Fns, env: &Params, ps: &Params, sd: &Struc
                 Err(r) => Err(r),
             },
             Some(_) => Err(Refusal::WriteParam(*v, *l)),
-            None => Err(Refusal::Syntax(*l)),
+            None => match get(env, *v) {
+                Some(Ty::Vec(_)) => match translate_code(i, *l) {
+                    Ok(di) => match translate_code(e, *l) {
+                        Ok(de) => Ok(DStmt::Assign(*v, DExpr::SetAt(Box::new(DExpr::Var(*v)), Box::new(di), Box::new(de)))),
+                        Err(r) => Err(r),
+                    },
+                    Err(r) => Err(r),
+                },
+                _ => Err(Refusal::Syntax(*l)),
+            },
         },
         Stmt::PushBack(v, e, l) => match get(ps, *v) {
             Some(Ty::MutSeq(_)) => match translate_code(e, *l) {
@@ -6593,7 +6664,13 @@ pub fn translate_stmt(s: &Stmt, all: &Fns, env: &Params, ps: &Params, sd: &Struc
                 Err(r) => Err(r),
             },
             Some(_) => Err(Refusal::WriteParam(*v, *l)),
-            None => Err(Refusal::Syntax(*l)),
+            None => match get(env, *v) {
+                Some(Ty::Vec(_)) => match translate_code(e, *l) {
+                    Ok(de) => Ok(DStmt::Assign(*v, DExpr::Append(Box::new(DExpr::Var(*v)), Box::new(de)))),
+                    Err(r) => Err(r),
+                },
+                _ => Err(Refusal::Syntax(*l)),
+            },
         },
         Stmt::Unknown(k, l) => Err(Refusal::Construct(*k, *l)),
     }

@@ -46,6 +46,8 @@ enum JTy {
     Mut(JScalar),
     /// A parameter of type `std::vector<T>&` that the function writes, decision 0145.
     MutSeq(JScalar),
+    /// A local `std::vector<T>` that the function owns, decision 0160.
+    Vec(JScalar),
     /// An enum class of the file by its key, decision 0109.
     Enum(String),
     Opt(JScalar),
@@ -344,6 +346,7 @@ fn ty(t: JTy, names: &mut Names) -> Ty {
         JTy::Struct(k) => Ty::Struct(names.id(&k)),
         JTy::Mut(s) => Ty::Mut(scalar(s, names)),
         JTy::MutSeq(s) => Ty::MutSeq(scalar(s, names)),
+        JTy::Vec(s) => Ty::Vec(scalar(s, names)),
         JTy::Enum(k) => Ty::Enum(names.id(&k)),
         JTy::This(k) => Ty::This(names.id(&k)),
         JTy::ThisMut(k) => Ty::ThisMut(names.id(&k)),
@@ -1288,7 +1291,14 @@ impl Printer<'_> {
             }
             DStmt::Assert(e) => self.put(depth, format!("assert {};", dexpr(e, names)), place),
             DStmt::Apply(l, args) => self.put(depth, format!("{}({});", names.text(*l), dargs(args, names).join(", ")), place),
-            DStmt::Local(x, t, e) => self.put(depth, format!("var {}: {} := {};", mangle(names.text(*x)), dty(*t, names), dexpr(e, names)), place),
+            // A local vector is a plain `seq`, because `push_back` may grow it past the bound of `Vec`, as for a vector given back, decision 0160.
+            DStmt::Local(x, t, e) => {
+                let shown = match t {
+                    DTy::Seq(s) => format!("seq<{}>", dscalar(*s, names)),
+                    _ => dty(*t, names),
+                };
+                self.put(depth, format!("var {}: {} := {};", mangle(names.text(*x)), shown, dexpr(e, names)), place)
+            }
             DStmt::LocalCall(x, t, m, args) => {
                 let call = self.call(*m, args);
                 self.put(depth, format!("var {}: {} := {call};", mangle(names.text(*x)), dty(*t, names)), place);
@@ -1451,6 +1461,8 @@ fn sentence(r: Refusal, names: &Names) -> (u32, String) {
         Refusal::Finite(n, line) if names.text(n).starts_with('\'') => (line, "a double parameter has no name. Give it a name and say std::isfinite of it in a requires line.".to_string()),
         Refusal::Finite(n, line) => (line, format!("{} is a double. A requires line needs std::isfinite({}).", names.text(n), names.text(n))),
         Refusal::FiniteResult(line) => (line, "a trusted function that gives a double needs std::isfinite(result) in an ensures line.".to_string()),
+        Refusal::VecLocal(line) => (line, "a local vector has a rule only as a copy of a vector in scope.".to_string()),
+        Refusal::PassLocal(n, line) => (line, format!("{} is a local vector. A call that passes it by reference has no rule yet.", names.text(n))),
         Refusal::PassOn(n, line) => (line, format!("{} is a vector by reference. A call that passes it on has no rule yet.", names.text(n))),
         Refusal::Misplaced(line) => (
             line,
