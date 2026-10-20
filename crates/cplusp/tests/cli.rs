@@ -4995,8 +4995,9 @@ fn the_unique_ptr_examples_prove() {
     assert_eq!(text.lines().last(), Some("ok: proved"), "{text}");
 }
 
-/// A make_unique of a class that is not final or has no check, a unique_ptr of a final class, a move and the return of a local
-/// unique_ptr have no rule, so no second owner and no moved-from pointer reaches the model, decision 0168.
+/// A make_unique of a class that is not final or has no check, a unique_ptr of a final class, a move, the return of a local
+/// unique_ptr, and a unique_ptr of a class from a call as one of its interface have no rule, so no second owner and no moved-from
+/// pointer reaches the model, decision 0168.
 #[test]
 fn a_unique_ptr_of_an_interface_has_one_owner_that_only_reads() {
     let Some(dafny) = dafny() else { return };
@@ -5018,6 +5019,8 @@ fn a_unique_ptr_of_an_interface_has_one_owner_that_only_reads() {
             "48: a call to std::make_unique<Square>, which has no model in view.",
             "54: a call to std::move<std::unique_ptr<Shape> &>, which has no model in view.",
             "59: CXXConstructExpr: the translator has no rule for it yet.",
+            "63: a call to std::make_unique<Square>, which has no model in view.",
+            "67: a std::unique_ptr of a class as a std::unique_ptr of its interface: the translator has no rule for it yet.",
         ],
         "{text}"
     );

@@ -58,3 +58,11 @@ std::unique_ptr<Shape> local() {
   std::unique_ptr<Shape> s = std::make_unique<Square>();
   return s;
 }
+
+std::unique_ptr<Square> square() {
+  return std::make_unique<Square>();
+}
+
+int32_t via() {
+  return read(square());
+}
