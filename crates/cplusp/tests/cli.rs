@@ -4781,3 +4781,100 @@ fn the_virtual_examples_prove() {
     assert_eq!(o.status.code(), Some(0), "stdout: {text} stderr: {}", stderr(&o));
     assert_eq!(text.lines().last(), Some("ok: proved"), "{text}");
 }
+
+/// A contract of an interface calls valid(), a caller reads s.valid() and s.apply(x) in its contract, a constructor builds a class
+/// over the interface, and a final class goes to a parameter of the interface. The caller knows the value of each call from the
+/// upcast, decision 0166.
+#[test]
+fn a_virtual_call_in_a_contract_and_an_upcast_prove() {
+    let Some(dafny) = dafny() else { return };
+    if !clang_tidy_available() {
+        return;
+    }
+    let o = prove("model-virtual-call.cpp", &[], &dafny);
+    let text = stdout(&o);
+    assert_eq!(o.status.code(), Some(0), "stdout: {text} stderr: {}", stderr(&o));
+    assert_eq!(text.lines().last(), Some("ok: proved"), "{text}");
+}
+
+/// A caller that claims more than the interface fails at its return, a contract call outside the requires lines of the interface
+/// fails at the contract line, and an object whose valid() is false fails at the call that upcasts it, decision 0166.
+#[test]
+fn a_virtual_call_and_an_upcast_keep_the_contract_of_the_interface() {
+    let Some(dafny) = dafny() else { return };
+    if !clang_tidy_available() {
+        return;
+    }
+    let o = prove("model-virtual-call-wrong.cpp", &[], &dafny);
+    let text = stdout(&o);
+    assert_eq!(o.status.code(), Some(1), "stdout: {text} stderr: {}", stderr(&o));
+    let found = blocks(&text);
+    let broken = |head: &str, clause: &str| {
+        found.iter().filter(|(h, under)| h.ends_with(head) && under.iter().any(|u| u.starts_with("  The contract line: ") && u.ends_with(clause))).count()
+    };
+    let ensures = "model-virtual-call-wrong.cpp:24: the ensures line may not hold on this return.";
+    assert_eq!(broken(ensures, "model-virtual-call-wrong.cpp:22: ensures result <= 1000"), 1, "{text}");
+    let member = "model-virtual-call-wrong.cpp:28: a requires line of the member function may not hold here.";
+    assert_eq!(broken(member, "model-virtual-call-wrong.cpp:7: requires valid() && 0 <= x && x <= 1000"), 1, "{text}");
+    let callee = "model-virtual-call-wrong.cpp:36: a requires line of the callee may not hold.";
+    assert_eq!(broken(callee, "model-virtual-call-wrong.cpp:21: requires s.valid() && 0 <= x && x <= 1000"), 1, "{text}");
+    assert_eq!(found.len(), 3, "{text}");
+}
+
+/// A contract of an interface that reads a virtual function declared after it, or the function itself, is refused at the contract
+/// line, and the class over that interface has no upcast. A pure virtual function that gives no value has no rule. A pure virtual
+/// function is a function of the model with no body, decision 0166.
+#[test]
+fn a_contract_of_an_interface_reads_only_the_functions_above_it() {
+    if !clang_tidy_available() {
+        return;
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let (o, out) = model("model-virtual-call-refuse.cpp", dir.path());
+    let text = stdout(&o);
+    assert_eq!(o.status.code(), Some(1), "stdout: {text} stderr: {}", stderr(&o));
+    let refusals: Vec<&str> = text.lines().filter(|l| l.starts_with("Not provable: ")).map(|l| l.rsplit_once(".cpp:").unwrap().1).collect();
+    assert_eq!(
+        refusals,
+        [
+            "6: the contract of Late::apply reads Late::ready, which comes later in Late. Declare Late::ready first.",
+            "21: a pure virtual function that gives no value: the translator has no rule for it yet.",
+            "26: the contract of Loop::size reads Loop::size itself. The translator has no rule for it yet.",
+        ],
+        "{text}"
+    );
+    let model = std::fs::read_to_string(&out).unwrap();
+    assert!(!model.contains("f_Soon'Late"), "{model}");
+    assert!(model.contains("function {:axiom} c_Late'ready'("), "{model}");
+}
+
+/// A call that upcasts a class with no check stops Dafny on the name of the upcast, after the refusal of the class, decision 0166.
+#[test]
+fn an_upcast_of_a_class_with_no_check_is_not_in_the_model() {
+    let Some(dafny) = dafny() else { return };
+    if !clang_tidy_available() {
+        return;
+    }
+    let o = prove("model-virtual-call-unchecked.cpp", &[], &dafny);
+    let text = stdout(&o);
+    assert_eq!(o.status.code(), Some(1), "stdout: {text} stderr: {}", stderr(&o));
+    let refusals: Vec<&str> = text.lines().filter(|l| l.starts_with("Not provable: ")).map(|l| l.rsplit_once(".cpp:").unwrap().1).collect();
+    let unchecked = "10: the override of Shape::corners in Two has no function in the model, so the translator cannot check it.";
+    assert_eq!(refusals, [unchecked, "27: Dafny says: unresolved identifier: f_Two'Shape."], "{text}");
+}
+
+/// The Axiom line names the interface by its C++ name. Two interfaces of one name show their full names, decision 0166.
+#[test]
+fn the_axiom_line_of_an_interface_names_it_in_cpp() {
+    let Some(dafny) = dafny() else { return };
+    if !clang_tidy_available() {
+        return;
+    }
+    let o = prove("model-virtual-names.cpp", &[], &dafny);
+    let text = stdout(&o);
+    assert_eq!(o.status.code(), Some(0), "stdout: {text} stderr: {}", stderr(&o));
+    assert_eq!(text.lines().last(), Some("ok: proved"), "{text}");
+    let axioms: Vec<&str> = text.lines().filter(|l| l.starts_with("Axiom: model: ")).collect();
+    let line = |n: &str| format!("Axiom: model: {n}: a call through {n} runs an override that keeps the contract of {n}, C++23 [class.virtual]. Each override of {n} in this file is checked against that contract.");
+    assert_eq!(axioms, [line("a::Shape"), line("b::Shape")], "{text}");
+}

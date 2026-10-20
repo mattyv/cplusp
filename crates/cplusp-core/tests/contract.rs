@@ -295,3 +295,9 @@ fn a_decimal_with_too_many_digits_after_the_point_has_its_own_fault() {
     assert_eq!(lex("0.0000000000000000001"), vec![t("0.0000000000000000001", LexKind::Real(1, 19))]);
 }
 
+
+/// `this` is a word of the grammar, decision 0166. A name that starts with it is a name.
+#[test]
+fn this_is_a_word() {
+    assert_eq!(lex("this->k_ == thisx"), vec![fixed("this", Tok::This), fixed("->", Tok::Arrow), name("k_"), op("==", BinOp::Eq), name("thisx")]);
+}

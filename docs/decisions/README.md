@@ -170,3 +170,4 @@ Status is `decided`, `proposed` (the default until someone objects or the thin s
 | [0163](0163-a-vector-of-a-struct-and-a-vector-as-a-result.md) | A vector of a struct, and a vector as a result. Slice four of 0160 | decided |
 | [0164](0164-plain-sentences-for-vectors-and-companion-lemmas.md) | Plain sentences for a vector that may be too long and for a companion lemma, one line per failure, and two refusals | decided |
 | [0165](0165-virtual-functions-through-an-interface.md) | Virtual functions through an interface, in six slices. Slice one: an interface, a final class over it, and the check of each override | decided |
+| [0166](0166-a-virtual-call-in-a-contract-and-an-upcast.md) | A virtual call in a contract, and an upcast at a call argument. Slice two of 0165 | decided |

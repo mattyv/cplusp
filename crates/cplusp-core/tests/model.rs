@@ -3330,7 +3330,9 @@ fn each_override_is_checked_against_the_contract_of_the_interface() {
     assert_eq!((o.base, o.derived, o.ret), (BKEY, DKEY, DTy::Int32));
     assert_eq!(o.params, List::Nil);
     assert_eq!(strip_conds(o.requires), List::Nil);
-    assert_eq!(strip_conds(o.ensures), strip_conds(base.ensures));
+    // The ensures line of the interface, with no line that links the method to its function, decision 0166.
+    let List::Cons(first, _) = base.ensures else { panic!("the ensures line of the interface") };
+    assert_eq!(strip_conds(o.ensures), strip_conds(List::Cons(first, Box::new(List::Nil))));
     assert_eq!(o.own, List::Nil);
 }
 
@@ -3429,4 +3431,123 @@ fn a_class_over_two_interfaces_has_a_check_for_each() {
     assert_eq!((first.derived, first.base, second.derived, second.base), (SQUARE, SHAPE, SQUARE, COLORED));
     let List::Cons(o, _) = second.overrides else { panic!("one override") };
     assert_eq!((o.base, o.derived), (RKEY, DRED));
+}
+
+const IVALID: u32 = 312;
+const IVKEY: u32 = 313;
+
+/// `virtual bool valid() const = 0;` of the interface Shape, with no contract.
+fn base_valid() -> Function {
+    Function { name: IVKEY, line: 6, ret: Ty::Bool, ..base_corners(List::Nil, List::Nil) }
+}
+
+/// The interface Shape with its members in the order given, and the final class Square with none.
+fn shape_of(members: &[(u32, u32)]) -> Structs {
+    let ms = members.iter().rev().fold(List::Nil, |rest, (n, k)| List::Cons((*n, (*k, None)), Box::new(rest)));
+    List::Cons((SHAPE, (5, List::Nil, ms)), Box::new(List::Cons((SQUARE, (12, List::Nil, List::Nil)), Box::new(List::Nil))))
+}
+
+/// The method of a pure virtual function also says that its result is the value of its function, decision 0166.
+#[test]
+fn a_pure_virtual_function_is_a_function_of_the_model() {
+    let all = fns(vec![base_corners(List::Nil, at_least_three())]);
+    let List::Cons(Model::Full(m), _) = translate_unit(&all, &shape_of(&[(CORNERS, BKEY)])) else { panic!("a full model") };
+    let link = DExpr::Bin(BinOp::Eq, Box::new(DExpr::Result), Box::new(DExpr::FCall(BKEY, Box::new(List::Cons(DExpr::Var(THIS), Box::new(List::Nil))))));
+    assert!(m.trusted && m.body == List::Nil, "{m:?}");
+    let List::Cons(_, rest) = m.ensures else { panic!("the ensures line of the interface") };
+    assert_eq!(*rest, List::Cons((link, 9), Box::new(List::Nil)));
+}
+
+/// A contract of a virtual function calls a virtual function of its interface on its object when that function comes first.
+/// A function that comes later is refused at the line of the contract, decision 0166.
+#[test]
+fn a_contract_of_an_interface_calls_a_virtual_function_above_it() {
+    let req = List::Cons((CondKind::Requires, Expr::Apply(IVALID, Box::new(List::Nil)), 7, names(&[THIS])), Box::new(List::Nil));
+    let all = fns(vec![base_valid(), base_corners(List::Nil, req)]);
+    let List::Cons(_, rest) = translate_unit(&all, &shape_of(&[(IVALID, IVKEY), (CORNERS, BKEY)])) else { panic!("two models") };
+    let List::Cons(Model::Full(m), _) = *rest else { panic!("a full model of corners") };
+    let on_this = DExpr::FCall(IVKEY, Box::new(List::Cons(DExpr::Var(THIS), Box::new(List::Nil))));
+    assert_eq!(m.requires, List::Cons((on_this, 7), Box::new(List::Nil)));
+    let List::Cons(_, rest) = translate_unit(&all, &shape_of(&[(CORNERS, BKEY), (IVALID, IVKEY)])) else { panic!("two models") };
+    let List::Cons(Model::Bare(_, _, _, r), _) = *rest else { panic!("a refused contract") };
+    assert_eq!(r, Refusal::Later(SHAPE, CORNERS, IVALID, 7));
+    // A contract that reads its own function.
+    let own = Expr::Bin(BinOp::Eq, b(Expr::Result), b(Expr::Apply(CORNERS, Box::new(List::Nil))));
+    let all = fns(vec![base_corners(List::Nil, List::Cons((CondKind::Ensures, own, 7, names(&[THIS])), Box::new(List::Nil)))]);
+    let List::Cons(Model::Bare(_, _, _, r), _) = translate_unit(&all, &shape_of(&[(CORNERS, BKEY)])) else { panic!("a refused contract") };
+    assert_eq!(r, Refusal::Later(SHAPE, CORNERS, CORNERS, 7));
+}
+
+/// The check of an override reads a virtual function of the interface in the contract of the interface as the override of the
+/// class. An interface whose contract reads a later function has no upcast, decision 0166.
+#[test]
+fn the_check_of_an_override_reads_the_functions_of_the_class() {
+    let bases = List::Cons((SQUARE, (names(&[SHAPE]), true)), Box::new(List::Nil));
+    let req = List::Cons((CondKind::Requires, Expr::Apply(IVALID, Box::new(List::Nil)), 7, names(&[THIS])), Box::new(List::Nil));
+    let dvalid = Function { name: 314, line: 14, ret: Ty::Bool, body: one(Stmt::Return(Expr::Bool(true), 14)), ..derived_corners(List::Nil, List::Nil) };
+    let all = fns(vec![base_valid(), base_corners(List::Nil, req), dvalid, derived_corners(List::Nil, List::Nil)]);
+    let square = List::Cons((IVALID, (314, None)), Box::new(corners_member()));
+    let sd = |shape: &[(u32, u32)]| {
+        let List::Cons(s, _) = shape_of(shape) else { unreachable!() };
+        List::Cons(s, Box::new(List::Cons((SQUARE, (12, List::Nil, square_copy(&square))), Box::new(List::Nil))))
+    };
+    let List::Cons(Ok(up), _) = translate_overrides(&bases, &all, &sd(&[(IVALID, IVKEY), (CORNERS, BKEY)])) else { panic!("an upcast") };
+    let List::Cons(_, rest) = up.overrides else { panic!("the check of valid") };
+    let List::Cons(o, _) = *rest else { panic!("the check of corners") };
+    let on_square = DExpr::FCall(314, Box::new(List::Cons(DExpr::Var(THIS), Box::new(List::Nil))));
+    assert_eq!(o.requires, List::Cons((on_square, 7), Box::new(List::Nil)));
+    let late = translate_overrides(&bases, &all, &sd(&[(CORNERS, BKEY), (IVALID, IVKEY)]));
+    assert_eq!(late, List::Cons(Err(Refusal::Later(SHAPE, CORNERS, IVALID, 7)), Box::new(List::Nil)));
+}
+
+fn square_copy(ms: &Members) -> Members {
+    match ms {
+        List::Nil => List::Nil,
+        List::Cons((n, (k, p)), rest) => List::Cons((*n, (*k, p.as_ref().map(|(t, ps)| (*t, params_copy(ps))))), Box::new(square_copy(rest))),
+    }
+}
+
+fn params_copy(ps: &Params) -> Params {
+    match ps {
+        List::Nil => List::Nil,
+        List::Cons((n, t), rest) => List::Cons((*n, *t), Box::new(params_copy(rest))),
+    }
+}
+
+/// A contract of a function with a parameter `const Shape& s` reads `s.corners()` as the function of the interface, decision 0166.
+#[test]
+fn a_caller_reads_a_virtual_function_of_a_parameter() {
+    let ens = Expr::Bin(BinOp::Eq, b(Expr::Result), b(Expr::MApply(b(Expr::Name(VX)), CORNERS, Box::new(List::Nil))));
+    let count = Function {
+        name: BKEY2,
+        line: 20,
+        params: List::Cons((VX, Ty::IfaceRef(SHAPE)), Box::new(List::Nil)),
+        ret: Ty::I32,
+        trusted: false,
+        conds: List::Cons((CondKind::Ensures, ens, 19, names(&[VX])), Box::new(List::Nil)),
+        body: one(Stmt::Return(Expr::Lit(3, Ty::I32), 21)),
+    };
+    let all = fns(vec![base_corners(List::Nil, at_least_three()), count]);
+    let List::Cons(_, rest) = translate_unit(&all, &shape_of(&[(CORNERS, BKEY)])) else { panic!("two models") };
+    let List::Cons(Model::Full(m), _) = *rest else { panic!("a full model of count") };
+    let call = DExpr::AsInt(Box::new(DExpr::FCall(BKEY, Box::new(List::Cons(DExpr::Var(VX), Box::new(List::Nil))))));
+    let want = DExpr::Bin(BinOp::Eq, Box::new(DExpr::AsInt(Box::new(DExpr::Result))), Box::new(call));
+    assert_eq!(m.ensures, List::Cons((want, 19), Box::new(List::Nil)));
+}
+
+/// A value of a final class as an argument of a parameter of its interface is the upcast, decision 0166.
+#[test]
+fn an_upcast_is_a_value_of_the_interface() {
+    let e = Expr::Cast(CastKind::Upcast(SQUARE, SHAPE), b(Expr::Var(VY, Ty::Struct(SQUARE))));
+    assert_eq!(translate_code(&e, 30), Ok(DExpr::Upcast(SQUARE, SHAPE, Box::new(DExpr::Var(VY)))));
+}
+
+/// `this->x` in a contract reads `x`, and `this->f(a)` calls `f(a)`, decision 0166. `this` alone has no rule.
+#[test]
+fn this_and_an_arrow_read_the_object() {
+    let k = 315;
+    assert_eq!(parse_contract(&vec![Tok::This, Tok::Arrow, Tok::Ident(k)], 4), parse_contract(&vec![Tok::Ident(k)], 4));
+    let call = vec![Tok::This, Tok::Arrow, Tok::Ident(IVALID), Tok::LParen, Tok::RParen, Tok::Op(BinOp::And), Tok::Ident(k)];
+    assert_eq!(parse_contract(&call, 4), parse_contract(&call[2..].to_vec(), 4));
+    assert_eq!(parse_contract(&vec![Tok::This], 4), Err(Refusal::Syntax(4)));
 }
