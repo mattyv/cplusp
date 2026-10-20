@@ -26,7 +26,10 @@ class Linear final : public Component {
 
   //@ requires valid() && 0 <= x <= 1000
   //@ ensures result == x * rate_
-  int32_t cost(int32_t x) const override { return x * rate_; }
+  int32_t cost(int32_t x) const override {
+    //@ apply MulBound(x, rate_, 1000, 1000)
+    return x * rate_;
+  }
 
  private:
   int32_t rate_;

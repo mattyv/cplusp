@@ -4878,3 +4878,55 @@ fn the_axiom_line_of_an_interface_names_it_in_cpp() {
     let line = |n: &str| format!("Axiom: model: {n}: a call through {n} runs an override that keeps the contract of {n}, C++23 [class.virtual]. Each override of {n} in this file is checked against that contract.");
     assert_eq!(axioms, [line("a::Shape"), line("b::Shape")], "{text}");
 }
+
+/// An apply line of MulBound gives the bound of a product of two names, in a free function and in a pure override, whose function
+/// and check call the lemma too. A caller knows the value of the override, decision 0167.
+#[test]
+fn the_bound_of_a_product_proves_with_mul_bound() {
+    let Some(dafny) = dafny() else { return };
+    if !clang_tidy_available() {
+        return;
+    }
+    let o = prove("model-product.cpp", &[], &dafny);
+    let text = stdout(&o);
+    assert_eq!(o.status.code(), Some(0), "stdout: {text} stderr: {}", stderr(&o));
+    assert_eq!(text.lines().last(), Some("ok: proved"), "{text}");
+    // MulBound is a lemma that Dafny proves, so it names no axiom.
+    assert!(!text.contains("MulBound"), "{text}");
+    // The check of the override calls the lemma, as its function does.
+    let dir = tempfile::tempdir().unwrap();
+    let (_, out) = model("model-product.cpp", dir.path());
+    let model = std::fs::read_to_string(&out).unwrap();
+    let check = model.split_once("lemma c_Rect'area'check'Shape").map(|(_, rest)| rest.split_once("\n}").map_or(rest, |(body, _)| body)).unwrap_or("");
+    assert!(check.contains("MulBound("), "{model}");
+}
+
+/// An apply line of MulBound whose bounds the requires lines do not give fails at its line, once, in a free function and in a pure
+/// override, decision 0167.
+#[test]
+fn mul_bound_with_a_bound_that_does_not_hold_fails_at_its_line() {
+    let Some(dafny) = dafny() else { return };
+    if !clang_tidy_available() {
+        return;
+    }
+    let o = prove("model-product-wrong.cpp", &[], &dafny);
+    let text = stdout(&o);
+    assert_eq!(o.status.code(), Some(1), "stdout: {text} stderr: {}", stderr(&o));
+    let failed: Vec<&str> = text.lines().filter(|l| l.starts_with("Not proved: ")).map(|l| l.rsplit_once(".cpp:").unwrap().1).collect();
+    assert_eq!(failed, ["7: a requires line of the callee may not hold.", "27: a requires line of the callee may not hold."], "{text}");
+}
+
+/// The examples whose overrides bound a product prove with an apply line of MulBound, decision 0167.
+#[test]
+fn the_product_examples_prove() {
+    let Some(dafny) = dafny() else { return };
+    if !clang_tidy_available() {
+        return;
+    }
+    for example in ["strategy"] {
+        let o = prove(&format!("../../../../examples/{example}/example.cpp"), &[], &dafny);
+        let text = stdout(&o);
+        assert_eq!(o.status.code(), Some(0), "{example}: stdout: {text} stderr: {}", stderr(&o));
+        assert_eq!(text.lines().last(), Some("ok: proved"), "{example}: {text}");
+    }
+}

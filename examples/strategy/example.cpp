@@ -24,7 +24,10 @@ class Squared final : public Strategy {
 
   //@ requires valid() && 0 <= x <= 1000
   //@ ensures result == x * x
-  int32_t apply(int32_t x) const override { return x * x; }
+  int32_t apply(int32_t x) const override {
+    //@ apply MulBound(x, x, 1000, 1000)
+    return x * x;
+  }
 };
 
 class Scaled final : public Strategy {
@@ -38,7 +41,10 @@ class Scaled final : public Strategy {
 
   //@ requires valid() && 0 <= x <= 1000
   //@ ensures result == x * k_
-  int32_t apply(int32_t x) const override { return x * k_; }
+  int32_t apply(int32_t x) const override {
+    //@ apply MulBound(x, k_, 1000, 1000)
+    return x * k_;
+  }
 
  private:
   int32_t k_;

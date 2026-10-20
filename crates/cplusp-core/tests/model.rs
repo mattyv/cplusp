@@ -3551,3 +3551,23 @@ fn this_and_an_arrow_read_the_object() {
     assert_eq!(parse_contract(&call, 4), parse_contract(&call[2..].to_vec(), 4));
     assert_eq!(parse_contract(&vec![Tok::This], 4), Err(Refusal::Syntax(4)));
 }
+
+const MULB: u32 = 316;
+
+/// A pure member function can have apply lines above its return. Its function calls each lemma before its value, in order,
+/// decision 0167.
+#[test]
+fn a_pure_member_function_calls_its_lemmas_before_its_value() {
+    let two = || Box::new(List::Cons(b(Expr::Int(2)), Box::new(List::Cons(b(Expr::Int(3)), Box::new(List::Nil)))));
+    let body = List::Cons(
+        Box::new(Stmt::Apply(MULB, two(), 14)),
+        Box::new(List::Cons(Box::new(Stmt::Apply(LEM, two(), 15)), Box::new(one(Stmt::Return(Expr::Lit(4, Ty::I32), 16))))),
+    );
+    let f = Function { body, ..derived_corners(List::Nil, List::Nil) };
+    let Model::Full(m) = translate_function(&f, &List::Nil, &shapes(corners_member())) else { panic!("a full model") };
+    let args = || Box::new(List::Cons(DExpr::Lit(2), Box::new(List::Cons(DExpr::Lit(3), Box::new(List::Nil)))));
+    let want = DExpr::Lemma(MULB, args(), Box::new(DExpr::Lemma(LEM, args(), Box::new(lit32(4)))));
+    assert_eq!(m.function, Some(want));
+    // The method keeps the apply lines as statements before its return, decision 0099.
+    assert!(matches!(&m.body, List::Cons(s, _) if matches!(&*s.0, DStmt::Apply(k, _) if *k == MULB)), "{:?}", m.body);
+}

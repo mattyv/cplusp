@@ -164,3 +164,10 @@ fn a_name_of_the_sort_model_is_refused() {
     assert_eq!(r, want);
     assert_eq!(d, vec![]);
 }
+
+/// The lemmas of the prelude for a product are names of the model, decision 0167.
+#[test]
+fn the_product_lemmas_are_names_of_the_model() {
+    let (r, _) = scan("lemma MulBound(a: int) { }\nlemma MulNonneg(a: int) { }\n");
+    assert_eq!(r, refused(&[(1, "name:MulBound"), (2, "name:MulNonneg")]));
+}
