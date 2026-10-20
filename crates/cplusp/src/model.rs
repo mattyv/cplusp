@@ -49,6 +49,8 @@ enum JTy {
     /// `this` of a pure virtual function of an interface, and a parameter `const B&` of one, by the key of its struct, decision 0165.
     Iface(String),
     IfaceRef(String),
+    /// `this` of a pure virtual function that is not const, decision 0169.
+    IfaceMut(String),
     /// A local `std::vector<T>` that the function owns, decision 0160.
     Vec(JScalar),
     /// An enum class of the file by its key, decision 0109.
@@ -376,6 +378,7 @@ fn ty(t: JTy, names: &mut Names) -> Ty {
         JTy::MutSeq(s) => Ty::MutSeq(scalar(s, names)),
         JTy::Iface(k) => Ty::Iface(names.id(&k)),
         JTy::IfaceRef(k) => Ty::IfaceRef(names.id(&k)),
+        JTy::IfaceMut(k) => Ty::IfaceMut(names.id(&k)),
         JTy::Vec(s) => Ty::Vec(scalar(s, names)),
         JTy::Enum(k) => Ty::Enum(names.id(&k)),
         JTy::This(k) => Ty::This(names.id(&k)),
@@ -903,12 +906,12 @@ fn function(f: JFunction, names: &mut Names) -> Function {
     names.shadow.extend(used.into_iter().map(str::to_string));
     // The names that a contract may call as a functor, decision 0098.
     names.functors = f.params.iter().filter(|(_, t)| matches!(t, JTy::Struct(_))).map(|(n, _)| n.clone()).collect();
-    if let (Some((_, JTy::This(k) | JTy::ThisMut(k) | JTy::Iface(k))), _) | (_, JTy::This(k)) = (f.params.first(), &f.ret) {
+    if let (Some((_, JTy::This(k) | JTy::ThisMut(k) | JTy::Iface(k) | JTy::IfaceMut(k))), _) | (_, JTy::This(k)) = (f.params.first(), &f.ret) {
         names.functors.extend(names.struct_fields.get(k).cloned().unwrap_or_default());
     }
     // A constructor reads the members of the value it builds, decision 0094.
     names.this_members = match (f.params.first(), &f.ret) {
-        (Some((_, JTy::This(k) | JTy::ThisMut(k) | JTy::Iface(k))), _) | (_, JTy::This(k)) => names.members.get(k).cloned().unwrap_or_default(),
+        (Some((_, JTy::This(k) | JTy::ThisMut(k) | JTy::Iface(k) | JTy::IfaceMut(k))), _) | (_, JTy::This(k)) => names.members.get(k).cloned().unwrap_or_default(),
         _ => Vec::new(),
     };
     // A parameter with no name is named by its position, as `'N`. C++ cannot write that, so it clashes with no name. The mangling makes it `v_'N`.
@@ -1261,6 +1264,12 @@ struct Printer<'a> {
     method_lines: HashMap<u32, std::ops::Range<usize>>,
     /// The lemma calls of the body of each pure member function by the id of its key, as `L(args);`, for the check of an override, decision 0167.
     calls: HashMap<u32, Vec<String>>,
+    /// The type that a local unique_ptr points at, by the id of its name, as the Dafny type, for the write of decision 0169.
+    owned: HashMap<u32, String>,
+    /// The virtual functions that write their object, by the id of their keys. They have no function and no line in the upcast, decision 0169.
+    writing: std::collections::HashSet<u32>,
+    /// The names of the reference parameters of each function, by the id of its key, for the lemma that checks an override that writes.
+    refs: HashMap<u32, Vec<u32>>,
     methods: &'a Methods,
     /// The result type of each method by the id of its key, for the call that drops a value, decision 0096.
     rets: &'a HashMap<u32, DTy>,
@@ -1290,18 +1299,36 @@ impl Printer<'_> {
 
     /// The Dafny names of the places that a call writes back, parted by commas, and the call `m(args)`. The arguments hold the object and
     /// the reference parameters too, decision 0108.
-    fn update(&self, objs: &Objs, m: u32, args: &DArgs) -> (String, String) {
+    /// The value of a local unique_ptr that a virtual function writes, `Owned`, comes back in a fresh local that is declared first, and the unique_ptr
+    /// takes it after the call, decision 0169. The third part is those declarations, and the fourth is the writes to the unique_ptrs.
+    fn update(&mut self, objs: &Objs, m: u32, args: &DArgs) -> (String, String, String, String) {
         let mut places = Vec::new();
+        let (mut before, mut after) = (String::new(), String::new());
         let mut rest = objs;
         while let List::Cons(o, next) = rest {
             places.push(match o {
                 Obj::Local(n) => mangle(self.names.text(*n)),
                 Obj::Object => "v_this'".to_string(),
                 Obj::Out(x) => format!("{}'", mangle(self.names.text(*x))),
+                Obj::Owned(v) => {
+                    self.fresh += 1;
+                    let temp = format!("v_'o{}", self.fresh);
+                    let pointed = self.owned.get(v).cloned().unwrap_or_default();
+                    before.push_str(&format!("var {temp}: {pointed}; "));
+                    after.push_str(&format!(" {} := Some({temp});", mangle(self.names.text(*v))));
+                    temp
+                }
             });
             rest = next;
         }
-        (places.join(", "), self.call(m, args))
+        (places.join(", "), self.call(m, args), before, after)
+    }
+
+    /// Keep the type that a local unique_ptr points at, for the write of a virtual function, decision 0169.
+    fn note(&mut self, x: u32, t: DTy) {
+        if let DTy::Opt(s) = t {
+            self.owned.insert(x, dscalar(s, self.names));
+        }
     }
 
     fn stmts(&mut self, ss: &DStmts, depth: usize) {
@@ -1362,21 +1389,22 @@ impl Printer<'_> {
                 self.put(depth, format!("{x} := {x}.(f_{} := {});", names.text(*f), dexpr(e, names)), place);
             }
             DStmt::Update(objs, m, args) => {
-                let (object, call) = self.update(objs, *m, args);
+                let (object, call, before, after) = self.update(objs, *m, args);
                 match self.rets.get(m) {
-                    Some(DTy::Void) | None => self.put(depth, format!("{object} := {call};"), place),
+                    Some(DTy::Void) | None => self.put(depth, format!("{before}{object} := {call};{after}"), place),
                     // The value is dropped into a fresh local.
                     Some(t) => {
                         self.fresh += 1;
                         let r = format!("v_'r{}", self.fresh);
-                        self.put(depth, format!("var {r}: {}; {r}, {object} := {call};", dty(*t, names)), place);
+                        self.put(depth, format!("{before}var {r}: {}; {r}, {object} := {call};{after}", dty(*t, names)), place);
                     }
                 }
             }
             DStmt::LocalUpdate(x, t, objs, m, args) => {
-                let (object, call) = self.update(objs, *m, args);
+                self.note(*x, *t);
+                let (object, call, before, after) = self.update(objs, *m, args);
                 let x = mangle(names.text(*x));
-                self.put(depth, format!("var {x}: {}; {x}, {object} := {call};", dty(*t, names)), place);
+                self.put(depth, format!("{before}var {x}: {}; {x}, {object} := {call};{after}", dty(*t, names)), place);
             }
             DStmt::Match(d, k, cases) => {
                 self.put(depth, format!("match {} {{", dexpr(d, names)), place);
@@ -1426,9 +1454,11 @@ impl Printer<'_> {
                 self.put(depth, format!("{target} := StdSort({target}, ({a}: {t}, {b}: {t}) => {});", dexpr(body, names)), place)
             }
             DStmt::Local(x, t, e) => {
+                self.note(*x, *t);
                 self.put(depth, format!("var {}: {} := {};", mangle(names.text(*x)), local_ty(*t, names), dexpr(e, names)), place)
             }
             DStmt::LocalCall(x, t, m, args) => {
+                self.note(*x, *t);
                 let call = self.call(*m, args);
                 self.put(depth, format!("var {}: {} := {call};", mangle(names.text(*x)), local_ty(*t, names)), place);
             }
@@ -1541,6 +1571,22 @@ impl Printer<'_> {
             args.push(mangle(names.text(*n)));
             rest = next;
         }
+        // An override that writes has no function. Its lemma takes the object after the call, the reference parameters after it, and the result, and Dafny
+        // proves that the promise of the override gives each ensures line of the interface, decision 0169.
+        let writes = self.writing.contains(&o.base);
+        if writes {
+            ps.push(format!("v_this': {}", names.datatypes[&up.derived]));
+            let mut rest = &o.params;
+            while let List::Cons((n, t), next) = rest {
+                if self.refs[&o.derived].contains(n) {
+                    ps.push(format!("{}': {}", mangle(names.text(*n)), dty(*t, names)));
+                }
+                rest = next;
+            }
+            if o.ret != DTy::Void {
+                ps.push(format!("result: {}", dty(o.ret, names)));
+            }
+        }
         self.out.push('\n');
         self.lines.push(None);
         let start = self.lines.len() + 1;
@@ -1561,9 +1607,24 @@ impl Printer<'_> {
             self.put(1, format!("ensures {}", dexpr(e, names)), *line);
             cs = next;
         }
+        let promise: Vec<String> = {
+            let mut all = Vec::new();
+            let mut cs = &o.promise;
+            while let List::Cons((e, _), next) = cs {
+                all.push(dexpr(e, names));
+                cs = next;
+            }
+            all
+        };
         let mut cs = &o.ensures;
         while let List::Cons((e, line), next) = cs {
-            self.put(1, format!("ensures var result: {} := {f}({}); {}", dty(o.ret, names), args.join(", "), dexpr(e, names)), *line);
+            if !writes {
+                self.put(1, format!("ensures var result: {} := {f}({}); {}", dty(o.ret, names), args.join(", "), dexpr(e, names)), *line);
+            } else if promise.is_empty() {
+                self.put(1, format!("ensures {}", dexpr(e, names)), *line);
+            } else {
+                self.put(1, format!("ensures ({}) ==> {}", promise.join(") && ("), dexpr(e, names)), *line);
+            }
             cs = next;
         }
         // The body calls the lemmas that the override calls, with the names that the lemma shares with its function, decision 0167.
@@ -1628,6 +1689,11 @@ impl Printer<'_> {
         self.put(0, format!("function {{:axiom}} {f}(v_this: {}): {}", names.datatypes[&up.derived], names.datatypes[&up.base]), place);
         let mut os = &up.overrides;
         while let List::Cons(o, next) = os {
+            // A virtual function that writes has no function in the model, so the upcast says nothing of it, decision 0169.
+            if self.writing.contains(&o.base) {
+                os = next;
+                continue;
+            }
             let mut binders = Vec::new();
             let mut args = vec![];
             let mut rest = &o.params;
@@ -1655,7 +1721,9 @@ impl Printer<'_> {
         let mut originals = Vec::new();
         let mut os = &up.overrides;
         while let List::Cons(o, next) = os {
-            originals.extend(self.method_lines.get(&o.base).cloned());
+            if !self.writing.contains(&o.base) {
+                originals.extend(self.method_lines.get(&o.base).cloned());
+            }
             os = next;
         }
         self.copies.push((start..self.lines.len() + 1, originals));
@@ -1667,7 +1735,7 @@ impl Printer<'_> {
         }
         // A pure virtual function of an interface is also a function of the model, with its contract and no body, which Dafny takes as given, decision 0166. The
         // method says that its result is the value of the function, and that link is the last ensures line.
-        if m.trusted && matches!(m.params, List::Cons((n, DTy::Iface(_)), _) if self.names.text(n) == "this") {
+        if m.trusted && !m.writes && matches!(m.params, List::Cons((n, DTy::Iface(_)), _) if self.names.text(n) == "this") {
             self.axiom_function(m, place);
         }
         let outs = dparams(&m.outs);
@@ -1753,6 +1821,10 @@ fn sentence(r: Refusal, names: &Names) -> (u32, String) {
         Refusal::Finite(n, line) if names.text(n).starts_with('\'') => (line, "a double parameter has no name. Give it a name and say std::isfinite of it in a requires line.".to_string()),
         Refusal::Finite(n, line) => (line, format!("{} is a double. A requires line needs std::isfinite({}).", names.text(n), names.text(n))),
         Refusal::FiniteResult(line) => (line, "a trusted function that gives a double needs std::isfinite(result) in an ensures line.".to_string()),
+        Refusal::NoMethod(d, b, n, line) => (
+            line,
+            format!("the override of {}::{} in {} has no method in the model, so the translator cannot check it.", names.class_names[&b], names.text(n), names.class_names[&d]),
+        ),
         Refusal::Later(b, f, g, line) if f == g => (line, format!("the contract of {0}::{1} reads {0}::{1} itself. The translator has no rule for it yet.", names.class_names[&b], names.text(f))),
         Refusal::Later(b, f, g, line) => {
             let (b, f, g) = (&names.class_names[&b], names.text(f), names.text(g));
@@ -1795,8 +1867,9 @@ fn dparams(ps: &DParams) -> Vec<(u32, DTy)> {
 /// signature is refused is not in the file. A function whose contract or body is refused is a method with no contract and no body. A `//@`
 /// line that no function claimed is a refusal too.
 pub fn translate(lines: &str, companion: Option<(&str, &str)>) -> Result<Translation> {
-    // The text `operator()` is the first word, so its id is `CALL_OP`, the id that the core uses, decision 0098.
-    let mut names = Names { words: vec!["operator()".to_string()], ..Default::default() };
+    // The text `operator()` is the first word, so its id is `CALL_OP`, the id that the core uses, decision 0098. The text `value` is the second, so its id is
+    // `VALUE_NAME`, the member that `x.value()` calls on a struct, decision 0169.
+    let mut names = Names { words: vec!["operator()".to_string(), "value".to_string()], ..Default::default() };
     let mut refusals = Vec::new();
     let mut funcs = Vec::new();
     let mut structs = Vec::new();
@@ -1881,6 +1954,7 @@ pub fn translate(lines: &str, companion: Option<(&str, &str)>) -> Result<Transla
     let mut methods = Methods::new();
     // The functions that write their object, by the id of their keys, for the header of a method with no body.
     let mut writing = std::collections::HashSet::new();
+    let mut writing_virtual = std::collections::HashSet::new();
     // The names of the reference parameters of each function, by the id of its key, for the header of a method with no body, decision 0108.
     let mut refs: HashMap<u32, Vec<u32>> = HashMap::new();
     // The place of each function, by the id of its key, for its method header.
@@ -1891,7 +1965,7 @@ pub fn translate(lines: &str, companion: Option<(&str, &str)>) -> Result<Transla
     // 0094. C++ cannot write `'`, so it clashes with no name.
     let plain = |f: &JFunction| match (f.params.first(), &f.ret) {
         // `this` of a virtual function of an interface names it too, decision 0165.
-        (Some((_, JTy::This(k) | JTy::ThisMut(k) | JTy::Iface(k))), _) | (_, JTy::This(k)) => format!("{}'{}", structs.iter().find(|s| s.key == *k).map_or("", |s| s.name.as_str()), dafny_word(&f.name)),
+        (Some((_, JTy::This(k) | JTy::ThisMut(k) | JTy::Iface(k) | JTy::IfaceMut(k))), _) | (_, JTy::This(k)) => format!("{}'{}", structs.iter().find(|s| s.key == *k).map_or("", |s| s.name.as_str()), dafny_word(&f.name)),
         _ => f.name.clone(),
     };
     for (i, f) in funcs.iter().enumerate() {
@@ -1902,8 +1976,11 @@ pub fn translate(lines: &str, companion: Option<(&str, &str)>) -> Result<Transla
         names.functions.insert(key, format!("{dafny}'"));
         names.fn_names.insert(key, f.name.clone());
         methods.insert(key, dafny);
-        if matches!(f.params.first(), Some((_, JTy::ThisMut(_)))) {
+        if matches!(f.params.first(), Some((_, JTy::ThisMut(_) | JTy::IfaceMut(_)))) {
             writing.insert(key);
+        }
+        if matches!(f.params.first(), Some((_, JTy::IfaceMut(_)))) {
+            writing_virtual.insert(key);
         }
         let mutable: Vec<u32> = f.params.iter().enumerate().filter(|(_, (_, t))| matches!(t, JTy::Mut(_) | JTy::MutSeq(_))).map(|(i, (n, _))| names.id(&if n.is_empty() { format!("'{i}") } else { n.clone() })).collect();
         refs.insert(key, mutable);
@@ -1980,7 +2057,7 @@ pub fn translate(lines: &str, companion: Option<(&str, &str)>) -> Result<Transla
         };
         seen = next;
     }
-    let mut p = Printer { copies: Vec::new(), pending: Vec::new(), method_lines: HashMap::new(), calls: HashMap::new(), names: &names, methods: &methods, rets: &rets, out: PRELUDE.to_string(), lines: Vec::new(), scope: Vec::new(), own: Vec::new(), writes: false, fresh: 0, temps: 0 };
+    let mut p = Printer { copies: Vec::new(), pending: Vec::new(), method_lines: HashMap::new(), calls: HashMap::new(), owned: HashMap::new(), writing: writing_virtual, refs: refs.clone(), names: &names, methods: &methods, rets: &rets, out: PRELUDE.to_string(), lines: Vec::new(), scope: Vec::new(), own: Vec::new(), writes: false, fresh: 0, temps: 0 };
     p.lines.extend(PRELUDE.lines().map(|_| None));
     let mut refused_at = Vec::new();
     for (en, (place, key)) in enums.iter().zip(enum_places) {

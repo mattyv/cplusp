@@ -181,7 +181,8 @@ pub enum Extent {
 /// reference that the function writes, as a sequence, and `MutSeqAfter` is its value after the call, decision 0145. `Vec` is a local
 /// `std::vector` that the function owns, a copy, decision 0160. `Enum` is an enum class of
 /// the file by its key, decision 0109. `Iface` is `this` of a virtual function of the interface `k`, and `IfaceRef` is a parameter
-/// `const B&` of it, through which a call runs an override, decision 0165. `Void` is the result type
+/// `const B&` of it, through which a call runs an override, decision 0165. `IfaceMut` is `this` of a virtual function that writes
+/// its object, decision 0169. `Void` is the result type
 /// of a function that gives no value. `Other` is a type the translator has no rule for, by the id of its name.
 #[derive(Structural, PartialEq, Eq, Clone, Copy, Debug)]
 pub enum Ty {
@@ -212,6 +213,7 @@ pub enum Ty {
     Fresh(u32),
     Iface(u32),
     IfaceRef(u32),
+    IfaceMut(u32),
     Void,
     Other(u32),
 }
@@ -543,12 +545,14 @@ pub enum DStmt {
 }
 
 /// A place that a call writes back: a local by its name, the object of the member function that makes the call, or a reference
-/// parameter of that function, decision 0108.
+/// parameter of that function, decision 0108. `Owned` is the value of a local unique_ptr, which a virtual function writes, decision
+/// 0169.
 #[derive(Structural, PartialEq, Eq, Clone, Copy, Debug)]
 pub enum Obj {
     Local(u32),
     Object,
     Out(u32),
+    Owned(u32),
 }
 
 /// The places that a call writes back, in the order of the results of its method after `result`: the object, then each reference
@@ -619,7 +623,8 @@ pub type Models = List<Model>;
 /// the id of the name of the function and the line of the class. `NotFinal` is a class over an interface that is not final, by its
 /// key and line. `Overload` is an interface with two virtual functions of one name, by its key and line, decision 0165. `Later` is
 /// a contract of a virtual function that reads a virtual function declared after it, by the key of the interface, the ids of the
-/// names of both functions and the line, decision 0166.
+/// names of both functions and the line, decision 0166. `NoMethod` is an override that writes and has no method in the model, by
+/// the keys of the class and the interface, the id of the name of the function and the line of the class, decision 0169.
 #[derive(Structural, PartialEq, Eq, Clone, Copy, Debug)]
 pub enum Refusal {
     Construct(u32, u32),
@@ -656,12 +661,17 @@ pub enum Refusal {
     NotFinal(u32, u32),
     Overload(u32, u32),
     Later(u32, u32, u32, u32),
+    NoMethod(u32, u32, u32, u32),
 }
 
 // ------------------------------------------------------------------ the rules
 
 /// The id of the name `operator()`. The shell gives this id to that text, decision 0098.
 pub const CALL_OP: u32 = 0;
+
+/// The id of the name `value`. The shell gives this id to that text, so `o.value()` on an object of a struct calls its member
+/// `value`, decision 0169.
+pub const VALUE_NAME: u32 = 1;
 
 /// The Dafny type of a scalar, decision 0108.
 pub open spec fn spec_scalar_dty(s: Scalar) -> DTy {
@@ -713,6 +723,7 @@ pub open spec fn spec_ty(t: Ty, line: u32) -> Result<DTy, Refusal> {
         // An interface is a type with no value that the model can see, decision 0165.
         Ty::Iface(k) => Ok(DTy::Iface(k)),
         Ty::IfaceRef(k) => Ok(DTy::Iface(k)),
+        Ty::IfaceMut(k) => Ok(DTy::Iface(k)),
         Ty::Fresh(_) => Err(Refusal::Syntax(line)),
         Ty::Void => Err(Refusal::Syntax(line)),
         Ty::Other(k) => Err(Refusal::Construct(k, line)),
@@ -791,6 +802,7 @@ pub open spec fn spec_value_ty(t: Ty, line: u32, sd: Structs) -> Result<DTy, Ref
             // An interface is a parameter only, decision 0165.
             Ty::Iface(_) => Err(Refusal::Syntax(line)),
             Ty::IfaceRef(_) => Err(Refusal::Syntax(line)),
+            Ty::IfaceMut(_) => Err(Refusal::Syntax(line)),
             Ty::Struct(k) => if spec_holds(sd, k) {
                 Err(Refusal::HoldsSeq(line))
             } else {
@@ -1712,7 +1724,14 @@ pub open spec fn spec_contract(e: Expr, decl: Names, ps: Params, ret: Option<Ty>
             Ok((d, Ty::Opt(s))) => spec_leaf(DExpr::Get(Box::new(d)), spec_elem(s), line),
             Ok((d, Ty::Ptr(s))) => spec_leaf(DExpr::Get(Box::new(d)), spec_elem(s), line),
             Ok((d, Ty::Own(s))) => spec_leaf(DExpr::Get(Box::new(d)), spec_elem(s), line),
-            Ok(_) => Err(Refusal::Syntax(line)),
+            // `o.value()` of an object of a struct calls its member `value`, decision 0169.
+            Ok((d, t)) => match spec_struct_key(t) {
+                Some(k) => match spec_member(sd, k, VALUE_NAME) {
+                    Some((key, Some((rt, _)))) => spec_leaf(DExpr::FCall(key, Box::new(List::Cons(d, Box::new(List::Nil)))), rt, line),
+                    _ => Err(Refusal::NotPure(VALUE_NAME, line)),
+                },
+                None => Err(Refusal::Syntax(line)),
+            },
             Err(r) => Err(r),
         },
         // A bound name is an integer, so it is no function, decision 0100.
@@ -1990,6 +2009,7 @@ pub open spec fn spec_self(ps: Params) -> Option<(u32, Ty)>
             Ty::ThisMut(_) => Some((p, t)),
             Ty::ThisAfter(_) => Some((p, t)),
             Ty::Iface(_) => Some((p, t)),
+            Ty::IfaceMut(_) => Some((p, t)),
             _ => spec_self(*rest),
         },
         List::Nil => None,
@@ -2000,6 +2020,7 @@ pub open spec fn spec_self(ps: Params) -> Option<(u32, Ty)>
 pub open spec fn spec_writes(ps: Params) -> bool {
     match spec_self(ps) {
         Some((_, Ty::ThisMut(_))) => true,
+        Some((_, Ty::IfaceMut(_))) => true,
         _ => false,
     }
 }
@@ -2012,6 +2033,7 @@ pub open spec fn spec_after(ps: Params) -> Params
         List::Nil => List::Nil,
         List::Cons((p, t), rest) => List::Cons((p, match t {
                 Ty::ThisMut(k) => Ty::ThisAfter(k),
+                Ty::IfaceMut(k) => Ty::ThisAfter(k),
                 Ty::Mut(s) => Ty::MutAfter(s),
                 Ty::MutSeq(s) => Ty::MutSeqAfter(s),
                 _ => t,
@@ -2070,6 +2092,7 @@ pub open spec fn spec_is_mut(ps: Params, name: u32) -> bool {
 pub open spec fn spec_written(t: Ty) -> bool {
     match t {
         Ty::ThisMut(_) => true,
+        Ty::IfaceMut(_) => true,
         Ty::Mut(_) => true,
         Ty::MutSeq(_) => true,
         _ => false,
@@ -2173,6 +2196,7 @@ pub open spec fn spec_object(ps: Params, ret: Option<Ty>) -> Option<(DExpr, u32)
             Ty::ThisMut(k) => Some((DExpr::Var(p), k)),
             // The object of a virtual function of an interface, decision 0166.
             Ty::Iface(k) => Some((DExpr::Var(p), k)),
+            Ty::IfaceMut(k) => Some((DExpr::Var(p), k)),
             _ => None,
         },
         None => match ret {
@@ -2500,6 +2524,42 @@ pub open spec fn spec_target(o: Expr, ps: Params, line: u32) -> Result<Obj, Refu
     }
 }
 
+/// The local unique_ptr whose value the expression reads: `*p` or `p->`, decision 0169.
+pub open spec fn spec_owned(o: Expr) -> Option<u32>
+    decreases o,
+{
+    match o {
+        Expr::Value(a) => match *a {
+            Expr::Var(v, t) => if t is Own {
+                Some(v)
+            } else {
+                None
+            },
+            _ => None,
+        },
+        Expr::Cast(c, a) => if c == CastKind::Read || c == CastKind::NoOp {
+            spec_owned(*a)
+        } else {
+            None
+        },
+        Expr::Paren(a) => spec_owned(*a),
+        _ => None,
+    }
+}
+
+/// The place that a call of a virtual function that writes its object writes back. It is a place of 0108, or the value of a local
+/// unique_ptr of the interface, which takes the new value, decision 0169.
+pub open spec fn spec_object_target(o: Expr, ps: Params, line: u32) -> Result<Obj, Refusal> {
+    match spec_owned(o) {
+        Some(v) => if spec_get(ps, v) is Some {
+            Err(Refusal::NoTarget(line))
+        } else {
+            Ok(Obj::Owned(v))
+        },
+        None => spec_target(o, ps, line),
+    }
+}
+
 /// The places that a call writes back: the argument at each parameter `cps` of the callee that takes a value in and gives it back,
 /// in order, decisions 0096 and 0108.
 pub open spec fn spec_writebacks(args: Args, cps: Params, ps: Params, line: u32) -> Result<Objs, Refusal>
@@ -2510,7 +2570,7 @@ pub open spec fn spec_writebacks(args: Args, cps: Params, ps: Params, line: u32)
         List::Cons(a, rest) => match cps {
             List::Nil => Err(Refusal::Syntax(line)),
             List::Cons((_, t), crest) => if spec_written(t) {
-                match spec_target(*a, ps, line) {
+                match (if t is IfaceMut { spec_object_target(*a, ps, line) } else { spec_target(*a, ps, line) }) {
                     Err(r) => Err(r),
                     Ok(o) => match spec_writebacks(*rest, *crest, ps, line) {
                         Err(r) => Err(r),
@@ -3253,7 +3313,7 @@ pub open spec fn spec_param_args(ps: Params) -> DArgs
 pub open spec fn spec_linked(f: Function, ens: DConds, pure: Option<DExpr>) -> DConds {
     match pure {
         Some(_) => spec_link(f, ens),
-        None => if spec_virtual(f) is Some {
+        None => if spec_const_virtual(f) {
             // The method of a virtual function gives the value of its function, decision 0166.
             spec_link(f, ens)
         } else {
@@ -3266,8 +3326,14 @@ pub open spec fn spec_linked(f: Function, ens: DConds, pure: Option<DExpr>) -> D
 pub open spec fn spec_virtual(f: Function) -> Option<u32> {
     match spec_head_ty(f.params) {
         Some(Ty::Iface(k)) => Some(k),
+        Some(Ty::IfaceMut(k)) => Some(k),
         _ => None,
     }
+}
+
+/// A virtual function that does not write its object: a function of the model, decision 0166.
+pub open spec fn spec_const_virtual(f: Function) -> bool {
+    spec_head_ty(f.params) is Some && spec_head_ty(f.params)->Some_0 is Iface
 }
 
 /// Each member marked as no function in the model.
@@ -3471,6 +3537,7 @@ pub open spec fn spec_struct_key(t: Ty) -> Option<u32> {
         // An interface has no field, and its member functions are its virtual functions, decision 0166.
         Ty::Iface(k) => Some(k),
         Ty::IfaceRef(k) => Some(k),
+        Ty::IfaceMut(k) => Some(k),
         _ => None,
     }
 }
@@ -3496,7 +3563,7 @@ pub open spec fn spec_pure_ret(all: Fns, key: u32, sd: Structs, strict: bool) ->
     match spec_find(all, key) {
         Some(f) => if !has_signature(f, sd) {
             None
-        } else if spec_virtual(f) is Some {
+        } else if spec_const_virtual(f) {
             // A virtual function is a function of the model with no body, decision 0166.
             if !strict {
                 Some((f.ret, f.params))
@@ -3560,7 +3627,8 @@ pub open spec fn spec_marked(sd: Structs, all: Fns) -> Structs {
 /// The check of one override. `base` and `derived` are the keys of the function of the interface and of the override. `params` are
 /// the parameters of the override after `this`. `requires` and `ensures` are the contract of the function of the interface, read on
 /// the parameters of the override. `own` is the requires lines of the override. Dafny proves that `own` follows from `requires`, and
-/// that the function of the override meets `ensures`.
+/// that the function of the override meets `ensures`. `promise` is the ensures lines of the override. An override that writes has
+/// no function, so Dafny proves that `promise` gives `ensures`, decision 0169.
 #[derive(PartialEq, Eq, Debug)]
 pub struct DOverride {
     pub base: u32,
@@ -3570,6 +3638,7 @@ pub struct DOverride {
     pub requires: DConds,
     pub ensures: DConds,
     pub own: DConds,
+    pub promise: DConds,
 }
 
 pub type DOverrides = List<DOverride>;
@@ -3606,8 +3675,9 @@ pub open spec fn spec_head_ty(ps: Params) -> Option<Ty> {
 /// The function `fb` of the interface `b` and the function `fd` of the class `d` have the same parameters after `this` and the
 /// same result.
 pub open spec fn spec_overrides_fn(fb: Function, fd: Function, d: u32, b: u32) -> bool {
-    spec_head_ty(fb.params) == Some(Ty::Iface(b)) && spec_head_ty(fd.params) == Some(Ty::This(d)) && fb.ret == fd.ret
-        && spec_same_tys(spec_tail(fb.params), spec_tail(fd.params))
+    ((spec_head_ty(fb.params) == Some(Ty::Iface(b)) && spec_head_ty(fd.params) == Some(Ty::This(d))) || (spec_head_ty(fb.params) == Some(
+        Ty::IfaceMut(b),
+    ) && spec_head_ty(fd.params) == Some(Ty::ThisMut(d)))) && fb.ret == fd.ret && spec_same_tys(spec_tail(fb.params), spec_tail(fd.params))
 }
 
 /// The check of the function `fb` of the interface on its override `fd`. The contract of `fb` reads the parameters of `fd` by their
@@ -3623,7 +3693,10 @@ pub open spec fn spec_check(fb: Function, fd: Function, sd: Structs) -> Result<D
                     Err(r) => Err(r),
                     Ok(en) => match spec_conds(fd.conds, CondKind::Requires, fd.params, fd.ret, sd) {
                         Err(r) => Err(r),
-                        Ok(own) => Ok(DOverride { base: fb.name, derived: fd.name, params: ps, ret, requires: rq, ensures: en, own }),
+                        Ok(own) => match spec_conds(fd.conds, CondKind::Ensures, fd.params, fd.ret, sd) {
+                            Err(r) => Err(r),
+                            Ok(promise) => Ok(DOverride { base: fb.name, derived: fd.name, params: ps, ret, requires: rq, ensures: en, own, promise }),
+                        },
                     },
                 },
             },
@@ -3642,8 +3715,11 @@ pub open spec fn spec_override(d: u32, b: u32, n: u32, bk: u32, line: u32, all: 
                 None => Err(Refusal::NoOverride(d, b, n, line)),
                 Some(fd) => if !spec_overrides_fn(fb, fd, d, b) {
                     Err(Refusal::NoOverride(d, b, n, line))
-                } else if pure is None {
+                } else if spec_const_virtual(fb) && pure is None {
                     Err(Refusal::Unchecked(d, b, n, line))
+                } else if !spec_const_virtual(fb) && !(spec_function(fd, all, sd) is Full) {
+                    // An override that writes is checked on its contract, so it must have a method, decision 0169.
+                    Err(Refusal::NoMethod(d, b, n, line))
                 } else {
                     // The contract of the interface must have a model of its own, decision 0166.
                     match spec_inside_of(fb, all, sd) {
@@ -3699,9 +3775,14 @@ pub open spec fn spec_checked(d: u32, b: u32, ms: Members, os: DOverrides, all: 
         List::Cons((n, (bk, _)), rest) => match os {
             List::Nil => false,
             List::Cons(o, orest) => o.base == bk && match spec_member(sd, d, n) {
-                Some((dk, Some(_))) => o.derived == dk && match spec_find(all, bk) {
+                Some((dk, p)) => o.derived == dk && match spec_find(all, bk) {
                     Some(fb) => match spec_find(all, dk) {
-                        Some(fd) => spec_overrides_fn(fb, fd, d, b),
+                        // A const override has a function in the model, and one that writes has a method, decision 0169.
+                        Some(fd) => spec_overrides_fn(fb, fd, d, b) && (if spec_const_virtual(fb) {
+                            p is Some
+                        } else {
+                            spec_function(fd, all, sd) is Full
+                        }),
                         None => false,
                     },
                     None => false,
@@ -3752,7 +3833,7 @@ pub open spec fn spec_listed(fs: Fns, b: u32, ms: Members) -> bool
 {
     match fs {
         List::Nil => true,
-        List::Cons(f, rest) => (spec_head_ty(f.params) != Some(Ty::Iface(b)) || spec_keyed(ms, f.name)) && spec_listed(*rest, b, ms),
+        List::Cons(f, rest) => (spec_virtual(*f) != Some(b) || spec_keyed(ms, f.name)) && spec_listed(*rest, b, ms),
     }
 }
 
@@ -5430,6 +5511,7 @@ pub fn translate_ty(t: Ty, line: u32) -> (r: Result<DTy, Refusal>)
         // An interface is a type with no value that the model can see, decision 0165.
         Ty::Iface(k) => Ok(DTy::Iface(k)),
         Ty::IfaceRef(k) => Ok(DTy::Iface(k)),
+        Ty::IfaceMut(k) => Ok(DTy::Iface(k)),
         Ty::Fresh(_) => Err(Refusal::Syntax(line)),
         Ty::Void => Err(Refusal::Syntax(line)),
         Ty::Other(k) => Err(Refusal::Construct(k, line)),
@@ -5455,6 +5537,7 @@ pub fn translate_value_ty(t: Ty, line: u32, sd: &Structs) -> (r: Result<DTy, Ref
             // An interface is a parameter only, decision 0165.
             Ty::Iface(_) => Err(Refusal::Syntax(line)),
             Ty::IfaceRef(_) => Err(Refusal::Syntax(line)),
+            Ty::IfaceMut(_) => Err(Refusal::Syntax(line)),
             Ty::Struct(k) => if holds_seq(sd, k) {
                 Err(Refusal::HoldsSeq(line))
             } else {
@@ -6122,7 +6205,13 @@ pub fn translate_contract(e: &Expr, decl: &Names, ps: &Params, ret: Option<Ty>, 
             Ok((d, Ty::Opt(s))) => translate_leaf(DExpr::Get(Box::new(d)), elem(s), line),
             Ok((d, Ty::Ptr(s))) => translate_leaf(DExpr::Get(Box::new(d)), elem(s), line),
             Ok((d, Ty::Own(s))) => translate_leaf(DExpr::Get(Box::new(d)), elem(s), line),
-            Ok(_) => Err(Refusal::Syntax(line)),
+            Ok((d, t)) => match struct_key(t) {
+                Some(k) => match member(sd, k, VALUE_NAME) {
+                    Some((key, Some((rt, _)))) => translate_leaf(DExpr::FCall(key, Box::new(List::Cons(d, Box::new(List::Nil)))), rt, line),
+                    _ => Err(Refusal::NotPure(VALUE_NAME, line)),
+                },
+                None => Err(Refusal::Syntax(line)),
+            },
             Err(r) => Err(r),
         },
         Expr::Apply(f, args) => if has(bound, *f) {
@@ -6393,6 +6482,7 @@ pub fn self_param(ps: &Params) -> (r: Option<(u32, Ty)>)
             Ty::ThisMut(_) => Some((*p, *t)),
             Ty::ThisAfter(_) => Some((*p, *t)),
             Ty::Iface(_) => Some((*p, *t)),
+            Ty::IfaceMut(_) => Some((*p, *t)),
             _ => self_param(rest),
         },
         List::Nil => None,
@@ -6405,6 +6495,7 @@ pub fn writes(ps: &Params) -> (r: bool)
 {
     match self_param(ps) {
         Some((_, Ty::ThisMut(_))) => true,
+        Some((_, Ty::IfaceMut(_))) => true,
         _ => false,
     }
 }
@@ -6419,6 +6510,7 @@ pub fn after(ps: &Params) -> (r: Params)
         List::Cons((p, t), rest) => {
             let v = match t {
                 Ty::ThisMut(k) => Ty::ThisAfter(*k),
+                Ty::IfaceMut(k) => Ty::ThisAfter(*k),
                 Ty::Mut(s) => Ty::MutAfter(*s),
                 Ty::MutSeq(s) => Ty::MutSeqAfter(*s),
                 _ => *t,
@@ -6488,6 +6580,7 @@ pub fn written(t: Ty) -> (r: bool)
 {
     match t {
         Ty::ThisMut(_) => true,
+        Ty::IfaceMut(_) => true,
         Ty::Mut(_) => true,
         Ty::MutSeq(_) => true,
         _ => false,
@@ -6601,6 +6694,7 @@ pub fn object(ps: &Params, ret: Option<Ty>) -> (r: Option<(DExpr, u32)>)
             Ty::This(k) => Some((DExpr::Var(p), k)),
             Ty::ThisMut(k) => Some((DExpr::Var(p), k)),
             Ty::Iface(k) => Some((DExpr::Var(p), k)),
+            Ty::IfaceMut(k) => Some((DExpr::Var(p), k)),
             _ => None,
         },
         None => match ret {
@@ -6961,6 +7055,44 @@ pub fn target(o: &Expr, ps: &Params, line: u32) -> (r: Result<Obj, Refusal>)
     }
 }
 
+pub fn owned(o: &Expr) -> (r: Option<u32>)
+    ensures
+        r == spec_owned(*o),
+    decreases o,
+{
+    match o {
+        Expr::Value(a) => match &**a {
+            Expr::Var(v, t) => if matches!(t, Ty::Own(_)) {
+                Some(*v)
+            } else {
+                None
+            },
+            _ => None,
+        },
+        Expr::Cast(c, a) => if *c == CastKind::Read || *c == CastKind::NoOp {
+            owned(a)
+        } else {
+            None
+        },
+        Expr::Paren(a) => owned(a),
+        _ => None,
+    }
+}
+
+pub fn object_target(o: &Expr, ps: &Params, line: u32) -> (r: Result<Obj, Refusal>)
+    ensures
+        r == spec_object_target(*o, *ps, line),
+{
+    match owned(o) {
+        Some(v) => if get_ref(ps, v).is_some() {
+            Err(Refusal::NoTarget(line))
+        } else {
+            Ok(Obj::Owned(v))
+        },
+        None => target(o, ps, line),
+    }
+}
+
 pub fn writebacks(args: &Args, cps: &Params, ps: &Params, line: u32) -> (r: Result<Objs, Refusal>)
     ensures
         r == spec_writebacks(*args, *cps, *ps, line),
@@ -6971,7 +7103,12 @@ pub fn writebacks(args: &Args, cps: &Params, ps: &Params, line: u32) -> (r: Resu
         List::Cons(a, rest) => match cps {
             List::Nil => Err(Refusal::Syntax(line)),
             List::Cons((_, t), crest) => if written(*t) {
-                match target(a, ps, line) {
+                let o = if matches!(t, Ty::IfaceMut(_)) {
+                    object_target(a, ps, line)
+                } else {
+                    target(a, ps, line)
+                };
+                match o {
                     Err(r) => Err(r),
                     Ok(o) => match writebacks(rest, crest, ps, line) {
                         Err(r) => Err(r),
@@ -7821,7 +7958,7 @@ pub fn linked(f: &Function, ens: DConds, pure: &Option<DExpr>) -> (r: DConds)
 {
     match pure {
         Some(_) => link(f, ens),
-        None => if virtual_of(f).is_some() {
+        None => if const_virtual(f) {
             link(f, ens)
         } else {
             ens
@@ -7835,8 +7972,16 @@ pub fn virtual_of(f: &Function) -> (r: Option<u32>)
 {
     match head_ty(&f.params) {
         Some(Ty::Iface(k)) => Some(k),
+        Some(Ty::IfaceMut(k)) => Some(k),
         _ => None,
     }
+}
+
+pub fn const_virtual(f: &Function) -> (r: bool)
+    ensures
+        r == spec_const_virtual(*f),
+{
+    matches!(head_ty(&f.params), Some(Ty::Iface(_)))
 }
 
 pub fn unmark(ms: &Members) -> (r: Members)
@@ -8010,6 +8155,7 @@ pub fn struct_key(t: Ty) -> (r: Option<u32>)
         Ty::ThisAfter(k) => Some(k),
         Ty::Iface(k) => Some(k),
         Ty::IfaceRef(k) => Some(k),
+        Ty::IfaceMut(k) => Some(k),
         _ => None,
     }
 }
@@ -8039,7 +8185,7 @@ pub fn pure_ret(all: &Fns, key: u32, sd: &Structs, strict: bool) -> (r: Option<(
     match find(all, key) {
         Some(f) => if !signature(f, sd) {
             None
-        } else if virtual_of(f).is_some() {
+        } else if const_virtual(f) {
             if !strict {
                 Some((f.ret, copy(&f.params)))
             } else {
@@ -8260,8 +8406,8 @@ pub fn overrides_fn(fb: &Function, fd: &Function, d: u32, b: u32) -> (r: bool)
     ensures
         r == spec_overrides_fn(*fb, *fd, d, b),
 {
-    head_ty(&fb.params) == Some(Ty::Iface(b)) && head_ty(&fd.params) == Some(Ty::This(d)) && fb.ret == fd.ret
-        && same_tys(&tail(&fb.params), &tail(&fd.params))
+    ((head_ty(&fb.params) == Some(Ty::Iface(b)) && head_ty(&fd.params) == Some(Ty::This(d))) || (head_ty(&fb.params) == Some(Ty::IfaceMut(b))
+        && head_ty(&fd.params) == Some(Ty::ThisMut(d)))) && fb.ret == fd.ret && same_tys(&tail(&fb.params), &tail(&fd.params))
 }
 
 pub fn check(fb: &Function, fd: &Function, sd: &Structs) -> (r: Result<DOverride, Refusal>)
@@ -8278,7 +8424,10 @@ pub fn check(fb: &Function, fd: &Function, sd: &Structs) -> (r: Result<DOverride
                     Err(r) => Err(r),
                     Ok(en) => match translate_conds(&fd.conds, CondKind::Requires, &fd.params, fd.ret, sd) {
                         Err(r) => Err(r),
-                        Ok(own) => Ok(DOverride { base: fb.name, derived: fd.name, params: ps, ret, requires: rq, ensures: en, own }),
+                        Ok(own) => match translate_conds(&fd.conds, CondKind::Ensures, &fd.params, fd.ret, sd) {
+                            Err(r) => Err(r),
+                            Ok(promise) => Ok(DOverride { base: fb.name, derived: fd.name, params: ps, ret, requires: rq, ensures: en, own, promise }),
+                        },
                     },
                 },
             },
@@ -8298,8 +8447,10 @@ pub fn translate_override(d: u32, b: u32, n: u32, bk: u32, line: u32, all: &Fns,
                 None => Err(Refusal::NoOverride(d, b, n, line)),
                 Some(fd) => if !overrides_fn(fb, fd, d, b) {
                     Err(Refusal::NoOverride(d, b, n, line))
-                } else if pure.is_none() {
+                } else if const_virtual(fb) && pure.is_none() {
                     Err(Refusal::Unchecked(d, b, n, line))
+                } else if !const_virtual(fb) && !matches!(translate_function(fd, all, sd), Model::Full(_)) {
+                    Err(Refusal::NoMethod(d, b, n, line))
                 } else {
                     match translate_inside_of(fb, all, sd) {
                         Err(r) => Err(r),
@@ -8346,7 +8497,7 @@ pub fn listed(fs: &Fns, b: u32, ms: &Members) -> (r: bool)
 {
     match fs {
         List::Nil => true,
-        List::Cons(f, rest) => (head_ty(&f.params) != Some(Ty::Iface(b)) || keyed(ms, f.name)) && listed(rest, b, ms),
+        List::Cons(f, rest) => (virtual_of(f) != Some(b) || keyed(ms, f.name)) && listed(rest, b, ms),
     }
 }
 

@@ -4173,8 +4173,8 @@ public:
     const CXXMethodDecl *Member = member(FD);
     // An interface method is written at its declaration only. A pure virtual function that has a body is none: the body has no rule, decision 0165.
     const bool PureBody = ifaceMethod(FD) && FD->isThisDeclarationADefinition();
-    // A pure virtual function that gives no value has no rule yet, decision 0166.
-    const bool NoValue = ifaceMethod(FD) && !PureBody && FD->getReturnType()->isVoidType();
+    // A const pure virtual function that gives no value has no rule yet, decision 0166. One that writes its object gives its object back, decision 0169.
+    const bool NoValue = ifaceMethod(FD) && !PureBody && FD->getReturnType()->isVoidType() && cast<CXXMethodDecl>(FD)->isConst();
     const bool Interface = ifaceMethod(FD) && !PureBody && !NoValue;
     const CXXConstructorDecl *Constructor = valueConstructor(FD);
     const char *Opaque = PureBody                                  ? "a body of a pure virtual function"
@@ -4712,7 +4712,7 @@ public:
           return false;
         continue;
       }
-      if (isa<CXXConstructorDecl>(M) || M->isStatic() || !M->isVirtual() || !M->isPureVirtual() || !M->isConst() || M->isVolatile() || M->getRefQualifier() != RQ_None ||
+      if (isa<CXXConstructorDecl>(M) || M->isStatic() || !M->isVirtual() || !M->isPureVirtual() || M->isVolatile() || M->getRefQualifier() != RQ_None ||
           M->isOverloadedOperator() || isa<CXXConversionDecl>(M))
         return false;
       Virtual = true;
@@ -4736,10 +4736,10 @@ public:
   bool finalOverInterface(const CXXRecordDecl *RD) const {
     return RD && RD->hasDefinition() && RD->getDefinition()->isEffectivelyFinal() && !interfaceBases(RD).empty();
   }
-  // A pure virtual `const` function of an interface, decision 0165.
+  // A pure virtual function of an interface, decisions 0165 and 0169. One that is not `const` writes its object.
   bool ifaceMethod(const FunctionDecl *FD) const {
     const auto *M = dyn_cast<CXXMethodDecl>(FD);
-    return M && M->isPureVirtual() && M->isConst() && isInterface(M->getParent());
+    return M && M->isPureVirtual() && isInterface(M->getParent());
   }
   // A member function, a constructor or a destructor that the model leaves out with no refusal, decision 0165: the defaulted destructor of an interface, and
   // each member of a class over an interface that is not final. A call on such a class may run an override of a subclass, so the model never reads its body.
@@ -4829,7 +4829,7 @@ private:
   llvm::json::Value thisType(const CXXRecordDecl *Parent, bool Writes = false) const {
     if (isInterface(Parent)) {
       interfaceEntry(Parent);
-      return tag("Iface", structKey(Parent->getDefinition()));
+      return tag(Writes ? "IfaceMut" : "Iface", structKey(Parent->getDefinition()));
     }
     const CXXRecordDecl *RD = plainStruct(Context.getRecordType(Parent));
     type(Context.getRecordType(Parent));  // writes the struct
@@ -4899,6 +4899,11 @@ private:
       return tag("Mut", S);
     if (plainStruct(Pointee))
       return tag("Mut", type(Pointee));
+    // A reference of an interface, which a virtual function that writes may run on, decision 0169.
+    if (const CXXRecordDecl *RD = Pointee->getAsCXXRecordDecl(); RD && isInterface(RD)) {
+      interfaceEntry(RD);
+      return tag("Mut", tag("Struct", structKey(RD->getDefinition())));
+    }
     return nullptr;
   }
   // The element of a pointer to const, decisions 0140 and 0141, or null: `const T*` for a scalar or a plain struct, with no other qualifier.
@@ -5029,7 +5034,8 @@ private:
         // a contract cannot tell the overloads apart, so it calls none.
         std::map<std::string, std::vector<std::string>> Named;
         for (const Decl *D : RD->decls())
-          if (const auto *M = dyn_cast<CXXMethodDecl>(D); M && constMember(M))
+          // An override that writes its object is a member too, so the check finds it. A contract cannot call it, decision 0169.
+          if (const auto *M = dyn_cast<CXXMethodDecl>(D); M && (constMember(M) || (M->isVirtual() && member(M))))
             Named[M->getNameAsString()].push_back(key(M));
         llvm::json::Array Members;
         for (const auto &[Name, Keys] : Named)
@@ -5163,6 +5169,10 @@ private:
     }
     if (const auto *Call = dyn_cast<CallExpr>(Inner))
       if (llvm::json::Value Written = expr(Call, line(S->getBeginLoc())); Written.getAsObject() && Written.getAsObject()->get("Call"))
+        return Written;
+      // The call with a class at a reference of its interface says why, decision 0169.
+      else if (const llvm::json::Array *Why = Written.getAsObject() ? Written.getAsObject()->getArray("Unknown") : nullptr;
+               Why && !Why->empty() && (*Why)[0].getAsString() == StringRef("a class as a reference to its interface"))
         return Written;
     if (const auto *Step = dyn_cast<UnaryOperator>(S); Step && Step->isIncrementDecrementOp())
       if (const auto *Target = dyn_cast<DeclRefExpr>(Step->getSubExpr()); Target && isVariable(Target->getDecl()))
@@ -5779,6 +5789,9 @@ private:
       // `nullptr` as an argument for a pointer to const is no value, decision 0140.
       if (Cast->getCastKind() == CK_NullToPointer && isa<CXXNullPtrLiteralExpr>(Cast->getSubExpr()->IgnoreParens()))
         return "Nullopt";
+      // A final class at a reference of its interface that is not const has no rule: the model has no way back from a value of the interface, decision 0169.
+      if (Cast->getCastKind() == CK_DerivedToBase && !Cast->getType().isConstQualified() && Cast->getValueKind() == VK_LValue && !upcastKind(Cast).getAsNull())
+        return unknown(E, "a class as a reference to its interface", Near);
       llvm::json::Value Kind = Cast->getCastKind() == CK_LValueToRValue ? llvm::json::Value("Read")
                                : Cast->getCastKind() == CK_NoOp         ? llvm::json::Value("NoOp")
                                : Cast->getCastKind() == CK_ConstructorConversion ? llvm::json::Value("Construct")
@@ -5920,7 +5933,9 @@ private:
         const auto *Callee = dyn_cast<MemberExpr>(Call->getCallee()->IgnoreParens());
         if (Callee && Callee->hasQualifier())
           return unknown(E, "a qualified call of a virtual function", Near);
-        llvm::json::Array Args{tag("Value", expr(optObject(Arrow->getArg(0)), line(E->getBeginLoc())))};
+        // A call that writes the object names the variable, with no cast, so the core finds the unique_ptr that takes the new value, decision 0169.
+        const Expr *Pointer = Call->getMethodDecl()->isConst() || !isa<DeclRefExpr>(Arrow->getArg(0)->IgnoreParenImpCasts()) ? optObject(Arrow->getArg(0)) : Arrow->getArg(0)->IgnoreParenImpCasts();
+        llvm::json::Array Args{tag("Value", expr(Pointer, line(E->getBeginLoc())))};
         for (const Expr *Arg : Call->arguments())
           Args.push_back(expr(Arg, line(E->getBeginLoc())));
         return tag("Call", llvm::json::Array{key(Call->getDirectCallee()), name(Call->getDirectCallee()), std::move(Args), number(line(E->getBeginLoc()))});
@@ -5959,8 +5974,13 @@ private:
     if (E->getStmtClass() == Stmt::CallExprClass)
       if (const FunctionDecl *Callee = cast<CallExpr>(E)->getDirectCallee()) {
         llvm::json::Array Args;
-        for (const Expr *Arg : cast<CallExpr>(E)->arguments())
+        for (const Expr *Arg : cast<CallExpr>(E)->arguments()) {
+          // A class at a reference of its interface that is not const stands for the whole call, because the core would refuse the write-back first, decision 0169.
+          if (const auto *Up = dyn_cast<ImplicitCastExpr>(Arg->IgnoreParens()); Up && Up->getCastKind() == CK_DerivedToBase && !Up->getType().isConstQualified() &&
+                                                                              Up->getValueKind() == VK_LValue && !upcastKind(Up).getAsNull())
+            return unknown(E, "a class as a reference to its interface", Near);
           Args.push_back(expr(Arg, line(E->getBeginLoc())));
+        }
         return tag("Call", llvm::json::Array{key(Callee), name(Callee), std::move(Args), number(line(E->getBeginLoc()))});
       }
     return unknown(E, E->getStmtClassName(), Near);
