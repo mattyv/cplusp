@@ -4930,3 +4930,24 @@ fn the_product_examples_prove() {
         assert_eq!(text.lines().last(), Some("ok: proved"), "{example}: {text}");
     }
 }
+
+/// A hint that holds in the method of an override and fails in its check means that the override requires more than the
+/// interface. prove says so at the override, with the requires line of the override, also when another function fails with the
+/// words of the hint, decision 0167.
+#[test]
+fn a_hint_that_fails_only_in_the_check_names_the_requires_half() {
+    let Some(dafny) = dafny() else { return };
+    if !clang_tidy_available() {
+        return;
+    }
+    let more = "16: the override may require more than Shape::area.";
+    for (name, want) in [("model-product-more.cpp", vec![more]), ("model-product-more-twin.cpp", vec![more, "27: a requires line of the callee may not hold."])] {
+        let o = prove(name, &[], &dafny);
+        let text = stdout(&o);
+        assert_eq!(o.status.code(), Some(1), "{name}: stdout: {text} stderr: {}", stderr(&o));
+        let failed: Vec<&str> = text.lines().filter(|l| l.starts_with("Not proved: ")).map(|l| l.rsplit_once(".cpp:").unwrap().1).collect();
+        assert_eq!(failed, want, "{name}: {text}");
+        let head = format!("{name}:{more}");
+        assert!(under(&text, &head).iter().any(|l| l.starts_with("  The contract line: ") && l.ends_with(&format!("{name}:14: requires valid() && w_ <= 500"))), "{name}: {text}");
+    }
+}
