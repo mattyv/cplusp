@@ -172,3 +172,4 @@ Status is `decided`, `proposed` (the default until someone objects or the thin s
 | [0165](0165-virtual-functions-through-an-interface.md) | Virtual functions through an interface, in six slices. Slice one: an interface, a final class over it, and the check of each override | decided |
 | [0166](0166-a-virtual-call-in-a-contract-and-an-upcast.md) | A virtual call in a contract, and an upcast at a call argument. Slice two of 0165 | decided |
 | [0167](0167-a-lemma-for-the-bound-of-a-product.md) | A lemma for the bound of a product, and apply lines in a pure member function | decided |
+| [0168](0168-a-unique-ptr-of-an-interface.md) | A unique_ptr of an interface. Slice four of 0165 | decided |

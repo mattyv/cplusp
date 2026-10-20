@@ -4951,3 +4951,74 @@ fn a_hint_that_fails_only_in_the_check_names_the_requires_half() {
         assert!(under(&text, &head).iter().any(|l| l.starts_with("  The contract line: ") && l.ends_with(&format!("{name}:14: requires valid() && w_ <= 500"))), "{name}: {text}");
     }
 }
+
+/// A unique_ptr of an interface made by std::make_unique of a final class, a call through it in code and in a contract, a local
+/// that a call sets, and a parameter by const reference prove, decision 0168.
+#[test]
+fn a_unique_ptr_of_an_interface_proves() {
+    let Some(dafny) = dafny() else { return };
+    if !clang_tidy_available() {
+        return;
+    }
+    let o = prove("model-unique-iface.cpp", &[], &dafny);
+    let text = stdout(&o);
+    assert_eq!(o.status.code(), Some(0), "stdout: {text} stderr: {}", stderr(&o));
+    assert_eq!(text.lines().last(), Some("ok: proved"), "{text}");
+}
+
+/// A call through a unique_ptr of an interface that may be null fails at the call with the sentence of 0075, and one whose object
+/// may not be valid fails with the requires line of the interface, decision 0168.
+#[test]
+fn a_call_through_a_unique_ptr_of_an_interface_keeps_its_contract() {
+    let Some(dafny) = dafny() else { return };
+    if !clang_tidy_available() {
+        return;
+    }
+    let o = prove("model-unique-iface-wrong.cpp", &[], &dafny);
+    let text = stdout(&o);
+    assert_eq!(o.status.code(), Some(1), "stdout: {text} stderr: {}", stderr(&o));
+    let failed: Vec<&str> = text.lines().filter(|l| l.starts_with("Not proved: ")).map(|l| l.rsplit_once(".cpp:").unwrap().1).collect();
+    assert_eq!(failed, ["16: the optional may be empty or the pointer may be null here.", "22: a requires line of the callee may not hold."], "{text}");
+    assert!(under(&text, "model-unique-iface-wrong.cpp:22: a requires line of the callee may not hold.").iter().any(|l| l.ends_with("model-unique-iface-wrong.cpp:8: requires valid()")), "{text}");
+}
+
+/// The example factory makes a shape with std::make_unique and reads it through std::unique_ptr<Shape>, decision 0168.
+#[test]
+fn the_unique_ptr_examples_prove() {
+    let Some(dafny) = dafny() else { return };
+    if !clang_tidy_available() {
+        return;
+    }
+    let o = prove("../../../../examples/factory/example.cpp", &[], &dafny);
+    let text = stdout(&o);
+    assert_eq!(o.status.code(), Some(0), "stdout: {text} stderr: {}", stderr(&o));
+    assert_eq!(text.lines().last(), Some("ok: proved"), "{text}");
+}
+
+/// A make_unique of a class that is not final or has no check, a unique_ptr of a final class, a move and the return of a local
+/// unique_ptr have no rule, so no second owner and no moved-from pointer reaches the model, decision 0168.
+#[test]
+fn a_unique_ptr_of_an_interface_has_one_owner_that_only_reads() {
+    let Some(dafny) = dafny() else { return };
+    if !clang_tidy_available() {
+        return;
+    }
+    let o = prove("model-unique-iface-refuse.cpp", &[], &dafny);
+    let text = stdout(&o);
+    assert_eq!(o.status.code(), Some(1), "stdout: {text} stderr: {}", stderr(&o));
+    let mut refusals: Vec<&str> = text.lines().filter(|l| l.starts_with("Not provable: ")).map(|l| l.rsplit_once(".cpp:").unwrap().1).collect();
+    refusals.sort_by_key(|l| l.split(':').next().unwrap().parse::<u32>().unwrap());
+    assert_eq!(
+        refusals,
+        [
+            "12: Open derives from an interface and is not final. Mark it final.",
+            "24: the override of Shape::area in Two has no function in the model, so the translator cannot check it.",
+            "40: a call to std::make_unique<Open>, which has no model in view.",
+            "44: Dafny says: unresolved identifier: f_Two'Shape.",
+            "48: a call to std::make_unique<Square>, which has no model in view.",
+            "54: a call to std::move<std::unique_ptr<Shape> &>, which has no model in view.",
+            "59: CXXConstructExpr: the translator has no rule for it yet.",
+        ],
+        "{text}"
+    );
+}

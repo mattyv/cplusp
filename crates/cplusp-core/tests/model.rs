@@ -3571,3 +3571,44 @@ fn a_pure_member_function_calls_its_lemmas_before_its_value() {
     // The method keeps the apply lines as statements before its return, decision 0099.
     assert!(matches!(&m.body, List::Cons(s, _) if matches!(&*s.0, DStmt::Apply(k, _) if *k == MULB)), "{:?}", m.body);
 }
+
+/// `p->f(a)` in a contract calls the member function `f` on the value of `p`, as `o.f(a)` calls it on `o`, decision 0168.
+#[test]
+fn an_arrow_call_reads_the_value_of_a_pointer() {
+    let (p, f) = (317, 318);
+    let none = parse_contract(&vec![Tok::Ident(p), Tok::Arrow, Tok::Ident(f), Tok::LParen, Tok::RParen], 4);
+    assert_eq!(none, Ok(Expr::MApply(b(Expr::Value(b(Expr::Name(p)))), f, Box::new(List::Nil))));
+    let one = parse_contract(&vec![Tok::Result, Tok::Arrow, Tok::Ident(f), Tok::LParen, Tok::Int(2), Tok::RParen], 4);
+    assert_eq!(one, Ok(Expr::MApply(b(Expr::Value(b(Expr::Result))), f, Box::new(List::Cons(b(Expr::Int(2)), Box::new(List::Nil))))));
+    // A field after the arrow stays a field.
+    assert_eq!(parse_contract(&vec![Tok::Ident(p), Tok::Arrow, Tok::Ident(f)], 4), Ok(Expr::Field(b(Expr::Value(b(Expr::Name(p)))), f)));
+}
+
+/// A unique_ptr of an interface is an optional of it. A contract reads `p->corners()` as the function of the interface on the value
+/// of `p`, and `std::make_unique` of a final class is the upcast of its value, decision 0168.
+#[test]
+fn a_unique_ptr_of_an_interface_is_an_optional_of_it() {
+    let own = Ty::Own(Scalar::Struct(SHAPE));
+    assert_eq!(translate_ty(own, 3), Ok(DTy::Opt(Scalar::Struct(SHAPE))));
+    let ens = Expr::Bin(BinOp::Eq, b(Expr::Result), b(Expr::MApply(b(Expr::Value(b(Expr::Name(VX)))), CORNERS, Box::new(List::Nil))));
+    let read = Function {
+        name: BKEY2,
+        line: 20,
+        params: List::Cons((VX, own), Box::new(List::Nil)),
+        ret: Ty::I32,
+        trusted: false,
+        conds: List::Cons((CondKind::Ensures, ens, 19, names(&[VX])), Box::new(List::Nil)),
+        body: one(Stmt::Return(Expr::Lit(3, Ty::I32), 21)),
+    };
+    let all = fns(vec![base_corners(List::Nil, at_least_three()), read]);
+    let List::Cons(_, rest) = translate_unit(&all, &shape_of(&[(CORNERS, BKEY)])) else { panic!("two models") };
+    let List::Cons(Model::Full(m), _) = *rest else { panic!("a full model of read") };
+    let get = DExpr::Get(Box::new(DExpr::Var(VX)));
+    let call = DExpr::AsInt(Box::new(DExpr::FCall(BKEY, Box::new(List::Cons(get, Box::new(List::Nil))))));
+    assert_eq!(m.ensures, List::Cons((DExpr::Bin(BinOp::Eq, Box::new(DExpr::AsInt(Box::new(DExpr::Result))), Box::new(call)), 19), Box::new(List::Nil)));
+    let made = Expr::Wrap(b(Expr::Cast(CastKind::Upcast(SQUARE, SHAPE), b(Expr::Construct(SQUARE, Box::new(List::Nil))))));
+    let make = Function { name: 319, line: 30, params: List::Nil, ret: own, trusted: false, conds: List::Nil, body: one(Stmt::Return(made, 31)) };
+    let Model::Full(m) = translate_function(&make, &List::Nil, &shape_of(&[(CORNERS, BKEY)])) else { panic!("a full model of make") };
+    let want = DExpr::Just(Box::new(DExpr::Upcast(SQUARE, SHAPE, Box::new(DExpr::Ctor(SQUARE, Box::new(List::Nil))))));
+    assert_eq!(strip(m.body), List::Cons((Box::new(DStmt::Return(want)), 0), Box::new(List::Nil)));
+}
