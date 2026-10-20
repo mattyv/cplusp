@@ -4588,9 +4588,23 @@ private:
     const CXXRecordDecl *Deleter = Spec->getTemplateArgs()[1].getAsType()->getAsCXXRecordDecl();
     if (!Deleter || !Deleter->isInStdNamespace() || Deleter->getName() != "default_delete")
       return QualType();
-    return !Elem.getCanonicalType().hasQualifiers() && (scalar(Elem) || plainStruct(Elem)) ? Elem : QualType();
+    // A scalar, a plain struct, or an interface, decision 0168.
+    return !Elem.getCanonicalType().hasQualifiers() && (scalar(Elem) || plainStruct(Elem) || isInterface(Elem->getAsCXXRecordDecl())) ? Elem : QualType();
   }
   bool isOwn(QualType T) const { return !ownElement(T).isNull(); }
+  // Whether a type is a `std::unique_ptr` of any class.
+  static bool isUniquePtr(QualType T) {
+    const CXXRecordDecl *RD = T.getNonReferenceType()->getAsCXXRecordDecl();
+    return RD && RD->isInStdNamespace() && RD->getIdentifier() && RD->getName() == "unique_ptr";
+  }
+  // The element of a unique_ptr as the type of the model: an interface is a `Struct` of its key, decision 0168.
+  llvm::json::Value ownScalar(QualType Elem) const {
+    if (const CXXRecordDecl *RD = Elem->getAsCXXRecordDecl(); RD && isInterface(RD)) {
+      interfaceEntry(RD);
+      return tag("Struct", structKey(RD->getDefinition()));
+    }
+    return type(Elem);
+  }
 
   // The plain struct that a type is, decision 0073, or null. A const and a reference are looked through. Plain means a definition with
   // a name, no bases, no virtual function, no destructor and no member template, and fields that are each a scalar, a small integer
@@ -4951,7 +4965,7 @@ private:
     // A `unique_ptr` parameter is read by const reference only, decision 0142. By value it has no rule: it moves.
     if (T->isLValueReferenceType() && T->getPointeeType().isConstQualified())
       if (const QualType Element = ownElement(T->getPointeeType()); !Element.isNull())
-        return tag("Own", type(Element));
+        return tag("Own", ownScalar(Element));
     if (isOwn(T))
       return tag("Other", T.getAsString(Context.getPrintingPolicy()));
     // A parameter `const B&` of an interface is a value of the interface, decision 0165. A pointer, a local, a result and a field have no rule.
@@ -5038,7 +5052,7 @@ private:
     if (const QualType E = optType(T); !E.isNull())
       return tag("Opt", type(E));
     if (const QualType E = Field ? QualType() : ownElement(T); !E.isNull())
-      return tag("Own", type(E));
+      return tag("Own", ownScalar(E));
     return tag("Other", T.getAsString(Context.getPrintingPolicy()));
   }
 
@@ -5412,6 +5426,12 @@ private:
     const CXXRecordDecl *From = Cast->getSubExpr()->getType()->getAsCXXRecordDecl();
     if (!To || !From || !finalOverInterface(From) || !isInterface(To))
       return nullptr;
+    return upcastJson(From, To);
+  }
+  // The kind `Upcast(D, B)` of a final class over interfaces to one of its interfaces, or null, decisions 0166 and 0168.
+  llvm::json::Value upcastJson(const CXXRecordDecl *From, const CXXRecordDecl *To) const {
+    if (!From || !To || !finalOverInterface(From) || !isInterface(To))
+      return nullptr;
     for (const CXXRecordDecl *B : interfaceBases(From))
       if (B->getCanonicalDecl() == To->getCanonicalDecl()) {
         type(Context.getRecordType(From));
@@ -5419,6 +5439,71 @@ private:
         return tag("Upcast", llvm::json::Array{structKey(From->getDefinition()), structKey(B)});
       }
     return nullptr;
+  }
+  // The construction `new T(args)` in the body of an instantiated `std::make_unique<T>`, or null.
+  static const CXXConstructExpr *constructedByNew(const Stmt *S) {
+    if (!S)
+      return nullptr;
+    if (const auto *New = dyn_cast<CXXNewExpr>(S))
+      return New->getConstructExpr();
+    for (const Stmt *Child : S->children())
+      if (const CXXConstructExpr *Found = constructedByNew(Child))
+        return Found;
+    return nullptr;
+  }
+  // `std::make_unique<D>(args)` of a final class over an interface, as a `std::unique_ptr<B>` of that interface: `Some(f_D'B(d))` where `d` is the value that the
+  // constructor of D gives, or `S_D()` for a class with no field and no constructor, decision 0168. Null for any other form.
+  llvm::json::Value makeUniqueUpcast(const CXXConstructExpr *Convert, unsigned Near) const {
+    const QualType Into = ownElement(Convert->getType());
+    const CXXRecordDecl *Base = Into.isNull() ? nullptr : Into->getAsCXXRecordDecl();
+    if (!Base || !isInterface(Base) || Convert->getNumArgs() != 1)
+      return nullptr;
+    // The argument is the unique_ptr<D> that a call of make_unique gives, behind the temporaries.
+    const Expr *Arg = Convert->getArg(0);
+    for (;;) {
+      Arg = Arg->IgnoreParenImpCasts();
+      if (const auto *Wrapper = dyn_cast<ExprWithCleanups>(Arg))
+        Arg = Wrapper->getSubExpr();
+      else if (const auto *Temporary = dyn_cast<MaterializeTemporaryExpr>(Arg))
+        Arg = Temporary->getSubExpr();
+      else if (const auto *Bound = dyn_cast<CXXBindTemporaryExpr>(Arg))
+        Arg = Bound->getSubExpr();
+      else
+        break;
+    }
+    const auto *Make = dyn_cast<CallExpr>(Arg);
+    const FunctionDecl *Callee = Make ? Make->getDirectCallee() : nullptr;
+    if (!Callee || !Callee->isInStdNamespace() || !Callee->getDeclName().isIdentifier() || Callee->getName() != "make_unique" || !SM.isInSystemHeader(Callee->getLocation()))
+      return nullptr;
+    const QualType Made = ownElement(Make->getType());
+    const CXXRecordDecl *Derived = Made.isNull() ? nullptr : Made->getAsCXXRecordDecl();
+    if (!Derived || !plainStruct(Made))
+      return nullptr;
+    llvm::json::Value Kind = upcastJson(Derived, Base);
+    if (Kind.getAsNull())
+      return nullptr;
+    // The value of D: a class with no field and no constructor of its own is `S_D()`, else the value constructor that make_unique calls.
+    llvm::json::Value Built = nullptr;
+    const CXXConstructExpr *Constructed = constructedByNew(Callee->getBody());
+    if (Derived->field_empty() && !Derived->hasUserDeclaredConstructor() && Make->getNumArgs() == 0) {
+      Built = tag("Construct", llvm::json::Array{structKey(Derived->getDefinition()), llvm::json::Array{}});
+    } else if (Constructed && valueConstructor(Constructed->getConstructor()) && Constructed->getConstructor()->getNumParams() == Make->getNumArgs()) {
+      llvm::json::Array Args;
+      for (unsigned I = 0; I < Make->getNumArgs(); ++I) {
+        const Expr *A = Make->getArg(I);
+        if (const auto *Temporary = dyn_cast<MaterializeTemporaryExpr>(A))
+          A = Temporary->getSubExpr();
+        // The argument has exactly the type of the parameter, so the construction converts nothing.
+        if (A->getType().getUnqualifiedType().getCanonicalType() != Constructed->getConstructor()->getParamDecl(I)->getType().getNonReferenceType().getUnqualifiedType().getCanonicalType())
+          return nullptr;
+        Args.push_back(expr(A, Near));
+      }
+      const CXXConstructorDecl *C = Constructed->getConstructor();
+      Built = tag("Call", llvm::json::Array{key(C), name(C), std::move(Args), number(line(Convert->getBeginLoc()))});
+    }
+    if (Built.getAsNull())
+      return nullptr;
+    return tag("Wrap", tag("Cast", llvm::json::Array{std::move(Kind), std::move(Built)}));
   }
 
   // The `CountIf` node of a call of `std::count_if` from the library, decision 0149, or null. When the call misses a limit of 0149, `Limit` names the first
@@ -5502,6 +5587,33 @@ private:
       return expr(Bound->getSubExpr(), Near);
     if (const auto *Held = dyn_cast<MaterializeTemporaryExpr>(E); Held && isOwn(Held->getType()))
       return expr(Held->getSubExpr(), Near);
+    // `std::make_unique<D>(args)` of a final class over an interface, as a `std::unique_ptr<B>`, decision 0168.
+    if (const auto *Convert = dyn_cast<CXXConstructExpr>(E))
+      if (llvm::json::Value Made = makeUniqueUpcast(Convert, Near); !Made.getAsNull())
+        return Made;
+    // The converting constructor of a unique_ptr of an interface from a unique_ptr of another class keeps its argument: the call that gives it is refused, as it was
+    // before, decision 0168.
+    if (const auto *Convert = dyn_cast<CXXConstructExpr>(E); Convert && Convert->getNumArgs() == 1 && isOwn(Convert->getType()) && isUniquePtr(Convert->getArg(0)->getType()) &&
+                                                             Convert->getArg(0)->getType().getUnqualifiedType().getCanonicalType() != Convert->getType().getUnqualifiedType().getCanonicalType())
+    {
+      const Expr *Inner = Convert->getArg(0);
+      for (;;) {
+        Inner = Inner->IgnoreParenImpCasts();
+        if (const auto *Wrapper = dyn_cast<ExprWithCleanups>(Inner))
+          Inner = Wrapper->getSubExpr();
+        else if (const auto *Temporary = dyn_cast<MaterializeTemporaryExpr>(Inner))
+          Inner = Temporary->getSubExpr();
+        else if (const auto *Bound = dyn_cast<CXXBindTemporaryExpr>(Inner))
+          Inner = Bound->getSubExpr();
+        else
+          break;
+      }
+      // Only a call of the library keeps its own refusal. A unique_ptr of a class that a function of the file gives would be a unique_ptr of the wrong type.
+      const auto *Gives = dyn_cast<CallExpr>(Inner);
+      if (Gives && Gives->getDirectCallee() && Gives->getDirectCallee()->isInStdNamespace())
+        return expr(Inner, Near);
+      return unknown(E, "a std::unique_ptr of a class as a std::unique_ptr of its interface", Near);
+    }
     // `std::make_unique<T>(x)` of a scalar, with an argument of exactly that type, is a value of `x`, decision 0142.
     if (const auto *Make = dyn_cast<CallExpr>(E); Make && Make->getNumArgs() == 1 && Make->getDirectCallee() && Make->getDirectCallee()->isInStdNamespace() &&
                                                   Make->getDirectCallee()->getDeclName().isIdentifier() && Make->getDirectCallee()->getName() == "make_unique")
@@ -5801,6 +5913,18 @@ private:
     if (const auto *Member = dyn_cast<CXXMemberCallExpr>(E); Member && Member->getNumArgs() == 1 && Member->getMethodDecl() && Member->getMethodDecl()->getNameAsString() == "at")
       if (const Expr *Object = Member->getImplicitObjectArgument(); Object && isSeq(Object->getType()))
         return tag("Index", llvm::json::Array{expr(Object, Near), expr(Member->getArg(0), Near)});
+    // `p->f(a)` on a unique_ptr of an interface is a call of the function of the interface on the value of `p`, decision 0168.
+    if (const auto *Call = dyn_cast<CXXMemberCallExpr>(E); Call && Call->getDirectCallee() && ifaceMethod(Call->getDirectCallee()))
+      if (const auto *Arrow = dyn_cast<CXXOperatorCallExpr>(Call->getImplicitObjectArgument()->IgnoreParenImpCasts());
+          Arrow && Arrow->getOperator() == OO_Arrow && Arrow->getNumArgs() == 1 && isOwn(Arrow->getArg(0)->getType())) {
+        const auto *Callee = dyn_cast<MemberExpr>(Call->getCallee()->IgnoreParens());
+        if (Callee && Callee->hasQualifier())
+          return unknown(E, "a qualified call of a virtual function", Near);
+        llvm::json::Array Args{tag("Value", expr(optObject(Arrow->getArg(0)), line(E->getBeginLoc())))};
+        for (const Expr *Arg : Call->arguments())
+          Args.push_back(expr(Arg, line(E->getBeginLoc())));
+        return tag("Call", llvm::json::Array{key(Call->getDirectCallee()), name(Call->getDirectCallee()), std::move(Args), number(line(E->getBeginLoc()))});
+      }
     // A call of a member function, `o.f(a)` or `f(a)` in a method, is a call of `f` with the object first, decisions 0089 and 0096.
     if (const auto *Call = dyn_cast<CXXMemberCallExpr>(E); Call && Call->getDirectCallee() && member(Call->getDirectCallee())) {
       const Expr *Object = Call->getImplicitObjectArgument()->IgnoreParenImpCasts();

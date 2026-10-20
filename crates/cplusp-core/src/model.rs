@@ -8785,13 +8785,27 @@ fn parse_postfix(toks: &Vec<Tok>, pos: usize, line: u32) -> (r: Result<(Expr, us
             a = Expr::Empty(Box::new(a));
             p = p + 1;
         } else if toks[p] == Tok::Arrow {
-            // `o->f` is `o.value().f`, decision 0137. A name of a field follows.
+            // `o->f` is `o.value().f`, decision 0137. A name of a field follows. `o->f(a)` calls `f` on `o.value()`, decision 0168.
             if toks.len() - p > 1 {
                 if let Tok::Ident(f) = toks[p + 1] {
                     let v = Expr::Value(Box::new(a));
                     assert(!unknown_expr(v));
-                    a = Expr::Field(Box::new(v), f);
-                    p = p + 2;
+                    if toks.len() - p > 3 && toks[p + 2] == Tok::LParen && toks[p + 3] == Tok::RParen {
+                        assert(!unknown_args(List::Nil));
+                        a = Expr::MApply(Box::new(v), f, Box::new(List::Nil));
+                        p = p + 4;
+                    } else if toks.len() - p > 2 && toks[p + 2] == Tok::LParen {
+                        match parse_args(toks, p + 3, line) {
+                            Ok((args, q)) => {
+                                a = Expr::MApply(Box::new(v), f, Box::new(args));
+                                p = q;
+                            },
+                            Err(e) => return Err(e),
+                        }
+                    } else {
+                        a = Expr::Field(Box::new(v), f);
+                        p = p + 2;
+                    }
                 } else {
                     return Err(Refusal::Syntax(line));
                 }

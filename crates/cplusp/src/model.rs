@@ -574,15 +574,19 @@ fn stmts(v: Vec<JStmt>, names: &mut Names) -> Stmts {
 /// refusal. Any text with no token is `Tok::Unknown`, and the parser refuses the line there.
 fn lex(text: &str, line: u32, names: &mut Names) -> Vec<Tok> {
     let bytes = text.as_bytes().to_vec();
+    // A name after `->` is a member of the object on the left, as a name after `.` is, decision 0168.
+    let mut after_arrow = false;
     cplusp_core::contract::lex_contract(&bytes)
         .into_iter()
         .map(|lexeme| {
             let word = &text[lexeme.start..lexeme.end];
+            let member = after_arrow;
+            after_arrow = matches!(lexeme.kind, LexKind::Fixed(Tok::Arrow));
             match lexeme.kind {
                 LexKind::Name(call) => {
                     // A name followed by `(` is a call, and the companion file must declare it. A member name in a member function may be a call of
                     // the member, and the core decides, decision 0090.
-                    if call && !names.declared.iter().any(|d| d == word) && !names.this_members.iter().any(|d| d == word) && !names.functors.iter().any(|d| d == word) {
+                    if call && !member && !names.declared.iter().any(|d| d == word) && !names.this_members.iter().any(|d| d == word) && !names.functors.iter().any(|d| d == word) {
                         names.bad_calls.entry(line).or_insert_with(|| word.to_string());
                     }
                     Tok::Ident(names.id(word))
