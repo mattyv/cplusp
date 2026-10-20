@@ -4171,11 +4171,15 @@ public:
         Trusted ? llvm::json::Value(llvm::json::Array{Trusted->Reason, file(Trusted->At->getLocation()), number(line(Trusted->At->getLocation()))})
                 : llvm::json::Value(nullptr);
     const CXXMethodDecl *Member = member(FD);
+    // An interface method is written at its declaration only. A pure virtual function that has a body is none: the body has no rule, decision 0165.
+    const bool PureBody = ifaceMethod(FD) && FD->isThisDeclarationADefinition();
+    const bool Interface = ifaceMethod(FD) && !PureBody;
     const CXXConstructorDecl *Constructor = valueConstructor(FD);
-    const char *Opaque = FD->isTemplated()                         ? "FunctionTemplateDecl"
+    const char *Opaque = PureBody                                  ? "a body of a pure virtual function"
+                         : FD->isTemplated()                         ? "FunctionTemplateDecl"
                          : isa<CXXConstructorDecl>(FD) && !Constructor ? "CXXConstructorDecl"
                          : isa<CXXMethodDecl>(FD) && !Member && !Constructor ? "CXXMethodDecl"
-                         : !FD->getBody() && !Trusted ? "FunctionDecl without body"
+                         : !FD->getBody() && !Trusted && !Interface ? "FunctionDecl without body"
                                                   : nullptr;
     llvm::json::Array Params, Conds;
     Enclosing = FD;
@@ -4214,10 +4218,11 @@ public:
                               {"params", std::move(Params)},
                               {"ret", Opaque ? tag("Other", Opaque) : FD->getReturnType()->isVoidType() ? llvm::json::Value("Void") : resultType(FD->getReturnType())},
                               {"trusted", TrustedJson},
+                              {"interface", Interface},
                               {"hidden", std::move(Hidden)},
                               {"conds", std::move(Conds)},
                               {"body", Opaque ? llvm::json::Array{tag("Unknown", llvm::json::Array{Opaque, number(line(FD->getLocation()))})}
-                                       : Trusted ? llvm::json::Array{}
+                                       : Trusted || Interface ? llvm::json::Array{}
                                                  : stmts(FD->getBody())}};
   }
 
@@ -4598,7 +4603,7 @@ private:
       return nullptr;
     RD = RD->getDefinition();
     if (RD->isUnion() || RD->isLambda() || !RD->getIdentifier() || RD->isDependentContext() || isa<ClassTemplateSpecializationDecl>(RD) ||
-        RD->getNumBases() || RD->isPolymorphic() || RD->hasUserDeclaredDestructor())
+        ((RD->getNumBases() || RD->isPolymorphic()) && !finalOverInterface(RD)) || RD->hasUserDeclaredDestructor())
       return nullptr;
     // A member function, a static member and a private field do not change the value of the struct, decision 0089. A member template still has no rule, decision 0089.
     for (const Decl *D : RD->decls())
@@ -4664,12 +4669,124 @@ private:
     return llvm::json::Array{tag("Return", llvm::json::Array{tag("Construct", llvm::json::Array{structKey(C->getParent()), std::move(Args)}), number(At)})};
   }
 
+public:
+  // An interface, decision 0165: a class in the file with no field and no base, whose members are pure virtual `const` functions and a destructor that is
+  // defaulted.
+  bool isInterface(const CXXRecordDecl *RD) const {
+    if (!RD || !RD->hasDefinition())
+      return false;
+    RD = RD->getDefinition();
+    if (SM.isInSystemHeader(RD->getLocation()) || RD->isUnion() || RD->isLambda() || !RD->getIdentifier() || RD->isDependentContext() || isa<ClassTemplateSpecializationDecl>(RD) ||
+        RD->getNumBases() || !RD->isPolymorphic() || !RD->field_empty())
+      return false;
+    bool Virtual = false;
+    for (const Decl *D : RD->decls()) {
+      if (D->isImplicit() || isa<AccessSpecDecl>(D))
+        continue;
+      const auto *M = dyn_cast<CXXMethodDecl>(D);
+      if (!M)
+        return false;
+      if (isa<CXXDestructorDecl>(M)) {
+        if (!M->isDefaulted())
+          return false;
+        continue;
+      }
+      if (isa<CXXConstructorDecl>(M) || M->isStatic() || !M->isVirtual() || !M->isPureVirtual() || !M->isConst() || M->isVolatile() || M->getRefQualifier() != RQ_None ||
+          M->isOverloadedOperator() || isa<CXXConversionDecl>(M))
+        return false;
+      Virtual = true;
+    }
+    return Virtual;
+  }
+  // The interfaces that a class derives from, or none when it has a base that is no interface, a virtual base or a base that is not public, decision 0165.
+  std::vector<const CXXRecordDecl *> interfaceBases(const CXXRecordDecl *RD) const {
+    std::vector<const CXXRecordDecl *> Out;
+    if (!RD || !RD->hasDefinition() || RD->getNumBases() == 0 || RD->getNumVBases() != 0)
+      return Out;
+    for (const CXXBaseSpecifier &Base : RD->getDefinition()->bases()) {
+      const CXXRecordDecl *B = Base.getType()->getAsCXXRecordDecl();
+      if (Base.isVirtual() || Base.getAccessSpecifier() != AS_public || !isInterface(B))
+        return {};
+      Out.push_back(B->getDefinition());
+    }
+    return Out;
+  }
+  // A final class whose bases are all interfaces, decision 0165.
+  bool finalOverInterface(const CXXRecordDecl *RD) const {
+    return RD && RD->hasDefinition() && RD->getDefinition()->isEffectivelyFinal() && !interfaceBases(RD).empty();
+  }
+  // A pure virtual `const` function of an interface, decision 0165.
+  bool ifaceMethod(const FunctionDecl *FD) const {
+    const auto *M = dyn_cast<CXXMethodDecl>(FD);
+    return M && M->isPureVirtual() && M->isConst() && isInterface(M->getParent());
+  }
+  // A member function, a constructor or a destructor that the model leaves out with no refusal, decision 0165: the defaulted destructor of an interface, and
+  // each member of a class over an interface that is not final. A call on such a class may run an override of a subclass, so the model never reads its body.
+  bool leftOut(const FunctionDecl *FD) const {
+    const auto *M = dyn_cast<CXXMethodDecl>(FD);
+    if (!M)
+      return false;
+    const CXXRecordDecl *Parent = M->getParent();
+    if (isa<CXXDestructorDecl>(M) && isInterface(Parent))
+      return true;
+    return !interfaceBases(Parent).empty() && !finalOverInterface(Parent);
+  }
+  // Writes the entry of an interface in the table of structs: no field, and the member table of its virtual functions, decision 0165.
+  void interfaceEntry(const CXXRecordDecl *RD) const {
+    RD = RD->getDefinition();
+    const std::string Key = structKey(RD);
+    if (Structs.count(Key))
+      return;
+    Structs.emplace(Key, nullptr);
+    std::map<std::string, std::vector<std::string>> Named;
+    for (const Decl *D : RD->decls())
+      if (const auto *M = dyn_cast<CXXMethodDecl>(D); M && ifaceMethod(M))
+        Named[M->getNameAsString()].push_back(this->key(M));
+    llvm::json::Array Members;
+    for (const auto &[Name, Keys] : Named)
+      if (Keys.size() == 1)
+        Members.push_back(llvm::json::Array{Name, Keys.front()});
+    const SourceLocation Loc = SM.getFileLoc(RD->getLocation());
+    Structs.at(Key) = llvm::json::Object{{"struct", Key}, {"name", RD->getNameAsString()}, {"file", file(Loc)}, {"line", number(line(Loc))},
+                                             {"fields", llvm::json::Array{}}, {"members", std::move(Members)}, {"interface", true}};
+  }
+  // The keys of the interfaces of a class, and the entry of each, for the table of structs, decision 0165.
+  llvm::json::Array baseKeys(const CXXRecordDecl *RD) const {
+    llvm::json::Array Out;
+    for (const CXXRecordDecl *B : interfaceBases(RD)) {
+      interfaceEntry(B);
+      Out.push_back(structKey(B));
+    }
+    return Out;
+  }
+  // The entry of a class over an interface in the table of structs. A final class is a struct of 0073. One that is not final has an entry for its line only,
+  // and no member, decision 0165.
+  void classEntry(const CXXRecordDecl *RD) const {
+    if (interfaceBases(RD).empty())
+      return;
+    if (finalOverInterface(RD)) {
+      type(Context.getRecordType(RD));
+      return;
+    }
+    const std::string Key = structKey(RD);
+    if (Structs.count(Key))
+      return;
+    Structs.emplace(Key, nullptr);
+    llvm::json::Array Bases = baseKeys(RD);
+    const SourceLocation Loc = SM.getFileLoc(RD->getLocation());
+    Structs.at(Key) = llvm::json::Object{{"struct", Key}, {"name", RD->getNameAsString()}, {"file", file(Loc)}, {"line", number(line(Loc))},
+                                             {"fields", llvm::json::Array{}}, {"members", llvm::json::Array{}}, {"bases", std::move(Bases)}, {"final", false}};
+  }
+
+private:
   // A member function that is written as a function, decision 0089: not static, not virtual, no ref-qualifier, not an operator other
   // than `operator()`, decision 0098, a conversion, a constructor or a destructor, not a template, and a member of a plain struct. Null for any other function.
   // One that is not `const` writes its object, decision 0096.
   const CXXMethodDecl *member(const FunctionDecl *FD) const {
     const auto *M = dyn_cast<CXXMethodDecl>(FD);
-    if (!M || M->isStatic() || M->isVirtual() || M->isVolatile() || M->isExplicitObjectMemberFunction() || M->getRefQualifier() != RQ_None || (M->isOverloadedOperator() && M->getOverloadedOperator() != OO_Call) ||
+    if (M && ifaceMethod(M))
+      return M;
+    if (!M || M->isStatic() || (M->isVirtual() && !finalOverInterface(M->getParent())) || M->isVolatile() || M->isExplicitObjectMemberFunction() || M->getRefQualifier() != RQ_None || (M->isOverloadedOperator() && M->getOverloadedOperator() != OO_Call) ||
         isa<CXXConversionDecl>(M) || isa<CXXConstructorDecl>(M) || isa<CXXDestructorDecl>(M) || M->isTemplated() || M->getDescribedFunctionTemplate())
       return nullptr;
     return plainStruct(Context.getRecordType(M->getParent())) ? M : nullptr;
@@ -4682,6 +4799,10 @@ private:
 
   // The type of `this` in a member function of a plain struct, by the key of the struct. `ThisMut` when the function writes its object.
   llvm::json::Value thisType(const CXXRecordDecl *Parent, bool Writes = false) const {
+    if (isInterface(Parent)) {
+      interfaceEntry(Parent);
+      return tag("Iface", structKey(Parent->getDefinition()));
+    }
     const CXXRecordDecl *RD = plainStruct(Context.getRecordType(Parent));
     type(Context.getRecordType(Parent));  // writes the struct
     return tag(Writes ? "ThisMut" : "This", structKey(RD));
@@ -4819,6 +4940,12 @@ private:
         return tag("Own", type(Element));
     if (isOwn(T))
       return tag("Other", T.getAsString(Context.getPrintingPolicy()));
+    // A parameter `const B&` of an interface is a value of the interface, decision 0165. A pointer, a local, a result and a field have no rule.
+    if (T->isLValueReferenceType() && T->getPointeeType().isConstQualified())
+      if (const CXXRecordDecl *RD = T->getPointeeType()->getAsCXXRecordDecl(); RD && isInterface(RD)) {
+        interfaceEntry(RD);
+        return tag("IfaceRef", structKey(RD->getDefinition()));
+      }
     return type(T);
   }
   // The type of a result. A `std::vector<T>` by value with no qualifier is a `Vec`, decision 0163: the function gives a copy. A span stays `Other`.
@@ -4873,8 +5000,14 @@ private:
           if (Keys.size() == 1)
             Members.push_back(llvm::json::Array{Name, Keys.front()});
         const SourceLocation Loc = SM.getFileLoc(RD->getLocation());
-        Structs.at(Key) = llvm::json::Object{{"struct", Key}, {"name", RD->getNameAsString()}, {"file", file(Loc)}, {"line", number(line(Loc))},
-                                                 {"fields", std::move(Fields)}, {"members", std::move(Members)}};
+        llvm::json::Object Entry{{"struct", Key}, {"name", RD->getNameAsString()}, {"file", file(Loc)}, {"line", number(line(Loc))},
+                                 {"fields", std::move(Fields)}, {"members", std::move(Members)}};
+        // A final class over interfaces names them, decision 0165.
+        if (finalOverInterface(RD)) {
+          Entry["bases"] = baseKeys(RD);
+          Entry["final"] = true;
+        }
+        Structs.at(Key) = std::move(Entry);
       }
       return tag("Struct", Key);
     }
@@ -5627,6 +5760,9 @@ private:
     if (const auto *Call = dyn_cast<CXXMemberCallExpr>(E); Call && Call->getDirectCallee() && member(Call->getDirectCallee())) {
       const Expr *Object = Call->getImplicitObjectArgument()->IgnoreParenImpCasts();
       const auto *Callee = dyn_cast<MemberExpr>(Call->getCallee()->IgnoreParens());
+      // A call of a virtual function with the name of its class runs that function, not an override, decision 0165.
+      if (Callee && Callee->hasQualifier() && Call->getMethodDecl() && Call->getMethodDecl()->isVirtual())
+        return unknown(E, "a qualified call of a virtual function", Near);
       if (Callee && (!Callee->isArrow() || isa<CXXThisExpr>(Object))) {
         llvm::json::Array Args{expr(Object, line(E->getBeginLoc()))};
         for (const Expr *Arg : Call->arguments())
@@ -5676,6 +5812,7 @@ public:
         functionDecl(unless(isImplicit()), unless(isTemplateInstantiation()), unless(isExpansionInSystemHeader())).bind("fn"), this);
     Finder->addMatcher(varDecl(isConstexpr(), unless(isExpansionInSystemHeader())).bind("constant"), this);
     Finder->addMatcher(enumDecl(isDefinition(), unless(isExpansionInSystemHeader())).bind("enum"), this);
+    Finder->addMatcher(cxxRecordDecl(isDefinition(), unless(isImplicit()), unless(isExpansionInSystemHeader())).bind("class"), this);
     Finder->addMatcher(translationUnitDecl(), this);
   }
   void check(const MatchFinder::MatchResult &Result) override {
@@ -5692,6 +5829,11 @@ public:
       TreeWriter(*Context, Claimed, Structs).writeEnum(ED);
       return;
     }
+    // A class over interfaces is written in the table of structs for its line, decision 0165.
+    if (const auto *RD = Result.Nodes.getNodeAs<CXXRecordDecl>("class")) {
+      TreeWriter(*Context, Claimed, Structs).classEntry(RD);
+      return;
+    }
     const auto *FD = Result.Nodes.getNodeAs<FunctionDecl>("fn");
     if (!FD || FD->isDeleted())
       return;
@@ -5701,10 +5843,13 @@ public:
     const Contract C = contractOf(Context->getSourceManager(), FD);
     for (const Contract::Line &L : C.Lines)
       Claimed.insert({L.File, L.Number});
+    // The member functions of a class over an interface that is not final, and the defaulted destructor of an interface, are left out, decision 0165.
+    if (TreeWriter(*Context, Claimed, Structs).leftOut(FD))
+      return;
     // A trusted function with no definition here is written once, at its first declaration. Its contract lines come from all of them.
     // ponytail: a trusted template is not written. A trusted constructor with no body here is written and refused as CXXConstructorDecl, and
     // one with a body is refused by valueConstructor unless its body is empty and it gives each field a value. Upgrade: their signatures.
-    if (FD->isThisDeclarationADefinition() ||
+    if (FD->isThisDeclarationADefinition() || (TreeWriter(*Context, Claimed, Structs).ifaceMethod(FD) && !FD->getDefinition()) ||
         (!FD->getDefinition() && FD == FD->getCanonicalDecl() && !FD->isTemplated() && trustedReason(FD)))
       append(TreeWriter(*Context, Claimed, Structs).function(FD, C));
   }

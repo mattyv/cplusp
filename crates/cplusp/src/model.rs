@@ -9,7 +9,7 @@ use anyhow::{Context, Result};
 use cplusp_core::companion::CompanionRefusal;
 use cplusp_core::contract::{LexKind, NumberFault};
 use cplusp_core::model::{
-    parse_contract, translate_structs, translate_unit, Args, BinOp, CastKind, CondKind, Conds, DArgs, DConds, DExpr, DParams, DStmt, DStmts, DTy, Expr, Extent, Fns,
+    parse_contract, translate_overrides, translate_structs, translate_unit, Args, BinOp, CastKind, CondKind, Conds, DArgs, DConds, DExpr, DOverride, DParams, DStmt, DStmts, DTy, DUpcast, Expr, Extent, Fns,
     Function, List, Members, Method, Model, Names as CNames, Obj, Objs, Params, Refusal, Scalar, Stmt, Stmts, Structs, Tok, Ty,
 };
 use serde::Deserialize;
@@ -46,6 +46,9 @@ enum JTy {
     Mut(JScalar),
     /// A parameter of type `std::vector<T>&` that the function writes, decision 0145.
     MutSeq(JScalar),
+    /// `this` of a pure virtual function of an interface, and a parameter `const B&` of one, by the key of its struct, decision 0165.
+    Iface(String),
+    IfaceRef(String),
     /// A local `std::vector<T>` that the function owns, decision 0160.
     Vec(JScalar),
     /// An enum class of the file by its key, decision 0109.
@@ -213,6 +216,14 @@ struct JStruct {
     fields: Vec<(String, JTy)>,
     /// The member functions that are written as functions, as (name, key), decision 0090.
     members: Vec<(String, String)>,
+    /// The keys of the interfaces that a class derives from, and whether it is final, decision 0165.
+    #[serde(default)]
+    bases: Vec<String>,
+    #[serde(default, rename = "final")]
+    is_final: bool,
+    /// An interface: a class with no field whose members are pure virtual, decision 0165.
+    #[serde(default)]
+    interface: bool,
 }
 
 #[derive(Deserialize)]
@@ -227,6 +238,9 @@ struct JFunction {
     /// decisions 0102 and 0103.
     #[serde(default)]
     trusted: Option<(String, String, u32)>,
+    /// A pure virtual function of an interface: the contract stands with no body, as for a trusted function, decision 0165.
+    #[serde(default)]
+    interface: bool,
     /// The constants of the file that C++ does not find from the function, decision 0107. They hide no constant from `shadow`, they join it.
     #[serde(default)]
     hidden: Vec<String>,
@@ -260,6 +274,9 @@ struct Names {
     exact: std::cell::Cell<bool>,
     /// Whether the printer wrote `StdSort`, so a verdict rests on its contract, decision 0161.
     sorted: std::cell::Cell<bool>,
+    /// The plain name of each class of the table of structs by the id of its key, and of each function by the id of its key, for the sentences of decision 0165.
+    class_names: HashMap<u32, String>,
+    fn_names: HashMap<u32, String>,
     /// The functions that the companion file declares. Empty when there is no file or the scan refused it, decision 0079.
     declared: Vec<String>,
     /// The lemmas that the companion file declares, apart from the functions, decision 0099.
@@ -352,6 +369,8 @@ fn ty(t: JTy, names: &mut Names) -> Ty {
         JTy::Struct(k) => Ty::Struct(names.id(&k)),
         JTy::Mut(s) => Ty::Mut(scalar(s, names)),
         JTy::MutSeq(s) => Ty::MutSeq(scalar(s, names)),
+        JTy::Iface(k) => Ty::Iface(names.id(&k)),
+        JTy::IfaceRef(k) => Ty::IfaceRef(names.id(&k)),
         JTy::Vec(s) => Ty::Vec(scalar(s, names)),
         JTy::Enum(k) => Ty::Enum(names.id(&k)),
         JTy::This(k) => Ty::This(names.id(&k)),
@@ -891,7 +910,7 @@ fn function(f: JFunction, names: &mut Names) -> Function {
     let params = ps.into_iter().rev().fold(Params::Nil, |rest, (n, t)| Params::Cons((n, t), Box::new(rest)));
     let ret = ty(f.ret, names);
     let line = names.here(f.line);
-    Function { name, line, params, ret, trusted: f.trusted.is_some(), conds: conds(f.conds, names), body: stmts(f.body, names) }
+    Function { name, line, params, ret, trusted: f.trusted.is_some() || f.interface, conds: conds(f.conds, names), body: stmts(f.body, names) }
 }
 
 // ------------------------------------------------------------------ the Dafny text
@@ -981,7 +1000,7 @@ fn dty(t: DTy, names: &Names) -> String {
         DTy::Bool => "bool".to_string(),
         DTy::Real => "real".to_string(),
         DTy::Seq(s) => format!("Vec<{}>", dscalar(s, names)),
-        DTy::Struct(k) | DTy::Enum(k) => names.datatypes[&k].clone(),
+        DTy::Struct(k) | DTy::Enum(k) | DTy::Iface(k) => names.datatypes[&k].clone(),
         DTy::Opt(s) => format!("Option<{}>", dscalar(s, names)),
         // A method that gives no value has no `result`, so no caller prints this type.
         DTy::Void => String::new(),
@@ -1148,6 +1167,21 @@ pub struct Map {
     pub places: Vec<(String, u32)>,
     /// The word and text of the contract line at a place, as the author wrote them.
     pub contracts: HashMap<u32, (String, String)>,
+    /// The check of each override, decision 0165.
+    pub lemmas: Vec<LemmaMap>,
+}
+
+/// The lines of the lemma that checks one override, for the report of prove, decision 0165. `lines` are line numbers of the Dafny text, `place` is the
+/// place of the override, `own` are the lines of its requires, which the lemma claims, and `requires` are the places of the requires lines of the interface.
+pub struct LemmaMap {
+    pub lines: std::ops::Range<usize>,
+    pub place: u32,
+    pub own: Vec<usize>,
+    pub requires: Vec<u32>,
+    /// The lines of its requires clauses, which copy the requires lines of the interface.
+    pub requires_lines: Vec<usize>,
+    /// `B::f`, for the sentences.
+    pub of: String,
 }
 
 pub struct Translation {
@@ -1163,6 +1197,8 @@ pub struct Translation {
     pub exact: bool,
     /// The model calls `StdSort`, so a verdict rests on its contract, decision 0161.
     pub sorted: bool,
+    /// The plain name of each interface in the model, decision 0165.
+    pub interfaces: Vec<String>,
     pub map: Map,
 }
 
@@ -1423,6 +1459,48 @@ impl Printer<'_> {
         self.scope.clear();
     }
 
+    /// The lemma that checks one override against the contract of its interface, decision 0165. Dafny proves that the requires lines of the override follow from
+    /// those of the interface, and that the function of the override keeps the ensures lines of the interface. The lemma has no body.
+    fn lemma(&mut self, up: &DUpcast, o: &DOverride, place: u32, of: String) -> LemmaMap {
+        let names = self.names;
+        let (this, f) = (format!("v_this: {}", names.datatypes[&up.derived]), &names.functions[&o.derived]);
+        let mut ps = vec![this];
+        let mut args = vec!["v_this".to_string()];
+        let mut rest = &o.params;
+        while let List::Cons((n, t), next) = rest {
+            ps.push(format!("{}: {}", mangle(names.text(*n)), dty(*t, names)));
+            args.push(mangle(names.text(*n)));
+            rest = next;
+        }
+        self.out.push('\n');
+        self.lines.push(None);
+        let start = self.lines.len() + 1;
+        self.put(0, format!("lemma {f}check'{}({})", names.class_names[&up.base], ps.join(", ")), place);
+        let mut requires = Vec::new();
+        let mut requires_lines = Vec::new();
+        let mut cs = &o.requires;
+        while let List::Cons((e, line), next) = cs {
+            requires_lines.push(self.lines.len() + 1);
+            self.put(1, format!("requires {}", dexpr(e, names)), *line);
+            requires.push(*line);
+            cs = next;
+        }
+        let mut own = Vec::new();
+        let mut cs = &o.own;
+        while let List::Cons((e, line), next) = cs {
+            own.push(self.lines.len() + 1);
+            self.put(1, format!("ensures {}", dexpr(e, names)), *line);
+            cs = next;
+        }
+        let mut cs = &o.ensures;
+        while let List::Cons((e, line), next) = cs {
+            self.put(1, format!("ensures var result: {} := {f}({}); {}", dty(o.ret, names), args.join(", "), dexpr(e, names)), *line);
+            cs = next;
+        }
+        self.put(0, "{}".to_string(), place);
+        LemmaMap { lines: start..self.lines.len() + 1, place, own, requires, requires_lines, of }
+    }
+
     fn method(&mut self, m: &Method, place: u32) {
         if let Some(body) = &m.function {
             self.function(m, body, place);
@@ -1498,6 +1576,13 @@ fn sentence(r: Refusal, names: &Names) -> (u32, String) {
         Refusal::Finite(n, line) if names.text(n).starts_with('\'') => (line, "a double parameter has no name. Give it a name and say std::isfinite of it in a requires line.".to_string()),
         Refusal::Finite(n, line) => (line, format!("{} is a double. A requires line needs std::isfinite({}).", names.text(n), names.text(n))),
         Refusal::FiniteResult(line) => (line, "a trusted function that gives a double needs std::isfinite(result) in an ensures line.".to_string()),
+        Refusal::NoOverride(d, b, n, line) => (line, format!("{} has no override of {}::{}.", names.class_names[&d], names.class_names[&b], names.text(n))),
+        Refusal::Unchecked(d, b, n, line) => (
+            line,
+            format!("the override of {}::{} in {} has no function in the model, so the translator cannot check it.", names.class_names[&b], names.text(n), names.class_names[&d]),
+        ),
+        Refusal::NotFinal(d, line) => (line, format!("{} derives from an interface and is not final. Mark it final.", names.class_names[&d])),
+        Refusal::Overload(b, line) => (line, format!("{} has two virtual functions of one name. The translator has no rule for it yet.", names.class_names[&b])),
         Refusal::SortForm(line) => (line, "std::sort of another form: the translator has no rule for it yet.".to_string()),
         Refusal::VecLocal(line) => (line, "a local vector has a rule only as a copy of a vector in scope.".to_string()),
         Refusal::PassLocal(n, line) => (line, format!("{} is a local vector. A call that passes it by reference has no rule yet.", names.text(n))),
@@ -1623,7 +1708,8 @@ pub fn translate(lines: &str, companion: Option<(&str, &str)>) -> Result<Transla
     // A member function is named by its struct too, `Struct'name`, decision 0089. So is a constructor, whose result is `This`, decision
     // 0094. C++ cannot write `'`, so it clashes with no name.
     let plain = |f: &JFunction| match (f.params.first(), &f.ret) {
-        (Some((_, JTy::This(k) | JTy::ThisMut(k))), _) | (_, JTy::This(k)) => format!("{}'{}", structs.iter().find(|s| s.key == *k).map_or("", |s| s.name.as_str()), dafny_word(&f.name)),
+        // `this` of a virtual function of an interface names it too, decision 0165.
+        (Some((_, JTy::This(k) | JTy::ThisMut(k) | JTy::Iface(k))), _) | (_, JTy::This(k)) => format!("{}'{}", structs.iter().find(|s| s.key == *k).map_or("", |s| s.name.as_str()), dafny_word(&f.name)),
         _ => f.name.clone(),
     };
     for (i, f) in funcs.iter().enumerate() {
@@ -1632,6 +1718,7 @@ pub fn translate(lines: &str, companion: Option<(&str, &str)>) -> Result<Transla
         let dafny = if same == 1 { format!("c_{}", plain(f)) } else { format!("c_{}'{k}", plain(f)) };
         let key = names.id(&f.key);
         names.functions.insert(key, format!("{dafny}'"));
+        names.fn_names.insert(key, f.name.clone());
         methods.insert(key, dafny);
         if matches!(f.params.first(), Some((_, JTy::ThisMut(_)))) {
             writing.insert(key);
@@ -1659,9 +1746,22 @@ pub fn translate(lines: &str, companion: Option<(&str, &str)>) -> Result<Transla
         let k = structs[..=i].iter().filter(|g| g.name == st.name).count();
         let key = names.id(&st.key);
         names.datatypes.insert(key, if same == 1 { format!("S_{}", st.name) } else { format!("S_{}'{k}", st.name) });
+        names.class_names.insert(key, st.name.clone());
         names.members.insert(st.key.clone(), st.members.iter().map(|(n, _)| n.clone()).collect());
         names.struct_fields.insert(st.key.clone(), st.fields.iter().filter(|(_, t)| matches!(t, JTy::Struct(_))).map(|(n, _)| n.clone()).collect());
     }
+    // The classes over interfaces, by key, for the check of each override, and the interfaces of the table, decision 0165.
+    let base_rows: Vec<(u32, Vec<u32>, bool)> =
+        structs.iter().filter(|st| !st.bases.is_empty()).map(|st| (names.id(&st.key), st.bases.iter().map(|b| names.id(b)).collect(), st.is_final)).collect();
+    let interface_flags: Vec<bool> = structs.iter().map(|st| st.interface).collect();
+    // A class over an interface that is not final is no type of the model, so it has no datatype, decision 0165.
+    let open_flags: Vec<bool> = structs.iter().map(|st| !st.bases.is_empty() && !st.is_final).collect();
+    // An interface is named by its plain name, or by its Dafny name when two structs share the plain name.
+    let interface_names: Vec<String> = structs
+        .iter()
+        .filter(|st| st.interface)
+        .map(|st| if structs.iter().filter(|g| g.name == st.name).count() > 1 { names.datatypes[&names.find(&st.key).unwrap_or(0)].clone() } else { st.name.clone() })
+        .collect();
     let struct_places: Vec<(u32, Option<String>)> = structs.iter().map(|st| (names.place(&st.file, st.line), unreadable_struct_name(st).map(String::from))).collect();
     for st in structs.into_iter().rev() {
         let key = names.id(&st.key);
@@ -1675,6 +1775,11 @@ pub fn translate(lines: &str, companion: Option<(&str, &str)>) -> Result<Transla
     let count = funcs.len();
     let fns = funcs.into_iter().rev().map(|f| function(f, &mut names)).fold(Fns::Nil, |rest, f| Fns::Cons(Box::new(f), Box::new(rest)));
     let mut models = translate_unit(&fns, &table);
+    let bases = base_rows
+        .iter()
+        .rev()
+        .fold(List::Nil, |rest, (d, bs, fin)| List::Cons((*d, (bs.iter().rev().fold(List::Nil, |r, b| List::Cons(*b, Box::new(r))), *fin)), Box::new(rest)));
+    let overrides = translate_overrides(&bases, &fns, &table);
     let mut smodels = translate_structs(&table);
     // The companion file, when the scan passed it, goes after the methods. Each of its lines is a place in its own file.
     let (mut companion_text, mut companion_places) = (String::new(), Vec::new());
@@ -1701,11 +1806,14 @@ pub fn translate(lines: &str, companion: Option<(&str, &str)>) -> Result<Transla
         let constructors: Vec<String> = en.enumerators.iter().map(|e| format!("{name}'{e}")).collect();
         p.put(0, format!("datatype {name} = {}", constructors.join(" | ")), place);
     }
-    for (place, unreadable) in struct_places {
+    for (((place, unreadable), interface), open) in struct_places.into_iter().zip(interface_flags).zip(open_flags) {
         let List::Cons(model, rest) = smodels else { unreachable!("one model for each struct") };
         match model {
             // The struct is refused, and its callers keep the type. The refusal stands for the file.
             Ok(_) if unreadable.is_some() => refused_at.push((place, format!("{}: a name with a character Dafny cannot read.", unreadable.unwrap_or_default()))),
+            Ok(_) if open => {}
+            // An interface is a type with no value that the model can see, decision 0165.
+            Ok((key, List::Nil)) if interface => p.put(0, format!("type {}", names.datatypes[&key]), place),
             Ok((key, List::Nil)) => p.put(0, format!("datatype {0} = {0}()", names.datatypes[&key]), place),
             Ok((key, mut fields)) => {
                 let mut shown = Vec::new();
@@ -1741,6 +1849,23 @@ pub fn translate(lines: &str, companion: Option<(&str, &str)>) -> Result<Transla
         };
         refused_at.extend(refused.map(|r| sentence(r, &names)));
         models = *rest;
+    }
+    // The check of each override against the contract of its interface, decision 0165. A class that cannot be checked is refused at its line.
+    let mut lemmas = Vec::new();
+    let mut seen_checks = &overrides;
+    while let List::Cons(result, next) = seen_checks {
+        match result {
+            Ok(up) => {
+                let mut os = &up.overrides;
+                while let List::Cons(o, more) = os {
+                    let of = format!("{}::{}", names.class_names[&up.base], names.fn_names[&o.base]);
+                    lemmas.push(p.lemma(up, o, at[&o.derived], of));
+                    os = more;
+                }
+            }
+            Err(r) => refused_at.push(sentence(*r, &names)),
+        }
+        seen_checks = next;
     }
     // ponytail: a method that names `shr` is a method that shifts. Upgrade: a flag that the printer sets.
     if p.out.contains("shr(") {
@@ -1782,5 +1907,5 @@ pub fn translate(lines: &str, companion: Option<(&str, &str)>) -> Result<Transla
     }
     refusals.sort();
     refusals.dedup();
-    Ok(Translation { dafny, methods: printed, trusted, refusals, rounds, exact: names.exact.get(), sorted: names.sorted.get(), map: Map { lines, companion: companion_lines, decls, places: names.places, contracts: names.contracts } })
+    Ok(Translation { dafny, methods: printed, trusted, refusals, rounds, exact: names.exact.get(), sorted: names.sorted.get(), interfaces: interface_names, map: Map { lines, companion: companion_lines, decls, places: names.places, contracts: names.contracts, lemmas } })
 }

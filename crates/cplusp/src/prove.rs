@@ -183,6 +183,31 @@ pub fn run(t: &Translation, limit: u32, refused: bool, source: &str, shown: &dyn
             emit(e, format!("Not provable: {}:{line}: Dafny says: {}.", shown(&path), message.trim_end_matches('.')));
             continue;
         }
+        // A failure in the lemma that checks an override names the override and the contract line of the interface that it breaks, decision 0165. Dafny
+        // reports the requires half at the end of the lemma, with the requires clause that it claims as the related location, and the ensures half the same
+        // way, with the ensures clause of the interface.
+        if let Some(lemma) = map.lemmas.iter().find(|l| l.lines.contains(&e.line)) {
+            // A requires clause of the lemma copies a requires line of the interface, which is already reported at the method of the interface. A lemma with such
+            // a failure has requires lines that Dafny cannot read, so no other failure of it is true.
+            if found.iter().any(|f| lemma.requires_lines.contains(&f.line)) {
+                continue;
+            }
+            let (path, line) = &map.places[lemma.place as usize];
+            let more = e.related.iter().any(|r| lemma.own.contains(r));
+            let mut block = if more {
+                format!("Not proved: {}:{line}: the override may require more than {}.", shown(path), lemma.of)
+            } else {
+                format!("Not proved: {}:{line}: the override may not keep the promise of {}.", shown(path), lemma.of)
+            };
+            let places: Vec<u32> = if more { lemma.requires.clone() } else { e.related.iter().filter_map(|r| here(*r)).map(|l| l.place).collect() };
+            for p in places {
+                if let Some(text) = contract(map, p, shown) {
+                    block.push_str(&format!("\n  The contract line: {text}"));
+                }
+            }
+            emit(e, block);
+            continue;
+        }
         // An error on a line of the companion file has no return, call or loop of a method, decisions 0084 and 0164.
         if let Some(at) = in_companion(e.line) {
             let (path, line) = here(at).map_or_else(|| ("model.dfy".to_string(), at as u32), |l| map.places[l.place as usize].clone());
@@ -267,6 +292,10 @@ pub fn run(t: &Translation, limit: u32, refused: bool, source: &str, shown: &dyn
     // The proof rests on the rounding axiom when the model calls an operation of `Double`, decision 0154.
     if t.rounds {
         println!("Axiom: Double.dfy: RoundError: IEEE 754 binary64, round to nearest even, gradual underflow, one rounding per operation.");
+    }
+    // A call through an interface runs an override that the file checks against the contract of the interface, decision 0165.
+    for interface in &t.interfaces {
+        println!("Axiom: model: {interface}: a call through {interface} runs an override that keeps the contract of {interface}, C++23 [class.virtual]. Each override of {interface} in this file is checked against that contract.");
     }
     if t.sorted {
         println!("Axiom: Algorithm.dfy: StdSort: std::sort with a strict weak order gives a permutation of its range, and no later element compares less than an earlier one, C++23 [sort] and [alg.sorting.general].");

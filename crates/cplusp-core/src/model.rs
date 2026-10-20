@@ -180,7 +180,8 @@ pub enum Extent {
 /// gives it back, and `MutAfter` is its value after the call, as an ensures line reads it, decision 0108. `MutSeq` is a vector by
 /// reference that the function writes, as a sequence, and `MutSeqAfter` is its value after the call, decision 0145. `Vec` is a local
 /// `std::vector` that the function owns, a copy, decision 0160. `Enum` is an enum class of
-/// the file by its key, decision 0109. `Void` is the result type
+/// the file by its key, decision 0109. `Iface` is `this` of a virtual function of the interface `k`, and `IfaceRef` is a parameter
+/// `const B&` of it, through which a call runs an override, decision 0165. `Void` is the result type
 /// of a function that gives no value. `Other` is a type the translator has no rule for, by the id of its name.
 #[derive(Structural, PartialEq, Eq, Clone, Copy, Debug)]
 pub enum Ty {
@@ -209,6 +210,8 @@ pub enum Ty {
     Own(Scalar),
     Enum(u32),
     Fresh(u32),
+    Iface(u32),
+    IfaceRef(u32),
     Void,
     Other(u32),
 }
@@ -425,6 +428,7 @@ pub enum DTy {
     Struct(u32),
     Opt(Scalar),
     Enum(u32),
+    Iface(u32),
     Void,
 }
 
@@ -607,7 +611,10 @@ pub type Models = List<Model>;
 /// that no requires line says is finite, and `FiniteResult` is a trusted function that gives a double and no ensures line says
 /// that it is finite, decision 0150. `VecLocal` is a local vector that is no copy of a vector in scope, and `PassLocal` is a local
 /// vector that a call passes by reference, by the id of its name, decision 0160. `SortForm` is a `std::sort` with no rule,
-/// decision 0161.
+/// decision 0161. `NoOverride` is a class with no override of a virtual function of its interface, or one with other parameters or
+/// another result, and `Unchecked` is an override with no function in the model, each by the keys of the class and the interface,
+/// the id of the name of the function and the line of the class. `NotFinal` is a class over an interface that is not final, by its
+/// key and line. `Overload` is an interface with two virtual functions of one name, by its key and line, decision 0165.
 #[derive(Structural, PartialEq, Eq, Clone, Copy, Debug)]
 pub enum Refusal {
     Construct(u32, u32),
@@ -639,6 +646,10 @@ pub enum Refusal {
     VecLocal(u32),
     PassLocal(u32, u32),
     SortForm(u32),
+    NoOverride(u32, u32, u32, u32),
+    Unchecked(u32, u32, u32, u32),
+    NotFinal(u32, u32),
+    Overload(u32, u32),
 }
 
 // ------------------------------------------------------------------ the rules
@@ -693,6 +704,9 @@ pub open spec fn spec_ty(t: Ty, line: u32) -> Result<DTy, Refusal> {
         Ty::Vec(Scalar::Bool) => Err(Refusal::Element(line)),
         Ty::Vec(s) => Ok(DTy::Seq(s)),
         Ty::Enum(k) => Ok(DTy::Enum(k)),
+        // An interface is a type with no value that the model can see, decision 0165.
+        Ty::Iface(k) => Ok(DTy::Iface(k)),
+        Ty::IfaceRef(k) => Ok(DTy::Iface(k)),
         Ty::Fresh(_) => Err(Refusal::Syntax(line)),
         Ty::Void => Err(Refusal::Syntax(line)),
         Ty::Other(k) => Err(Refusal::Construct(k, line)),
@@ -768,6 +782,9 @@ pub open spec fn spec_value_ty(t: Ty, line: u32, sd: Structs) -> Result<DTy, Ref
             Ty::MutSeq(_) => Err(Refusal::Syntax(line)),
             Ty::MutSeqAfter(_) => Err(Refusal::Syntax(line)),
             Ty::Ptr(_) => Err(Refusal::Syntax(line)),
+            // An interface is a parameter only, decision 0165.
+            Ty::Iface(_) => Err(Refusal::Syntax(line)),
+            Ty::IfaceRef(_) => Err(Refusal::Syntax(line)),
             Ty::Struct(k) => if spec_holds(sd, k) {
                 Err(Refusal::HoldsSeq(line))
             } else {
@@ -3305,6 +3322,266 @@ pub open spec fn spec_marked(sd: Structs, all: Fns) -> Structs {
     spec_mark(sd, all, spec_mark(sd, all, sd, false), true)
 }
 
+// ------------------------------------------------------------------ virtual functions, decision 0165
+
+/// The check of one override. `base` and `derived` are the keys of the function of the interface and of the override. `params` are
+/// the parameters of the override after `this`. `requires` and `ensures` are the contract of the function of the interface, read on
+/// the parameters of the override. `own` is the requires lines of the override. Dafny proves that `own` follows from `requires`, and
+/// that the function of the override meets `ensures`.
+#[derive(PartialEq, Eq, Debug)]
+pub struct DOverride {
+    pub base: u32,
+    pub derived: u32,
+    pub params: DParams,
+    pub ret: DTy,
+    pub requires: DConds,
+    pub ensures: DConds,
+    pub own: DConds,
+}
+
+pub type DOverrides = List<DOverride>;
+
+/// The upcast from the final class `derived` to the interface `base`, with the check of each override.
+#[derive(PartialEq, Eq, Debug)]
+pub struct DUpcast {
+    pub derived: u32,
+    pub base: u32,
+    pub overrides: DOverrides,
+}
+
+/// The parameters have the same types in their order, whatever their names.
+pub open spec fn spec_same_tys(a: Params, b: Params) -> bool
+    decreases a,
+{
+    match a {
+        List::Nil => b == List::<(u32, Ty)>::Nil,
+        List::Cons((_, ta), ra) => match b {
+            List::Cons((_, tb), rb) => ta == tb && spec_same_tys(*ra, *rb),
+            List::Nil => false,
+        },
+    }
+}
+
+/// The type of the first parameter, `this` of a member function.
+pub open spec fn spec_head_ty(ps: Params) -> Option<Ty> {
+    match ps {
+        List::Cons((_, t), _) => Some(t),
+        List::Nil => None,
+    }
+}
+
+/// The function `fb` of the interface `b` and the function `fd` of the class `d` have the same parameters after `this` and the
+/// same result.
+pub open spec fn spec_overrides_fn(fb: Function, fd: Function, d: u32, b: u32) -> bool {
+    spec_head_ty(fb.params) == Some(Ty::Iface(b)) && spec_head_ty(fd.params) == Some(Ty::This(d)) && fb.ret == fd.ret
+        && spec_same_tys(spec_tail(fb.params), spec_tail(fd.params))
+}
+
+/// The check of the function `fb` of the interface on its override `fd`. The contract of `fb` reads the parameters of `fd` by their
+/// place, decision 0060.
+pub open spec fn spec_check(fb: Function, fd: Function, sd: Structs) -> Result<DOverride, Refusal> {
+    match spec_params(spec_tail(fd.params), fd.line, sd) {
+        Err(r) => Err(r),
+        Ok(ps) => match spec_ret_ty(fd.ret, fd.line, sd) {
+            Err(r) => Err(r),
+            Ok(ret) => match spec_conds(fb.conds, CondKind::Requires, fd.params, fd.ret, sd) {
+                Err(r) => Err(r),
+                Ok(rq) => match spec_conds(fb.conds, CondKind::Ensures, fd.params, fd.ret, sd) {
+                    Err(r) => Err(r),
+                    Ok(en) => match spec_conds(fd.conds, CondKind::Requires, fd.params, fd.ret, sd) {
+                        Err(r) => Err(r),
+                        Ok(own) => Ok(DOverride { base: fb.name, derived: fd.name, params: ps, ret, requires: rq, ensures: en, own }),
+                    },
+                },
+            },
+        },
+    }
+}
+
+/// The check of the override in the class `d` of the virtual function `n` of the interface `b`, whose function has the key `bk`.
+/// `line` is the line of `d`. The override must have the same parameters and result, and a function in the model, decision 0090.
+pub open spec fn spec_override(d: u32, b: u32, n: u32, bk: u32, line: u32, all: Fns, sd: Structs) -> Result<DOverride, Refusal> {
+    match spec_member(sd, d, n) {
+        None => Err(Refusal::NoOverride(d, b, n, line)),
+        Some((dk, pure)) => match spec_find(all, bk) {
+            None => Err(Refusal::NoOverride(d, b, n, line)),
+            Some(fb) => match spec_find(all, dk) {
+                None => Err(Refusal::NoOverride(d, b, n, line)),
+                Some(fd) => if !spec_overrides_fn(fb, fd, d, b) {
+                    Err(Refusal::NoOverride(d, b, n, line))
+                } else if pure is None {
+                    Err(Refusal::Unchecked(d, b, n, line))
+                } else {
+                    spec_check(fb, fd, sd)
+                },
+            },
+        },
+    }
+}
+
+/// The checks of the overrides in `d` of the members `ms` of the interface `b`, or the first refusal.
+pub open spec fn spec_override_each(d: u32, b: u32, ms: Members, line: u32, all: Fns, sd: Structs) -> Result<DOverrides, Refusal>
+    decreases ms,
+{
+    match ms {
+        List::Nil => Ok(List::Nil),
+        List::Cons((n, (bk, _)), rest) => match spec_override(d, b, n, bk, line, all, sd) {
+            Err(r) => Err(r),
+            Ok(o) => match spec_override_each(d, b, *rest, line, all, sd) {
+                Err(r) => Err(r),
+                Ok(os) => Ok(List::Cons(o, Box::new(os))),
+            },
+        },
+    }
+}
+
+/// The function that `spec_find` gives has the key it was asked for.
+pub proof fn lemma_find_has_the_key(fs: Fns, key: u32)
+    ensures
+        match spec_find(fs, key) {
+            Some(f) => f.name == key,
+            None => true,
+        },
+    decreases fs,
+{
+    match fs {
+        List::Nil => {},
+        List::Cons(f, rest) => if f.name != key {
+            lemma_find_has_the_key(*rest, key);
+        },
+    }
+}
+
+/// The checks `os` are one for each member of the interface `b` in `ms`, in their order. Each is of the member of `d` with the same
+/// name, which has a function in the model and the same parameters and result.
+pub open spec fn spec_checked(d: u32, b: u32, ms: Members, os: DOverrides, all: Fns, sd: Structs) -> bool
+    decreases ms,
+{
+    match ms {
+        List::Nil => os == List::<DOverride>::Nil,
+        List::Cons((n, (bk, _)), rest) => match os {
+            List::Nil => false,
+            List::Cons(o, orest) => o.base == bk && match spec_member(sd, d, n) {
+                Some((dk, Some(_))) => o.derived == dk && match spec_find(all, bk) {
+                    Some(fb) => match spec_find(all, dk) {
+                        Some(fd) => spec_overrides_fn(fb, fd, d, b),
+                        None => false,
+                    },
+                    None => false,
+                },
+                _ => false,
+            } && spec_checked(d, b, *rest, *orest, all, sd),
+        },
+    }
+}
+
+/// The checks of the members of an interface are one for each member, in their order, each of an override with the same signature
+/// and a function in the model.
+pub proof fn lemma_each_member_is_checked(d: u32, b: u32, ms: Members, line: u32, all: Fns, sd: Structs)
+    ensures
+        match spec_override_each(d, b, ms, line, all, sd) {
+            Ok(os) => spec_checked(d, b, ms, os, all, sd),
+            Err(_) => true,
+        },
+    decreases ms,
+{
+    match ms {
+        List::Nil => {},
+        List::Cons((n, (bk, _)), rest) => {
+            lemma_find_has_the_key(all, bk);
+            match spec_member(sd, d, n) {
+                Some((dk, _)) => lemma_find_has_the_key(all, dk),
+                None => {},
+            }
+            lemma_each_member_is_checked(d, b, *rest, line, all, sd);
+        },
+    }
+}
+
+/// A member of the table has the function `key`.
+pub open spec fn spec_keyed(ms: Members, key: u32) -> bool
+    decreases ms,
+{
+    match ms {
+        List::Nil => false,
+        List::Cons((_, (k, _)), rest) => k == key || spec_keyed(*rest, key),
+    }
+}
+
+/// Each function of `fs` whose first parameter is `this` of the interface `b` is in its member table `ms`. The plugin leaves out
+/// a name that two functions share, decision 0090. A free function of `const B&` has `IfaceRef`, so it is none of them.
+pub open spec fn spec_listed(fs: Fns, b: u32, ms: Members) -> bool
+    decreases fs,
+{
+    match fs {
+        List::Nil => true,
+        List::Cons(f, rest) => (spec_head_ty(f.params) != Some(Ty::Iface(b)) || spec_keyed(ms, f.name)) && spec_listed(*rest, b, ms),
+    }
+}
+
+/// The upcast from the final class `d`, at the line `line`, to the interface `b`. The shell sends the interface from its table.
+pub open spec fn spec_upcast(d: u32, b: u32, line: u32, all: Fns, sd: Structs) -> Result<DUpcast, Refusal> {
+    match spec_get(sd, b) {
+        None => Err(Refusal::Syntax(line)),
+        Some((bl, _, ms)) => if !spec_listed(all, b, ms) {
+            Err(Refusal::Overload(b, bl))
+        } else {
+            match spec_override_each(d, b, ms, line, all, sd) {
+                Err(r) => Err(r),
+                Ok(os) => Ok(DUpcast { derived: d, base: b, overrides: os }),
+            }
+        },
+    }
+}
+
+/// An upcast holds only with a check of each virtual function of the interface. Each function with `this` of the interface is in
+/// its member table, and each member has its check. A class with a virtual function with no override, or with an override that has
+/// another signature or no function in the model, and an interface with two virtual functions of one name, have no upcast, decision
+/// 0165.
+pub proof fn lemma_each_virtual_function_is_checked(d: u32, b: u32, line: u32, all: Fns, sd: Structs)
+    ensures
+        match spec_upcast(d, b, line, all, sd) {
+            Ok(up) => match spec_get(sd, b) {
+                Some((_, _, ms)) => spec_listed(all, b, ms) && spec_checked(d, b, ms, up.overrides, all, sd),
+                None => false,
+            },
+            Err(_) => true,
+        },
+{
+    match spec_get(sd, b) {
+        Some((_, _, ms)) => lemma_each_member_is_checked(d, b, ms, line, all, sd),
+        None => {},
+    }
+}
+
+/// The upcasts from the final class `d` to each of its interfaces `bs`, in their order.
+pub open spec fn spec_upcasts_of(d: u32, bs: Names, line: u32, all: Fns, sd: Structs) -> List<Result<DUpcast, Refusal>>
+    decreases bs,
+{
+    match bs {
+        List::Nil => List::Nil,
+        List::Cons(b, rest) => List::Cons(spec_upcast(d, b, line, all, sd), Box::new(spec_upcasts_of(d, *rest, line, all, sd))),
+    }
+}
+
+/// The upcasts of each class over interfaces, by its key, the keys of its interfaces and whether it is final, in their order. A
+/// class that is not final has none, and its refusal. The shell sends each class from its table.
+pub open spec fn spec_upcasts(bases: List<(u32, (Names, bool))>, all: Fns, sd: Structs) -> List<Result<DUpcast, Refusal>>
+    decreases bases,
+{
+    match bases {
+        List::Nil => List::Nil,
+        List::Cons((d, (bs, fin)), rest) => match spec_get(sd, d) {
+            None => List::Cons(Err(Refusal::Syntax(0)), Box::new(spec_upcasts(*rest, all, sd))),
+            Some((line, _, _)) => if !fin {
+                List::Cons(Err(Refusal::NotFinal(d, line)), Box::new(spec_upcasts(*rest, all, sd)))
+            } else {
+                spec_append(spec_upcasts_of(d, bs, line, all, sd), spec_upcasts(*rest, all, sd))
+            },
+        },
+    }
+}
+
 /// The type of Dafny of an integer type of C++.
 pub open spec fn spec_int_dty(t: Ty) -> Option<DTy> {
     match t {
@@ -4913,6 +5190,9 @@ pub fn translate_ty(t: Ty, line: u32) -> (r: Result<DTy, Refusal>)
         Ty::Vec(Scalar::Bool) => Err(Refusal::Element(line)),
         Ty::Vec(s) => Ok(DTy::Seq(s)),
         Ty::Enum(k) => Ok(DTy::Enum(k)),
+        // An interface is a type with no value that the model can see, decision 0165.
+        Ty::Iface(k) => Ok(DTy::Iface(k)),
+        Ty::IfaceRef(k) => Ok(DTy::Iface(k)),
         Ty::Fresh(_) => Err(Refusal::Syntax(line)),
         Ty::Void => Err(Refusal::Syntax(line)),
         Ty::Other(k) => Err(Refusal::Construct(k, line)),
@@ -4935,6 +5215,9 @@ pub fn translate_value_ty(t: Ty, line: u32, sd: &Structs) -> (r: Result<DTy, Ref
             Ty::MutSeq(_) => Err(Refusal::Syntax(line)),
             Ty::MutSeqAfter(_) => Err(Refusal::Syntax(line)),
             Ty::Ptr(_) => Err(Refusal::Syntax(line)),
+            // An interface is a parameter only, decision 0165.
+            Ty::Iface(_) => Err(Refusal::Syntax(line)),
+            Ty::IfaceRef(_) => Err(Refusal::Syntax(line)),
             Ty::Struct(k) => if holds_seq(sd, k) {
                 Err(Refusal::HoldsSeq(line))
             } else {
@@ -7520,6 +7803,178 @@ pub fn translate_unit(all: &Fns, sd: &Structs) -> (r: Models)
     let first = mark(sd, all, sd, false);
     let marked = mark(sd, all, &first, true);
     translate_each(all, all, &marked)
+}
+
+pub fn same_tys(a: &Params, b: &Params) -> (r: bool)
+    ensures
+        r == spec_same_tys(*a, *b),
+    decreases a,
+{
+    match a {
+        List::Nil => matches!(b, List::Nil),
+        List::Cons((_, ta), ra) => match b {
+            List::Cons((_, tb), rb) => *ta == *tb && same_tys(ra, rb),
+            List::Nil => false,
+        },
+    }
+}
+
+pub fn head_ty(ps: &Params) -> (r: Option<Ty>)
+    ensures
+        r == spec_head_ty(*ps),
+{
+    match ps {
+        List::Cons((_, t), _) => Some(*t),
+        List::Nil => None,
+    }
+}
+
+pub fn overrides_fn(fb: &Function, fd: &Function, d: u32, b: u32) -> (r: bool)
+    ensures
+        r == spec_overrides_fn(*fb, *fd, d, b),
+{
+    head_ty(&fb.params) == Some(Ty::Iface(b)) && head_ty(&fd.params) == Some(Ty::This(d)) && fb.ret == fd.ret
+        && same_tys(&tail(&fb.params), &tail(&fd.params))
+}
+
+pub fn check(fb: &Function, fd: &Function, sd: &Structs) -> (r: Result<DOverride, Refusal>)
+    ensures
+        r == spec_check(*fb, *fd, *sd),
+{
+    match translate_params(&tail(&fd.params), fd.line, sd) {
+        Err(r) => Err(r),
+        Ok(ps) => match ret_ty(fd.ret, fd.line, sd) {
+            Err(r) => Err(r),
+            Ok(ret) => match translate_conds(&fb.conds, CondKind::Requires, &fd.params, fd.ret, sd) {
+                Err(r) => Err(r),
+                Ok(rq) => match translate_conds(&fb.conds, CondKind::Ensures, &fd.params, fd.ret, sd) {
+                    Err(r) => Err(r),
+                    Ok(en) => match translate_conds(&fd.conds, CondKind::Requires, &fd.params, fd.ret, sd) {
+                        Err(r) => Err(r),
+                        Ok(own) => Ok(DOverride { base: fb.name, derived: fd.name, params: ps, ret, requires: rq, ensures: en, own }),
+                    },
+                },
+            },
+        },
+    }
+}
+
+pub fn translate_override(d: u32, b: u32, n: u32, bk: u32, line: u32, all: &Fns, sd: &Structs) -> (r: Result<DOverride, Refusal>)
+    ensures
+        r == spec_override(d, b, n, bk, line, *all, *sd),
+{
+    match member(sd, d, n) {
+        None => Err(Refusal::NoOverride(d, b, n, line)),
+        Some((dk, pure)) => match find(all, bk) {
+            None => Err(Refusal::NoOverride(d, b, n, line)),
+            Some(fb) => match find(all, dk) {
+                None => Err(Refusal::NoOverride(d, b, n, line)),
+                Some(fd) => if !overrides_fn(fb, fd, d, b) {
+                    Err(Refusal::NoOverride(d, b, n, line))
+                } else if pure.is_none() {
+                    Err(Refusal::Unchecked(d, b, n, line))
+                } else {
+                    check(fb, fd, sd)
+                },
+            },
+        },
+    }
+}
+
+pub fn override_each(d: u32, b: u32, ms: &Members, line: u32, all: &Fns, sd: &Structs) -> (r: Result<DOverrides, Refusal>)
+    ensures
+        r == spec_override_each(d, b, *ms, line, *all, *sd),
+    decreases ms,
+{
+    match ms {
+        List::Nil => Ok(List::Nil),
+        List::Cons((n, (bk, _)), rest) => match translate_override(d, b, *n, *bk, line, all, sd) {
+            Err(r) => Err(r),
+            Ok(o) => match override_each(d, b, rest, line, all, sd) {
+                Err(r) => Err(r),
+                Ok(os) => Ok(List::Cons(o, Box::new(os))),
+            },
+        },
+    }
+}
+
+pub fn keyed(ms: &Members, key: u32) -> (r: bool)
+    ensures
+        r == spec_keyed(*ms, key),
+    decreases ms,
+{
+    match ms {
+        List::Nil => false,
+        List::Cons((_, (k, _)), rest) => *k == key || keyed(rest, key),
+    }
+}
+
+pub fn listed(fs: &Fns, b: u32, ms: &Members) -> (r: bool)
+    ensures
+        r == spec_listed(*fs, b, *ms),
+    decreases fs,
+{
+    match fs {
+        List::Nil => true,
+        List::Cons(f, rest) => (head_ty(&f.params) != Some(Ty::Iface(b)) || keyed(ms, f.name)) && listed(rest, b, ms),
+    }
+}
+
+pub fn upcast(d: u32, b: u32, line: u32, all: &Fns, sd: &Structs) -> (r: Result<DUpcast, Refusal>)
+    ensures
+        r == spec_upcast(d, b, line, *all, *sd),
+{
+    match get_ref(sd, b) {
+        None => Err(Refusal::Syntax(line)),
+        Some((bl, _, ms)) => if !listed(all, b, ms) {
+            Err(Refusal::Overload(b, *bl))
+        } else {
+            match override_each(d, b, ms, line, all, sd) {
+                Err(r) => Err(r),
+                Ok(os) => Ok(DUpcast { derived: d, base: b, overrides: os }),
+            }
+        },
+    }
+}
+
+pub fn upcasts_of(d: u32, bs: &Names, line: u32, all: &Fns, sd: &Structs) -> (r: List<Result<DUpcast, Refusal>>)
+    ensures
+        r == spec_upcasts_of(d, *bs, line, *all, *sd),
+    decreases bs,
+{
+    match bs {
+        List::Nil => List::Nil,
+        List::Cons(b, rest) => List::Cons(upcast(d, *b, line, all, sd), Box::new(upcasts_of(d, rest, line, all, sd))),
+    }
+}
+
+pub fn upcasts(bases: &List<(u32, (Names, bool))>, all: &Fns, sd: &Structs) -> (r: List<Result<DUpcast, Refusal>>)
+    ensures
+        r == spec_upcasts(*bases, *all, *sd),
+    decreases bases,
+{
+    match bases {
+        List::Nil => List::Nil,
+        List::Cons((d, (bs, fin)), rest) => match get_ref(sd, *d) {
+            None => List::Cons(Err(Refusal::Syntax(0)), Box::new(upcasts(rest, all, sd))),
+            Some((line, _, _)) => if !*fin {
+                List::Cons(Err(Refusal::NotFinal(*d, *line)), Box::new(upcasts(rest, all, sd)))
+            } else {
+                append(upcasts_of(*d, bs, *line, all, sd), upcasts(rest, all, sd))
+            },
+        },
+    }
+}
+
+/// The upcasts of the unit, each with the check of each override, decision 0165. The checks read the table of the unit, as the models
+/// of its functions do.
+pub fn translate_overrides(bases: &List<(u32, (Names, bool))>, all: &Fns, sd: &Structs) -> (r: List<Result<DUpcast, Refusal>>)
+    ensures
+        r == spec_upcasts(*bases, *all, spec_marked(*sd, *all)),
+{
+    let first = mark(sd, all, sd, false);
+    let marked = mark(sd, all, &first, true);
+    upcasts(bases, all, &marked)
 }
 
 // ------------------------------------------------------------------ the contract parser
