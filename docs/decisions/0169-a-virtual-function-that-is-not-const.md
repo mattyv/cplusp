@@ -10,6 +10,7 @@ Date: 2026-10-20. Status: decided. Amends 0096, 0108, 0142 and 0165. This is sli
 - `p->f(a)` on a local `std::unique_ptr<B> p` writes the new value back to `p`. This amends 0142. A write through `const std::unique_ptr<B>&` is a finding of the gate. The translator refuses a write through `*p` or through any other place with the sentence of 0108.
 - A `D` object at a `B&` parameter has no rule yet: `a class as a reference to its interface: the translator has no rule for it yet.` The model has no way back from a value of `B` to a value of `D`.
 - The translator refuses an override whose method has no contract at its class: `the override of B::f in D has no method in the model, so the translator cannot check it.`
+- `c.value()` in a contract on an object of a struct calls its member `value`, as `c.f()` calls `f`. On an optional, `.value()` still reads the value. The example `command` needs this for `Counter::value`.
 - The example `command` gets `//@ modifies c` on `execute` and `undo` of the interface and of each class.
 
 ## Why

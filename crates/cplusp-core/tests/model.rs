@@ -3685,3 +3685,25 @@ fn a_contract_cannot_call_a_virtual_function_that_writes() {
     let List::Cons(Model::Bare(_, _, _, r), _) = *rest else { panic!("a refused contract") };
     assert_eq!(r, Refusal::NotPure(VBUMP, 7));
 }
+
+/// `c.value()` on an object of a struct calls its member `value`, as `c.f()` calls `f`. On an optional it still reads the value,
+/// decision 0169.
+#[test]
+fn value_of_a_struct_calls_its_member_value() {
+    let (counter, key) = (323, 324);
+    let ps = List::Cons((THIS, Ty::This(counter)), Box::new(List::Nil));
+    let table: Structs = List::Cons((counter, (3, List::Nil, List::Cons((VALUE_NAME, (key, Some((Ty::I32, ps)))), Box::new(List::Nil)))), Box::new(List::Nil));
+    let ens = Expr::Bin(BinOp::Eq, b(Expr::Result), b(Expr::Value(b(Expr::Name(VX)))));
+    let f = Function {
+        name: BKEY2,
+        line: 20,
+        params: List::Cons((VX, Ty::Struct(counter)), Box::new(List::Nil)),
+        ret: Ty::I32,
+        trusted: false,
+        conds: List::Cons((CondKind::Ensures, ens, 19, names(&[VX])), Box::new(List::Nil)),
+        body: one(Stmt::Return(Expr::Lit(3, Ty::I32), 21)),
+    };
+    let Model::Full(m) = translate_function(&f, &List::Nil, &table) else { panic!("a full model") };
+    let call = DExpr::AsInt(Box::new(DExpr::FCall(key, Box::new(List::Cons(DExpr::Var(VX), Box::new(List::Nil))))));
+    assert_eq!(m.ensures, List::Cons((DExpr::Bin(BinOp::Eq, Box::new(DExpr::AsInt(Box::new(DExpr::Result))), Box::new(call)), 19), Box::new(List::Nil)));
+}
