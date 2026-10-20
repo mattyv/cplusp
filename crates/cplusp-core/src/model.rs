@@ -446,7 +446,7 @@ pub enum DTy {
 /// one operation of the double model, `fadd` to `fdiv`, and `Abs`, `Eps`, `Eta` and `DblMax` are `abs`, `EPS`, `ETA` and `MAX` of it,
 /// decision 0154. `FromInt` is `fint(e as int)` of it, the conversion of an integer, and `IntAbs` is `trunc_size(e)` of the prelude,
 /// the absolute value of an integer, decision 0159. `Upcast` is `f_D'B(e)`, the value of a final class as its interface, decision
-/// 0166. A Dafny expression calls no method.
+/// 0166. `Lemma` is `L(a); e`, the value `e` after a call of the lemma `L`, decision 0167. A Dafny expression calls no method.
 #[derive(PartialEq, Eq, Debug)]
 pub enum DExpr {
     Lit(u64),
@@ -493,6 +493,7 @@ pub enum DExpr {
     FromInt(Box<DExpr>),
     IntAbs(Box<DExpr>),
     Upcast(u32, u32, Box<DExpr>),
+    Lemma(u32, Box<DArgs>, Box<DExpr>),
     Abs(Box<DExpr>),
     Eps,
     Eta,
@@ -3206,22 +3207,33 @@ pub open spec fn spec_bounds(ps: Params, line: u32, tail: DConds) -> DConds
 /// The body of the Dafny function of a member function: the expression of its one `return`, when the function has `this` and its
 /// body is that `return` alone, decision 0090. A `return` of a call is a `ReturnCall`, so a pure body holds no call. A function that
 /// writes a reference parameter is never pure, decision 0108.
+/// The value of a body of apply lines and one return: the value of the return after each lemma, in order, decision 0167.
+pub open spec fn spec_pure_value(body: DStmts) -> Option<DExpr>
+    decreases body,
+{
+    match body {
+        List::Cons((s, _), rest) => match *s {
+            DStmt::Return(d) => if *rest == List::Nil {
+                Some(d)
+            } else {
+                None
+            },
+            DStmt::Apply(f, da) => match spec_pure_value(*rest) {
+                Some(e) => Some(DExpr::Lemma(f, Box::new(da), Box::new(e))),
+                None => None,
+            },
+            _ => None,
+        },
+        List::Nil => None,
+    }
+}
+
 pub open spec fn spec_pure_body(ps: Params, body: DStmts) -> Option<DExpr> {
     match spec_this(ps) {
         Some(_) => if spec_mutates(ps) {
             None
         } else {
-            match body {
-                List::Cons((s, _), rest) => if *rest == List::Nil {
-                    match *s {
-                        DStmt::Return(d) => Some(d),
-                        _ => None,
-                    }
-                } else {
-                    None
-                },
-                List::Nil => None,
-            }
+            spec_pure_value(body)
         },
         None => None,
     }
@@ -7738,6 +7750,7 @@ pub fn copy_dexpr(d: &DExpr) -> (r: DExpr)
         DExpr::Abs(x0) => DExpr::Abs(Box::new(copy_dexpr(x0))),
         DExpr::FromInt(x0) => DExpr::FromInt(Box::new(copy_dexpr(x0))),
         DExpr::Upcast(x0, x1, x2) => DExpr::Upcast(*x0, *x1, Box::new(copy_dexpr(x2))),
+        DExpr::Lemma(x0, x1, x2) => DExpr::Lemma(*x0, Box::new(copy_dargs(x1)), Box::new(copy_dexpr(x2))),
         DExpr::IntAbs(x0) => DExpr::IntAbs(Box::new(copy_dexpr(x0))),
         DExpr::Eps => DExpr::Eps,
         DExpr::Eta => DExpr::Eta,
@@ -7756,6 +7769,27 @@ pub fn copy_dargs(a: &DArgs) -> (r: DArgs)
     }
 }
 
+pub fn pure_value(body: &DStmts) -> (r: Option<DExpr>)
+    ensures
+        r == spec_pure_value(*body),
+    decreases body,
+{
+    match body {
+        List::Cons((s, _), rest) => match &**s {
+            DStmt::Return(d) => match &**rest {
+                List::Nil => Some(copy_dexpr(d)),
+                _ => None,
+            },
+            DStmt::Apply(f, da) => match pure_value(rest) {
+                Some(e) => Some(DExpr::Lemma(*f, Box::new(copy_dargs(da)), Box::new(e))),
+                None => None,
+            },
+            _ => None,
+        },
+        List::Nil => None,
+    }
+}
+
 pub fn pure_body(ps: &Params, body: &DStmts) -> (r: Option<DExpr>)
     ensures
         r == spec_pure_body(*ps, *body),
@@ -7764,16 +7798,7 @@ pub fn pure_body(ps: &Params, body: &DStmts) -> (r: Option<DExpr>)
         Some(_) => if mutates(ps) {
             None
         } else {
-            match body {
-                List::Cons((s, _), rest) => match &**rest {
-                    List::Nil => match &**s {
-                        DStmt::Return(d) => Some(copy_dexpr(d)),
-                        _ => None,
-                    },
-                    _ => None,
-                },
-                List::Nil => None,
-            }
+            pure_value(body)
         },
         None => None,
     }

@@ -527,7 +527,8 @@ fn body_line(c: JCond, apply: bool, names: &mut Names) -> Stmt {
         if head.is_empty() || head.starts_with(|ch: char| ch.is_ascii_digit()) || !rest.starts_with('(') {
             return syntax(line, None, names);
         }
-        if !names.lemmas.iter().any(|l| l == head) {
+        // `MulBound` is a lemma of the prelude, decision 0167.
+        if head != "MulBound" && !names.lemmas.iter().any(|l| l == head) {
             return syntax(line, Some(format!("{head} is no lemma of the companion file.")), names);
         }
         // The call ends at the `)` that closes its `(`. Anything after it is a form the translator cannot read.
@@ -932,6 +933,25 @@ newtype uint64 = x: int | 0 <= x < 0x1_0000_0000_0000_0000
 datatype Option<T> = None | Some(value: T)
 type Vec<T> = s: seq<T> | |s| < 0x1_0000_0000_0000_0000 witness []
 function trunc_size(x: int): nat { if x < 0 then -x else x }
+lemma MulNonneg(a: int, b: int)
+  requires 0 <= a && 0 <= b
+  ensures 0 <= a * b
+{
+  if a > 0 {
+    MulNonneg(a - 1, b);
+    assert a * b == (a - 1) * b + b;
+  }
+}
+lemma MulBound(a: int, b: int, c: int, d: int)
+  requires 0 <= a <= c && 0 <= b <= d
+  ensures 0 <= a * b <= c * d
+{
+  MulNonneg(a, b);
+  MulNonneg(c - a, b);
+  MulNonneg(c, d - b);
+  assert (c - a) * b == c * b - a * b;
+  assert c * (d - b) == c * d - c * b;
+}
 lemma trunc_div_size(x: nat, m: nat)
   requires m >= 1
   ensures x / m <= x
@@ -1129,6 +1149,8 @@ fn dexpr(e: &DExpr, names: &Names) -> String {
         }
         // The value of a final class as its interface, decision 0166.
         DExpr::Upcast(d, b, a) => format!("{}({})", upcast_name(*d, *b, names), dexpr(a, names)),
+        // The value after a call of a lemma, decision 0167. A lemma is called before the value in the body of a function.
+        DExpr::Lemma(l, args, e) => format!("{}({}); {}", names.text(*l), dargs(args, names).join(", "), dexpr(e, names)),
         DExpr::SetAt(a, i, e) => format!("{}[{} := {}]", dexpr(a, names), dexpr(i, names), dexpr(e, names)),
         DExpr::Drop(a, k) => format!("{}[{}..]", dexpr(a, names), dexpr(k, names)),
         DExpr::Take(a, j) => format!("{}[..{}]", dexpr(a, names), dexpr(j, names)),
@@ -1185,7 +1207,7 @@ pub struct Map {
     /// The check of each override, decision 0165.
     pub lemmas: Vec<LemmaMap>,
     /// The lines of the Dafny text that copy lines of an interface, decision 0166.
-    pub copies: Vec<std::ops::Range<usize>>,
+    pub copies: Vec<(std::ops::Range<usize>, Vec<std::ops::Range<usize>>)>,
 }
 
 /// The lines of the lemma that checks one override, for the report of prove, decision 0165. `lines` are line numbers of the Dafny text, `place` is the
@@ -1197,6 +1219,11 @@ pub struct LemmaMap {
     pub requires: Vec<u32>,
     /// The lines of its requires clauses, which copy the requires lines of the interface.
     pub requires_lines: Vec<usize>,
+    /// The lines of the lemma calls of its body, and the lines of the method of the override, decision 0167.
+    pub body: std::ops::Range<usize>,
+    pub method: std::ops::Range<usize>,
+    /// The places of the requires lines of the override.
+    pub own_places: Vec<u32>,
     /// `B::f`, for the sentences.
     pub of: String,
 }
@@ -1223,7 +1250,13 @@ pub struct Translation {
 struct Printer<'a> {
     names: &'a Names,
     /// The lines (of the Dafny text, from 1) of the functions that copy the lines of an interface: the function of a virtual function and the upcast, decision 0166.
-    copies: Vec<std::ops::Range<usize>>,
+    copies: Vec<(std::ops::Range<usize>, Vec<std::ops::Range<usize>>)>,
+    /// The functions printed for the method that is being written, which copy its lines: they become copies when the method is done.
+    pending: Vec<std::ops::Range<usize>>,
+    /// The lines of the method of each function, by the id of its key.
+    method_lines: HashMap<u32, std::ops::Range<usize>>,
+    /// The lemma calls of the body of each pure member function by the id of its key, as `L(args);`, for the check of an override, decision 0167.
+    calls: HashMap<u32, Vec<String>>,
     methods: &'a Methods,
     /// The result type of each method by the id of its key, for the call that drops a value, decision 0096.
     rets: &'a HashMap<u32, DTy>,
@@ -1463,8 +1496,19 @@ impl Printer<'_> {
             shown.push(format!("{}: {}", mangle(self.names.text(*n)), dty(*t, self.names)));
             ps = next;
         }
+        // The lemmas that the body calls, for the check of an override, decision 0167.
+        let mut calls = Vec::new();
+        let mut cur = body;
+        while let DExpr::Lemma(l, args, rest) = cur {
+            calls.push(format!("{}({});", self.names.text(*l), dargs(args, self.names).join(", ")));
+            cur = rest;
+        }
+        if !calls.is_empty() {
+            self.calls.insert(m.name, calls);
+        }
         self.out.push('\n');
         self.lines.push(None);
+        let start = self.lines.len() + 1;
         self.put(0, format!("function {}({}): {}", self.names.functions[&m.name], shown.join(", "), dty(m.ret, self.names)), place);
         let mut cs = &m.requires;
         while let List::Cons((e, line), next) = cs {
@@ -1476,6 +1520,8 @@ impl Printer<'_> {
         self.put(1, dexpr(body, self.names), place);
         self.put(0, "}".to_string(), place);
         self.scope.clear();
+        // The function of a pure member has the requires lines and the body of its method, so a failure in it stands for the failure of the method, decision 0167.
+        self.pending.push(start..self.lines.len() + 1);
     }
 
     /// The lemma that checks one override against the contract of its interface, decision 0165. Dafny proves that the requires lines of the override follow from
@@ -1516,8 +1562,27 @@ impl Printer<'_> {
             self.put(1, format!("ensures var result: {} := {f}({}); {}", dty(o.ret, names), args.join(", "), dexpr(e, names)), *line);
             cs = next;
         }
-        self.put(0, "{}".to_string(), place);
-        LemmaMap { lines: start..self.lines.len() + 1, place, own, requires, requires_lines, of }
+        // The body calls the lemmas that the override calls, with the names that the lemma shares with its function, decision 0167.
+        let mut body = self.lines.len() + 1..self.lines.len() + 1;
+        match self.calls.get(&o.derived).cloned() {
+            Some(calls) => {
+                self.put(0, "{".to_string(), place);
+                let first = self.lines.len() + 1;
+                for call in calls {
+                    self.put(1, call, place);
+                }
+                body = first..self.lines.len() + 1;
+                self.put(0, "}".to_string(), place);
+            }
+            None => self.put(0, "{}".to_string(), place),
+        }
+        let mut own_places = Vec::new();
+        let mut cs = &o.own;
+        while let List::Cons((_, line), next) = cs {
+            own_places.push(*line);
+            cs = next;
+        }
+        LemmaMap { lines: start..self.lines.len() + 1, place, own, requires, requires_lines, body, method: self.method_lines.get(&o.derived).cloned().unwrap_or(0..0), own_places, of }
     }
 
     fn axiom_function(&mut self, m: &Method, place: u32) {
@@ -1544,7 +1609,7 @@ impl Printer<'_> {
             }
             cs = next;
         }
-        self.copies.push(start..self.lines.len() + 1);
+        self.pending.push(start..self.lines.len() + 1);
     }
 
     /// The upcast from a final class to its interface, decision 0166: a function of the model with no body, which Dafny takes as given. For each virtual function
@@ -1582,7 +1647,14 @@ impl Printer<'_> {
             self.put(1, format!("ensures {line}"), place);
             os = next;
         }
-        self.copies.push(start..self.lines.len() + 1);
+        // It copies the lines of the methods of the interface that it names.
+        let mut originals = Vec::new();
+        let mut os = &up.overrides;
+        while let List::Cons(o, next) = os {
+            originals.extend(self.method_lines.get(&o.base).cloned());
+            os = next;
+        }
+        self.copies.push((start..self.lines.len() + 1, originals));
     }
 
     fn method(&mut self, m: &Method, place: u32) {
@@ -1595,6 +1667,7 @@ impl Printer<'_> {
             self.axiom_function(m, place);
         }
         let outs = dparams(&m.outs);
+        let method_start = self.lines.len() + 1;
         self.header(m.name, &m.params, m.ret, (m.writes, m.trusted), &outs, place);
         self.temps = 0;
         // A requires line has the requires lines before it in scope, and an ensures or decreases line and the body have all of them.
@@ -1611,6 +1684,7 @@ impl Printer<'_> {
         // A trusted method has no body, and Dafny takes its contract as given, decision 0102.
         if m.trusted {
             self.scope.clear();
+            self.finish_method(m.name, method_start);
             return;
         }
         self.put(0, "{".to_string(), place);
@@ -1627,6 +1701,16 @@ impl Printer<'_> {
         self.writes = false;
         self.put(0, "}".to_string(), place);
         self.scope.clear();
+        self.finish_method(m.name, method_start);
+    }
+
+    /// The lines of a method are known. The functions printed before it copy its lines, decision 0167.
+    fn finish_method(&mut self, key: u32, start: usize) {
+        let range = start..self.lines.len() + 1;
+        for copy in std::mem::take(&mut self.pending) {
+            self.copies.push((copy, vec![range.clone()]));
+        }
+        self.method_lines.insert(key, range);
     }
 }
 
@@ -1892,7 +1976,7 @@ pub fn translate(lines: &str, companion: Option<(&str, &str)>) -> Result<Transla
         };
         seen = next;
     }
-    let mut p = Printer { copies: Vec::new(), names: &names, methods: &methods, rets: &rets, out: PRELUDE.to_string(), lines: Vec::new(), scope: Vec::new(), own: Vec::new(), writes: false, fresh: 0, temps: 0 };
+    let mut p = Printer { copies: Vec::new(), pending: Vec::new(), method_lines: HashMap::new(), calls: HashMap::new(), names: &names, methods: &methods, rets: &rets, out: PRELUDE.to_string(), lines: Vec::new(), scope: Vec::new(), own: Vec::new(), writes: false, fresh: 0, temps: 0 };
     p.lines.extend(PRELUDE.lines().map(|_| None));
     let mut refused_at = Vec::new();
     for (en, (place, key)) in enums.iter().zip(enum_places) {
@@ -1923,11 +2007,35 @@ pub fn translate(lines: &str, companion: Option<(&str, &str)>) -> Result<Transla
     }
     let mut printed = 0;
     let mut trusted = Vec::new();
+    let mut lemmas = Vec::new();
+    let mut upcast_printed = std::collections::HashSet::new();
+    // The checks by the key of the function of the override.
+    let mut checks: HashMap<u32, Vec<(&DUpcast, &DOverride)>> = HashMap::new();
+    let mut seen_upcasts = &overrides;
+    while let List::Cons(result, next) = seen_upcasts {
+        if let Ok(up) = result {
+            let mut os = &up.overrides;
+            while let List::Cons(o, more) = os {
+                checks.entry(o.derived).or_default().push((up, o));
+                os = more;
+            }
+        }
+        seen_upcasts = next;
+    }
     for _ in 0..count {
         let List::Cons(model, rest) = models else { unreachable!("one model for each function") };
         let refused = match model {
             Model::Full(m) => {
                 p.method(&m, at[&m.name]);
+                // The check of each override against the contract of its interface follows the method of the override, decision 0165. The upcast of a class comes
+                // with the check of its first override.
+                for (up, o) in checks.get(&m.name).into_iter().flatten() {
+                    if upcast_printed.insert((up.derived, up.base)) {
+                        p.upcast_function(up, at[&o.derived]);
+                    }
+                    let of = format!("{}::{}", names.class_names[&up.base], names.fn_names[&o.base]);
+                    lemmas.push(p.lemma(up, o, at[&o.derived], of));
+                }
                 printed += 1;
                 trusted.extend(reasons.remove(&m.name).filter(|_| m.trusted));
                 None
@@ -1944,23 +2052,11 @@ pub fn translate(lines: &str, companion: Option<(&str, &str)>) -> Result<Transla
         refused_at.extend(refused.map(|r| sentence(r, &names)));
         models = *rest;
     }
-    // The check of each override against the contract of its interface, decision 0165. A class that cannot be checked is refused at its line.
-    let mut lemmas = Vec::new();
+    // A class that cannot be checked is refused at its line, decision 0165.
     let mut seen_checks = &overrides;
     while let List::Cons(result, next) = seen_checks {
-        match result {
-            Ok(up) => {
-                if let List::Cons(o, _) = &up.overrides {
-                    p.upcast_function(up, at[&o.derived]);
-                }
-                let mut os = &up.overrides;
-                while let List::Cons(o, more) = os {
-                    let of = format!("{}::{}", names.class_names[&up.base], names.fn_names[&o.base]);
-                    lemmas.push(p.lemma(up, o, at[&o.derived], of));
-                    os = more;
-                }
-            }
-            Err(r) => refused_at.push(sentence(*r, &names)),
+        if let Err(r) = result {
+            refused_at.push(sentence(*r, &names));
         }
         seen_checks = next;
     }

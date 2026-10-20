@@ -183,11 +183,12 @@ pub fn run(t: &Translation, limit: u32, refused: bool, source: &str, shown: &dyn
             emit(e, format!("Not provable: {}:{line}: Dafny says: {}.", shown(&path), message.trim_end_matches('.')));
             continue;
         }
-        // A function of the model that copies lines of an interface, the function of a virtual function or the upcast, fails as the lines of the interface do, when
-        // they cannot be read. The method of the interface reports that failure, so a failure with the same message elsewhere stands for this one, decision 0166.
-        let in_copy = |line: usize| map.copies.iter().any(|r| r.contains(&line));
-        if in_copy(e.line) && found.iter().any(|o| o.message == e.message && !in_copy(o.line) && !map.lemmas.iter().any(|l| l.lines.contains(&o.line))) {
-            continue;
+        // A function of the model that copies lines of its method, the function of a pure member, the function of a virtual function or the upcast, fails as the
+        // lines of the original do. The original reports that failure, so a failure with the same message in the original stands for this one, decision 0167.
+        if let Some((_, originals)) = map.copies.iter().find(|(r, _)| r.contains(&e.line)) {
+            if found.iter().any(|o| o.message == e.message && originals.iter().any(|r| r.contains(&o.line))) {
+                continue;
+            }
         }
         // A failure in the lemma that checks an override names the override and the contract line of the interface that it breaks, decision 0165. Dafny
         // reports the requires half at the end of the lemma, with the requires clause that it claims as the related location, and the ensures half the same
@@ -196,6 +197,22 @@ pub fn run(t: &Translation, limit: u32, refused: bool, source: &str, shown: &dyn
             // A requires clause of the lemma copies a requires line of the interface, which is already reported at the method of the interface. A lemma with such
             // a failure has requires lines that Dafny cannot read, so no other failure of it is true.
             if found.iter().any(|f| lemma.requires_lines.contains(&f.line)) {
+                continue;
+            }
+            // A lemma call in the body of the check is read under the requires lines of the interface. When it fails there and not in the method of the override, the
+            // override requires more than the interface, decision 0167. When it fails in the method too, the method reports it.
+            if lemma.body.contains(&e.line) {
+                if found.iter().any(|o| o.message == e.message && lemma.method.contains(&o.line)) {
+                    continue;
+                }
+                let (path, line) = &map.places[lemma.place as usize];
+                let mut block = format!("Not proved: {}:{line}: the override may require more than {}.", shown(path), lemma.of);
+                for p in lemma.own_places.iter().chain(&lemma.requires) {
+                    if let Some(text) = contract(map, *p, shown) {
+                        block.push_str(&format!("\n  The contract line: {text}"));
+                    }
+                }
+                emit(e, block);
                 continue;
             }
             let (path, line) = &map.places[lemma.place as usize];
