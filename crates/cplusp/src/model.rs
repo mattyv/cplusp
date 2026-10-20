@@ -87,6 +87,8 @@ enum JCast {
     NoOp,
     Construct,
     Integral(JTy, JTy),
+    /// A final class to its interface, by their keys, decision 0166.
+    Upcast(String, String),
     Other(String),
 }
 
@@ -224,6 +226,9 @@ struct JStruct {
     /// An interface: a class with no field whose members are pure virtual, decision 0165.
     #[serde(default)]
     interface: bool,
+    /// The name of the class in C++ with its namespaces, for the Axiom line of an interface, decision 0166.
+    #[serde(default)]
+    qualified: String,
 }
 
 #[derive(Deserialize)]
@@ -417,6 +422,7 @@ fn expr(e: JExpr, names: &mut Names) -> Expr {
                 JCast::NoOp => CastKind::NoOp,
                 JCast::Construct => CastKind::Construct,
                 JCast::Integral(from, to) => CastKind::Integral(ty(from, names), ty(to, names)),
+                JCast::Upcast(d, b) => CastKind::Upcast(names.id(&d), names.id(&b)),
                 JCast::Other(s) => CastKind::Other(names.id(&s)),
             };
             Expr::Cast(kind, Box::new(expr(*a, names)))
@@ -892,12 +898,12 @@ fn function(f: JFunction, names: &mut Names) -> Function {
     names.shadow.extend(used.into_iter().map(str::to_string));
     // The names that a contract may call as a functor, decision 0098.
     names.functors = f.params.iter().filter(|(_, t)| matches!(t, JTy::Struct(_))).map(|(n, _)| n.clone()).collect();
-    if let (Some((_, JTy::This(k) | JTy::ThisMut(k))), _) | (_, JTy::This(k)) = (f.params.first(), &f.ret) {
+    if let (Some((_, JTy::This(k) | JTy::ThisMut(k) | JTy::Iface(k))), _) | (_, JTy::This(k)) = (f.params.first(), &f.ret) {
         names.functors.extend(names.struct_fields.get(k).cloned().unwrap_or_default());
     }
     // A constructor reads the members of the value it builds, decision 0094.
     names.this_members = match (f.params.first(), &f.ret) {
-        (Some((_, JTy::This(k) | JTy::ThisMut(k))), _) | (_, JTy::This(k)) => names.members.get(k).cloned().unwrap_or_default(),
+        (Some((_, JTy::This(k) | JTy::ThisMut(k) | JTy::Iface(k))), _) | (_, JTy::This(k)) => names.members.get(k).cloned().unwrap_or_default(),
         _ => Vec::new(),
     };
     // A parameter with no name is named by its position, as `'N`. C++ cannot write that, so it clashes with no name. The mangling makes it `v_'N`.
@@ -1015,6 +1021,13 @@ fn local_ty(t: DTy, names: &Names) -> String {
     }
 }
 
+/// The Dafny name of the upcast from the class `d` to its interface `b`, `f_D'B`, decision 0166. The names of the model are the names of the datatypes, without
+/// `S_`, so two classes of one plain name stay apart.
+fn upcast_name(d: u32, b: u32, names: &Names) -> String {
+    let short = |k: u32| names.datatypes[&k].strip_prefix("S_").unwrap_or(&names.datatypes[&k]).to_string();
+    format!("f_{}'{}", short(d), short(b))
+}
+
 fn dop(o: BinOp) -> &'static str {
     match o {
         BinOp::Add => "+",
@@ -1114,6 +1127,8 @@ fn dexpr(e: &DExpr, names: &Names) -> String {
             names.double.set(true);
             "MAX".to_string()
         }
+        // The value of a final class as its interface, decision 0166.
+        DExpr::Upcast(d, b, a) => format!("{}({})", upcast_name(*d, *b, names), dexpr(a, names)),
         DExpr::SetAt(a, i, e) => format!("{}[{} := {}]", dexpr(a, names), dexpr(i, names), dexpr(e, names)),
         DExpr::Drop(a, k) => format!("{}[{}..]", dexpr(a, names), dexpr(k, names)),
         DExpr::Take(a, j) => format!("{}[..{}]", dexpr(a, names), dexpr(j, names)),
@@ -1169,6 +1184,8 @@ pub struct Map {
     pub contracts: HashMap<u32, (String, String)>,
     /// The check of each override, decision 0165.
     pub lemmas: Vec<LemmaMap>,
+    /// The lines of the Dafny text that copy lines of an interface, decision 0166.
+    pub copies: Vec<std::ops::Range<usize>>,
 }
 
 /// The lines of the lemma that checks one override, for the report of prove, decision 0165. `lines` are line numbers of the Dafny text, `place` is the
@@ -1205,6 +1222,8 @@ pub struct Translation {
 /// The printer of the Dafny text. It writes one line at a time, and keeps the map for each line it writes.
 struct Printer<'a> {
     names: &'a Names,
+    /// The lines (of the Dafny text, from 1) of the functions that copy the lines of an interface: the function of a virtual function and the upcast, decision 0166.
+    copies: Vec<std::ops::Range<usize>>,
     methods: &'a Methods,
     /// The result type of each method by the id of its key, for the call that drops a value, decision 0096.
     rets: &'a HashMap<u32, DTy>,
@@ -1501,9 +1520,79 @@ impl Printer<'_> {
         LemmaMap { lines: start..self.lines.len() + 1, place, own, requires, requires_lines, of }
     }
 
+    fn axiom_function(&mut self, m: &Method, place: u32) {
+        let names = self.names;
+        let mut shown = Vec::new();
+        let mut ps = &m.params;
+        while let List::Cons((n, t), next) = ps {
+            shown.push(format!("{}: {}", mangle(names.text(*n)), dty(*t, names)));
+            ps = next;
+        }
+        self.out.push('\n');
+        self.lines.push(None);
+        let start = self.lines.len() + 1;
+        self.put(0, format!("function {{:axiom}} {}({}): (result: {})", names.functions[&m.name], shown.join(", "), dty(m.ret, names)), place);
+        let mut cs = &m.requires;
+        while let List::Cons((e, line), next) = cs {
+            self.put(1, format!("requires {}", dexpr(e, names)), *line);
+            cs = next;
+        }
+        let mut cs = &m.ensures;
+        while let List::Cons((e, line), next) = cs {
+            if matches!(**next, List::Cons(..)) {
+                self.put(1, format!("ensures {}", dexpr(e, names)), *line);
+            }
+            cs = next;
+        }
+        self.copies.push(start..self.lines.len() + 1);
+    }
+
+    /// The upcast from a final class to its interface, decision 0166: a function of the model with no body, which Dafny takes as given. For each virtual function
+    /// of the interface, in its order, the interface function on the upcast of an object is the function of the override on the object, when the requires lines of
+    /// both hold. The lemmas of the checks show that those lines are consistent.
+    fn upcast_function(&mut self, up: &DUpcast, place: u32) {
+        let names = self.names;
+        let f = upcast_name(up.derived, up.base, names);
+        self.out.push('\n');
+        self.lines.push(None);
+        let start = self.lines.len() + 1;
+        self.put(0, format!("function {{:axiom}} {f}(v_this: {}): {}", names.datatypes[&up.derived], names.datatypes[&up.base]), place);
+        let mut os = &up.overrides;
+        while let List::Cons(o, next) = os {
+            let mut binders = Vec::new();
+            let mut args = vec![];
+            let mut rest = &o.params;
+            while let List::Cons((n, t), more) = rest {
+                binders.push(format!("{}: {}", mangle(names.text(*n)), dty(*t, names)));
+                args.push(mangle(names.text(*n)));
+                rest = more;
+            }
+            let mut guards = Vec::new();
+            for list in [&o.requires, &o.own] {
+                let mut cs = list;
+                while let List::Cons((e, _), more) = cs {
+                    guards.push(dexpr(e, names));
+                    cs = more;
+                }
+            }
+            let tail = |this: &str| if args.is_empty() { this.to_string() } else { format!("{this}, {}", args.join(", ")) };
+            let equal = format!("{}({}) == {}({})", names.functions[&o.base], tail(&format!("{f}(v_this)")), names.functions[&o.derived], tail("v_this"));
+            let body = if guards.is_empty() { equal } else { format!("({}) ==> {equal}", guards.join(") && (")) };
+            let line = if binders.is_empty() { body } else { format!("forall {} :: {body}", binders.join(", ")) };
+            self.put(1, format!("ensures {line}"), place);
+            os = next;
+        }
+        self.copies.push(start..self.lines.len() + 1);
+    }
+
     fn method(&mut self, m: &Method, place: u32) {
         if let Some(body) = &m.function {
             self.function(m, body, place);
+        }
+        // A pure virtual function of an interface is also a function of the model, with its contract and no body, which Dafny takes as given, decision 0166. The
+        // method says that its result is the value of the function, and that link is the last ensures line.
+        if m.trusted && matches!(m.params, List::Cons((n, DTy::Iface(_)), _) if self.names.text(n) == "this") {
+            self.axiom_function(m, place);
         }
         let outs = dparams(&m.outs);
         self.header(m.name, &m.params, m.ret, (m.writes, m.trusted), &outs, place);
@@ -1576,6 +1665,11 @@ fn sentence(r: Refusal, names: &Names) -> (u32, String) {
         Refusal::Finite(n, line) if names.text(n).starts_with('\'') => (line, "a double parameter has no name. Give it a name and say std::isfinite of it in a requires line.".to_string()),
         Refusal::Finite(n, line) => (line, format!("{} is a double. A requires line needs std::isfinite({}).", names.text(n), names.text(n))),
         Refusal::FiniteResult(line) => (line, "a trusted function that gives a double needs std::isfinite(result) in an ensures line.".to_string()),
+        Refusal::Later(b, f, g, line) if f == g => (line, format!("the contract of {0}::{1} reads {0}::{1} itself. The translator has no rule for it yet.", names.class_names[&b], names.text(f))),
+        Refusal::Later(b, f, g, line) => {
+            let (b, f, g) = (&names.class_names[&b], names.text(f), names.text(g));
+            (line, format!("the contract of {b}::{f} reads {b}::{g}, which comes later in {b}. Declare {b}::{g} first."))
+        }
         Refusal::NoOverride(d, b, n, line) => (line, format!("{} has no override of {}::{}.", names.class_names[&d], names.class_names[&b], names.text(n))),
         Refusal::Unchecked(d, b, n, line) => (
             line,
@@ -1756,11 +1850,11 @@ pub fn translate(lines: &str, companion: Option<(&str, &str)>) -> Result<Transla
     let interface_flags: Vec<bool> = structs.iter().map(|st| st.interface).collect();
     // A class over an interface that is not final is no type of the model, so it has no datatype, decision 0165.
     let open_flags: Vec<bool> = structs.iter().map(|st| !st.bases.is_empty() && !st.is_final).collect();
-    // An interface is named by its plain name, or by its Dafny name when two structs share the plain name.
+    // An interface is named by its plain name in C++, or by its full name when two structs share the plain name, decision 0166.
     let interface_names: Vec<String> = structs
         .iter()
         .filter(|st| st.interface)
-        .map(|st| if structs.iter().filter(|g| g.name == st.name).count() > 1 { names.datatypes[&names.find(&st.key).unwrap_or(0)].clone() } else { st.name.clone() })
+        .map(|st| if structs.iter().filter(|g| g.name == st.name).count() > 1 && !st.qualified.is_empty() { st.qualified.clone() } else { st.name.clone() })
         .collect();
     let struct_places: Vec<(u32, Option<String>)> = structs.iter().map(|st| (names.place(&st.file, st.line), unreadable_struct_name(st).map(String::from))).collect();
     for st in structs.into_iter().rev() {
@@ -1798,7 +1892,7 @@ pub fn translate(lines: &str, companion: Option<(&str, &str)>) -> Result<Transla
         };
         seen = next;
     }
-    let mut p = Printer { names: &names, methods: &methods, rets: &rets, out: PRELUDE.to_string(), lines: Vec::new(), scope: Vec::new(), own: Vec::new(), writes: false, fresh: 0, temps: 0 };
+    let mut p = Printer { copies: Vec::new(), names: &names, methods: &methods, rets: &rets, out: PRELUDE.to_string(), lines: Vec::new(), scope: Vec::new(), own: Vec::new(), writes: false, fresh: 0, temps: 0 };
     p.lines.extend(PRELUDE.lines().map(|_| None));
     let mut refused_at = Vec::new();
     for (en, (place, key)) in enums.iter().zip(enum_places) {
@@ -1856,6 +1950,9 @@ pub fn translate(lines: &str, companion: Option<(&str, &str)>) -> Result<Transla
     while let List::Cons(result, next) = seen_checks {
         match result {
             Ok(up) => {
+                if let List::Cons(o, _) = &up.overrides {
+                    p.upcast_function(up, at[&o.derived]);
+                }
                 let mut os = &up.overrides;
                 while let List::Cons(o, more) = os {
                     let of = format!("{}::{}", names.class_names[&up.base], names.fn_names[&o.base]);
@@ -1895,7 +1992,7 @@ pub fn translate(lines: &str, companion: Option<(&str, &str)>) -> Result<Transla
     let companion_lines = start..p.lines.len();
     // The lines of the file are those of the Dafny text from `start + 1`. Nothing is printed when the scan refused the file.
     let decls = if companion_ok { decls.into_iter().map(|(n, lemma)| (start + n, lemma)).collect() } else { Vec::new() };
-    let (dafny, lines) = (p.out, p.lines);
+    let (dafny, lines, copies) = (p.out, p.lines, p.copies);
     for (place, sentence) in refused_at {
         let (file, line) = names.places[place as usize].clone();
         refusals.push((file, line, sentence));
@@ -1907,5 +2004,5 @@ pub fn translate(lines: &str, companion: Option<(&str, &str)>) -> Result<Transla
     }
     refusals.sort();
     refusals.dedup();
-    Ok(Translation { dafny, methods: printed, trusted, refusals, rounds, exact: names.exact.get(), sorted: names.sorted.get(), interfaces: interface_names, map: Map { lines, companion: companion_lines, decls, places: names.places, contracts: names.contracts, lemmas } })
+    Ok(Translation { dafny, methods: printed, trusted, refusals, rounds, exact: names.exact.get(), sorted: names.sorted.get(), interfaces: interface_names, map: Map { lines, companion: companion_lines, decls, places: names.places, contracts: names.contracts, lemmas, copies } })
 }

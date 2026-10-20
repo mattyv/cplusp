@@ -10,6 +10,7 @@ Date: 2026-10-20. Status: decided. Amends 0089, 0090, 0094 and 0165. This is sli
 - A call argument of a final class `D` to a parameter `const B&` is the upcast `f_D'B` of 0165. The model prints the upcast of each pair that has a check. It has one ensures line for each virtual function of `B`, in the order of `B`. The line is `ensures forall ps :: R_B@D && R_D ==> c_B'f'(f_D'B(this), ps) == c_D'f'(this, ps)`. A class that has no check has no upcast in the model. A call that needs one stops Dafny with `Dafny says: unresolved identifier: f_D'B.` The refusal of the class names the cause. A refusal of the call in the core is the upgrade path.
 - `this->x` in a contract reads `x`, as decision 0089 reads a bare field name, and `this->f(a)` calls `f(a)`.
 - A pure virtual function that gives no value has no rule yet. The translator refuses it at its line with `a pure virtual function that gives no value: the translator has no rule for it yet.`
+- A local `const T x = e;` of an integer, a `bool` or an enum is a local of decision 0060. The word `const` adds nothing to the model, because C++ refuses a write to it.
 - A constructor of a final class over an interface follows decision 0094. A local `const D d;` of a class with no field and no constructor has the value `S_D()`.
 - The Axiom line of 0165 names a C++ class, never a name of the model. Two interfaces of one name show their full C++ names.
 

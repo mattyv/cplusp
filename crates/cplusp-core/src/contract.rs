@@ -316,6 +316,8 @@ pub open spec fn spec_word(t: Seq<u8>, i: int, e: int) -> LexKind {
     let w = t.subrange(i, e);
     if w == b"result"@ {
         LexKind::Fixed(Tok::Result)
+    } else if w == b"this"@ {
+        LexKind::Fixed(Tok::This)
     } else if w == b"old"@ && paren_after(t, e) {
         LexKind::Fixed(Tok::Old)
     } else if w == b"forall"@ {
@@ -987,6 +989,8 @@ fn word_exec(t: &Vec<u8>, i: usize, e: usize) -> (r: LexKind)
 {
     if word_is(t, i, e, b"result") {
         LexKind::Fixed(Tok::Result)
+    } else if word_is(t, i, e, b"this") {
+        LexKind::Fixed(Tok::This)
     } else if word_is(t, i, e, b"old") && paren_after_exec(t, e) {
         LexKind::Fixed(Tok::Old)
     } else if word_is(t, i, e, b"forall") {

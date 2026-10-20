@@ -183,6 +183,12 @@ pub fn run(t: &Translation, limit: u32, refused: bool, source: &str, shown: &dyn
             emit(e, format!("Not provable: {}:{line}: Dafny says: {}.", shown(&path), message.trim_end_matches('.')));
             continue;
         }
+        // A function of the model that copies lines of an interface, the function of a virtual function or the upcast, fails as the lines of the interface do, when
+        // they cannot be read. The method of the interface reports that failure, so a failure with the same message elsewhere stands for this one, decision 0166.
+        let in_copy = |line: usize| map.copies.iter().any(|r| r.contains(&line));
+        if in_copy(e.line) && found.iter().any(|o| o.message == e.message && !in_copy(o.line) && !map.lemmas.iter().any(|l| l.lines.contains(&o.line))) {
+            continue;
+        }
         // A failure in the lemma that checks an override names the override and the contract line of the interface that it breaks, decision 0165. Dafny
         // reports the requires half at the end of the lemma, with the requires clause that it claims as the related location, and the ensures half the same
         // way, with the ensures clause of the interface.

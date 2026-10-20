@@ -4173,9 +4173,12 @@ public:
     const CXXMethodDecl *Member = member(FD);
     // An interface method is written at its declaration only. A pure virtual function that has a body is none: the body has no rule, decision 0165.
     const bool PureBody = ifaceMethod(FD) && FD->isThisDeclarationADefinition();
-    const bool Interface = ifaceMethod(FD) && !PureBody;
+    // A pure virtual function that gives no value has no rule yet, decision 0166.
+    const bool NoValue = ifaceMethod(FD) && !PureBody && FD->getReturnType()->isVoidType();
+    const bool Interface = ifaceMethod(FD) && !PureBody && !NoValue;
     const CXXConstructorDecl *Constructor = valueConstructor(FD);
     const char *Opaque = PureBody                                  ? "a body of a pure virtual function"
+                         : NoValue                                   ? "a pure virtual function that gives no value"
                          : FD->isTemplated()                         ? "FunctionTemplateDecl"
                          : isa<CXXConstructorDecl>(FD) && !Constructor ? "CXXConstructorDecl"
                          : isa<CXXMethodDecl>(FD) && !Member && !Constructor ? "CXXMethodDecl"
@@ -4652,9 +4655,13 @@ private:
     if (!Body || !Body->body_empty())
       return nullptr;
     std::set<const FieldDecl *> Given;
-    for (const CXXCtorInitializer *Init : C->inits())
+    for (const CXXCtorInitializer *Init : C->inits()) {
+      // The interface bases of a final class over interfaces are built by the compiler, decision 0166.
+      if (Init->isBaseInitializer() && !Init->isWritten())
+        continue;
       if (!Init->isWritten() || !Init->isMemberInitializer() || !Given.insert(Init->getMember()).second || readsObject(Init->getInit()))
         return nullptr;
+    }
     return Given.size() == static_cast<size_t>(std::distance(C->getParent()->field_begin(), C->getParent()->field_end())) ? C : nullptr;
   }
 
@@ -4738,17 +4745,24 @@ public:
     if (Structs.count(Key))
       return;
     Structs.emplace(Key, nullptr);
-    std::map<std::string, std::vector<std::string>> Named;
+    // The members are in the order of the declarations, decision 0166: a contract reads only the functions above it.
+    std::vector<std::pair<std::string, std::vector<std::string>>> Named;
     for (const Decl *D : RD->decls())
-      if (const auto *M = dyn_cast<CXXMethodDecl>(D); M && ifaceMethod(M))
-        Named[M->getNameAsString()].push_back(this->key(M));
+      if (const auto *M = dyn_cast<CXXMethodDecl>(D); M && ifaceMethod(M)) {
+        const std::string Name = M->getNameAsString();
+        auto At = std::find_if(Named.begin(), Named.end(), [&](const auto &N) { return N.first == Name; });
+        if (At == Named.end())
+          At = Named.insert(Named.end(), {Name, {}});
+        At->second.push_back(this->key(M));
+      }
     llvm::json::Array Members;
     for (const auto &[Name, Keys] : Named)
       if (Keys.size() == 1)
         Members.push_back(llvm::json::Array{Name, Keys.front()});
     const SourceLocation Loc = SM.getFileLoc(RD->getLocation());
     Structs.at(Key) = llvm::json::Object{{"struct", Key}, {"name", RD->getNameAsString()}, {"file", file(Loc)}, {"line", number(line(Loc))},
-                                             {"fields", llvm::json::Array{}}, {"members", std::move(Members)}, {"interface", true}};
+                                             {"fields", llvm::json::Array{}}, {"members", std::move(Members)}, {"interface", true},
+                                             {"qualified", RD->getQualifiedNameAsString()}};
   }
   // The keys of the interfaces of a class, and the entry of each, for the table of structs, decision 0165.
   llvm::json::Array baseKeys(const CXXRecordDecl *RD) const {
@@ -4964,6 +4978,14 @@ private:
     if (const auto *Var = dyn_cast<VarDecl>(D); Var && Var->hasLocalStorage() && !isa<ParmVarDecl>(Var))
       if (const QualType Element = localVec(Var->getType()); !Element.isNull())
         return tag("Vec", type(Element));
+    // A `const` on a local changes no value of the model, decision 0166.
+    if (const auto *Var = dyn_cast<VarDecl>(D); Var && Var->hasLocalStorage() && !isa<ParmVarDecl>(Var) && !Var->getType()->isReferenceType() && !Var->isCXXForRangeDecl() &&
+                                                 Var->getType().isLocalConstQualified()) {
+      QualType Plain = Var->getType();
+      Plain.removeLocalConst();
+      if (scalar(Plain) || smallScalar(Plain) || plainEnum(Plain))
+        return type(Plain);
+    }
     // The parameter of a lambda is the element, whether it is by value or by const reference, decision 0149.
     if (const auto *Param = dyn_cast<ParmVarDecl>(D); Param && isa<CXXMethodDecl>(Param->getDeclContext()) && cast<CXXMethodDecl>(Param->getDeclContext())->getParent()->isLambda())
       return type(Param->getType().getNonReferenceType().getUnqualifiedType());
@@ -5384,6 +5406,21 @@ private:
     return Parameter->getIdentifier() ? Declared.getCanonicalType().getUnqualifiedType() : QualType();
   }
 
+  // The kind of a cast of a final class over an interface to one of its interfaces, or null, decision 0166.
+  llvm::json::Value upcastKind(const CastExpr *Cast) const {
+    const CXXRecordDecl *To = Cast->getType()->getAsCXXRecordDecl();
+    const CXXRecordDecl *From = Cast->getSubExpr()->getType()->getAsCXXRecordDecl();
+    if (!To || !From || !finalOverInterface(From) || !isInterface(To))
+      return nullptr;
+    for (const CXXRecordDecl *B : interfaceBases(From))
+      if (B->getCanonicalDecl() == To->getCanonicalDecl()) {
+        type(Context.getRecordType(From));
+        interfaceEntry(B);
+        return tag("Upcast", llvm::json::Array{structKey(From->getDefinition()), structKey(B)});
+      }
+    return nullptr;
+  }
+
   // The `CountIf` node of a call of `std::count_if` from the library, decision 0149, or null. When the call misses a limit of 0149, `Limit` names the first
   // limit that it misses, in the order of decision 0157. A miss that fits none of them leaves `Limit` empty, and the call stays a call with no model.
   llvm::json::Value countIf(const Expr *E, unsigned Near, std::string &Limit) const {
@@ -5640,6 +5677,8 @@ private:
                                      (scalar(Cast->getSubExpr()->getType().getUnqualifiedType()) || smallScalar(Cast->getSubExpr()->getType().getUnqualifiedType())) &&
                                      !Cast->getSubExpr()->getType()->isBooleanType()
                                    ? tag("Integral", llvm::json::Array{type(Cast->getSubExpr()->getType().getUnqualifiedType()), type(Cast->getType())})
+                               // A final class over an interface to that interface, decision 0166. Any other derived-to-base cast stays `Other`.
+                               : Cast->getCastKind() == CK_DerivedToBase && !upcastKind(Cast).getAsNull() ? upcastKind(Cast)
                                                                         : tag("Other", std::string(Cast->getStmtClassName()) + " " + Cast->getCastKindName());
       return tag("Cast", llvm::json::Array{std::move(Kind), expr(Cast->getSubExpr(), Near)});
     }
@@ -5660,6 +5699,12 @@ private:
         llvm::json::Value From = !Written.isNull() ? tag("Seq", llvm::json::Array{type(Written), nullptr}) : type(Source->getType());
         return tag("Copy", llvm::json::Array{expr(Source, Near), std::move(From), tag("Seq", llvm::json::Array{type(localVec(Construct->getType())), nullptr})});
       }
+    }
+    // `const D d;` of a plain struct with no field and no constructor of its own is the value `S_D()`, decision 0166.
+    if (const auto *Default = dyn_cast<CXXConstructExpr>(E); Default && Default->getNumArgs() == 0 && Default->getConstructor()->isDefaultConstructor()) {
+      const CXXRecordDecl *RD = plainStruct(Default->getType());
+      if (RD && RD->field_empty() && !RD->hasUserDeclaredConstructor())
+        return tag("Construct", llvm::json::Array{structKey(RD), llvm::json::Array{}});
     }
     // A sequence made from one sequence, decision 0070, or a struct made from one struct, decision 0073. The core judges the two types.
     if (const auto *Construct = dyn_cast<CXXConstructExpr>(E);

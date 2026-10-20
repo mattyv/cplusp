@@ -238,14 +238,15 @@ pub enum BinOp {
 
 /// A cast that the compiler made or the author wrote. `Read` is the read of a variable, an lvalue-to-rvalue cast, and `NoOp` changes
 /// nothing. Both keep the value. `Integral` is a cast from one integral type to another, by both types. `Construct` is the cast the
-/// compiler writes around a construction, which keeps the value of the construction, decision 0070. `Other` is a cast with no
-/// rule yet, by the id of its kind.
+/// compiler writes around a construction, which keeps the value of the construction, decision 0070. `Upcast` is a value of a final
+/// class to its interface, by their keys, decision 0166. `Other` is a cast with no rule yet, by the id of its kind.
 #[derive(Structural, PartialEq, Eq, Clone, Copy, Debug)]
 pub enum CastKind {
     Read,
     NoOp,
     Integral(Ty, Ty),
     Construct,
+    Upcast(u32, u32),
     Other(u32),
 }
 
@@ -444,8 +445,8 @@ pub enum DTy {
 /// of the width `W`, decision 0106. `SetAt` is `s[i := e]`, which Dafny proves is in range, decision 0145. `Append` is `s + [e]`, decision 0148. `CountIf` is `CountIf(s, (x: T) => e)` of the prelude, decision 0149. `RealLit` is the real `d / 10^k`, decision 0150. `FOp` is
 /// one operation of the double model, `fadd` to `fdiv`, and `Abs`, `Eps`, `Eta` and `DblMax` are `abs`, `EPS`, `ETA` and `MAX` of it,
 /// decision 0154. `FromInt` is `fint(e as int)` of it, the conversion of an integer, and `IntAbs` is `trunc_size(e)` of the prelude,
-/// the absolute value of an integer, decision 0159. A Dafny expression calls no
-/// method.
+/// the absolute value of an integer, decision 0159. `Upcast` is `f_D'B(e)`, the value of a final class as its interface, decision
+/// 0166. A Dafny expression calls no method.
 #[derive(PartialEq, Eq, Debug)]
 pub enum DExpr {
     Lit(u64),
@@ -491,6 +492,7 @@ pub enum DExpr {
     FOp(BinOp, Box<DExpr>, Box<DExpr>),
     FromInt(Box<DExpr>),
     IntAbs(Box<DExpr>),
+    Upcast(u32, u32, Box<DExpr>),
     Abs(Box<DExpr>),
     Eps,
     Eta,
@@ -614,7 +616,9 @@ pub type Models = List<Model>;
 /// decision 0161. `NoOverride` is a class with no override of a virtual function of its interface, or one with other parameters or
 /// another result, and `Unchecked` is an override with no function in the model, each by the keys of the class and the interface,
 /// the id of the name of the function and the line of the class. `NotFinal` is a class over an interface that is not final, by its
-/// key and line. `Overload` is an interface with two virtual functions of one name, by its key and line, decision 0165.
+/// key and line. `Overload` is an interface with two virtual functions of one name, by its key and line, decision 0165. `Later` is
+/// a contract of a virtual function that reads a virtual function declared after it, by the key of the interface, the ids of the
+/// names of both functions and the line, decision 0166.
 #[derive(Structural, PartialEq, Eq, Clone, Copy, Debug)]
 pub enum Refusal {
     Construct(u32, u32),
@@ -650,6 +654,7 @@ pub enum Refusal {
     Unchecked(u32, u32, u32, u32),
     NotFinal(u32, u32),
     Overload(u32, u32),
+    Later(u32, u32, u32, u32),
 }
 
 // ------------------------------------------------------------------ the rules
@@ -1254,6 +1259,11 @@ pub open spec fn spec_lift(e: Expr, all: Fns, line: u32, sd: Structs, n: u32, op
                     Err(r) => Err(r),
                     Ok(di) => Ok((c, di, n1)),
                 },
+            },
+            // A final class to its interface is the upcast of the model, decision 0166.
+            CastKind::Upcast(dk, bk) => match spec_lift(*a, all, line, sd, n, open) {
+                Err(r) => Err(r),
+                Ok((c, d, n1)) => Ok((c, DExpr::Upcast(dk, bk, Box::new(d)), n1)),
             },
             _ => spec_lift(*a, all, line, sd, n, open),
         },
@@ -1978,6 +1988,7 @@ pub open spec fn spec_self(ps: Params) -> Option<(u32, Ty)>
             Ty::This(_) => Some((p, t)),
             Ty::ThisMut(_) => Some((p, t)),
             Ty::ThisAfter(_) => Some((p, t)),
+            Ty::Iface(_) => Some((p, t)),
             _ => spec_self(*rest),
         },
         List::Nil => None,
@@ -2159,6 +2170,8 @@ pub open spec fn spec_object(ps: Params, ret: Option<Ty>) -> Option<(DExpr, u32)
             Ty::ThisAfter(k) => Some((DExpr::After, k)),
             Ty::This(k) => Some((DExpr::Var(p), k)),
             Ty::ThisMut(k) => Some((DExpr::Var(p), k)),
+            // The object of a virtual function of an interface, decision 0166.
+            Ty::Iface(k) => Some((DExpr::Var(p), k)),
             _ => None,
         },
         None => match ret {
@@ -3227,13 +3240,206 @@ pub open spec fn spec_param_args(ps: Params) -> DArgs
 /// The ensures lines of a method, and for a pure member function one more: `result == F(params)`, at the line of the function.
 pub open spec fn spec_linked(f: Function, ens: DConds, pure: Option<DExpr>) -> DConds {
     match pure {
-        Some(_) => spec_append(
-            ens,
-            List::Cons((DExpr::Bin(BinOp::Eq, Box::new(DExpr::Result), Box::new(DExpr::FCall(f.name, Box::new(spec_param_args(f.params))))), f.line), Box::new(List::Nil)),
-        ),
-        None => ens,
+        Some(_) => spec_link(f, ens),
+        None => if spec_virtual(f) is Some {
+            // The method of a virtual function gives the value of its function, decision 0166.
+            spec_link(f, ens)
+        } else {
+            ens
+        },
     }
 }
+
+/// The interface of a virtual function: its first parameter is `this` of it, decision 0165.
+pub open spec fn spec_virtual(f: Function) -> Option<u32> {
+    match spec_head_ty(f.params) {
+        Some(Ty::Iface(k)) => Some(k),
+        _ => None,
+    }
+}
+
+/// Each member marked as no function in the model.
+pub open spec fn spec_unmark(ms: Members) -> Members
+    decreases ms,
+{
+    match ms {
+        List::Nil => List::Nil,
+        List::Cons((n, (k, _)), rest) => List::Cons((n, (k, None)), Box::new(spec_unmark(*rest))),
+    }
+}
+
+/// The members, with the member of the function `key` and each one after it marked as no function in the model.
+pub open spec fn spec_from(ms: Members, key: u32) -> Members
+    decreases ms,
+{
+    match ms {
+        List::Nil => List::Nil,
+        List::Cons((n, (k, p)), rest) => if k == key {
+            spec_unmark(ms)
+        } else {
+            List::Cons((n, (k, p)), Box::new(spec_from(*rest, key)))
+        },
+    }
+}
+
+/// The table that a contract of the virtual function `key` of the interface `b` reads: only the functions above it in `b` are
+/// functions of the model, decision 0166.
+pub open spec fn spec_above(sd: Structs, b: u32, key: u32) -> Structs
+    decreases sd,
+{
+    match sd {
+        List::Nil => List::Nil,
+        List::Cons((k, (l, fields, ms)), rest) => if k == b {
+            List::Cons((k, (l, fields, spec_from(ms, key))), Box::new(spec_above(*rest, b, key)))
+        } else {
+            List::Cons((k, (l, fields, ms)), Box::new(spec_above(*rest, b, key)))
+        },
+    }
+}
+
+/// The table that the contract of `f` reads. A virtual function has no body, so the table reads only its contract.
+pub open spec fn spec_view_of(f: Function, sd: Structs) -> Structs {
+    match spec_virtual(f) {
+        Some(b) => if f.trusted {
+            spec_above(sd, b, f.name)
+        } else {
+            sd
+        },
+        None => sd,
+    }
+}
+
+/// The name of the member of the function `key`.
+pub open spec fn spec_member_name(ms: Members, key: u32) -> Option<u32>
+    decreases ms,
+{
+    match ms {
+        List::Nil => None,
+        List::Cons((n, (k, _)), rest) => if k == key {
+            Some(n)
+        } else {
+            spec_member_name(*rest, key)
+        },
+    }
+}
+
+/// The first member of the name `g` is the member of the function `key` or comes after it.
+pub open spec fn spec_at_or_after(ms: Members, key: u32, g: u32) -> bool
+    decreases ms,
+{
+    match ms {
+        List::Nil => false,
+        List::Cons((n, (k, _)), rest) => if k == key {
+            spec_get(ms, g) is Some
+        } else if n == g {
+            false
+        } else {
+            spec_at_or_after(*rest, key, g)
+        },
+    }
+}
+
+/// Each member of `ms` from the one of the function `key` on is no function in the model of `spec_from`.
+pub proof fn lemma_from_unmarks(ms: Members, key: u32, g: u32)
+    requires
+        spec_at_or_after(ms, key, g),
+    ensures
+        match spec_get(spec_from(ms, key), g) {
+            Some((_, p)) => p is None,
+            None => false,
+        },
+    decreases ms,
+{
+    match ms {
+        List::Nil => {},
+        List::Cons((_, (k, _)), rest) => if k == key {
+            lemma_unmark_none(ms, g);
+        } else {
+            lemma_from_unmarks(*rest, key, g);
+        },
+    }
+}
+
+proof fn lemma_unmark_none(ms: Members, g: u32)
+    requires
+        spec_get(ms, g) is Some,
+    ensures
+        match spec_get(spec_unmark(ms), g) {
+            Some((_, p)) => p is None,
+            None => false,
+        },
+    decreases ms,
+{
+    match ms {
+        List::Nil => {},
+        List::Cons((n, _), rest) => if n != g {
+            lemma_unmark_none(*rest, g);
+        },
+    }
+}
+
+/// A contract of a virtual function reads no function of its interface at or after it as a function of the model, decision 0166.
+/// So the functions of the model of an interface call each other in the order of the interface, with no cycle.
+pub proof fn lemma_a_later_function_is_no_function(sd: Structs, b: u32, key: u32, g: u32)
+    requires
+        match spec_get(sd, b) {
+            Some((_, _, ms)) => spec_at_or_after(ms, key, g),
+            None => false,
+        },
+    ensures
+        match spec_member(spec_above(sd, b, key), b, g) {
+            Some((_, p)) => p is None,
+            None => false,
+        },
+    decreases sd,
+{
+    match sd {
+        List::Nil => {},
+        List::Cons((k, (_, _, ms)), rest) => if k == b {
+            lemma_from_unmarks(ms, key, g);
+        } else {
+            lemma_a_later_function_is_no_function(*rest, b, key, g);
+        },
+    }
+}
+
+/// The refusal of a contract of `f`. A virtual function that reads a later function of its interface gets `Later`, decision 0166.
+pub open spec fn spec_late(f: Function, sd: Structs, r: Refusal) -> Refusal {
+    match spec_virtual(f) {
+        Some(b) => match r {
+            Refusal::NotPure(g, l) => match spec_get(sd, b) {
+                Some((_, _, ms)) => if spec_at_or_after(ms, f.name, g) {
+                    match spec_member_name(ms, f.name) {
+                        Some(n) => Refusal::Later(b, n, g, l),
+                        None => r,
+                    }
+                } else {
+                    r
+                },
+                None => r,
+            },
+            _ => r,
+        },
+        None => r,
+    }
+}
+
+/// The contract and the body of `f` under the table that its contract reads, decision 0166.
+pub open spec fn spec_inside_of(f: Function, all: Fns, sd: Structs) -> Result<(DConds, DConds, DConds, DStmts), Refusal> {
+    match spec_inside(f, all, spec_view_of(f, sd)) {
+        Ok(x) => Ok(x),
+        Err(r) => Err(spec_late(f, sd, r)),
+    }
+}
+
+/// The ensures lines of a method with one more: `result == F(params)`, at the line of the function.
+pub open spec fn spec_link(f: Function, ens: DConds) -> DConds {
+    spec_append(
+        ens,
+        List::Cons((DExpr::Bin(BinOp::Eq, Box::new(DExpr::Result), Box::new(DExpr::FCall(f.name, Box::new(spec_param_args(f.params))))), f.line), Box::new(List::Nil)),
+    )
+}
+
 
 /// The member `name` of the struct `k`: the key of its function, and its return type when it is pure.
 pub open spec fn spec_member(sd: Structs, k: u32, name: u32) -> Option<(u32, Option<(Ty, Params)>)> {
@@ -3250,6 +3456,9 @@ pub open spec fn spec_struct_key(t: Ty) -> Option<u32> {
         Ty::This(k) => Some(k),
         Ty::ThisMut(k) => Some(k),
         Ty::ThisAfter(k) => Some(k),
+        // An interface has no field, and its member functions are its virtual functions, decision 0166.
+        Ty::Iface(k) => Some(k),
+        Ty::IfaceRef(k) => Some(k),
         _ => None,
     }
 }
@@ -3273,7 +3482,19 @@ pub open spec fn spec_find(fs: Fns, key: u32) -> Option<Function>
 /// pure, decision 0102.
 pub open spec fn spec_pure_ret(all: Fns, key: u32, sd: Structs, strict: bool) -> Option<(Ty, Params)> {
     match spec_find(all, key) {
-        Some(f) => if !has_signature(f, sd) || f.trusted {
+        Some(f) => if !has_signature(f, sd) {
+            None
+        } else if spec_virtual(f) is Some {
+            // A virtual function is a function of the model with no body, decision 0166.
+            if !strict {
+                Some((f.ret, f.params))
+            } else {
+                match spec_inside_of(f, all, sd) {
+                    Ok(_) => Some((f.ret, f.params)),
+                    Err(_) => None,
+                }
+            }
+        } else if f.trusted {
             None
         } else if strict {
             match spec_inside(f, all, sd) {
@@ -3412,7 +3633,11 @@ pub open spec fn spec_override(d: u32, b: u32, n: u32, bk: u32, line: u32, all: 
                 } else if pure is None {
                     Err(Refusal::Unchecked(d, b, n, line))
                 } else {
-                    spec_check(fb, fd, sd)
+                    // The contract of the interface must have a model of its own, decision 0166.
+                    match spec_inside_of(fb, all, sd) {
+                        Err(r) => Err(r),
+                        Ok(_) => spec_check(fb, fd, sd),
+                    }
                 },
             },
         },
@@ -3631,7 +3856,7 @@ pub open spec fn spec_function(f: Function, all: Fns, sd: Structs) -> Model {
             Err(r) => Model::Refused(r),
             Ok(ret) => match spec_checks(f) {
                 Some(r) => Model::Refused(r),
-                None => match spec_inside(f, all, sd) {
+                None => match spec_inside_of(f, all, sd) {
                     Err(r) => Model::Bare(f.name, ps, ret, r),
                     Ok((req, ens, dec, body)) => Model::Full(
                         Method {
@@ -5498,6 +5723,10 @@ pub fn lift(e: &Expr, all: &Fns, line: u32, sd: &Structs, n: u32, open: bool) ->
                     Ok(di) => Ok((c, di, n1)),
                 },
             },
+            CastKind::Upcast(dk, bk) => match lift(a, all, line, sd, n, open) {
+                Err(r) => Err(r),
+                Ok((c, d, n1)) => Ok((c, DExpr::Upcast(*dk, *bk, Box::new(d)), n1)),
+            },
             _ => lift(a, all, line, sd, n, open),
         },
         Expr::Paren(a) => lift(a, all, line, sd, n, open),
@@ -6151,6 +6380,7 @@ pub fn self_param(ps: &Params) -> (r: Option<(u32, Ty)>)
             Ty::This(_) => Some((*p, *t)),
             Ty::ThisMut(_) => Some((*p, *t)),
             Ty::ThisAfter(_) => Some((*p, *t)),
+            Ty::Iface(_) => Some((*p, *t)),
             _ => self_param(rest),
         },
         List::Nil => None,
@@ -6358,6 +6588,7 @@ pub fn object(ps: &Params, ret: Option<Ty>) -> (r: Option<(DExpr, u32)>)
             Ty::ThisAfter(k) => Some((DExpr::After, k)),
             Ty::This(k) => Some((DExpr::Var(p), k)),
             Ty::ThisMut(k) => Some((DExpr::Var(p), k)),
+            Ty::Iface(k) => Some((DExpr::Var(p), k)),
             _ => None,
         },
         None => match ret {
@@ -7506,6 +7737,7 @@ pub fn copy_dexpr(d: &DExpr) -> (r: DExpr)
         DExpr::FOp(x0, x1, x2) => DExpr::FOp(*x0, Box::new(copy_dexpr(x1)), Box::new(copy_dexpr(x2))),
         DExpr::Abs(x0) => DExpr::Abs(Box::new(copy_dexpr(x0))),
         DExpr::FromInt(x0) => DExpr::FromInt(Box::new(copy_dexpr(x0))),
+        DExpr::Upcast(x0, x1, x2) => DExpr::Upcast(*x0, *x1, Box::new(copy_dexpr(x2))),
         DExpr::IntAbs(x0) => DExpr::IntAbs(Box::new(copy_dexpr(x0))),
         DExpr::Eps => DExpr::Eps,
         DExpr::Eta => DExpr::Eta,
@@ -7563,12 +7795,169 @@ pub fn linked(f: &Function, ens: DConds, pure: &Option<DExpr>) -> (r: DConds)
         r == spec_linked(*f, ens, *pure),
 {
     match pure {
-        Some(_) => append(
-            ens,
-            List::Cons((DExpr::Bin(BinOp::Eq, Box::new(DExpr::Result), Box::new(DExpr::FCall(f.name, Box::new(param_args(&f.params))))), f.line), Box::new(List::Nil)),
-        ),
-        None => ens,
+        Some(_) => link(f, ens),
+        None => if virtual_of(f).is_some() {
+            link(f, ens)
+        } else {
+            ens
+        },
     }
+}
+
+pub fn virtual_of(f: &Function) -> (r: Option<u32>)
+    ensures
+        r == spec_virtual(*f),
+{
+    match head_ty(&f.params) {
+        Some(Ty::Iface(k)) => Some(k),
+        _ => None,
+    }
+}
+
+pub fn unmark(ms: &Members) -> (r: Members)
+    ensures
+        r == spec_unmark(*ms),
+    decreases ms,
+{
+    match ms {
+        List::Nil => List::Nil,
+        List::Cons((n, (k, _)), rest) => List::Cons((*n, (*k, None)), Box::new(unmark(rest))),
+    }
+}
+
+pub fn copy_members(ms: &Members) -> (r: Members)
+    ensures
+        r == *ms,
+    decreases ms,
+{
+    match ms {
+        List::Nil => List::Nil,
+        List::Cons((n, (k, p)), rest) => {
+            let c = match p {
+                Some((t, mps)) => Some((*t, copy(mps))),
+                None => None,
+            };
+            List::Cons((*n, (*k, c)), Box::new(copy_members(rest)))
+        },
+    }
+}
+
+pub fn from_key(ms: &Members, key: u32) -> (r: Members)
+    ensures
+        r == spec_from(*ms, key),
+    decreases ms,
+{
+    match ms {
+        List::Nil => List::Nil,
+        List::Cons((n, (k, p)), rest) => if *k == key {
+            unmark(ms)
+        } else {
+            let c = match p {
+                Some((t, mps)) => Some((*t, copy(mps))),
+                None => None,
+            };
+            List::Cons((*n, (*k, c)), Box::new(from_key(rest, key)))
+        },
+    }
+}
+
+pub fn above(sd: &Structs, b: u32, key: u32) -> (r: Structs)
+    ensures
+        r == spec_above(*sd, b, key),
+    decreases sd,
+{
+    match sd {
+        List::Nil => List::Nil,
+        List::Cons((k, (l, fields, ms)), rest) => if *k == b {
+            List::Cons((*k, (*l, copy(fields), from_key(ms, key))), Box::new(above(rest, b, key)))
+        } else {
+            List::Cons((*k, (*l, copy(fields), copy_members(ms))), Box::new(above(rest, b, key)))
+        },
+    }
+}
+
+pub fn member_name(ms: &Members, key: u32) -> (r: Option<u32>)
+    ensures
+        r == spec_member_name(*ms, key),
+    decreases ms,
+{
+    match ms {
+        List::Nil => None,
+        List::Cons((n, (k, _)), rest) => if *k == key {
+            Some(*n)
+        } else {
+            member_name(rest, key)
+        },
+    }
+}
+
+pub fn at_or_after(ms: &Members, key: u32, g: u32) -> (r: bool)
+    ensures
+        r == spec_at_or_after(*ms, key, g),
+    decreases ms,
+{
+    match ms {
+        List::Nil => false,
+        List::Cons((n, (k, _)), rest) => if *k == key {
+            get_ref(ms, g).is_some()
+        } else if *n == g {
+            false
+        } else {
+            at_or_after(rest, key, g)
+        },
+    }
+}
+
+pub fn late(f: &Function, sd: &Structs, r: Refusal) -> (out: Refusal)
+    ensures
+        out == spec_late(*f, *sd, r),
+{
+    match virtual_of(f) {
+        Some(b) => match r {
+            Refusal::NotPure(g, l) => match get_ref(sd, b) {
+                Some((_, _, ms)) => if at_or_after(ms, f.name, g) {
+                    match member_name(ms, f.name) {
+                        Some(n) => Refusal::Later(b, n, g, l),
+                        None => r,
+                    }
+                } else {
+                    r
+                },
+                None => r,
+            },
+            _ => r,
+        },
+        None => r,
+    }
+}
+
+pub fn translate_inside_of(f: &Function, all: &Fns, sd: &Structs) -> (r: Result<(DConds, DConds, DConds, DStmts), Refusal>)
+    ensures
+        r == spec_inside_of(*f, *all, *sd),
+{
+    let inside = match virtual_of(f) {
+        Some(b) => if f.trusted {
+            let view = above(sd, b, f.name);
+            translate_inside(f, all, &view)
+        } else {
+            translate_inside(f, all, sd)
+        },
+        None => translate_inside(f, all, sd),
+    };
+    match inside {
+        Ok(x) => Ok(x),
+        Err(r) => Err(late(f, sd, r)),
+    }
+}
+
+pub fn link(f: &Function, ens: DConds) -> (r: DConds)
+    ensures
+        r == spec_link(*f, ens),
+{
+    append(
+        ens,
+        List::Cons((DExpr::Bin(BinOp::Eq, Box::new(DExpr::Result), Box::new(DExpr::FCall(f.name, Box::new(param_args(&f.params))))), f.line), Box::new(List::Nil)),
+    )
 }
 
 pub fn member(sd: &Structs, k: u32, name: u32) -> (r: Option<(u32, Option<(Ty, Params)>)>)
@@ -7594,6 +7983,8 @@ pub fn struct_key(t: Ty) -> (r: Option<u32>)
         Ty::This(k) => Some(k),
         Ty::ThisMut(k) => Some(k),
         Ty::ThisAfter(k) => Some(k),
+        Ty::Iface(k) => Some(k),
+        Ty::IfaceRef(k) => Some(k),
         _ => None,
     }
 }
@@ -7621,7 +8012,18 @@ pub fn pure_ret(all: &Fns, key: u32, sd: &Structs, strict: bool) -> (r: Option<(
         r == spec_pure_ret(*all, key, *sd, strict),
 {
     match find(all, key) {
-        Some(f) => if !signature(f, sd) || f.trusted {
+        Some(f) => if !signature(f, sd) {
+            None
+        } else if virtual_of(f).is_some() {
+            if !strict {
+                Some((f.ret, copy(&f.params)))
+            } else {
+                match translate_inside_of(f, all, sd) {
+                    Ok(_) => Some((f.ret, copy(&f.params))),
+                    Err(_) => None,
+                }
+            }
+        } else if f.trusted {
             None
         } else if strict {
             match translate_inside(f, all, sd) {
@@ -7722,7 +8124,7 @@ pub fn translate_function(f: &Function, all: &Fns, sd: &Structs) -> (r: Model)
             Err(r) => Model::Refused(r),
             Ok(ret) => match checks(f) {
                 Some(r) => Model::Refused(r),
-                None => match translate_inside(f, all, sd) {
+                None => match translate_inside_of(f, all, sd) {
                     Err(r) => Model::Bare(f.name, ps, ret, r),
                     Ok((req, ens, dec, body)) => {
                         let pure = pure_body(&f.params, &body);
@@ -7874,7 +8276,10 @@ pub fn translate_override(d: u32, b: u32, n: u32, bk: u32, line: u32, all: &Fns,
                 } else if pure.is_none() {
                     Err(Refusal::Unchecked(d, b, n, line))
                 } else {
-                    check(fb, fd, sd)
+                    match translate_inside_of(fb, all, sd) {
+                        Err(r) => Err(r),
+                        Ok(_) => check(fb, fd, sd),
+                    }
                 },
             },
         },
@@ -8020,6 +8425,7 @@ pub enum Tok {
     Eps,
     Eta,
     DblMax,
+    This,
     Unknown(u32, u32),
 }
 
@@ -8548,6 +8954,12 @@ fn parse_atom(toks: &Vec<Tok>, pos: usize, line: u32) -> (r: Result<(Expr, usize
             Err(Refusal::Syntax(line))
         },
         Tok::Nullptr => Ok((Expr::Nullopt, pos + 1)),
+        // `this->x` reads `x`, and `this->f(a)` calls `f(a)`, decision 0166.
+        Tok::This => if toks.len() - pos > 1 && toks[pos + 1] == Tok::Arrow {
+            parse_atom(toks, pos + 2, line)
+        } else {
+            Err(Refusal::Syntax(line))
+        },
         Tok::Forall => parse_binders(toks, pos + 1, true, line),
         Tok::Exists => parse_binders(toks, pos + 1, false, line),
         Tok::Unknown(k, l) => Err(Refusal::Construct(k, l)),
