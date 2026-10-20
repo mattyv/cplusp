@@ -3270,3 +3270,163 @@ fn a_vector_of_a_struct_that_holds_a_sequence_and_a_copy_of_no_name_are_refused(
     let f = Function { ret: Ty::I32, ..write_at(List::Cons(Box::new(own), Box::new(one(Stmt::Return(Expr::Var(WX, Ty::I32), 7))))) };
     assert_eq!(bare_refusal(translate_function(&f, &List::Nil, &List::Nil)), Refusal::VecLocal(6));
 }
+
+const SHAPE: u32 = 300;
+const SQUARE: u32 = 301;
+const CORNERS: u32 = 302;
+const BKEY: u32 = 303;
+const DKEY: u32 = 304;
+const VX: u32 = 305;
+const VY: u32 = 306;
+const BKEY2: u32 = 307;
+
+/// `virtual int32_t corners() const = 0;` of the interface Shape, with `ensures result >= 3`, decision 0165.
+fn base_corners(params: Params, conds: Conds) -> Function {
+    Function { name: BKEY, line: 9, params: List::Cons((THIS, Ty::Iface(SHAPE)), Box::new(params)), ret: Ty::I32, trusted: true, conds, body: List::Nil }
+}
+
+/// `int32_t corners() const override { return 4; }` of the final class Square.
+fn derived_corners(params: Params, conds: Conds) -> Function {
+    Function { name: DKEY, line: 15, params: List::Cons((THIS, Ty::This(SQUARE)), Box::new(params)), ret: Ty::I32, trusted: false, conds, body: one(Stmt::Return(Expr::Lit(4, Ty::I32), 15)) }
+}
+
+fn at_least_three() -> Conds {
+    List::Cons((CondKind::Ensures, Expr::Bin(BinOp::Ge, b(Expr::Result), b(Expr::Int(3))), 8, names(&[THIS])), Box::new(List::Nil))
+}
+
+/// The interface Shape, with no field, and the final class Square over it.
+fn shapes(square_members: Members) -> Structs {
+    let shape = (SHAPE, (5, List::Nil, List::Cons((CORNERS, (BKEY, None)), Box::new(List::Nil))));
+    List::Cons(shape, Box::new(List::Cons((SQUARE, (12, List::Nil, square_members)), Box::new(List::Nil))))
+}
+
+fn corners_member() -> Members {
+    List::Cons((CORNERS, (DKEY, None)), Box::new(List::Nil))
+}
+
+/// An interface is a type of the model with no value that it can see. It is a parameter only, decision 0165.
+#[test]
+fn an_interface_is_a_type_of_the_model_and_a_parameter_only() {
+    assert_eq!(translate_ty(Ty::Iface(SHAPE), 3), Ok(DTy::Iface(SHAPE)));
+    assert_eq!(translate_value_ty(Ty::Iface(SHAPE), 3, &shapes(corners_member())), Err(Refusal::Syntax(3)));
+    // A pure virtual function is a trusted function of the interface: its contract with no body.
+    let Model::Full(m) = translate_function(&base_corners(List::Nil, at_least_three()), &List::Nil, &shapes(corners_member())) else { panic!("a full model") };
+    assert!(m.trusted && m.body == List::Nil, "{m:?}");
+    assert_eq!(m.params, List::Cons((THIS, DTy::Iface(SHAPE)), Box::new(List::Nil)));
+}
+
+/// Each override of a final class over an interface has its check: the contract of the base function read on the override, with
+/// the parameters of the override, and the requires lines of the override itself, decision 0165.
+#[test]
+fn each_override_is_checked_against_the_contract_of_the_interface() {
+    let bases = List::Cons((SQUARE, (names(&[SHAPE]), true)), Box::new(List::Nil));
+    let all = fns(vec![base_corners(List::Nil, at_least_three()), derived_corners(List::Nil, List::Nil)]);
+    let Model::Full(base) = translate_function(&base_corners(List::Nil, at_least_three()), &List::Nil, &shapes(corners_member())) else { panic!("a full model") };
+    let List::Cons(Ok(up), rest) = translate_overrides(&bases, &all, &shapes(corners_member())) else { panic!("one upcast") };
+    assert_eq!(*rest, List::Nil);
+    assert_eq!((up.derived, up.base), (SQUARE, SHAPE));
+    let List::Cons(o, more) = up.overrides else { panic!("one override") };
+    assert_eq!(*more, List::Nil);
+    assert_eq!((o.base, o.derived, o.ret), (BKEY, DKEY, DTy::Int32));
+    assert_eq!(o.params, List::Nil);
+    assert_eq!(strip_conds(o.requires), List::Nil);
+    assert_eq!(strip_conds(o.ensures), strip_conds(base.ensures));
+    assert_eq!(o.own, List::Nil);
+}
+
+/// The parameters of the override take the place of those of the base function, by their place, and the requires lines of the
+/// override are part of the check, decision 0165.
+#[test]
+fn an_override_check_reads_the_parameters_of_the_override() {
+    let base_conds = List::Cons(
+        (CondKind::Requires, Expr::Bin(BinOp::Le, b(Expr::Int(0)), b(Expr::Name(VX))), 7, names(&[THIS, VX])),
+        Box::new(List::Cons((CondKind::Ensures, Expr::Bin(BinOp::Ge, b(Expr::Result), b(Expr::Name(VX))), 8, names(&[THIS, VX])), Box::new(List::Nil))),
+    );
+    let own = List::Cons((CondKind::Requires, Expr::Bin(BinOp::Lt, b(Expr::Name(VY)), b(Expr::Int(100))), 14, names(&[THIS, VY])), Box::new(List::Nil));
+    let base = base_corners(List::Cons((VX, Ty::I32), Box::new(List::Nil)), base_conds);
+    let derived = derived_corners(List::Cons((VY, Ty::I32), Box::new(List::Nil)), own);
+    let bases = List::Cons((SQUARE, (names(&[SHAPE]), true)), Box::new(List::Nil));
+    let List::Cons(Ok(up), _) = translate_overrides(&bases, &fns(vec![base, derived]), &shapes(corners_member())) else { panic!("one upcast") };
+    let List::Cons(o, _) = up.overrides else { panic!("one override") };
+    assert_eq!(o.params, List::Cons((VY, DTy::Int32), Box::new(List::Nil)));
+    let as_int = |n: u32| Box::new(DExpr::AsInt(Box::new(DExpr::Var(n))));
+    assert_eq!(o.requires, List::Cons((DExpr::Bin(BinOp::Le, Box::new(DExpr::Lit(0)), as_int(VY)), 7), Box::new(List::Nil)));
+    assert_eq!(o.ensures, List::Cons((DExpr::Bin(BinOp::Ge, Box::new(DExpr::AsInt(Box::new(DExpr::Result))), as_int(VY)), 8), Box::new(List::Nil)));
+    assert_eq!(o.own, List::Cons((DExpr::Bin(BinOp::Lt, as_int(VY), Box::new(DExpr::Lit(100))), 14), Box::new(List::Nil)));
+}
+
+/// A class with no override of a virtual function of its base, an override with other parameters or another result, an override
+/// with no function in the model, and a class that is not final are refused at the line of the class. An interface with two virtual
+/// functions of one name is refused at its own line, decision 0165.
+#[test]
+fn a_class_with_no_override_or_an_override_that_cannot_be_checked_is_refused() {
+    let bases = List::Cons((SQUARE, (names(&[SHAPE]), true)), Box::new(List::Nil));
+    let base = || base_corners(List::Nil, at_least_three());
+    // No member of the name.
+    let all = fns(vec![base(), derived_corners(List::Nil, List::Nil)]);
+    assert_eq!(translate_overrides(&bases, &all, &shapes(List::Nil)), List::Cons(Err(Refusal::NoOverride(SQUARE, SHAPE, CORNERS, 12)), Box::new(List::Nil)));
+    // Other parameters.
+    let all = fns(vec![base(), derived_corners(List::Cons((VY, Ty::I32), Box::new(List::Nil)), List::Nil)]);
+    assert_eq!(translate_overrides(&bases, &all, &shapes(corners_member())), List::Cons(Err(Refusal::NoOverride(SQUARE, SHAPE, CORNERS, 12)), Box::new(List::Nil)));
+    // The same count of parameters, of another type.
+    let all = fns(vec![base_corners(List::Cons((VX, Ty::I32), Box::new(List::Nil)), List::Nil), derived_corners(List::Cons((VY, Ty::I64), Box::new(List::Nil)), List::Nil)]);
+    assert_eq!(translate_overrides(&bases, &all, &shapes(corners_member())), List::Cons(Err(Refusal::NoOverride(SQUARE, SHAPE, CORNERS, 12)), Box::new(List::Nil)));
+    // Another result.
+    let all = fns(vec![base(), Function { ret: Ty::I64, body: one(Stmt::Return(Expr::Lit(4, Ty::I64), 15)), ..derived_corners(List::Nil, List::Nil) }]);
+    assert_eq!(translate_overrides(&bases, &all, &shapes(corners_member())), List::Cons(Err(Refusal::NoOverride(SQUARE, SHAPE, CORNERS, 12)), Box::new(List::Nil)));
+    // A trusted override has no function in the model.
+    let all = fns(vec![base(), Function { trusted: true, body: List::Nil, ..derived_corners(List::Nil, List::Nil) }]);
+    assert_eq!(translate_overrides(&bases, &all, &shapes(corners_member())), List::Cons(Err(Refusal::Unchecked(SQUARE, SHAPE, CORNERS, 12)), Box::new(List::Nil)));
+    // Two virtual functions of one name. The plugin leaves the name out of the members of the interface, so the core refuses the
+    // interface.
+    let all = fns(vec![base(), Function { name: BKEY2, ..base() }, derived_corners(List::Nil, List::Nil)]);
+    let sd = List::Cons((SHAPE, (5, List::Nil, List::Nil)), Box::new(List::Cons((SQUARE, (12, List::Nil, corners_member())), Box::new(List::Nil))));
+    assert_eq!(translate_overrides(&bases, &all, &sd), List::Cons(Err(Refusal::Overload(SHAPE, 5)), Box::new(List::Nil)));
+    // A class over an interface that is not final.
+    let open = List::Cons((SQUARE, (names(&[SHAPE]), false)), Box::new(List::Nil));
+    let all = fns(vec![base(), derived_corners(List::Nil, List::Nil)]);
+    assert_eq!(translate_overrides(&open, &all, &shapes(corners_member())), List::Cons(Err(Refusal::NotFinal(SQUARE, 12)), Box::new(List::Nil)));
+}
+
+/// A free function of `const Shape&` is no virtual function of the interface, so it does not make the interface look overloaded,
+/// decision 0165.
+#[test]
+fn a_free_function_of_an_interface_is_no_virtual_function_of_it() {
+    let bases = List::Cons((SQUARE, (names(&[SHAPE]), true)), Box::new(List::Nil));
+    let count = Function {
+        name: BKEY2,
+        line: 20,
+        params: List::Cons((VX, Ty::IfaceRef(SHAPE)), Box::new(List::Nil)),
+        trusted: false,
+        conds: List::Nil,
+        body: one(Stmt::Return(Expr::Lit(3, Ty::I32), 21)),
+        ..base_corners(List::Nil, List::Nil)
+    };
+    let all = fns(vec![base_corners(List::Nil, at_least_three()), count, derived_corners(List::Nil, List::Nil)]);
+    assert!(matches!(translate_overrides(&bases, &all, &shapes(corners_member())), List::Cons(Ok(_), ref rest) if **rest == List::Nil));
+    assert_eq!(translate_ty(Ty::IfaceRef(SHAPE), 3), Ok(DTy::Iface(SHAPE)));
+    assert_eq!(translate_value_ty(Ty::IfaceRef(SHAPE), 3, &shapes(corners_member())), Err(Refusal::Syntax(3)));
+}
+
+const COLORED: u32 = 308;
+const RED: u32 = 309;
+const RKEY: u32 = 310;
+const DRED: u32 = 311;
+
+/// A class over two interfaces has a check for each, in the order of its bases, decision 0165.
+#[test]
+fn a_class_over_two_interfaces_has_a_check_for_each() {
+    let bases = List::Cons((SQUARE, (names(&[SHAPE, COLORED]), true)), Box::new(List::Nil));
+    let base_red = Function { name: RKEY, line: 30, params: List::Cons((THIS, Ty::Iface(COLORED)), Box::new(List::Nil)), ..base_corners(List::Nil, List::Nil) };
+    let derived_red = Function { name: DRED, line: 18, ..derived_corners(List::Nil, List::Nil) };
+    let all = fns(vec![base_corners(List::Nil, at_least_three()), base_red, derived_corners(List::Nil, List::Nil), derived_red]);
+    let colored = (COLORED, (28, List::Nil, List::Cons((RED, (RKEY, None)), Box::new(List::Nil))));
+    let square = List::Cons((CORNERS, (DKEY, None)), Box::new(List::Cons((RED, (DRED, None)), Box::new(List::Nil))));
+    let sd = List::Cons(colored, Box::new(shapes(square)));
+    let List::Cons(Ok(first), rest) = translate_overrides(&bases, &all, &sd) else { panic!("an upcast to Shape") };
+    let List::Cons(Ok(second), rest) = *rest else { panic!("an upcast to Colored") };
+    assert_eq!(*rest, List::Nil);
+    assert_eq!((first.derived, first.base, second.derived, second.base), (SQUARE, SHAPE, SQUARE, COLORED));
+    let List::Cons(o, _) = second.overrides else { panic!("one override") };
+    assert_eq!((o.base, o.derived), (RKEY, DRED));
+}

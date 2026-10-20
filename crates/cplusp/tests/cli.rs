@@ -4673,3 +4673,111 @@ fn a_ban_of_variable_index_covers_vectors_spans_and_at() {
     // An explicit `operator[]` call and a C array by reference too, which the upstream check misses.
     assert_eq!(lines, BTreeSet::from(["8", "12", "16", "24", "28"]), "{text}");
 }
+
+const SHAPE_AXIOM: &str = "Axiom: model: Shape: a call through Shape runs an override that keeps the contract of Shape, C++23 [class.virtual]. Each override of Shape in this file is checked against that contract.";
+
+/// A call through const Shape& reads the contract of Shape::corners, a call on const Square& reads the override, and each override
+/// is checked against the contract of the interface, decision 0165. prove names the trust once for each interface.
+#[test]
+fn a_call_through_an_interface_proves_and_each_override_is_checked() {
+    let Some(dafny) = dafny() else { return };
+    if !clang_tidy_available() {
+        return;
+    }
+    let o = prove("model-virtual.cpp", &[], &dafny);
+    let text = stdout(&o);
+    assert_eq!(o.status.code(), Some(0), "stdout: {text} stderr: {}", stderr(&o));
+    let lines: Vec<&str> = text.lines().collect();
+    assert_eq!(lines.last(), Some(&"ok: proved"), "{text}");
+    assert_eq!(lines.iter().filter(|l| **l == SHAPE_AXIOM).count(), 1, "{text}");
+    // A model with no interface names no axiom of one.
+    let o = prove("model-method.cpp", &[], &dafny);
+    assert!(!stdout(&o).contains("Axiom: model:"), "{}", stdout(&o));
+}
+
+/// An override that requires more than the interface, and one that promises less, each fail at the override with their own
+/// sentence and the contract line of the interface under it. A class over two interfaces is checked against each, decision 0165.
+#[test]
+fn an_override_that_breaks_the_contract_of_the_interface_fails_at_its_line() {
+    let Some(dafny) = dafny() else { return };
+    if !clang_tidy_available() {
+        return;
+    }
+    let o = prove("model-virtual-wrong.cpp", &[], &dafny);
+    let text = stdout(&o);
+    assert_eq!(o.status.code(), Some(1), "stdout: {text} stderr: {}", stderr(&o));
+    // One line for the interface, though two classes derive from it.
+    assert_eq!(text.lines().filter(|l| *l == SHAPE_AXIOM).count(), 1, "{text}");
+    let found = blocks(&text);
+    let broken = |head: &str, clause: &str| {
+        found.iter().filter(|(h, under)| h.ends_with(head) && under.iter().any(|u| u.starts_with("  The contract line: ") && u.ends_with(clause))).count()
+    };
+    let more = "model-virtual-wrong.cpp:17: the override may require more than Shape::corners.";
+    assert_eq!(broken(more, "model-virtual-wrong.cpp:7: requires 0 <= scale && scale <= 100"), 1, "{text}");
+    let less = "model-virtual-wrong.cpp:25: the override may not keep the promise of Shape::corners.";
+    assert_eq!(broken(less, "model-virtual-wrong.cpp:8: ensures result >= 3 * scale"), 1, "{text}");
+    // A class over two interfaces has a check for each.
+    let red = "model-virtual-wrong.cpp:42: the override may not keep the promise of Colored::red.";
+    assert_eq!(broken(red, "model-virtual-wrong.cpp:31: ensures 0 <= result && result <= 255"), 1, "{text}");
+    assert_eq!(found.len(), 3, "{text}");
+}
+
+/// A requires line of an interface that may read out of range fails once, at that line. The check of the override reads the same
+/// line, and adds no failure of its own, decision 0165.
+#[test]
+fn a_requires_line_of_an_interface_that_fails_fails_once() {
+    let Some(dafny) = dafny() else { return };
+    if !clang_tidy_available() {
+        return;
+    }
+    let o = prove("model-virtual-index.cpp", &[], &dafny);
+    let text = stdout(&o);
+    assert_eq!(o.status.code(), Some(1), "stdout: {text} stderr: {}", stderr(&o));
+    let failed: Vec<&str> = text.lines().filter(|l| l.starts_with("Not proved: ")).map(|l| l.rsplit_once(".cpp:").unwrap().1).collect();
+    assert_eq!(failed, ["8: the index may be out of range."], "{text}");
+}
+
+/// A class over an interface that is not final, a final class with no override, and an override with no function in the model are
+/// refused at the line of the class. A pointer to an interface has no rule, and an interface with two virtual functions of one name
+/// is refused at its line. A class that is not final is no type of a parameter. A call with the name of the interface and a body
+/// of a pure virtual function have no rule. A call through the interface still translates, decision 0165.
+#[test]
+fn a_class_over_an_interface_with_no_rule_is_refused_at_its_line() {
+    if !clang_tidy_available() {
+        return;
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let (o, out) = model("model-virtual-refuse.cpp", dir.path());
+    let text = stdout(&o);
+    assert_eq!(o.status.code(), Some(1), "stdout: {text} stderr: {}", stderr(&o));
+    let refusals: Vec<&str> = text.lines().filter(|l| l.starts_with("Not provable: ")).map(|l| l.rsplit_once(".cpp:").unwrap().1).collect();
+    assert_eq!(
+        refusals,
+        [
+            "12: Open derives from an interface and is not final. Mark it final.",
+            "18: Half has no override of Shape::corners.",
+            "23: the override of Shape::corners in Two has no function in the model, so the translator cannot check it.",
+            "38: const Shape *: the translator has no rule for it yet.",
+            "43: Sound has two virtual functions of one name. The translator has no rule for it yet.",
+            "62: const Open &: the translator has no rule for it yet.",
+            "69: a qualified call of a virtual function: the translator has no rule for it yet.",
+            "73: a body of a pure virtual function: the translator has no rule for it yet.",
+        ],
+        "{text}"
+    );
+    let model = std::fs::read_to_string(&out).unwrap();
+    assert!(model.contains("method c_count("), "{model}");
+}
+
+/// The example single_inheritance proves: an interface, a final class over it, and a call through each, decision 0165.
+#[test]
+fn the_virtual_examples_prove() {
+    let Some(dafny) = dafny() else { return };
+    if !clang_tidy_available() {
+        return;
+    }
+    let o = prove("../../../../examples/single_inheritance/example.cpp", &[], &dafny);
+    let text = stdout(&o);
+    assert_eq!(o.status.code(), Some(0), "stdout: {text} stderr: {}", stderr(&o));
+    assert_eq!(text.lines().last(), Some("ok: proved"), "{text}");
+}
