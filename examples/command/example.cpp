@@ -39,9 +39,11 @@ struct Command {
   //@ ensures 0 <= result <= 1000
   virtual int32_t before() const = 0;
   // A command raises the counter by one at most. That is what lets the driver keep every step in range.
+  //@ modifies c
   //@ requires valid() && !done() && c.valid() && c.value() < 1000
   //@ ensures valid() && done() && c.valid() && before() == old(c.value()) && c.value() <= old(c.value()) + 1
   virtual void execute(Counter& c) = 0;
+  //@ modifies c
   //@ requires valid() && done() && c.valid()
   //@ ensures valid() && !done() && c.valid() && c.value() == old(before())
   virtual void undo(Counter& c) = 0;
@@ -62,6 +64,7 @@ class Increment final : public Command {
   //@ ensures result == before_
   int32_t before() const override { return before_; }
 
+  //@ modifies c
   //@ requires valid() && !done() && c.valid() && c.value() < 1000
   //@ ensures valid() && done() && c.valid() && before() == old(c.value()) && c.value() == old(c.value()) + 1
   void execute(Counter& c) override {
@@ -70,6 +73,7 @@ class Increment final : public Command {
     done_ = true;
   }
 
+  //@ modifies c
   //@ requires valid() && done() && c.valid()
   //@ ensures valid() && !done() && c.valid() && c.value() == old(before())
   void undo(Counter& c) override {
@@ -97,6 +101,7 @@ class Reset final : public Command {
   //@ ensures result == before_
   int32_t before() const override { return before_; }
 
+  //@ modifies c
   //@ requires valid() && !done() && c.valid() && c.value() < 1000
   //@ ensures valid() && done() && c.valid() && before() == old(c.value()) && c.value() == 0
   void execute(Counter& c) override {
@@ -105,6 +110,7 @@ class Reset final : public Command {
     done_ = true;
   }
 
+  //@ modifies c
   //@ requires valid() && done() && c.valid()
   //@ ensures valid() && !done() && c.valid() && c.value() == old(before())
   void undo(Counter& c) override {

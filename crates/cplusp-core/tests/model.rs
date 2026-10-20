@@ -3612,3 +3612,76 @@ fn a_unique_ptr_of_an_interface_is_an_optional_of_it() {
     let want = DExpr::Just(Box::new(DExpr::Upcast(SQUARE, SHAPE, Box::new(DExpr::Ctor(SQUARE, Box::new(List::Nil))))));
     assert_eq!(strip(m.body), List::Cons((Box::new(DStmt::Return(want)), 0), Box::new(List::Nil)));
 }
+
+const VBUMP: u32 = 320;
+const BMKEY: u32 = 321;
+const DMKEY: u32 = 322;
+
+/// `virtual void bump() = 0;` of the interface Shape, a pure virtual function that writes its object, with `ensures true`.
+fn base_bump() -> Function {
+    let ens = List::Cons((CondKind::Ensures, Expr::Bool(true), 8, names(&[THIS])), Box::new(List::Nil));
+    Function { name: BMKEY, line: 9, params: List::Cons((THIS, Ty::IfaceMut(SHAPE)), Box::new(List::Nil)), ret: Ty::Void, trusted: true, conds: ens, body: List::Nil }
+}
+
+/// `void bump() override {}` of the final class Square, with `ensures true`.
+fn derived_bump() -> Function {
+    let ens = List::Cons((CondKind::Ensures, Expr::Bool(true), 14, names(&[THIS])), Box::new(List::Nil));
+    Function { name: DMKEY, line: 15, params: List::Cons((THIS, Ty::ThisMut(SQUARE)), Box::new(List::Nil)), ret: Ty::Void, trusted: false, conds: ens, body: List::Nil }
+}
+
+/// A pure virtual function that writes its object is a method that gives its object back, with no function in the model and no
+/// line that links it to one. A reference of an interface is a value of it in and out, decision 0169.
+#[test]
+fn a_virtual_function_that_writes_is_a_method_with_no_function() {
+    assert_eq!(translate_ty(Ty::IfaceMut(SHAPE), 3), Ok(DTy::Iface(SHAPE)));
+    assert_eq!(translate_ty(Ty::Mut(Scalar::Struct(SHAPE)), 3), Ok(DTy::Struct(SHAPE)));
+    let all = fns(vec![base_bump()]);
+    let List::Cons(Model::Full(m), _) = translate_unit(&all, &shape_of(&[(VBUMP, BMKEY)])) else { panic!("a full model") };
+    assert!(m.trusted && m.writes && m.function == None, "{m:?}");
+    assert_eq!(m.ensures, List::Cons((DExpr::Bool(true), 8), Box::new(List::Nil)));
+    // A function of a reference of the interface on its modifies line gives the reference back.
+    let ping = Function {
+        name: BKEY2,
+        line: 20,
+        params: List::Cons((VX, Ty::Mut(Scalar::Struct(SHAPE))), Box::new(List::Nil)),
+        ret: Ty::Void,
+        trusted: false,
+        conds: modifies(&[VX], &[VX], List::Nil),
+        body: List::Nil,
+    };
+    let Model::Full(m) = translate_function(&ping, &List::Nil, &shape_of(&[(VBUMP, BMKEY)])) else { panic!("a full model of ping") };
+    assert_eq!(m.outs, List::Cons((VX, DTy::Struct(SHAPE)), Box::new(List::Nil)));
+}
+
+/// An override that writes is checked on the contracts: the check holds the ensures lines of the override as its promise. An
+/// override with no method in the model is refused at its class, decision 0169.
+#[test]
+fn an_override_that_writes_is_checked_on_its_contract() {
+    let bases = List::Cons((SQUARE, (names(&[SHAPE]), true)), Box::new(List::Nil));
+    let square = List::Cons((VBUMP, (DMKEY, None)), Box::new(List::Nil));
+    let sd = || {
+        let List::Cons(s, _) = shape_of(&[(VBUMP, BMKEY)]) else { unreachable!() };
+        List::Cons(s, Box::new(List::Cons((SQUARE, (12, List::Nil, square_copy(&square))), Box::new(List::Nil))))
+    };
+    let all = fns(vec![base_bump(), derived_bump()]);
+    let List::Cons(Ok(up), _) = translate_overrides(&bases, &all, &sd()) else { panic!("an upcast") };
+    let List::Cons(o, _) = up.overrides else { panic!("one check") };
+    assert_eq!((o.base, o.derived), (BMKEY, DMKEY));
+    assert_eq!(o.ensures, List::Cons((DExpr::Bool(true), 8), Box::new(List::Nil)));
+    assert_eq!(o.promise, List::Cons((DExpr::Bool(true), 14), Box::new(List::Nil)));
+    // A body with no rule leaves the override with no method in the model.
+    let bad = Function { body: one(Stmt::Return(Expr::Unknown(7, 15), 15)), ..derived_bump() };
+    let all = fns(vec![base_bump(), bad]);
+    assert_eq!(translate_overrides(&bases, &all, &sd()), List::Cons(Err(Refusal::NoMethod(SQUARE, SHAPE, VBUMP, 12)), Box::new(List::Nil)));
+}
+
+/// A contract can call only a const virtual function of its interface, because a function that writes has no function in the
+/// model, decision 0169.
+#[test]
+fn a_contract_cannot_call_a_virtual_function_that_writes() {
+    let req = List::Cons((CondKind::Requires, Expr::Apply(VBUMP, Box::new(List::Nil)), 7, names(&[THIS])), Box::new(List::Nil));
+    let all = fns(vec![base_bump(), base_corners(List::Nil, req)]);
+    let List::Cons(_, rest) = translate_unit(&all, &shape_of(&[(VBUMP, BMKEY), (CORNERS, BKEY)])) else { panic!("two models") };
+    let List::Cons(Model::Bare(_, _, _, r), _) = *rest else { panic!("a refused contract") };
+    assert_eq!(r, Refusal::NotPure(VBUMP, 7));
+}

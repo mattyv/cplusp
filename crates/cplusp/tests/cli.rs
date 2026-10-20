@@ -5025,3 +5025,68 @@ fn a_unique_ptr_of_an_interface_has_one_owner_that_only_reads() {
         "{text}"
     );
 }
+
+/// A virtual function that writes its object runs through a reference of the interface on the modifies line and through a local
+/// unique_ptr, which takes the new value. Each override is checked on the contracts, decision 0169.
+#[test]
+fn a_virtual_function_that_writes_its_object_proves() {
+    let Some(dafny) = dafny() else { return };
+    if !clang_tidy_available() {
+        return;
+    }
+    for name in ["model-virtual-mut.cpp", "model-virtual-mut-ref.cpp"] {
+        let o = prove(name, &[], &dafny);
+        let text = stdout(&o);
+        assert_eq!(o.status.code(), Some(0), "{name}: stdout: {text} stderr: {}", stderr(&o));
+        assert_eq!(text.lines().last(), Some("ok: proved"), "{name}: {text}");
+    }
+}
+
+/// An override that writes and promises less, one that requires more, and a read of the value before the write each fail at their
+/// line, decision 0169.
+#[test]
+fn an_override_that_writes_keeps_the_contract_of_the_interface() {
+    let Some(dafny) = dafny() else { return };
+    if !clang_tidy_available() {
+        return;
+    }
+    let o = prove("model-virtual-mut-wrong.cpp", &[], &dafny);
+    let text = stdout(&o);
+    assert_eq!(o.status.code(), Some(1), "stdout: {text} stderr: {}", stderr(&o));
+    let found = blocks(&text);
+    let broken = |head: &str, clause: &str| {
+        found.iter().filter(|(h, under)| h.ends_with(head) && under.iter().any(|u| u.starts_with("  The contract line: ") && u.ends_with(clause))).count()
+    };
+    let less = "model-virtual-mut-wrong.cpp:26: the override may not keep the promise of Observer::on_change.";
+    assert_eq!(broken(less, "model-virtual-mut-wrong.cpp:12: ensures valid() && seen() == old(seen()) + 1"), 1, "{text}");
+    let more = "model-virtual-mut-wrong.cpp:44: the override may require more than Observer::on_change.";
+    assert_eq!(broken(more, "model-virtual-mut-wrong.cpp:11: requires valid() && seen() < 1000"), 1, "{text}");
+    assert!(found.iter().any(|(h, _)| h.ends_with("model-virtual-mut-wrong.cpp:55: the assert line may not hold.")), "{text}");
+    assert_eq!(found.len(), 3, "{text}");
+}
+
+/// A class at a reference of its interface, a write through the value of a unique_ptr, an override with no method in the model, and
+/// a reference parameter of an interface function that no modifies line names are refused at their lines, decision 0169.
+#[test]
+fn a_write_through_an_interface_with_no_rule_is_refused() {
+    if !clang_tidy_available() {
+        return;
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let (o, _) = model("model-virtual-mut-refuse.cpp", dir.path());
+    let text = stdout(&o);
+    assert_eq!(o.status.code(), Some(1), "stdout: {text} stderr: {}", stderr(&o));
+    let mut refusals: Vec<&str> = text.lines().filter(|l| l.starts_with("Not provable: ")).map(|l| l.rsplit_once(".cpp:").unwrap().1).collect();
+    refusals.sort_by_key(|l| l.split(':').next().unwrap().parse::<u32>().unwrap());
+    assert_eq!(
+        refusals,
+        [
+            "44: a class as a reference to its interface: the translator has no rule for it yet.",
+            "49: the call writes a value back, and the translator writes back only to a local or a reference parameter.",
+            "53: the override of Observer::on_change in Loud has no method in the model, so the translator cannot check it.",
+            "63: DoStmt: the translator has no rule for it yet.",
+            "83: c is a reference parameter that the modifies line does not name.",
+        ],
+        "{text}"
+    );
+}
