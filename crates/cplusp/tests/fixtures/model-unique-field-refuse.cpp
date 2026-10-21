@@ -68,3 +68,22 @@ struct Holder {
 
   std::unique_ptr<Component> inner_;
 };
+
+class Peek final : public Component {
+ public:
+  //@ requires 0 <= v && v <= 1000
+  //@ ensures valid() && this->v_ == v
+  Peek(const std::unique_ptr<Component>& inner, int32_t v) : v_(v) {}
+  //@ ensures result == (0 <= v_ && v_ <= 1000)
+  bool valid() const override { return 0 <= v_ && v_ <= 1000; }
+  void bump() override {}
+
+ private:
+  int32_t v_;
+};
+
+int32_t peek() {
+  std::unique_ptr<Component> base = std::make_unique<Unit>();
+  std::unique_ptr<Component> t = std::make_unique<Peek>(std::move(base), 5);
+  return 0;
+}

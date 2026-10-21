@@ -5208,8 +5208,8 @@ fn a_call_through_a_unique_ptr_field_keeps_its_contract() {
 }
 
 /// Two moves of one local in one statement, a move and a read of one local in one call, a move of a parameter in a call, a move in a
-/// condition, a move of an element of a vector and a call that writes through a field have no rule, so no two names share one
-/// object and no read sees a moved local, decision 0171.
+/// condition, a move of an element of a vector, a move into std::make_unique at a parameter by const reference, and a call that
+/// writes through a field have no rule, so no two names share one object and no read sees a moved local, decision 0171.
 #[test]
 fn a_moved_unique_ptr_has_one_owner() {
     let Some(dafny) = dafny() else { return };
@@ -5230,6 +5230,7 @@ fn a_moved_unique_ptr_has_one_owner() {
             "54: a std::move of a std::unique_ptr has a rule only in a call that stands alone, the start value of a local or a return.",
             "62: a call to std::move<std::unique_ptr<Component> &>, which has no model in view.",
             "67: the call writes a value back, and the translator writes back only to a local or a reference parameter.",
+            "87: a call to std::move<std::unique_ptr<Component> &>, which has no model in view.",
         ],
         "{text}"
     );

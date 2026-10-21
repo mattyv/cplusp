@@ -8,13 +8,13 @@ Date: 2026-10-21. Status: decided. Amends 0094, 0142 and 0168. This is the first
 - A call that writes through a field has no rule yet. The sentence is that of 0108, `the call writes a value back, and the translator writes back only to a local or a reference parameter.`
 - `std::unique_ptr<B>` can be a parameter by value. It is a value `Option<S_B>` that the function owns. The argument at it is `std::make_unique<D>(a)` of 0168, a call that gives a `std::unique_ptr<B>`, or `std::move(x)`.
 - `std::move(x)` of a local or a parameter `x` of type `std::unique_ptr<B>` is in the subset where C++ makes a new `std::unique_ptr` from it. That is at a parameter by value, as the start value of a local, and as the value of a return. Its value is the value of `x`.
-- `std::move(x)` can stand in three statements. These are a call that stands alone, decision 0108, the start value of a local, and a return. It can be the value itself, an argument of a call or of a constructor, or the argument of `std::make_unique`. After a call or a local, `x` is null in the model. A later read of `x` fails with the sentence of 0075.
+- `std::move(x)` can stand in three statements. These are a call that stands alone, decision 0108, the start value of a local, and a return. It can be the value itself, or an argument of a call or of a constructor. It can also be the argument of `std::make_unique` at a parameter by value of the constructor. After a call or a local, `x` is null in the model. A later read of `x` fails with the sentence of 0075.
 - A parameter can move only in a return, because the model cannot write a parameter. The init list of a constructor is its return, decision 0094. So `f_(std::move(p))` gives the field the value of `p`. A move of a parameter in a call or a local gives the sentence of 0108, `p is a parameter. The translator writes only a local or a reference parameter.`
 - A statement that moves `x` reads `x` nowhere else, and moves it only once. C++ does not fix the order of the arguments of a call. So the model cannot know if a read comes before the move or after it. The sentence is `x moves and is read in one statement. C++ does not fix the order.`
 - A move in any other place has no rule yet. The sentence is `a std::move of a std::unique_ptr has a rule only in a call that stands alone, the start value of a local or a return.`
 - These have no rule yet, as before:
   - `std::move` of any other expression, such as an element of a vector or a struct. The sentence stays `a call to std::move<T>, which has no model in view.`
-  - `std::move(x)` at a parameter `const std::unique_ptr<B>&`. C++ makes no new `std::unique_ptr` there, so nothing moves.
+  - `std::move(x)` at a parameter `const std::unique_ptr<B>&`, also through `std::make_unique`. C++ makes no new `std::unique_ptr` there, so nothing moves.
   - A write to a parameter by value, and `reset`, `release` and `get`, decision 0142.
   - The return of a local `std::unique_ptr` with no `std::move`, decision 0168.
 
