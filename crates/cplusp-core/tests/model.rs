@@ -3143,12 +3143,13 @@ fn a_local_vector_that_is_no_copy_is_refused() {
     assert_eq!(bare_refusal(translate_function(&f, &List::Nil, &holds)), Refusal::HoldsSeq(6));
     // A span is a view.
     assert_eq!(refused(local(seq, copy())), Refusal::SeqParam(6));
-    // A call that passes the local by reference to a writer.
+    // A call that passes the local by reference to a writer writes it back to the local, decision 0170.
     let set = Stmt::SetIndex(WV, Expr::Var(WI, Ty::U64), Expr::Var(WX, Ty::I32), 6);
     let all = fns(vec![Function { name: WX + 3, ..write_at(one(set)) }]);
     let args = List::Cons(b(Expr::Var(LX, Ty::Vec(Scalar::I32))), Box::new(List::Cons(b(Expr::Var(WI, Ty::U64)), Box::new(List::Cons(b(Expr::Var(WX, Ty::I32)), Box::new(List::Nil))))));
     let caller = with_copy(List::Cons(Box::new(Stmt::Call(WX + 3, SAT_NAME, Box::new(args), 12)), Box::new(one(Stmt::Return(Expr::Var(WX, Ty::I32), 13)))));
-    assert_eq!(bare_refusal(translate_function(&caller, &all, &List::Nil)), Refusal::PassLocal(LX, 12));
+    let Model::Full(m) = translate_function(&caller, &all, &List::Nil) else { panic!("a full model of the caller") };
+    assert!(format!("{:?}", m.body).contains(&format!("Update(Cons(Local({LX}), Nil)")), "{m:?}");
 }
 
 /// `std::sort(v.begin(), v.end())` of a local vector or of a vector by reference is StdSort with `<` on its elements, decision
