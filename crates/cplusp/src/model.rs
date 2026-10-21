@@ -25,6 +25,8 @@ enum JScalar {
     U64,
     Bool,
     Struct(String),
+    /// A unique_ptr of a struct or an interface, as the element of a sequence, decision 0170.
+    Own(String),
 }
 
 #[derive(Deserialize)]
@@ -111,6 +113,8 @@ enum JExpr {
     Brace(Box<JExpr>),
     Size(Box<JExpr>),
     Empty(Box<JExpr>),
+    /// A local vector with no initial value, decision 0170.
+    EmptyVec,
     Subspan(Box<JExpr>, Box<JExpr>),
     Copy(Box<JExpr>, JTy, JTy),
     Field(Box<JExpr>, String),
@@ -354,6 +358,7 @@ fn scalar(s: JScalar, names: &mut Names) -> Scalar {
         JScalar::U64 => Scalar::U64,
         JScalar::Bool => Scalar::Bool,
         JScalar::Struct(k) => Scalar::Struct(names.id(&k)),
+        JScalar::Own(k) => Scalar::Own(names.id(&k)),
     }
 }
 
@@ -434,6 +439,7 @@ fn expr(e: JExpr, names: &mut Names) -> Expr {
         JExpr::Brace(a) => Expr::Brace(Box::new(expr(*a, names))),
         JExpr::Size(a) => Expr::Size(Box::new(expr(*a, names))),
         JExpr::Empty(a) => Expr::Empty(Box::new(expr(*a, names))),
+        JExpr::EmptyVec => Expr::EmptyVec,
         JExpr::Subspan(a, k) => Expr::Subspan(Box::new(expr(*a, names)), Box::new(expr(*k, names))),
         JExpr::Copy(a, from, to) => Expr::Copy(Box::new(expr(*a, names)), ty(from, names), ty(to, names)),
         JExpr::Field(a, f) => Expr::Field(Box::new(expr(*a, names)), names.id(&f)),
@@ -801,7 +807,7 @@ fn expr_names<'a>(e: &'a JExpr, out: &mut Vec<&'a str>) {
         }
         JExpr::Not(a) | JExpr::Neg(a) | JExpr::Cast(_, a) | JExpr::Paren(a) | JExpr::Brace(a) | JExpr::Size(a) | JExpr::Empty(a) | JExpr::Copy(a, ..) | JExpr::Field(a, _) | JExpr::HasValue(a) | JExpr::Value(a) | JExpr::Wrap(a) => expr_names(a, out),
         JExpr::Call(_, _, args, _) | JExpr::Construct(_, args) => args.iter().for_each(|a| expr_names(a, out)),
-        JExpr::Lit(..) | JExpr::Bool(_) | JExpr::RealLit(..) | JExpr::Ratio(..) | JExpr::Nullopt | JExpr::Enumerator(..) | JExpr::Unknown(..) => {}
+        JExpr::Lit(..) | JExpr::Bool(_) | JExpr::RealLit(..) | JExpr::Ratio(..) | JExpr::Nullopt | JExpr::EmptyVec | JExpr::Enumerator(..) | JExpr::Unknown(..) => {}
     }
 }
 
@@ -1017,6 +1023,7 @@ fn dscalar(s: Scalar, names: &Names) -> String {
         Scalar::U64 => "uint64".to_string(),
         Scalar::Bool => "bool".to_string(),
         Scalar::Struct(k) => names.datatypes[&k].clone(),
+        Scalar::Own(k) => format!("Option<{}>", names.datatypes[&k]),
     }
 }
 
@@ -1108,6 +1115,7 @@ fn dexpr(e: &DExpr, names: &Names) -> String {
         DExpr::IsSome(a) => format!("{}.Some?", dexpr(a, names)),
         DExpr::Get(a) => format!("{}.value", dexpr(a, names)),
         DExpr::Nothing => "None".to_string(),
+        DExpr::EmptySeq => "[]".to_string(),
         DExpr::Just(a) => format!("Some({})", dexpr(a, names)),
         DExpr::Enumerator(k, i) => format!("{}'{}", names.datatypes[k], names.enums.iter().find(|e| e.1 == *k).and_then(|e| e.2.get(*i as usize)).map_or("'unknown", String::as_str)),
         DExpr::Ctor(k, args) => format!("{}({})", names.datatypes[k], dargs(args, names).join(", ")),
@@ -1326,8 +1334,15 @@ impl Printer<'_> {
 
     /// Keep the type that a local unique_ptr points at, for the write of a virtual function, decision 0169.
     fn note(&mut self, x: u32, t: DTy) {
-        if let DTy::Opt(s) = t {
-            self.owned.insert(x, dscalar(s, self.names));
+        match t {
+            DTy::Opt(s) => {
+                self.owned.insert(x, dscalar(s, self.names));
+            }
+            // A vector of unique_ptr keeps the type of its elements, for the write of an element, decision 0170.
+            DTy::Seq(Scalar::Own(k)) => {
+                self.owned.insert(x, self.names.datatypes[&k].clone());
+            }
+            _ => {}
         }
     }
 
@@ -1399,6 +1414,37 @@ impl Printer<'_> {
                         self.put(depth, format!("{before}var {r}: {}; {r}, {object} := {call};{after}", dty(*t, names)), place);
                     }
                 }
+            }
+            DStmt::UpdateAt(vec, index, objs, m, args) => {
+                // The element comes back in a fresh local, and the vector takes it at the index, decision 0170. The index is read twice, and the core checked that
+                // the call does not change it.
+                let (places, call, before, after) = self.update(objs, *m, args);
+                let temp = format!("v_'e{}", self.fresh);
+                self.fresh += 1;
+                let (name, written) = match vec {
+                    Obj::Local(v) => (*v, mangle(names.text(*v))),
+                    Obj::Out(v) | Obj::Owned(v) => (*v, format!("{}'", mangle(names.text(*v)))),
+                    Obj::Object => (0, "v_this'".to_string()),
+                };
+                let pointed = self.owned.get(&name).cloned().unwrap_or_default();
+                let mut gives = vec![temp.clone()];
+                if !places.is_empty() {
+                    gives.push(places);
+                }
+                let result = match self.rets.get(m) {
+                    Some(DTy::Void) | None => String::new(),
+                    Some(t) => {
+                        self.fresh += 1;
+                        let r = format!("v_'r{}", self.fresh);
+                        gives.insert(0, r.clone());
+                        format!("var {r}: {}; ", dty(*t, names))
+                    }
+                };
+                self.put(
+                    depth,
+                    format!("{before}{result}var {temp}: {pointed}; {} := {call}; {written} := {written}[{} := Some({temp})];{after}", gives.join(", "), dexpr(index, names)),
+                    place,
+                );
             }
             DStmt::LocalUpdate(x, t, objs, m, args) => {
                 self.note(*x, *t);
@@ -1739,6 +1785,14 @@ impl Printer<'_> {
             self.axiom_function(m, place);
         }
         let outs = dparams(&m.outs);
+        let mut ps = &m.params;
+        while let List::Cons((n, t), next) = ps {
+            self.note(*n, *t);
+            ps = next;
+        }
+        for (n, t) in &outs {
+            self.note(*n, *t);
+        }
         let method_start = self.lines.len() + 1;
         self.header(m.name, &m.params, m.ret, (m.writes, m.trusted), &outs, place);
         self.temps = 0;
@@ -1821,6 +1875,7 @@ fn sentence(r: Refusal, names: &Names) -> (u32, String) {
         Refusal::Finite(n, line) if names.text(n).starts_with('\'') => (line, "a double parameter has no name. Give it a name and say std::isfinite of it in a requires line.".to_string()),
         Refusal::Finite(n, line) => (line, format!("{} is a double. A requires line needs std::isfinite({}).", names.text(n), names.text(n))),
         Refusal::FiniteResult(line) => (line, "a trusted function that gives a double needs std::isfinite(result) in an ensures line.".to_string()),
+        Refusal::IndexWritten(line) => (line, "the index reads a value that the call writes: the translator has no rule for it yet.".to_string()),
         Refusal::NoMethod(d, b, n, line) => (
             line,
             format!("the override of {}::{} in {} has no method in the model, so the translator cannot check it.", names.class_names[&b], names.text(n), names.class_names[&d]),

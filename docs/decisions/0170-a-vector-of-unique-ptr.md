@@ -5,7 +5,7 @@ Date: 2026-10-21. Status: decided. Amends 0064, 0145, 0148, 0160 and 0168. This 
 ## Decision
 
 - `std::unique_ptr<B>` of a struct or an interface `B` is an element of a vector. Dafny reads the vector as `seq<Option<S_B>>`, with the bound of 0164. The vector is a parameter `const std::vector<std::unique_ptr<B>>&`, decision 0064, a parameter `std::vector<std::unique_ptr<B>>&` on the modifies line, decision 0145, or a local, decision 0160.
-- A local `std::vector<T> v;` with no initial value is the empty sequence, for every `T` of the subset. This amends 0160.
+- A local `std::vector<T> v;` with no initial value is the empty sequence, for every `T` of the subset. This includes a vector of a plain struct of 0163. This amends 0160.
 - A call that passes a local vector to a parameter `std::vector<T>&` writes the vector back to the local, as 0108 writes a local. This amends 0160.
 - `v.push_back(std::make_unique<D>(a))` adds `Some(f_D'B(d))`, where `d` is the value of the constructor of `D`, decision 0168. The constructor runs before the `push_back`. This amends 0148 for this form only.
 - `v[i] != nullptr` and `v[i]->f(a)` read the element as a unique_ptr of 0168, in code and in a contract. Dafny proves that `i` is in range and that `v[i]` is not null, with the sentences of 0064 and 0075. A contract line that reads `v[i]->f()` stands below a line that says `v[i] != nullptr`.

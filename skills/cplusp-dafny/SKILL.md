@@ -51,7 +51,7 @@ Treat SPARK guidance as an engineering method, not an LLM performance measuremen
 
 ## Contract lines that the translator reads
 
-This list is true at decision 0169. Read the later decisions before you rely on it.
+This list is true at decision 0170. Read the later decisions before you rely on it.
 `cplusp prove` translates the C++ and the `//@` lines to Dafny, and runs Dafny. It says `ok: proved`, or `Not proved: FILE:LINE: sentence` for a proof that fails, or `Not provable: FILE:LINE: sentence` for a form that has no rule.
 
 Where each line goes:
@@ -87,6 +87,7 @@ The modifies line:
 - `//@ apply MulBound(a, b, c, d)` above a product of two names gives `0 <= a * b <= c * d` from `0 <= a <= c` and `0 <= b <= d`, decision 0167. Dafny guesses on a product of two names, so write this line above each one. It is a proved lemma of the prelude, so it adds no axiom. An apply line can stand above the `return` of a pure member function. An assert line there has no rule yet.
 - `std::unique_ptr<B>` of an interface works in the places of 0142, decision 0168. `std::make_unique<D>(a)` of a final class over `B` gives it, also at a call argument, and `p->f(a)` calls the virtual function in code and in a contract. Write `p != nullptr` in a requires line before you call through `p`. A move, a `std::unique_ptr<D>` held as itself, and a `std::unique_ptr<D>` from a call as a `std::unique_ptr<B>` have no rule yet.
 - A pure virtual function that is not `const` writes its object, decision 0169. Its contract reads the const functions of the interface, with `old(f())` for the value before. A call runs through a parameter `B& b` on the modifies line, or through a local `std::unique_ptr<B>`, which takes the new value. `prove` checks each override on the contracts: its ensures lines must give those of the interface. A class at a `B&` parameter has no rule yet.
+- A vector of `std::unique_ptr<B>` works as a `const&` parameter, a parameter by reference on the modifies line, or a local, decision 0170. A local `std::vector<T> v;` starts empty, and `v.push_back(std::make_unique<D>(a))` adds an element. `v[i]->f(a)` calls through the element, and a call that writes the object writes the element back. Its index must not read a value that the call writes. Write `v[i] != nullptr` in a requires line or an invariant above a line that reads `v[i]->f()`. A range-for over such a vector, an assignment to an element, and `std::move` of an element have no rule yet.
 - After a `push_back`, a read of `v.size()` in code needs a requires line or an invariant that bounds the length. Then the size fits `size_t`.
 - An ensures line that reads `v[i]` after the call needs a line before it that gives the length: `ensures v.size() == old(v.size())`, or `+ 1` after one `push_back`, decision 0146. A loop that writes `v` needs the same line as an invariant.
 - The gate also reads `modifies` and `reads` lines for globals, decision 0035. The translator has no rule for a global yet, so it refuses `reads` and a global on a `modifies` line.

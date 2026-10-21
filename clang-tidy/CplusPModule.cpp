@@ -4526,6 +4526,9 @@ private:
       if (!(Field || T.isConstQualified()) || Elem.getCanonicalType().hasQualifiers())
         return QualType();
       const char *S = scalar(Elem);
+      // A unique_ptr of a struct or an interface is an element of a vector, not of a field, decision 0170.
+      if (!Field && !ownVecElement(Elem).isNull())
+        return Elem;
       return (S ? StringRef(S) != "Bool" : plainStruct(Elem) != nullptr) ? Elem : QualType();
     }
     if (!Field && Spec->getName() == "span" && Elem.isConstQualified()) {
@@ -4592,6 +4595,22 @@ private:
     return !Elem.getCanonicalType().hasQualifiers() && (scalar(Elem) || plainStruct(Elem) || isInterface(Elem->getAsCXXRecordDecl())) ? Elem : QualType();
   }
   bool isOwn(QualType T) const { return !ownElement(T).isNull(); }
+  // A `std::unique_ptr` of a struct or an interface with no qualifier, as the element of a vector, decision 0170, or null.
+  QualType ownVecElement(QualType Elem) const {
+    if (Elem.isNull() || Elem.getCanonicalType().hasQualifiers())
+      return QualType();
+    const QualType Pointee = ownElement(Elem);
+    return !Pointee.isNull() && Pointee->getAsCXXRecordDecl() ? Elem : QualType();
+  }
+  // The type of an element of a sequence for the core. A unique_ptr is `Own` of its key, and any other element is its type, decision 0170.
+  llvm::json::Value elementType(QualType Elem) const {
+    if (const QualType Held = ownVecElement(Elem); !Held.isNull())
+      {
+      (void)ownScalar(ownElement(Held));  // writes the struct or the interface
+      return tag("Own", structKey(ownElement(Held)->getAsCXXRecordDecl()->getDefinition()));
+    }
+    return type(Elem);
+  }
   // Whether a type is a `std::unique_ptr` of any class.
   static bool isUniquePtr(QualType T) {
     const CXXRecordDecl *RD = T.getNonReferenceType()->getAsCXXRecordDecl();
@@ -4930,15 +4949,17 @@ private:
     return vectorElement(Spec->getTemplateArgs()[0].getAsType());
   }
   // The element of a vector that the function owns or writes: a scalar other than bool, or a plain struct, with no qualifier, or null.
-  QualType vectorElement(QualType Elem) const {
+  QualType vectorElement(QualType Elem, bool Owns = true) const {
     if (Elem.getCanonicalType().hasQualifiers())
       return QualType();
+    if (Owns && !ownVecElement(Elem).isNull())
+      return Elem;
     const char *S = scalar(Elem);
     return (S ? StringRef(S) != "Bool" : plainStruct(Elem) != nullptr) ? Elem : QualType();
   }
   // The element of a local `std::vector<T>` by value, which the function owns, decision 0160, or null: no reference, and a scalar `T` other than bool.
   // A `const` on the vector is looked through. A span is a view, not a vector, so it is none.
-  QualType localVec(QualType T) const {
+  QualType localVec(QualType T, bool Owns = true) const {
     if (T->isReferenceType())
       return QualType();
     const QualType Vector = T.getUnqualifiedType();
@@ -4946,7 +4967,7 @@ private:
     if (T.isVolatileQualified() || !Spec || !Spec->isInStdNamespace() || Spec->getName() != "vector" || Spec->getTemplateArgs().size() == 0 ||
         Spec->getTemplateArgs()[0].getKind() != TemplateArgument::Type)
       return QualType();
-    return vectorElement(Spec->getTemplateArgs()[0].getAsType());
+    return vectorElement(Spec->getTemplateArgs()[0].getAsType(), Owns);
   }
   // Whether an expression names a vector that the function writes: a vector by reference, decision 0145, or a local vector, decision 0160.
   bool isMutSeq(const Expr *E) const {
@@ -4966,7 +4987,7 @@ private:
     if (const QualType Element = constPointee(T); !Element.isNull())
       return tag("Ptr", type(Element));
     if (const QualType Element = mutSeq(T); !Element.isNull())
-      return tag("MutSeq", type(Element));
+      return tag("MutSeq", elementType(Element));
     // A `unique_ptr` parameter is read by const reference only, decision 0142. By value it has no rule: it moves.
     if (T->isLValueReferenceType() && T->getPointeeType().isConstQualified())
       if (const QualType Element = ownElement(T->getPointeeType()); !Element.isNull())
@@ -4984,7 +5005,7 @@ private:
   // The type of a result. A `std::vector<T>` by value with no qualifier is a `Vec`, decision 0163: the function gives a copy. A span stays `Other`.
   llvm::json::Value resultType(QualType T) const {
     if (!T.hasQualifiers())
-      if (const QualType Element = localVec(T); !Element.isNull())
+      if (const QualType Element = localVec(T, false); !Element.isNull())
         return tag("Vec", type(Element));
     return type(T);
   }
@@ -4996,7 +5017,7 @@ private:
     // A local vector is a `Vec`, decision 0160.
     if (const auto *Var = dyn_cast<VarDecl>(D); Var && Var->hasLocalStorage() && !isa<ParmVarDecl>(Var))
       if (const QualType Element = localVec(Var->getType()); !Element.isNull())
-        return tag("Vec", type(Element));
+        return tag("Vec", elementType(Element));
     // A `const` on a local changes no value of the model, decision 0166.
     if (const auto *Var = dyn_cast<VarDecl>(D); Var && Var->hasLocalStorage() && !isa<ParmVarDecl>(Var) && !Var->getType()->isReferenceType() && !Var->isCXXForRangeDecl() &&
                                                  Var->getType().isLocalConstQualified()) {
@@ -5054,7 +5075,7 @@ private:
       return tag("Struct", Key);
     }
     if (const QualType E = seqElement(T, Field); !E.isNull())
-      return tag("Seq", llvm::json::Array{type(E), seqExtent(T)});
+      return tag("Seq", llvm::json::Array{elementType(E), seqExtent(T)});
     if (const QualType E = optType(T); !E.isNull())
       return tag("Opt", type(E));
     if (const QualType E = Field ? QualType() : ownElement(T); !E.isNull())
@@ -5109,6 +5130,15 @@ private:
       if (const FieldDecl *Field = objectField(Assign->getLHS()))
         return tag("SetField", llvm::json::Array{Field->getNameAsString(), expr(Assign->getRHS(), line(S->getBeginLoc())), number(line(S->getBeginLoc()))});
     }
+    // `v[i] = e` on a vector of unique_ptr has no rule yet, decision 0170.
+    {
+      const Stmt *Plain = S;
+      if (const auto *Cleanups = dyn_cast<ExprWithCleanups>(Plain))
+        Plain = Cleanups->getSubExpr();
+      if (const auto *Assign = dyn_cast<CXXOperatorCallExpr>(Plain); Assign && Assign->getOperator() == OO_Equal && Assign->getNumArgs() == 2 && isUniquePtr(Assign->getArg(0)->getType()))
+        if (const auto *Element = dyn_cast<CXXOperatorCallExpr>(Assign->getArg(0)->IgnoreParenImpCasts()); Element && Element->getOperator() == OO_Subscript)
+          return unknown(S, "an assignment to a unique_ptr element", line(S->getBeginLoc()));
+    }
     // `x = y` for a struct, with the copy assignment that the compiler makes, is the write of the variable, decision 0108.
     if (const auto *Copy = dyn_cast<CXXOperatorCallExpr>(S); Copy && Copy->getOperator() == OO_Equal && Copy->getNumArgs() == 2 && plainStruct(Copy->getArg(0)->getType()) &&
                                                              Copy->getDirectCallee() && Copy->getDirectCallee()->isTrivial())
@@ -5132,8 +5162,16 @@ private:
       const Expr *Arg = Push->getArg(0);
       if (const auto *Temporary = dyn_cast<MaterializeTemporaryExpr>(Arg))
         Arg = Temporary->getSubExpr();
+      llvm::json::Value Pushed = expr(Arg, line(S->getBeginLoc()));
+      // The conversion of `std::make_unique<D>(a)` to the unique_ptr of the interface stands as the `Wrap` alone, decision 0170.
+      if (llvm::json::Object *Outer = Pushed.getAsObject())
+        if (llvm::json::Array *Casted = Outer->getArray("Cast"); Casted && Casted->size() == 2 && (*Casted)[0].getAsString() == StringRef("Construct"))
+          if (const llvm::json::Object *Inner = (*Casted)[1].getAsObject(); Inner && Inner->get("Wrap")) {
+            llvm::json::Value Bare = std::move((*Casted)[1]);
+            Pushed = std::move(Bare);
+          }
       return tag("PushBack", llvm::json::Array{cast<DeclRefExpr>(Push->getImplicitObjectArgument()->IgnoreParenImpCasts())->getDecl()->getNameAsString(),
-                                               expr(Arg, line(S->getBeginLoc())), number(line(S->getBeginLoc()))});
+                                               std::move(Pushed), number(line(S->getBeginLoc()))});
     }
     // A call that is the whole statement, `f(a);` or `o.f(a);`. Its object is the first argument, decision 0096.
     // `std::sort(v.begin(), v.end())` of a vector that the function writes is a sort of the whole of `v`, decision 0161. A comparator lambda of the element type
@@ -5167,13 +5205,14 @@ private:
           }
       return unknown(S, "std::sort of another form", line(S->getBeginLoc()));
     }
-    if (const auto *Call = dyn_cast<CallExpr>(Inner))
+    if (const auto *Call = dyn_cast<CallExpr>(Inner)) {
       if (llvm::json::Value Written = expr(Call, line(S->getBeginLoc())); Written.getAsObject() && Written.getAsObject()->get("Call"))
         return Written;
       // The call with a class at a reference of its interface says why, decision 0169.
       else if (const llvm::json::Array *Why = Written.getAsObject() ? Written.getAsObject()->getArray("Unknown") : nullptr;
                Why && !Why->empty() && (*Why)[0].getAsString() == StringRef("a class as a reference to its interface"))
         return Written;
+    }
     if (const auto *Step = dyn_cast<UnaryOperator>(S); Step && Step->isIncrementDecrementOp())
       if (const auto *Target = dyn_cast<DeclRefExpr>(Step->getSubExpr()); Target && isVariable(Target->getDecl()))
         return tag("Step", llvm::json::Array{Target->getDecl()->getNameAsString(), varType(Target->getDecl()), Step->isIncrementOp(),
@@ -5183,8 +5222,16 @@ private:
     // A range-for over a read-only sequence parameter, decision 0143. The loop variable is `T x`, `const T& x`, `auto x` or `const auto& x`, with
     // `T` the element type. The core builds the loop over the indexes. A write reference, a range that is no parameter, and an element of
     // another type stay unknown.
+    // A range over a vector of unique_ptr has no rule yet, decision 0170.
+    if (const auto *Range = dyn_cast<CXXForRangeStmt>(S)) {
+      const auto *Named = dyn_cast<DeclRefExpr>(Range->getRangeInit()->IgnoreParenImpCasts());
+      const QualType Held = Named ? Named->getDecl()->getType() : Range->getRangeInit()->getType();
+      if (!ownVecElement(seqElement(Held)).isNull() || !ownVecElement(mutSeq(Held)).isNull() || !ownVecElement(localVec(Held.getNonReferenceType())).isNull())
+        return unknown(S, "a range-for over a vector of unique_ptr", line(S->getBeginLoc()));
+    }
     if (const auto *Range = dyn_cast<CXXForRangeStmt>(S); Range && !Range->getInit() && Range->getLoopVariable() && Range->getLoopVariable()->getIdentifier())
       if (const auto *Ref = dyn_cast<DeclRefExpr>(Range->getRangeInit()->IgnoreParenImpCasts()); Ref && isa<ParmVarDecl>(Ref->getDecl()) && isSeq(Ref->getType())) {
+
         QualType Declared = Range->getLoopVariable()->getType();
         bool Written = false;
         if (Declared->isReferenceType()) {
@@ -5821,10 +5868,13 @@ private:
       {
         // The core judges a copy of a sequence by two `Seq` types. A vector the function writes is a dynamic sequence of its element.
         const QualType Written = isa<ParmVarDecl>(Named) ? mutSeq(Named->getType()) : localVec(Named->getType());
-        llvm::json::Value From = !Written.isNull() ? tag("Seq", llvm::json::Array{type(Written), nullptr}) : type(Source->getType());
-        return tag("Copy", llvm::json::Array{expr(Source, Near), std::move(From), tag("Seq", llvm::json::Array{type(localVec(Construct->getType())), nullptr})});
+        llvm::json::Value From = !Written.isNull() ? tag("Seq", llvm::json::Array{elementType(Written), nullptr}) : type(Source->getType());
+        return tag("Copy", llvm::json::Array{expr(Source, Near), std::move(From), tag("Seq", llvm::json::Array{elementType(localVec(Construct->getType())), nullptr})});
       }
     }
+    // `std::vector<T> v;` with no initial value is the empty sequence, decision 0170.
+    if (const auto *Default = dyn_cast<CXXConstructExpr>(E); Default && Default->getNumArgs() == 0 && Default->getConstructor()->isDefaultConstructor() && !localVec(Default->getType()).isNull())
+      return "EmptyVec";
     // `const D d;` of a plain struct with no field and no constructor of its own is the value `S_D()`, decision 0166.
     if (const auto *Default = dyn_cast<CXXConstructExpr>(E); Default && Default->getNumArgs() == 0 && Default->getConstructor()->isDefaultConstructor()) {
       const CXXRecordDecl *RD = plainStruct(Default->getType());
@@ -5934,7 +5984,10 @@ private:
         if (Callee && Callee->hasQualifier())
           return unknown(E, "a qualified call of a virtual function", Near);
         // A call that writes the object names the variable, with no cast, so the core finds the unique_ptr that takes the new value, decision 0169.
-        const Expr *Pointer = Call->getMethodDecl()->isConst() || !isa<DeclRefExpr>(Arrow->getArg(0)->IgnoreParenImpCasts()) ? optObject(Arrow->getArg(0)) : Arrow->getArg(0)->IgnoreParenImpCasts();
+        // So does the element of a vector of unique_ptr, `v[i]->f(a)`, decision 0170.
+        const Expr *Bare = Arrow->getArg(0)->IgnoreParenImpCasts();
+        const auto *Element = dyn_cast<CXXOperatorCallExpr>(Bare);
+        const Expr *Pointer = Call->getMethodDecl()->isConst() || !(isa<DeclRefExpr>(Bare) || (Element && Element->getOperator() == OO_Subscript)) ? optObject(Arrow->getArg(0)) : Bare;
         llvm::json::Array Args{tag("Value", expr(Pointer, line(E->getBeginLoc())))};
         for (const Expr *Arg : Call->arguments())
           Args.push_back(expr(Arg, line(E->getBeginLoc())));

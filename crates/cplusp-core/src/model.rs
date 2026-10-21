@@ -152,6 +152,7 @@ pub fn copy<T: Copy>(l: &List<T>) -> (r: List<T>)
 // ------------------------------------------------------------------ the C++ side
 
 /// The element of a sequence or of an optional: a scalar type, decision 0064, or a struct of the file by its key, decision 0076.
+/// `Own` is a unique_ptr of a struct or an interface, as an element of a sequence only, decision 0170.
 #[derive(Structural, PartialEq, Eq, Clone, Copy, Debug)]
 pub enum Scalar {
     I32,
@@ -161,6 +162,7 @@ pub enum Scalar {
     U64,
     Bool,
     Struct(u32),
+    Own(u32),
 }
 
 /// The extent of a sequence: no fixed length, or a fixed length, decision 0070.
@@ -316,6 +318,7 @@ pub enum Expr {
     Eps,
     Eta,
     DblMax,
+    EmptyVec,
     Unknown(u32, u32),
 }
 
@@ -496,6 +499,7 @@ pub enum DExpr {
     IntAbs(Box<DExpr>),
     Upcast(u32, u32, Box<DExpr>),
     Lemma(u32, Box<DArgs>, Box<DExpr>),
+    EmptySeq,
     Abs(Box<DExpr>),
     Eps,
     Eta,
@@ -533,6 +537,7 @@ pub enum DStmt {
     SetOut(u32, DExpr),
     SetOutField(u32, u32, DExpr),
     Update(Objs, u32, DArgs),
+    UpdateAt(Obj, Box<DExpr>, Objs, u32, DArgs),
     LocalUpdate(u32, DTy, Objs, u32, DArgs),
     CallStmt(u32, DArgs),
     Exit,
@@ -621,7 +626,8 @@ pub type Models = List<Model>;
 /// decision 0161. `NoOverride` is a class with no override of a virtual function of its interface, or one with other parameters or
 /// another result, and `Unchecked` is an override with no function in the model, each by the keys of the class and the interface,
 /// the id of the name of the function and the line of the class. `NotFinal` is a class over an interface that is not final, by its
-/// key and line. `Overload` is an interface with two virtual functions of one name, by its key and line, decision 0165. `Later` is
+/// key and line. `IndexWritten` is a call through an element of a vector whose index reads a place that the call writes, by the line,
+/// decision 0170. `Overload` is an interface with two virtual functions of one name, by its key and line, decision 0165. `Later` is
 /// a contract of a virtual function that reads a virtual function declared after it, by the key of the interface, the ids of the
 /// names of both functions and the line, decision 0166. `NoMethod` is an override that writes and has no method in the model, by
 /// the keys of the class and the interface, the id of the name of the function and the line of the class, decision 0169.
@@ -662,6 +668,7 @@ pub enum Refusal {
     Overload(u32, u32),
     Later(u32, u32, u32, u32),
     NoMethod(u32, u32, u32, u32),
+    IndexWritten(u32),
 }
 
 // ------------------------------------------------------------------ the rules
@@ -683,6 +690,8 @@ pub open spec fn spec_scalar_dty(s: Scalar) -> DTy {
         Scalar::U64 => DTy::UInt64,
         Scalar::Bool => DTy::Bool,
         Scalar::Struct(k) => DTy::Struct(k),
+        // A unique_ptr as an element of a vector, decision 0170.
+        Scalar::Own(k) => DTy::Opt(Scalar::Struct(k)),
     }
 }
 
@@ -703,6 +712,12 @@ pub open spec fn spec_ty(t: Ty, line: u32) -> Result<DTy, Refusal> {
         Ty::Seq(Scalar::Bool, _) => Err(Refusal::Element(line)),
         Ty::Seq(s, _) => Ok(DTy::Seq(s)),
         Ty::Struct(k) => Ok(DTy::Struct(k)),
+        // A unique_ptr is a scalar of the model only as the element of a sequence, decision 0170.
+        Ty::Opt(Scalar::Own(_)) => Err(Refusal::Element(line)),
+        Ty::Ptr(Scalar::Own(_)) => Err(Refusal::Element(line)),
+        Ty::Own(Scalar::Own(_)) => Err(Refusal::Element(line)),
+        Ty::Mut(Scalar::Own(_)) => Err(Refusal::Element(line)),
+        Ty::MutAfter(Scalar::Own(_)) => Err(Refusal::Element(line)),
         Ty::Opt(s) => Ok(DTy::Opt(s)),
         // A pointer to const is an Option in Dafny, decisions 0140 and 0141.
         Ty::Ptr(s) => Ok(DTy::Opt(s)),
@@ -929,6 +944,7 @@ pub open spec fn spec_elem(s: Scalar) -> Ty {
         Scalar::U64 => Ty::U64,
         Scalar::Bool => Ty::Bool,
         Scalar::Struct(k) => Ty::Struct(k),
+        Scalar::Own(k) => Ty::Own(Scalar::Struct(k)),
     }
 }
 
@@ -1126,6 +1142,21 @@ pub open spec fn spec_code(e: Expr, line: u32) -> Result<DExpr, Refusal> {
 }
 
 /// A statement with the calls that run before it. With no call it is the statement alone.
+/// The value of a push_back. A value that the compiler turns into an optional, as `std::make_unique<D>(a)`, runs its calls before it,
+/// decision 0170. Any other value is code with no call, decision 0148.
+pub open spec fn spec_push_value(e: Expr, all: Fns, line: u32, sd: Structs) -> Result<(DCalls, DExpr), Refusal> {
+    match e {
+        Expr::Wrap(_) => match spec_lift(e, all, line, sd, 0, true) {
+            Ok((c, d, _)) => Ok((c, d)),
+            Err(r) => Err(r),
+        },
+        _ => match spec_code(e, line) {
+            Ok(d) => Ok((List::Nil, d)),
+            Err(r) => Err(r),
+        },
+    }
+}
+
 pub open spec fn spec_pre(c: DCalls, s: DStmt) -> DStmt {
     match c {
         List::Nil => s,
@@ -2507,7 +2538,6 @@ pub open spec fn spec_target(o: Expr, ps: Params, line: u32) -> Result<Obj, Refu
             // A call that passes a vector by reference on to a writer has no rule yet, decision 0147, nor one that passes a local
             // vector by reference, decision 0160.
             Ty::MutSeq(_) => Err(Refusal::PassOn(v, line)),
-            Ty::Vec(_) => Err(Refusal::PassLocal(v, line)),
             _ => if (spec_get(ps, v) is Some) {
                 Err(Refusal::WriteParam(v, line))
             } else {
@@ -2594,8 +2624,134 @@ pub open spec fn spec_callee_writebacks(all: Fns, key: u32, args: Args, ps: Para
 
 /// A call that stands alone as a statement, decision 0096. A call of a function that gives back a value of a parameter writes each
 /// such argument back, decision 0108. A call of any other function must give no value.
+/// The element of a vector of unique_ptr that is the object of a call: `v[i]->f(a)`, by the name and type of the vector and the
+/// index, decision 0170.
+pub open spec fn spec_elem_object(o: Expr) -> Option<(u32, Ty, Expr)>
+    decreases o,
+{
+    match o {
+        Expr::Value(a) => match *a {
+            Expr::Index(v, i) => match *v {
+                Expr::Var(n, t) => match t {
+                    Ty::Vec(Scalar::Own(_)) => Some((n, t, *i)),
+                    Ty::MutSeq(Scalar::Own(_)) => Some((n, t, *i)),
+                    _ => None,
+                },
+                _ => None,
+            },
+            _ => None,
+        },
+        Expr::Cast(c, a) => if c == CastKind::Read || c == CastKind::NoOp {
+            spec_elem_object(*a)
+        } else {
+            None
+        },
+        Expr::Paren(a) => spec_elem_object(*a),
+        _ => None,
+    }
+}
+
+/// The place of a vector whose element a call writes back: a local vector, or a vector by reference on the modifies line.
+pub open spec fn spec_vec_obj(v: u32, t: Ty, ps: Params, line: u32) -> Result<Obj, Refusal> {
+    match t {
+        Ty::Vec(_) => if spec_get(ps, v) is Some {
+            Err(Refusal::NoTarget(line))
+        } else {
+            Ok(Obj::Local(v))
+        },
+        Ty::MutSeq(_) => if spec_get(ps, v) == Some(t) {
+            Ok(Obj::Out(v))
+        } else {
+            Err(Refusal::NoTarget(line))
+        },
+        _ => Err(Refusal::NoTarget(line)),
+    }
+}
+
+/// The names that an index reads, when it is names, literals, sizes and arithmetic. Any other index gives none.
+pub open spec fn spec_index_vars(e: Expr) -> Option<Names>
+    decreases e,
+{
+    match e {
+        Expr::Var(n, _) => Some(List::Cons(n, Box::new(List::Nil))),
+        Expr::Lit(_, _) => Some(List::Nil),
+        Expr::Int(_) => Some(List::Nil),
+        Expr::Cast(_, a) => spec_index_vars(*a),
+        Expr::Paren(a) => spec_index_vars(*a),
+        Expr::Size(a) => spec_index_vars(*a),
+        Expr::Bin(_, a, b) => match spec_index_vars(*a) {
+            Some(na) => match spec_index_vars(*b) {
+                Some(nb) => Some(spec_append(na, nb)),
+                None => None,
+            },
+            None => None,
+        },
+        _ => None,
+    }
+}
+
+/// The place has a name in `ns`.
+pub open spec fn spec_obj_named(o: Obj, ns: Names) -> bool {
+    match o {
+        Obj::Local(n) => spec_has(ns, n),
+        Obj::Out(n) => spec_has(ns, n),
+        Obj::Owned(n) => spec_has(ns, n),
+        Obj::Object => false,
+    }
+}
+
+/// A place that the call writes back has a name in `ns`.
+pub open spec fn spec_writes_name(os: Objs, ns: Names) -> bool
+    decreases os,
+{
+    match os {
+        List::Nil => false,
+        List::Cons(o, rest) => spec_obj_named(o, ns) || spec_writes_name(*rest, ns),
+    }
+}
+
+/// A call of a virtual function that writes its object, whose object is an element of a vector of unique_ptr. It writes the new value
+/// back to that element. The index reads no place that the call writes, decision 0170.
+pub open spec fn spec_call_elem(key: u32, name: u32, args: Args, line: u32, all: Fns, ps: Params, sd: Structs) -> Option<Result<DStmt, Refusal>> {
+    match spec_find(all, key) {
+        Some(f) => if spec_head_ty(f.params) is Some && spec_head_ty(f.params)->Some_0 is IfaceMut {
+            match args {
+                List::Cons(a, rest) => match spec_elem_object(*a) {
+                    Some((v, t, i)) => Some(match spec_vec_obj(v, t, ps, line) {
+                        Err(r) => Err(r),
+                        Ok(vo) => match spec_writebacks(*rest, spec_tail(f.params), ps, line) {
+                            Err(r) => Err(r),
+                            Ok(os) => match spec_index_vars(i) {
+                                None => Err(Refusal::IndexWritten(line)),
+                                Some(ns) => if spec_has(ns, v) || spec_writes_name(os, ns) {
+                                    Err(Refusal::IndexWritten(line))
+                                } else {
+                                    match spec_code(i, line) {
+                                        Err(r) => Err(r),
+                                        Ok(di) => match spec_call_lift(key, name, args, line, all, line, sd) {
+                                            Ok((c, da)) => Ok(spec_pre(c, DStmt::UpdateAt(vo, Box::new(di), os, key, da))),
+                                            Err(r) => Err(r),
+                                        },
+                                    }
+                                },
+                            },
+                        },
+                    }),
+                    None => None,
+                },
+                List::Nil => None,
+            }
+        } else {
+            None
+        },
+        None => None,
+    }
+}
+
 pub open spec fn spec_call_stmt(key: u32, name: u32, args: Args, line: u32, all: Fns, ps: Params, sd: Structs) -> Result<DStmt, Refusal> {
-    if spec_callee_writes(all, key) {
+    if spec_callee_writes(all, key) && spec_call_elem(key, name, args, line, all, ps, sd) is Some {
+        spec_call_elem(key, name, args, line, all, ps, sd)->Some_0
+    } else if spec_callee_writes(all, key) {
         match spec_callee_writebacks(all, key, args, ps, line) {
             Err(r) => Err(r),
             Ok(os) => match spec_call_lift(key, name, args, line, all, line, sd) {
@@ -2711,6 +2867,8 @@ pub open spec fn spec_stmt(s: Stmt, all: Fns, env: Params, ps: Params, sd: Struc
                 } else {
                     Err(Refusal::VecLocal(l))
                 },
+                // A local vector with no initial value is the empty sequence, decision 0170.
+                Expr::EmptyVec => Ok(DStmt::Local(n, dt, DExpr::EmptySeq)),
                 _ => Err(Refusal::VecLocal(l)),
             },
         },
@@ -2916,15 +3074,16 @@ pub open spec fn spec_stmt(s: Stmt, all: Fns, env: Params, ps: Params, sd: Struc
         },
         // `v.push_back(e)` appends one element, decision 0148. A failed push_back throws and never returns to verified code.
         // ponytail: a call in the value is refused as out of place, as for SetIndex. Upgrade: lift the calls, decision 0104.
+        // `v.push_back(std::make_unique<D>(a))` runs the constructor of `D` before it, decision 0170.
         Stmt::PushBack(v, e, l) => match spec_get(ps, v) {
-            Some(Ty::MutSeq(_)) => match spec_code(e, l) {
-                Ok(de) => Ok(DStmt::SetOut(v, DExpr::Append(Box::new(DExpr::Out(v)), Box::new(de)))),
+            Some(Ty::MutSeq(_)) => match spec_push_value(e, all, l, sd) {
+                Ok((c, de)) => Ok(spec_pre(c, DStmt::SetOut(v, DExpr::Append(Box::new(DExpr::Out(v)), Box::new(de))))),
                 Err(r) => Err(r),
             },
             Some(_) => Err(Refusal::WriteParam(v, l)),
             None => match spec_get(env, v) {
-                Some(Ty::Vec(_)) => match spec_code(e, l) {
-                    Ok(de) => Ok(DStmt::Assign(v, DExpr::Append(Box::new(DExpr::Var(v)), Box::new(de)))),
+                Some(Ty::Vec(_)) => match spec_push_value(e, all, l, sd) {
+                    Ok((c, de)) => Ok(spec_pre(c, DStmt::Assign(v, DExpr::Append(Box::new(DExpr::Var(v)), Box::new(de))))),
                     Err(r) => Err(r),
                 },
                 _ => Err(Refusal::Syntax(l)),
@@ -4425,7 +4584,10 @@ pub proof fn lemma_unknown_stmt_is_refused(s: Stmt, all: Fns, env: Params, ps: P
                 lemma_unknown_code_is_refused(e, l);
             }
         },
-        Stmt::PushBack(_, e, l) => lemma_unknown_code_is_refused(e, l),
+        Stmt::PushBack(_, e, l) => {
+            lemma_unknown_code_is_refused(e, l);
+            lemma_unknown_lift_is_refused(e, all, l, sd, 0, true);
+        },
         Stmt::Sort(_, _) => {},
         Stmt::SortBy(_, _, _, _, e, l) => lemma_unknown_code_is_refused(e, l),
         Stmt::Switch(e, _, cs, l) => {
@@ -4621,7 +4783,7 @@ pub proof fn lemma_kept_assign(s: Stmt, all: Fns, env: Params, ps: Params, sd: S
 pub proof fn lemma_kept_set_field(s: Stmt, all: Fns, env: Params, ps: Params, sd: Structs)
     requires
         spec_stmt(s, all, env, ps, sd).is_ok(),
-        s is SetField || s is SetRefField,
+        s is SetField || s is SetRefField || s is PushBack,
     ensures
         count_dstmt(spec_stmt(s, all, env, ps, sd).unwrap()) == 1,
 {
@@ -4780,6 +4942,7 @@ pub proof fn lemma_stmt_kept(s: Stmt, all: Fns, env: Params, ps: Params, sd: Str
         Stmt::Assign(_, _, _) => lemma_kept_assign(s, all, env, ps, sd),
         Stmt::SetField(_, _, _) => lemma_kept_set_field(s, all, env, ps, sd),
         Stmt::SetRefField(_, _, _, _) => lemma_kept_set_field(s, all, env, ps, sd),
+        Stmt::PushBack(_, _, _) => lemma_kept_set_field(s, all, env, ps, sd),
         Stmt::Switch(e, k, cs, l) => {
             lemma_cases_kept(*cs, all, env, ps, sd);
             let ce = spec_lift(e, all, l, sd, 0, true).unwrap();
@@ -4887,6 +5050,7 @@ pub open spec fn calls_resolve_stmt(s: DStmt, all: Fns, sd: Structs) -> bool
         DStmt::ReturnCall(k, _) => spec_callable(all, k, sd),
         DStmt::AssignCall(_, k, _) => spec_callable(all, k, sd),
         DStmt::Update(_, k, _) => spec_callable(all, k, sd),
+        DStmt::UpdateAt(_, _, _, k, _) => spec_callable(all, k, sd),
         DStmt::LocalUpdate(_, _, _, k, _) => spec_callable(all, k, sd),
         DStmt::CallStmt(k, _) => spec_callable(all, k, sd),
         DStmt::Pre(c, s) => calls_resolve_calls(c, all, sd) && calls_resolve_stmt(*s, all, sd),
@@ -5267,6 +5431,26 @@ pub proof fn lemma_resolves_set_field(s: Stmt, all: Fns, env: Params, ps: Params
     }
 }
 
+/// A push_back runs the calls of its value before it, decision 0170, and each names a method.
+pub proof fn lemma_resolves_push(s: Stmt, all: Fns, env: Params, ps: Params, sd: Structs)
+    requires
+        spec_stmt(s, all, env, ps, sd).is_ok(),
+        s is PushBack,
+    ensures
+        calls_resolve_stmt(spec_stmt(s, all, env, ps, sd).unwrap(), all, sd),
+{
+    reveal_with_fuel(calls_resolve_stmt, 2);
+    let v = s->PushBack_0;
+    let e = s->PushBack_1;
+    let l = s->PushBack_2;
+    if e is Wrap && spec_lift(e, all, l, sd, 0, true).is_ok() {
+        lemma_lift_resolves(e, all, l, sd, 0, true);
+        let (c, d, _) = spec_lift(e, all, l, sd, 0, true).unwrap();
+        lemma_pre_resolves(c, DStmt::SetOut(v, DExpr::Append(Box::new(DExpr::Out(v)), Box::new(d))), all, sd);
+        lemma_pre_resolves(c, DStmt::Assign(v, DExpr::Append(Box::new(DExpr::Var(v)), Box::new(d))), all, sd);
+    }
+}
+
 pub proof fn lemma_resolves_set_ref_field(s: Stmt, all: Fns, env: Params, ps: Params, sd: Structs)
     requires
         spec_stmt(s, all, env, ps, sd).is_ok(),
@@ -5288,7 +5472,7 @@ pub proof fn lemma_resolves_set_ref_field(s: Stmt, all: Fns, env: Params, ps: Pa
 pub proof fn lemma_resolves_plain(s: Stmt, all: Fns, env: Params, ps: Params, sd: Structs)
     requires
         spec_stmt(s, all, env, ps, sd).is_ok(),
-        s is Step || s is Exit || s is Assert || s is Apply || s is Unknown || s is SetIndex || s is PushBack || s is Sort || s is SortBy,
+        s is Step || s is Exit || s is Assert || s is Apply || s is Unknown || s is SetIndex || s is Sort || s is SortBy,
     ensures
         calls_resolve_stmt(spec_stmt(s, all, env, ps, sd).unwrap(), all, sd),
 {
@@ -5362,7 +5546,7 @@ pub proof fn lemma_stmt_calls_resolve(s: Stmt, all: Fns, env: Params, ps: Params
         Stmt::Apply(_, _, _) => lemma_resolves_plain(s, all, env, ps, sd),
         Stmt::Unknown(_, _) => lemma_resolves_plain(s, all, env, ps, sd),
         Stmt::SetIndex(_, _, _, _) => lemma_resolves_plain(s, all, env, ps, sd),
-        Stmt::PushBack(_, _, _) => lemma_resolves_plain(s, all, env, ps, sd),
+        Stmt::PushBack(_, _, _) => lemma_resolves_push(s, all, env, ps, sd),
         Stmt::Sort(_, _) => lemma_resolves_plain(s, all, env, ps, sd),
         Stmt::SortBy(_, _, _, _, _, _) => lemma_resolves_plain(s, all, env, ps, sd),
         Stmt::If(c, t, f, l) => {
@@ -5470,6 +5654,8 @@ pub fn scalar_dty(s: Scalar) -> (r: DTy)
         Scalar::U64 => DTy::UInt64,
         Scalar::Bool => DTy::Bool,
         Scalar::Struct(k) => DTy::Struct(k),
+        // A unique_ptr as an element of a vector, decision 0170.
+        Scalar::Own(k) => DTy::Opt(Scalar::Struct(k)),
     }
 }
 
@@ -5491,6 +5677,12 @@ pub fn translate_ty(t: Ty, line: u32) -> (r: Result<DTy, Refusal>)
         Ty::Seq(Scalar::Bool, _) => Err(Refusal::Element(line)),
         Ty::Seq(s, _) => Ok(DTy::Seq(s)),
         Ty::Struct(k) => Ok(DTy::Struct(k)),
+        // A unique_ptr is a scalar of the model only as the element of a sequence, decision 0170.
+        Ty::Opt(Scalar::Own(_)) => Err(Refusal::Element(line)),
+        Ty::Ptr(Scalar::Own(_)) => Err(Refusal::Element(line)),
+        Ty::Own(Scalar::Own(_)) => Err(Refusal::Element(line)),
+        Ty::Mut(Scalar::Own(_)) => Err(Refusal::Element(line)),
+        Ty::MutAfter(Scalar::Own(_)) => Err(Refusal::Element(line)),
         Ty::Opt(s) => Ok(DTy::Opt(s)),
         // A pointer to const is an Option in Dafny, decisions 0140 and 0141.
         Ty::Ptr(s) => Ok(DTy::Opt(s)),
@@ -5619,6 +5811,7 @@ pub fn elem(s: Scalar) -> (r: Ty)
         Scalar::U64 => Ty::U64,
         Scalar::Bool => Ty::Bool,
         Scalar::Struct(k) => Ty::Struct(k),
+        Scalar::Own(k) => Ty::Own(Scalar::Struct(k)),
     }
 }
 
@@ -5670,6 +5863,22 @@ pub fn translate_code(e: &Expr, line: u32) -> (r: Result<DExpr, Refusal>)
     match lift(e, &List::Nil, line, &List::Nil, 0, false) {
         Ok((_, d, _)) => Ok(d),
         Err(r) => Err(r),
+    }
+}
+
+pub fn push_value(e: &Expr, all: &Fns, line: u32, sd: &Structs) -> (r: Result<(DCalls, DExpr), Refusal>)
+    ensures
+        r == spec_push_value(*e, *all, line, *sd),
+{
+    match e {
+        Expr::Wrap(_) => match lift(e, all, line, sd, 0, true) {
+            Ok((c, d, _)) => Ok((c, d)),
+            Err(r) => Err(r),
+        },
+        _ => match translate_code(e, line) {
+            Ok(d) => Ok((List::Nil, d)),
+            Err(r) => Err(r),
+        },
     }
 }
 
@@ -7038,7 +7247,6 @@ pub fn target(o: &Expr, ps: &Params, line: u32) -> (r: Result<Obj, Refusal>)
                 Err(Refusal::Syntax(line))
             },
             Ty::MutSeq(_) => Err(Refusal::PassOn(*v, line)),
-            Ty::Vec(_) => Err(Refusal::PassLocal(*v, line)),
             _ => if get(ps, *v).is_some() {
                 Err(Refusal::WriteParam(*v, line))
             } else {
@@ -7132,11 +7340,152 @@ pub fn callee_writebacks(all: &Fns, key: u32, args: &Args, ps: &Params, line: u3
     }
 }
 
+pub fn elem_object(o: &Expr) -> (r: Option<(u32, Ty, &Expr)>)
+    ensures
+        match r {
+            Some((v, t, i)) => spec_elem_object(*o) == Some((v, t, *i)),
+            None => spec_elem_object(*o) is None,
+        },
+    decreases o,
+{
+    match o {
+        Expr::Value(a) => match &**a {
+            Expr::Index(v, i) => match &**v {
+                Expr::Var(n, t) => match t {
+                    Ty::Vec(Scalar::Own(_)) => Some((*n, *t, &**i)),
+                    Ty::MutSeq(Scalar::Own(_)) => Some((*n, *t, &**i)),
+                    _ => None,
+                },
+                _ => None,
+            },
+            _ => None,
+        },
+        Expr::Cast(c, a) => if *c == CastKind::Read || *c == CastKind::NoOp {
+            elem_object(a)
+        } else {
+            None
+        },
+        Expr::Paren(a) => elem_object(a),
+        _ => None,
+    }
+}
+
+pub fn vec_obj(v: u32, t: Ty, ps: &Params, line: u32) -> (r: Result<Obj, Refusal>)
+    ensures
+        r == spec_vec_obj(v, t, *ps, line),
+{
+    match t {
+        Ty::Vec(_) => if get_ref(ps, v).is_some() {
+            Err(Refusal::NoTarget(line))
+        } else {
+            Ok(Obj::Local(v))
+        },
+        Ty::MutSeq(_) => if get(ps, v) == Some(t) {
+            Ok(Obj::Out(v))
+        } else {
+            Err(Refusal::NoTarget(line))
+        },
+        _ => Err(Refusal::NoTarget(line)),
+    }
+}
+
+pub fn index_vars(e: &Expr) -> (r: Option<Names>)
+    ensures
+        r == spec_index_vars(*e),
+    decreases e,
+{
+    match e {
+        Expr::Var(n, _) => Some(List::Cons(*n, Box::new(List::Nil))),
+        Expr::Lit(_, _) => Some(List::Nil),
+        Expr::Int(_) => Some(List::Nil),
+        Expr::Cast(_, a) => index_vars(a),
+        Expr::Paren(a) => index_vars(a),
+        Expr::Size(a) => index_vars(a),
+        Expr::Bin(_, a, b) => match index_vars(a) {
+            Some(na) => match index_vars(b) {
+                Some(nb) => Some(append(na, nb)),
+                None => None,
+            },
+            None => None,
+        },
+        _ => None,
+    }
+}
+
+pub fn obj_named(o: Obj, ns: &Names) -> (r: bool)
+    ensures
+        r == spec_obj_named(o, *ns),
+{
+    match o {
+        Obj::Local(n) => has(ns, n),
+        Obj::Out(n) => has(ns, n),
+        Obj::Owned(n) => has(ns, n),
+        Obj::Object => false,
+    }
+}
+
+pub fn writes_name(os: &Objs, ns: &Names) -> (r: bool)
+    ensures
+        r == spec_writes_name(*os, *ns),
+    decreases os,
+{
+    match os {
+        List::Nil => false,
+        List::Cons(o, rest) => obj_named(*o, ns) || writes_name(rest, ns),
+    }
+}
+
+pub fn call_elem(key: u32, name: u32, args: &Args, line: u32, all: &Fns, ps: &Params, sd: &Structs) -> (r: Option<Result<DStmt, Refusal>>)
+    ensures
+        r == spec_call_elem(key, name, *args, line, *all, *ps, *sd),
+{
+    match find(all, key) {
+        Some(f) => if matches!(head_ty(&f.params), Some(Ty::IfaceMut(_))) {
+            match args {
+                List::Cons(a, rest) => match elem_object(a) {
+                    Some((v, t, i)) => Some(match vec_obj(v, t, ps, line) {
+                        Err(r) => Err(r),
+                        Ok(vo) => match writebacks(rest, &tail(&f.params), ps, line) {
+                            Err(r) => Err(r),
+                            Ok(os) => match index_vars(i) {
+                                None => Err(Refusal::IndexWritten(line)),
+                                Some(ns) => if has(&ns, v) || writes_name(&os, &ns) {
+                                    Err(Refusal::IndexWritten(line))
+                                } else {
+                                    match translate_code(i, line) {
+                                        Err(r) => Err(r),
+                                        Ok(di) => match call_lift(key, name, args, line, all, line, sd) {
+                                            Ok((c, da)) => Ok(pre(c, DStmt::UpdateAt(vo, Box::new(di), os, key, da))),
+                                            Err(r) => Err(r),
+                                        },
+                                    }
+                                },
+                            },
+                        },
+                    }),
+                    None => None,
+                },
+                List::Nil => None,
+            }
+        } else {
+            None
+        },
+        None => None,
+    }
+}
+
 pub fn call_stmt(key: u32, name: u32, args: &Args, line: u32, all: &Fns, ps: &Params, sd: &Structs) -> (r: Result<DStmt, Refusal>)
     ensures
         r == spec_call_stmt(key, name, *args, line, *all, *ps, *sd),
 {
-    if callee_writes(all, key) {
+    let elem = if callee_writes(all, key) {
+        call_elem(key, name, args, line, all, ps, sd)
+    } else {
+        None
+    };
+    if let Some(r) = elem {
+        r
+    } else if callee_writes(all, key) {
         match callee_writebacks(all, key, args, ps, line) {
             Err(r) => Err(r),
             Ok(os) => match call_lift(key, name, args, line, all, line, sd) {
@@ -7241,6 +7590,7 @@ pub fn translate_stmt(s: &Stmt, all: &Fns, env: &Params, ps: &Params, sd: &Struc
                 } else {
                     Err(Refusal::VecLocal(*l))
                 },
+                Expr::EmptyVec => Ok(DStmt::Local(*n, dt, DExpr::EmptySeq)),
                 _ => Err(Refusal::VecLocal(*l)),
             },
         },
@@ -7446,14 +7796,14 @@ pub fn translate_stmt(s: &Stmt, all: &Fns, env: &Params, ps: &Params, sd: &Struc
             },
         },
         Stmt::PushBack(v, e, l) => match get(ps, *v) {
-            Some(Ty::MutSeq(_)) => match translate_code(e, *l) {
-                Ok(de) => Ok(DStmt::SetOut(*v, DExpr::Append(Box::new(DExpr::Out(*v)), Box::new(de)))),
+            Some(Ty::MutSeq(_)) => match push_value(e, all, *l, sd) {
+                Ok((c, de)) => Ok(pre(c, DStmt::SetOut(*v, DExpr::Append(Box::new(DExpr::Out(*v)), Box::new(de))))),
                 Err(r) => Err(r),
             },
             Some(_) => Err(Refusal::WriteParam(*v, *l)),
             None => match get(env, *v) {
-                Some(Ty::Vec(_)) => match translate_code(e, *l) {
-                    Ok(de) => Ok(DStmt::Assign(*v, DExpr::Append(Box::new(DExpr::Var(*v)), Box::new(de)))),
+                Some(Ty::Vec(_)) => match push_value(e, all, *l, sd) {
+                    Ok((c, de)) => Ok(pre(c, DStmt::Assign(*v, DExpr::Append(Box::new(DExpr::Var(*v)), Box::new(de))))),
                     Err(r) => Err(r),
                 },
                 _ => Err(Refusal::Syntax(*l)),
@@ -7888,6 +8238,7 @@ pub fn copy_dexpr(d: &DExpr) -> (r: DExpr)
         DExpr::FromInt(x0) => DExpr::FromInt(Box::new(copy_dexpr(x0))),
         DExpr::Upcast(x0, x1, x2) => DExpr::Upcast(*x0, *x1, Box::new(copy_dexpr(x2))),
         DExpr::Lemma(x0, x1, x2) => DExpr::Lemma(*x0, Box::new(copy_dargs(x1)), Box::new(copy_dexpr(x2))),
+        DExpr::EmptySeq => DExpr::EmptySeq,
         DExpr::IntAbs(x0) => DExpr::IntAbs(Box::new(copy_dexpr(x0))),
         DExpr::Eps => DExpr::Eps,
         DExpr::Eta => DExpr::Eta,
