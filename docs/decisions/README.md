@@ -175,3 +175,4 @@ Status is `decided`, `proposed` (the default until someone objects or the thin s
 | [0168](0168-a-unique-ptr-of-an-interface.md) | A unique_ptr of an interface. Slice four of 0165 | decided |
 | [0169](0169-a-virtual-function-that-is-not-const.md) | A virtual function that is not const. Slice three of 0165 | decided |
 | [0170](0170-a-vector-of-unique-ptr.md) | A vector of unique_ptr of an interface. Slice six of 0165 | decided |
+| [0171](0171-a-unique-ptr-field-and-a-move.md) | A unique_ptr as a field and by value, and std::move of a local. Step A of slice five of 0165 | decided |

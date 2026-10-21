@@ -3802,3 +3802,114 @@ fn a_call_through_an_element_writes_the_element_back() {
     let List::Cons(s, _) = *rest else { panic!("the call") };
     assert!(matches!(&*s.0, DStmt::Update(List::Cons(Obj::Local(v), _), 327, _) if *v == LX), "{:?}", s.0);
 }
+
+const MA: u32 = 331;
+const MB: u32 = 332;
+const MTAKE: u32 = 333;
+const MP: u32 = 334;
+const MCALLER: u32 = 335;
+
+/// `std::make_unique<Square>()` as a `std::unique_ptr<Shape>`, decision 0168.
+fn made_square() -> Expr {
+    Expr::Wrap(b(Expr::Cast(CastKind::Upcast(SQUARE, SHAPE), b(Expr::Construct(SQUARE, Box::new(List::Nil))))))
+}
+
+/// `void take(std::unique_ptr<Shape> p);`, a trusted function with no contract that owns its parameter.
+fn take_owned() -> Function {
+    let own = Ty::Own(Scalar::Struct(SHAPE));
+    Function { name: MTAKE, line: 40, params: List::Cons((MP, own), Box::new(List::Nil)), ret: Ty::Void, trusted: true, conds: List::Nil, body: List::Nil }
+}
+
+/// A caller of `take` with the parameter `p` of type `std::unique_ptr<Shape>` by value, and the body given.
+fn mover(body: Stmts) -> Function {
+    let own = Ty::Own(Scalar::Struct(SHAPE));
+    Function { name: MCALLER, line: 44, params: List::Cons((MP, own), Box::new(List::Nil)), ret: Ty::I32, trusted: false, conds: List::Nil, body }
+}
+
+/// The model of the caller, the second of the unit with `take`.
+fn moved_model(body: Stmts) -> Model {
+    let all = fns(vec![take_owned(), mover(body)]);
+    let List::Cons(_, rest) = translate_unit(&all, &shape_of(&[(CORNERS, BKEY)])) else { panic!("two models") };
+    let List::Cons(m, _) = *rest else { panic!("the model of the caller") };
+    m
+}
+
+/// `std::move(a)` reads the value of `a`. After a call that stands alone or the start value of a local, `a` is null in the model,
+/// so a later read fails as a null read. A return moves a local or a parameter, and adds nothing after it, decision 0171.
+#[test]
+fn a_move_gives_the_value_and_leaves_the_local_null() {
+    let own = Ty::Own(Scalar::Struct(SHAPE));
+    let body = List::Cons(
+        Box::new(Stmt::Local(MA, own, made_square(), 45)),
+        Box::new(List::Cons(
+            Box::new(Stmt::Local(MB, own, Expr::Move(MA, own), 46)),
+            Box::new(List::Cons(Box::new(Stmt::Call(MTAKE, MTAKE, Box::new(List::Cons(b(Expr::Move(MB, own)), Box::new(List::Nil))), 47)), Box::new(one(Stmt::Return(Expr::Lit(0, Ty::I32), 48))))),
+        )),
+    );
+    let Model::Full(m) = moved_model(body) else { panic!("a full model") };
+    // Each statement that moves a local is a Moved statement, which sets the local to null after it.
+    let List::Cons(_, rest) = strip(m.body) else { panic!("the first local") };
+    let List::Cons(s, rest) = *rest else { panic!("the second local") };
+    assert_eq!(*s.0, DStmt::Moved(Box::new(DStmt::Local(MB, DTy::Opt(Scalar::Struct(SHAPE)), DExpr::Var(MA))), names(&[MA])));
+    let List::Cons(s, _) = *rest else { panic!("the call") };
+    assert!(matches!(&*s.0, DStmt::Moved(c, ns) if matches!(&**c, DStmt::CallStmt(k, _) if *k == MTAKE) && *ns == names(&[MB])), "{:?}", s.0);
+    // A return of a moved local gives its value, and so does a return of a moved parameter.
+    let body = List::Cons(Box::new(Stmt::Local(MA, own, made_square(), 45)), Box::new(one(Stmt::Return(Expr::Move(MA, own), 46))));
+    let f = Function { ret: own, ..mover(body) };
+    let Model::Full(m) = translate_function(&f, &List::Nil, &shape_of(&[(CORNERS, BKEY)])) else { panic!("a full model of a return") };
+    let List::Cons(_, rest) = strip(m.body) else { panic!("the local") };
+    assert_eq!(*rest, List::Cons((Box::new(DStmt::Return(DExpr::Var(MA))), 0), Box::new(List::Nil)));
+    let f = Function { ret: own, ..mover(one(Stmt::Return(Expr::Move(MP, own), 45))) };
+    let Model::Full(m) = translate_function(&f, &List::Nil, &shape_of(&[(CORNERS, BKEY)])) else { panic!("a full model of a parameter") };
+    assert_eq!(strip(m.body), List::Cons((Box::new(DStmt::Return(DExpr::Var(MP))), 0), Box::new(List::Nil)));
+}
+
+/// The init list of a constructor is its return, so `f_(std::move(p))` gives the field the value of the parameter, decision 0171.
+#[test]
+fn a_constructor_moves_its_parameter_into_a_field() {
+    let own = Ty::Own(Scalar::Struct(SHAPE));
+    let (holder, inner) = (336, 337);
+    let table = List::Cons((holder, (3, List::Cons((inner, own), Box::new(List::Nil)), List::Nil)), Box::new(shape_of(&[(CORNERS, BKEY)])));
+    let init = Expr::Construct(holder, Box::new(List::Cons(b(Expr::Move(MP, own)), Box::new(List::Nil))));
+    let f = Function { name: 338, line: 9, params: List::Cons((MP, own), Box::new(List::Nil)), ret: Ty::This(holder), trusted: false, conds: List::Nil, body: one(Stmt::Return(init, 9)) };
+    let Model::Full(m) = translate_function(&f, &List::Nil, &table) else { panic!("a full model") };
+    let want = DExpr::Ctor(holder, Box::new(List::Cons(DExpr::Var(MP), Box::new(List::Nil))));
+    assert_eq!(strip(m.body), List::Cons((Box::new(DStmt::Return(want)), 0), Box::new(List::Nil)));
+}
+
+/// Two moves of one local in one statement, a move and a read of one local in one call, a move of a parameter in a call, and a move
+/// in a condition have no rule, decision 0171.
+#[test]
+fn a_move_has_one_owner_and_a_place() {
+    let own = Ty::Own(Scalar::Struct(SHAPE));
+    let arg = |v: u32| List::Cons(b(Expr::Move(v, own)), Box::new(List::Nil));
+    let start = || Box::new(Stmt::Local(MA, own, made_square(), 45));
+    let end = || Box::new(one(Stmt::Return(Expr::Lit(0, Ty::I32), 48)));
+    // Two moves of a in one call.
+    let two_ps = List::Cons((MP, own), Box::new(List::Cons((VY, own), Box::new(List::Nil))));
+    let two = Function { params: two_ps, ..take_owned() };
+    let twice = Stmt::Call(MTAKE, MTAKE, Box::new(List::Cons(b(Expr::Move(MA, own)), Box::new(arg(MA)))), 46);
+    let all = fns(vec![two, mover(List::Cons(start(), Box::new(List::Cons(Box::new(twice), end()))))]);
+    let List::Cons(_, rest) = translate_unit(&all, &shape_of(&[(CORNERS, BKEY)])) else { panic!("two models") };
+    let List::Cons(Model::Bare(_, _, _, r), _) = *rest else { panic!("a refused body") };
+    assert_eq!(r, Refusal::MoveRead(MA, 46));
+    // A move of a and a read of a in one call.
+    let two_ps = List::Cons((MP, own), Box::new(List::Cons((VY, own), Box::new(List::Nil))));
+    let two = Function { params: two_ps, ..take_owned() };
+    let beside = Stmt::Call(MTAKE, MTAKE, Box::new(List::Cons(b(Expr::Move(MA, own)), Box::new(List::Cons(b(Expr::Var(MA, own)), Box::new(List::Nil))))), 46);
+    let all = fns(vec![two, mover(List::Cons(start(), Box::new(List::Cons(Box::new(beside), end()))))]);
+    let List::Cons(_, rest) = translate_unit(&all, &shape_of(&[(CORNERS, BKEY)])) else { panic!("two models") };
+    let List::Cons(Model::Bare(_, _, _, r), _) = *rest else { panic!("a refused body") };
+    assert_eq!(r, Refusal::MoveRead(MA, 46));
+    // A move of a parameter in a call writes the parameter.
+    let param = Stmt::Call(MTAKE, MTAKE, Box::new(arg(MP)), 46);
+    let Model::Bare(_, _, _, r) = moved_model(List::Cons(Box::new(param), end())) else { panic!("a refused body") };
+    assert_eq!(r, Refusal::WriteParam(MP, 46));
+    // A move in the condition of an if has no place.
+    let test = Function { ret: Ty::Bool, ..take_owned() };
+    let cond = Stmt::If(Expr::Call(MTAKE, MTAKE, Box::new(arg(MA)), 46), Box::new(List::Nil), Box::new(List::Nil), 46);
+    let all = fns(vec![test, mover(List::Cons(start(), Box::new(List::Cons(Box::new(cond), end()))))]);
+    let List::Cons(_, rest) = translate_unit(&all, &shape_of(&[(CORNERS, BKEY)])) else { panic!("two models") };
+    let List::Cons(Model::Bare(_, _, _, r), _) = *rest else { panic!("a refused body") };
+    assert_eq!(r, Refusal::MovePlace(46));
+}

@@ -5166,3 +5166,70 @@ fn the_vector_examples_prove() {
         assert_eq!(text.lines().last(), Some("ok: proved"), "{example}: {text}");
     }
 }
+
+/// A unique_ptr of an interface as a field and as a parameter by value proves. A local moves into a constructor, into a call and
+/// into another local, and a return moves a local out, decision 0171.
+#[test]
+fn a_unique_ptr_field_and_a_move_prove() {
+    let Some(dafny) = dafny() else { return };
+    if !clang_tidy_available() {
+        return;
+    }
+    let o = prove("model-unique-field.cpp", &[], &dafny);
+    let text = stdout(&o);
+    assert_eq!(o.status.code(), Some(0), "stdout: {text} stderr: {}", stderr(&o));
+    assert_eq!(text.lines().last(), Some("ok: proved"), "{text}");
+}
+
+/// A call through a unique_ptr field keeps the null check of 0075 and the requires lines of the interface. A moved local meets the
+/// requires lines of the constructor that takes it, decision 0171.
+#[test]
+fn a_call_through_a_unique_ptr_field_keeps_its_contract() {
+    let Some(dafny) = dafny() else { return };
+    if !clang_tidy_available() {
+        return;
+    }
+    let o = prove("model-unique-field-wrong.cpp", &[], &dafny);
+    let text = stdout(&o);
+    assert_eq!(o.status.code(), Some(1), "stdout: {text} stderr: {}", stderr(&o));
+    let failed: Vec<&str> = text.lines().filter(|l| l.starts_with("Not proved: ")).map(|l| l.rsplit_once(".cpp:").unwrap().1).collect();
+    assert_eq!(
+        failed,
+        [
+            "22: the optional may be empty or the pointer may be null here.",
+            "26: a requires line of the callee may not hold.",
+            "47: a requires line of the callee may not hold.",
+        ],
+        "{text}"
+    );
+    assert!(under(&text, "model-unique-field-wrong.cpp:26: a requires line of the callee may not hold.").iter().any(|l| l.ends_with("model-unique-field-wrong.cpp:10: requires valid() && 0 <= x && x <= 1000")), "{text}");
+    assert!(under(&text, "model-unique-field-wrong.cpp:47: a requires line of the callee may not hold.").iter().any(|l| l.ends_with("model-unique-field-wrong.cpp:16: requires inner != nullptr && inner->valid()")), "{text}");
+}
+
+/// Two moves of one local in one statement, a move and a read of one local in one call, a move of a parameter in a call, a move in a
+/// condition, a move of an element of a vector and a call that writes through a field have no rule, so no two names share one
+/// object and no read sees a moved local, decision 0171.
+#[test]
+fn a_moved_unique_ptr_has_one_owner() {
+    let Some(dafny) = dafny() else { return };
+    if !clang_tidy_available() {
+        return;
+    }
+    let o = prove("model-unique-field-refuse.cpp", &[], &dafny);
+    let text = stdout(&o);
+    assert_eq!(o.status.code(), Some(1), "stdout: {text} stderr: {}", stderr(&o));
+    let mut refusals: Vec<&str> = text.lines().filter(|l| l.starts_with("Not provable: ")).map(|l| l.rsplit_once(".cpp:").unwrap().1).collect();
+    refusals.sort_by_key(|l| l.split(':').next().unwrap().parse::<u32>().unwrap());
+    assert_eq!(
+        refusals,
+        [
+            "37: a moves and is read in one statement. C++ does not fix the order.",
+            "43: a moves and is read in one statement. C++ does not fix the order.",
+            "48: p is a parameter. The translator writes only a local or a reference parameter.",
+            "54: a std::move of a std::unique_ptr has a rule only in a call that stands alone, the start value of a local or a return.",
+            "62: a call to std::move<std::unique_ptr<Component> &>, which has no model in view.",
+            "67: the call writes a value back, and the translator writes back only to a local or a reference parameter.",
+        ],
+        "{text}"
+    );
+}
