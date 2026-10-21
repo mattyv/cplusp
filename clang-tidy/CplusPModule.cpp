@@ -4652,7 +4652,7 @@ private:
     for (const FieldDecl *F : RD->fields()) {
       const QualType FT = F->getType();
       if (F->isBitField() || FT->isReferenceType() || FT.hasQualifiers() ||
-          (!scalar(FT) && !smallScalar(FT) && !plainEnum(FT) && !plainStruct(FT) && !optElement(FT) && seqElement(FT, true).isNull())) {
+          (!scalar(FT) && !smallScalar(FT) && !plainEnum(FT) && !plainStruct(FT) && !optElement(FT) && seqElement(FT, true).isNull() && ownVecElement(FT).isNull())) {
         Plain = false;
         break;
       }
@@ -4992,6 +4992,9 @@ private:
     if (T->isLValueReferenceType() && T->getPointeeType().isConstQualified())
       if (const QualType Element = ownElement(T->getPointeeType()); !Element.isNull())
         return tag("Own", ownScalar(Element));
+    // By value, a unique_ptr of a struct or an interface is a value that the function owns, decision 0171.
+    if (!ownVecElement(T).isNull() && !T.isConstQualified())
+      return tag("Own", ownScalar(ownElement(T)));
     if (isOwn(T))
       return tag("Other", T.getAsString(Context.getPrintingPolicy()));
     // A parameter `const B&` of an interface is a value of the interface, decision 0165. A pointer, a local, a result and a field have no rule.
@@ -5078,7 +5081,8 @@ private:
       return tag("Seq", llvm::json::Array{elementType(E), seqExtent(T)});
     if (const QualType E = optType(T); !E.isNull())
       return tag("Opt", type(E));
-    if (const QualType E = Field ? QualType() : ownElement(T); !E.isNull())
+    // A field holds a unique_ptr of a struct or an interface, decision 0171.
+    if (const QualType E = Field ? (ownVecElement(T).isNull() ? QualType() : ownElement(T)) : ownElement(T); !E.isNull())
       return tag("Own", ownScalar(E));
     return tag("Other", T.getAsString(Context.getPrintingPolicy()));
   }
@@ -5508,6 +5512,22 @@ private:
         return Found;
     return nullptr;
   }
+  // `std::move(x)` of a local or a parameter `x` whose type is exactly the `std::unique_ptr<B>` type `Target`: `Move(x, Own(B))`, decision 0171. Null for any other form.
+  llvm::json::Value moveOfLocal(const Expr *Moved, QualType Target) const {
+    const auto *Call = dyn_cast<CallExpr>(Moved->IgnoreParenImpCasts());
+    const FunctionDecl *Callee = Call && Call->getNumArgs() == 1 ? Call->getDirectCallee() : nullptr;
+    if (!Callee || !Callee->isInStdNamespace() || !Callee->getDeclName().isIdentifier() || Callee->getName() != "move")
+      return nullptr;
+    const auto *Ref = dyn_cast<DeclRefExpr>(Call->getArg(0)->IgnoreParenImpCasts());
+    const auto *Var = Ref ? dyn_cast<VarDecl>(Ref->getDecl()) : nullptr;
+    if (!Var || !Var->hasLocalStorage() || Var->getType()->isReferenceType() || Var->getType().hasQualifiers() ||
+        Var->getType().getCanonicalType() != Target.getUnqualifiedType().getCanonicalType())
+      return nullptr;
+    const QualType Held = ownVecElement(Var->getType());
+    if (Held.isNull())
+      return nullptr;
+    return tag("Move", llvm::json::Array{Var->getNameAsString(), tag("Own", ownScalar(ownElement(Held)))});
+  }
   // `std::make_unique<D>(args)` of a final class over an interface, as a `std::unique_ptr<B>` of that interface: `Some(f_D'B(d))` where `d` is the value that the
   // constructor of D gives, or `S_D()` for a class with no field and no constructor, decision 0168. Null for any other form.
   llvm::json::Value makeUniqueUpcast(const CXXConstructExpr *Convert, unsigned Near) const {
@@ -5553,7 +5573,13 @@ private:
         // The argument has exactly the type of the parameter, so the construction converts nothing.
         if (A->getType().getUnqualifiedType().getCanonicalType() != Constructed->getConstructor()->getParamDecl(I)->getType().getNonReferenceType().getUnqualifiedType().getCanonicalType())
           return nullptr;
-        Args.push_back(expr(A, Near));
+        // An argument `std::move(x)` of a local at a parameter by value of its own unique_ptr type is a move, decision 0171.
+        // A parameter by reference binds the xvalue and moves nothing, so that `std::move` keeps its refusal.
+        const QualType ParamType = Constructed->getConstructor()->getParamDecl(I)->getType();
+        if (llvm::json::Value Moved = ParamType->isReferenceType() ? llvm::json::Value(nullptr) : moveOfLocal(A, ParamType); !Moved.getAsNull())
+          Args.push_back(std::move(Moved));
+        else
+          Args.push_back(expr(A, Near));
       }
       const CXXConstructorDecl *C = Constructed->getConstructor();
       Built = tag("Call", llvm::json::Array{key(C), name(C), std::move(Args), number(line(Convert->getBeginLoc()))});
@@ -5648,6 +5674,18 @@ private:
     if (const auto *Convert = dyn_cast<CXXConstructExpr>(E))
       if (llvm::json::Value Made = makeUniqueUpcast(Convert, Near); !Made.getAsNull())
         return Made;
+    // `std::move(x)` of a local or a parameter `x` of exactly the type `std::unique_ptr<B>`, where C++ runs the move constructor of the unique_ptr on it, decision 0171.
+    // Any other `std::move` keeps its refusal. So does `std::move` at a parameter `const std::unique_ptr<B>&`, which has no move constructor at all.
+    if (const auto *Construct = dyn_cast<CXXConstructExpr>(E); Construct && Construct->getNumArgs() == 1 && Construct->getConstructor()->isMoveConstructor() &&
+                                                               !ownVecElement(Construct->getType()).isNull())
+      if (llvm::json::Value Moved = moveOfLocal(Construct->getArg(0), Construct->getType()); !Moved.getAsNull())
+        return Moved;
+    // The move constructor of a unique_ptr over any other `std::move` keeps the refusal of that call, decision 0171.
+    if (const auto *Construct = dyn_cast<CXXConstructExpr>(E); Construct && Construct->getNumArgs() == 1 && Construct->getConstructor()->isMoveConstructor() &&
+                                                               !ownVecElement(Construct->getType()).isNull())
+      if (const auto *Move = dyn_cast<CallExpr>(Construct->getArg(0)->IgnoreParenImpCasts()); Move && Move->getDirectCallee() && Move->getDirectCallee()->isInStdNamespace() &&
+                                                                                          Move->getDirectCallee()->getDeclName().isIdentifier() && Move->getDirectCallee()->getName() == "move")
+        return expr(Move, Near);
     // The converting constructor of a unique_ptr of an interface from a unique_ptr of another class keeps its argument: the call that gives it is refused, as it was
     // before, decision 0168.
     if (const auto *Convert = dyn_cast<CXXConstructExpr>(E); Convert && Convert->getNumArgs() == 1 && isOwn(Convert->getType()) && isUniquePtr(Convert->getArg(0)->getType()) &&

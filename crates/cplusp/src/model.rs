@@ -101,6 +101,8 @@ enum JExpr {
     Lit(u64, JTy),
     Bool(bool),
     Var(String, JTy),
+    /// `std::move(x)` of a local or a parameter of type unique_ptr, by the name and the type of `x`, decision 0171.
+    Move(String, JTy),
     Bin(JOp, Box<JExpr>, Box<JExpr>),
     Divide(JOp, Box<JExpr>, Box<JExpr>, JTy),
     Shr(Box<JExpr>, Box<JExpr>, JTy),
@@ -418,6 +420,7 @@ fn expr(e: JExpr, names: &mut Names) -> Expr {
         JExpr::RealLit(d, k) => Expr::RealLit(d, k),
         JExpr::Ratio(m, q) => Expr::Ratio(m, q),
         JExpr::Var(v, t) => Expr::Var(names.id(&v), ty(t, names)),
+        JExpr::Move(v, t) => Expr::Move(names.id(&v), ty(t, names)),
         JExpr::Bin(o, a, b) => Expr::Bin(op(o), Box::new(expr(*a, names)), Box::new(expr(*b, names))),
         JExpr::Divide(o, a, b, t) => Expr::Divide(op(o), Box::new(expr(*a, names)), Box::new(expr(*b, names)), ty(t, names)),
         JExpr::Shr(a, b, t) => Expr::Shr(Box::new(expr(*a, names)), Box::new(expr(*b, names)), ty(t, names)),
@@ -790,7 +793,7 @@ fn scan_companion(text: &str) -> (Vec<(u32, String)>, Vec<Declared>) {
 /// Every name in an expression that the Dafny text will print.
 fn expr_names<'a>(e: &'a JExpr, out: &mut Vec<&'a str>) {
     match e {
-        JExpr::Var(v, _) => out.push(v),
+        JExpr::Var(v, _) | JExpr::Move(v, _) => out.push(v),
         JExpr::Bin(_, a, b) | JExpr::Divide(_, a, b, _) | JExpr::Shr(a, b, _) | JExpr::Index(a, b) | JExpr::Subspan(a, b) => {
             expr_names(a, out);
             expr_names(b, out);
@@ -1485,6 +1488,15 @@ impl Printer<'_> {
                 names.temp_base.set(outer);
             }
             DStmt::Assert(e) => self.put(depth, format!("assert {};", dexpr(e, names)), place),
+            // The statement, then each name that it moved is null, decision 0171.
+            DStmt::Moved(inner, moved) => {
+                self.stmt(inner, place, depth);
+                let mut rest = moved;
+                while let List::Cons(x, next) = rest {
+                    self.put(depth, format!("{} := None;", mangle(names.text(*x))), place);
+                    rest = next;
+                }
+            }
             DStmt::Apply(l, args) => self.put(depth, format!("{}({});", names.text(*l), dargs(args, names).join(", ")), place),
             // `std::sort` of a whole vector with the default `<`, decision 0161. `StdSort` is the method of the module `Algorithm`.
             DStmt::Sort(target, t) => {
@@ -1868,6 +1880,8 @@ fn sentence(r: Refusal, names: &Names) -> (u32, String) {
         Refusal::HoldsSeq(line) => (line, "a struct that holds a sequence is in the subset only as a parameter that the function does not write.".to_string()),
         Refusal::Element(line) => (line, "an optional of a struct or a sequence of bool has no rule yet.".to_string()),
         Refusal::Extent(line) => (line, "a sequence or an optional made from one of another type or length.".to_string()),
+        Refusal::MoveRead(n, line) => (line, format!("{} moves and is read in one statement. C++ does not fix the order.", names.text(n))),
+        Refusal::MovePlace(line) => (line, "a std::move of a std::unique_ptr has a rule only in a call that stands alone, the start value of a local or a return.".to_string()),
         Refusal::NoTarget(line) => (line, "the call writes a value back, and the translator writes back only to a local or a reference parameter.".to_string()),
         Refusal::NoObject(n, line) => (line, format!("{} is a member of the struct. A requires line of a constructor has no object yet.", names.text(n))),
         Refusal::IndexName(n, line) => (line, format!("{} on the index line is a name the function already has.", names.text(n))),

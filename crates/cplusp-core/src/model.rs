@@ -269,8 +269,9 @@ pub enum CastKind {
 /// decision 0149. `RealLit` is a literal of type `double`, or a decimal with a point in a contract, by its digits and the count of
 /// the digits after the point, decision 0150. `Ratio` is a literal of type `double` that is `m / q`, with `q` a power of two, and
 /// no such decimal, decision 0158. `Finite` is `std::isfinite(e)` in a contract. `Abs` is `|e|`, and `Eps`, `Eta` and
-/// `DblMax` are the words `eps`, `eta` and `DBL_MAX` of a contract, decision 0154. `Unknown` is a construct with no rule,
-/// by the id of its kind and its line.
+/// `DblMax` are the words `eps`, `eta` and `DBL_MAX` of a contract, decision 0154. `Move` is `std::move(x)` of a local or a
+/// parameter `x` of type `std::unique_ptr`, where C++ makes a new `std::unique_ptr` from it, by the name and the type of `x`,
+/// decision 0171. `Unknown` is a construct with no rule, by the id of its kind and its line.
 #[derive(PartialEq, Eq, Debug)]
 pub enum Expr {
     Int(u64),
@@ -319,6 +320,7 @@ pub enum Expr {
     Eta,
     DblMax,
     EmptyVec,
+    Move(u32, Ty),
     Unknown(u32, u32),
 }
 
@@ -514,7 +516,8 @@ pub type DArgs = List<DExpr>;
 
 /// A Dafny statement. `Local` is `var x: T := e;`. `LocalCall` is `var x: T := m(args);`. `ReturnCall` is `result := m(args);
 /// return;`, since Dafny takes no call in a `return`. `Assign` is `x := e;` and `AssignCall` is `x := m(args);`. `While` is the
-/// condition, the invariants, the decreases lines and the body. `For` prints as its start, then a `while` whose body ends with the
+/// condition, the invariants, the decreases lines and the body. `Moved` is a statement, then `x := None;` for each name that it
+/// moves, decision 0171. `For` prints as its start, then a `while` whose body ends with the
 /// step. The start and the step keep their own places, decision 0069. `SetField` is `this' := this'.(f := e);`. `SetOut` is
 /// `x' := e;` and `SetOutField` is `x' := x'.(f := e);` of a reference parameter, decision 0108. `Update` calls a method that writes
 /// back, `o, x := m(o, x, args);`, and `LocalUpdate` also sets a new local to the value it gives, decisions 0096 and 0108. The
@@ -547,6 +550,7 @@ pub enum DStmt {
     Pre(DCalls, Box<DStmt>),
     Sort(Box<DExpr>, DTy),
     SortBy(Box<DExpr>, u32, u32, DTy, Box<DExpr>),
+    Moved(Box<DStmt>, Names),
 }
 
 /// A place that a call writes back: a local by its name, the object of the member function that makes the call, or a reference
@@ -631,6 +635,8 @@ pub type Models = List<Model>;
 /// a contract of a virtual function that reads a virtual function declared after it, by the key of the interface, the ids of the
 /// names of both functions and the line, decision 0166. `NoMethod` is an override that writes and has no method in the model, by
 /// the keys of the class and the interface, the id of the name of the function and the line of the class, decision 0169.
+/// `MoveRead` is a statement that moves a name and also reads it or moves it again, by the id of the name and the line, and `MovePlace` is a move in a place
+/// with no rule, by the line, decision 0171.
 #[derive(Structural, PartialEq, Eq, Clone, Copy, Debug)]
 pub enum Refusal {
     Construct(u32, u32),
@@ -669,6 +675,8 @@ pub enum Refusal {
     Later(u32, u32, u32, u32),
     NoMethod(u32, u32, u32, u32),
     IndexWritten(u32),
+    MoveRead(u32, u32),
+    MovePlace(u32),
 }
 
 // ------------------------------------------------------------------ the rules
@@ -1391,6 +1399,8 @@ pub open spec fn spec_lift(e: Expr, all: Fns, line: u32, sd: Structs, n: u32, op
             },
         },
         Expr::Name(v) => Err(Refusal::Name(v, line)),
+        // A move that the statement did not take out stands in a place with no rule, decision 0171.
+        Expr::Move(_, _) => Err(Refusal::MovePlace(line)),
         Expr::Unknown(k, l) => Err(Refusal::Construct(k, l)),
         _ => Err(Refusal::Syntax(line)),
     }
@@ -1409,6 +1419,335 @@ pub open spec fn spec_lift_args(args: Args, all: Fns, line: u32, sd: Structs, n:
                 Ok((cr, dr, n2)) => Ok((spec_append(ca, cr), List::Cons(da, Box::new(dr)), n2)),
             },
         },
+    }
+}
+
+/// `std::move(x)` stands where C++ makes a new `std::unique_ptr` from `x`: as the value itself, as an argument of a call or of a
+/// constructor, or under a cast, a paren or the `Some` of `std::make_unique`, decision 0171. Each such move reads `x`. The names are
+/// the moved names in their order. A move in any other place stays, and spec_lift refuses it.
+pub open spec fn spec_unmove(e: Expr) -> (Expr, Names)
+    decreases e,
+{
+    match e {
+        Expr::Move(v, t) => (Expr::Var(v, t), List::Cons(v, Box::new(List::Nil))),
+        Expr::Call(k, nm, args, at) => (Expr::Call(k, nm, Box::new(spec_unmove_args(*args).0), at), spec_unmove_args(*args).1),
+        Expr::Construct(k, args) => (Expr::Construct(k, Box::new(spec_unmove_args(*args).0)), spec_unmove_args(*args).1),
+        Expr::Wrap(a) => (Expr::Wrap(Box::new(spec_unmove(*a).0)), spec_unmove(*a).1),
+        Expr::Cast(ck, a) => (Expr::Cast(ck, Box::new(spec_unmove(*a).0)), spec_unmove(*a).1),
+        Expr::Paren(a) => (Expr::Paren(Box::new(spec_unmove(*a).0)), spec_unmove(*a).1),
+        _ => (e, List::Nil),
+    }
+}
+
+pub open spec fn spec_unmove_args(args: Args) -> (Args, Names)
+    decreases args,
+{
+    match args {
+        List::Nil => (List::Nil, List::Nil),
+        List::Cons(a, rest) => (
+            List::Cons(Box::new(spec_unmove(*a).0), Box::new(spec_unmove_args(*rest).0)),
+            spec_append(spec_unmove(*a).1, spec_unmove_args(*rest).1),
+        ),
+    }
+}
+
+pub fn copy_expr(e: &Expr) -> (r: Expr)
+    ensures
+        r == *e,
+    decreases e,
+{
+    match e {
+        Expr::Int(f0) => Expr::Int(*f0),
+        Expr::Lit(f0, f1) => Expr::Lit(*f0, *f1),
+        Expr::Bool(f0) => Expr::Bool(*f0),
+        Expr::Var(f0, f1) => Expr::Var(*f0, *f1),
+        Expr::Name(f0) => Expr::Name(*f0),
+        Expr::Result => Expr::Result,
+        Expr::Bin(f0, f1, f2) => Expr::Bin(*f0, Box::new(copy_expr(f1)), Box::new(copy_expr(f2))),
+        Expr::Not(f0) => Expr::Not(Box::new(copy_expr(f0))),
+        Expr::Neg(f0) => Expr::Neg(Box::new(copy_expr(f0))),
+        Expr::Cast(f0, f1) => Expr::Cast(*f0, Box::new(copy_expr(f1))),
+        Expr::Paren(f0) => Expr::Paren(Box::new(copy_expr(f0))),
+        Expr::Brace(f0) => Expr::Brace(Box::new(copy_expr(f0))),
+        Expr::Call(f0, f1, f2, f3) => Expr::Call(*f0, *f1, Box::new(copy_args(f2)), *f3),
+        Expr::Size(f0) => Expr::Size(Box::new(copy_expr(f0))),
+        Expr::Index(f0, f1) => Expr::Index(Box::new(copy_expr(f0)), Box::new(copy_expr(f1))),
+        Expr::Copy(f0, f1, f2) => Expr::Copy(Box::new(copy_expr(f0)), *f1, *f2),
+        Expr::Field(f0, f1) => Expr::Field(Box::new(copy_expr(f0)), *f1),
+        Expr::Construct(f0, f1) => Expr::Construct(*f0, Box::new(copy_args(f1))),
+        Expr::Forall(f0, f1) => Expr::Forall(*f0, Box::new(copy_expr(f1))),
+        Expr::Exists(f0, f1) => Expr::Exists(*f0, Box::new(copy_expr(f1))),
+        Expr::Chain(f0, f1, f2, f3, f4) => Expr::Chain(*f0, *f1, Box::new(copy_expr(f2)), Box::new(copy_expr(f3)), Box::new(copy_expr(f4))),
+        Expr::HasValue(f0) => Expr::HasValue(Box::new(copy_expr(f0))),
+        Expr::Value(f0) => Expr::Value(Box::new(copy_expr(f0))),
+        Expr::Nullopt => Expr::Nullopt,
+        Expr::Wrap(f0) => Expr::Wrap(Box::new(copy_expr(f0))),
+        Expr::Empty(f0) => Expr::Empty(Box::new(copy_expr(f0))),
+        Expr::Subspan(f0, f1) => Expr::Subspan(Box::new(copy_expr(f0)), Box::new(copy_expr(f1))),
+        Expr::Apply(f0, f1) => Expr::Apply(*f0, Box::new(copy_args(f1))),
+        Expr::Suffix(f0, f1) => Expr::Suffix(Box::new(copy_expr(f0)), Box::new(copy_expr(f1))),
+        Expr::Prefix(f0, f1) => Expr::Prefix(Box::new(copy_expr(f0)), Box::new(copy_expr(f1))),
+        Expr::Slice(f0, f1, f2) => Expr::Slice(Box::new(copy_expr(f0)), Box::new(copy_expr(f1)), Box::new(copy_expr(f2))),
+        Expr::Divide(f0, f1, f2, f3) => Expr::Divide(*f0, Box::new(copy_expr(f1)), Box::new(copy_expr(f2)), *f3),
+        Expr::MApply(f0, f1, f2) => Expr::MApply(Box::new(copy_expr(f0)), *f1, Box::new(copy_args(f2))),
+        Expr::Old(f0) => Expr::Old(Box::new(copy_expr(f0))),
+        Expr::Cond(f0, f1, f2) => Expr::Cond(Box::new(copy_expr(f0)), Box::new(copy_expr(f1)), Box::new(copy_expr(f2))),
+        Expr::Shr(f0, f1, f2) => Expr::Shr(Box::new(copy_expr(f0)), Box::new(copy_expr(f1)), *f2),
+        Expr::Enumerator(f0, f1) => Expr::Enumerator(*f0, *f1),
+        Expr::CountIf(f0, f1, f2, f3) => Expr::CountIf(Box::new(copy_expr(f0)), *f1, *f2, Box::new(copy_expr(f3))),
+        Expr::RealLit(f0, f1) => Expr::RealLit(*f0, *f1),
+        Expr::Ratio(f0, f1) => Expr::Ratio(*f0, *f1),
+        Expr::Finite(f0) => Expr::Finite(Box::new(copy_expr(f0))),
+        Expr::Abs(f0) => Expr::Abs(Box::new(copy_expr(f0))),
+        Expr::Eps => Expr::Eps,
+        Expr::Eta => Expr::Eta,
+        Expr::DblMax => Expr::DblMax,
+        Expr::EmptyVec => Expr::EmptyVec,
+        Expr::Unknown(f0, f1) => Expr::Unknown(*f0, *f1),
+        Expr::Move(f0, f1) => Expr::Move(*f0, *f1),
+    }
+}
+
+pub fn copy_args(args: &Args) -> (r: Args)
+    ensures
+        r == *args,
+    decreases args,
+{
+    match args {
+        List::Nil => List::Nil,
+        List::Cons(a, rest) => List::Cons(Box::new(copy_expr(a)), Box::new(copy_args(rest))),
+    }
+}
+
+pub fn unmove(e: &Expr) -> (r: (Expr, Names))
+    ensures
+        r == spec_unmove(*e),
+    decreases e,
+{
+    match e {
+        Expr::Move(v, t) => (Expr::Var(*v, *t), List::Cons(*v, Box::new(List::Nil))),
+        Expr::Call(k, nm, args, at) => {
+            let (a, ns) = unmove_args(args);
+            (Expr::Call(*k, *nm, Box::new(a), *at), ns)
+        },
+        Expr::Construct(k, args) => {
+            let (a, ns) = unmove_args(args);
+            (Expr::Construct(*k, Box::new(a)), ns)
+        },
+        Expr::Wrap(a) => {
+            let (x, ns) = unmove(a);
+            (Expr::Wrap(Box::new(x)), ns)
+        },
+        Expr::Cast(ck, a) => {
+            let (x, ns) = unmove(a);
+            (Expr::Cast(*ck, Box::new(x)), ns)
+        },
+        Expr::Paren(a) => {
+            let (x, ns) = unmove(a);
+            (Expr::Paren(Box::new(x)), ns)
+        },
+        _ => (copy_expr(e), List::Nil),
+    }
+}
+
+pub fn unmove_args(args: &Args) -> (r: (Args, Names))
+    ensures
+        r == spec_unmove_args(*args),
+    decreases args,
+{
+    match args {
+        List::Nil => (List::Nil, List::Nil),
+        List::Cons(a, rest) => {
+            let (x, n1) = unmove(a);
+            let (r, n2) = unmove_args(rest);
+            (List::Cons(Box::new(x), Box::new(r)), append(n1, n2))
+        },
+    }
+}
+
+/// Each name that an expression reads, in any place, decision 0171. A move is no read here.
+pub open spec fn spec_var_names(e: Expr) -> Names
+    decreases e,
+{
+    match e {
+        Expr::Int(_) => List::Nil,
+        Expr::Lit(_, _) => List::Nil,
+        Expr::Bool(_) => List::Nil,
+        Expr::Var(f0, _) => List::Cons(f0, Box::new(List::Nil)),
+        Expr::Name(f0) => List::Cons(f0, Box::new(List::Nil)),
+        Expr::Result => List::Nil,
+        Expr::Bin(_, f1, f2) => spec_append(spec_var_names(*f1), spec_var_names(*f2)),
+        Expr::Not(f0) => spec_var_names(*f0),
+        Expr::Neg(f0) => spec_var_names(*f0),
+        Expr::Cast(_, f1) => spec_var_names(*f1),
+        Expr::Paren(f0) => spec_var_names(*f0),
+        Expr::Brace(f0) => spec_var_names(*f0),
+        Expr::Call(_, _, f2, _) => spec_var_names_args(*f2),
+        Expr::Size(f0) => spec_var_names(*f0),
+        Expr::Index(f0, f1) => spec_append(spec_var_names(*f0), spec_var_names(*f1)),
+        Expr::Copy(f0, _, _) => spec_var_names(*f0),
+        Expr::Field(f0, _) => spec_var_names(*f0),
+        Expr::Construct(_, f1) => spec_var_names_args(*f1),
+        Expr::Forall(_, f1) => spec_var_names(*f1),
+        Expr::Exists(_, f1) => spec_var_names(*f1),
+        Expr::Chain(_, _, f2, f3, f4) => spec_append(spec_var_names(*f2), spec_append(spec_var_names(*f3), spec_var_names(*f4))),
+        Expr::HasValue(f0) => spec_var_names(*f0),
+        Expr::Value(f0) => spec_var_names(*f0),
+        Expr::Nullopt => List::Nil,
+        Expr::Wrap(f0) => spec_var_names(*f0),
+        Expr::Empty(f0) => spec_var_names(*f0),
+        Expr::Subspan(f0, f1) => spec_append(spec_var_names(*f0), spec_var_names(*f1)),
+        Expr::Apply(_, f1) => spec_var_names_args(*f1),
+        Expr::Suffix(f0, f1) => spec_append(spec_var_names(*f0), spec_var_names(*f1)),
+        Expr::Prefix(f0, f1) => spec_append(spec_var_names(*f0), spec_var_names(*f1)),
+        Expr::Slice(f0, f1, f2) => spec_append(spec_var_names(*f0), spec_append(spec_var_names(*f1), spec_var_names(*f2))),
+        Expr::Divide(_, f1, f2, _) => spec_append(spec_var_names(*f1), spec_var_names(*f2)),
+        Expr::MApply(f0, _, f2) => spec_append(spec_var_names(*f0), spec_var_names_args(*f2)),
+        Expr::Old(f0) => spec_var_names(*f0),
+        Expr::Cond(f0, f1, f2) => spec_append(spec_var_names(*f0), spec_append(spec_var_names(*f1), spec_var_names(*f2))),
+        Expr::Shr(f0, f1, _) => spec_append(spec_var_names(*f0), spec_var_names(*f1)),
+        Expr::Enumerator(_, _) => List::Nil,
+        Expr::CountIf(f0, _, _, f3) => spec_append(spec_var_names(*f0), spec_var_names(*f3)),
+        Expr::RealLit(_, _) => List::Nil,
+        Expr::Ratio(_, _) => List::Nil,
+        Expr::Finite(f0) => spec_var_names(*f0),
+        Expr::Abs(f0) => spec_var_names(*f0),
+        Expr::Eps => List::Nil,
+        Expr::Eta => List::Nil,
+        Expr::DblMax => List::Nil,
+        Expr::EmptyVec => List::Nil,
+        Expr::Move(_, _) => List::Nil,
+        Expr::Unknown(_, _) => List::Nil,
+    }
+}
+
+pub open spec fn spec_var_names_args(args: Args) -> Names
+    decreases args,
+{
+    match args {
+        List::Nil => List::Nil,
+        List::Cons(a, rest) => spec_append(spec_var_names(*a), spec_var_names_args(*rest)),
+    }
+}
+
+pub fn var_names(e: &Expr) -> (r: Names)
+    ensures
+        r == spec_var_names(*e),
+    decreases e,
+{
+    match e {
+        Expr::Int(_) => List::Nil,
+        Expr::Lit(_, _) => List::Nil,
+        Expr::Bool(_) => List::Nil,
+        Expr::Var(f0, _) => List::Cons(*f0, Box::new(List::Nil)),
+        Expr::Name(f0) => List::Cons(*f0, Box::new(List::Nil)),
+        Expr::Result => List::Nil,
+        Expr::Bin(_, f1, f2) => append(var_names(f1), var_names(f2)),
+        Expr::Not(f0) => var_names(f0),
+        Expr::Neg(f0) => var_names(f0),
+        Expr::Cast(_, f1) => var_names(f1),
+        Expr::Paren(f0) => var_names(f0),
+        Expr::Brace(f0) => var_names(f0),
+        Expr::Call(_, _, f2, _) => var_names_args(f2),
+        Expr::Size(f0) => var_names(f0),
+        Expr::Index(f0, f1) => append(var_names(f0), var_names(f1)),
+        Expr::Copy(f0, _, _) => var_names(f0),
+        Expr::Field(f0, _) => var_names(f0),
+        Expr::Construct(_, f1) => var_names_args(f1),
+        Expr::Forall(_, f1) => var_names(f1),
+        Expr::Exists(_, f1) => var_names(f1),
+        Expr::Chain(_, _, f2, f3, f4) => append(var_names(f2), append(var_names(f3), var_names(f4))),
+        Expr::HasValue(f0) => var_names(f0),
+        Expr::Value(f0) => var_names(f0),
+        Expr::Nullopt => List::Nil,
+        Expr::Wrap(f0) => var_names(f0),
+        Expr::Empty(f0) => var_names(f0),
+        Expr::Subspan(f0, f1) => append(var_names(f0), var_names(f1)),
+        Expr::Apply(_, f1) => var_names_args(f1),
+        Expr::Suffix(f0, f1) => append(var_names(f0), var_names(f1)),
+        Expr::Prefix(f0, f1) => append(var_names(f0), var_names(f1)),
+        Expr::Slice(f0, f1, f2) => append(var_names(f0), append(var_names(f1), var_names(f2))),
+        Expr::Divide(_, f1, f2, _) => append(var_names(f1), var_names(f2)),
+        Expr::MApply(f0, _, f2) => append(var_names(f0), var_names_args(f2)),
+        Expr::Old(f0) => var_names(f0),
+        Expr::Cond(f0, f1, f2) => append(var_names(f0), append(var_names(f1), var_names(f2))),
+        Expr::Shr(f0, f1, _) => append(var_names(f0), var_names(f1)),
+        Expr::Enumerator(_, _) => List::Nil,
+        Expr::CountIf(f0, _, _, f3) => append(var_names(f0), var_names(f3)),
+        Expr::RealLit(_, _) => List::Nil,
+        Expr::Ratio(_, _) => List::Nil,
+        Expr::Finite(f0) => var_names(f0),
+        Expr::Abs(f0) => var_names(f0),
+        Expr::Eps => List::Nil,
+        Expr::Eta => List::Nil,
+        Expr::DblMax => List::Nil,
+        Expr::EmptyVec => List::Nil,
+        Expr::Move(_, _) => List::Nil,
+        Expr::Unknown(_, _) => List::Nil,
+    }
+}
+
+pub fn var_names_args(args: &Args) -> (r: Names)
+    ensures
+        r == spec_var_names_args(*args),
+    decreases args,
+{
+    match args {
+        List::Nil => List::Nil,
+        List::Cons(a, rest) => append(var_names(a), var_names_args(rest)),
+    }
+}
+
+/// The moves `ns` of one statement that reads the names `reads` besides, decision 0171. C++ does not fix the order of the
+/// arguments of a call, so a statement that moves a name reads it nowhere else and moves it once. A parameter moves only in a
+/// return, because the model cannot write a parameter.
+pub open spec fn spec_move_check(ns: Names, reads: Names, ps: Params, ret: bool, line: u32) -> Option<Refusal>
+    decreases ns,
+{
+    match ns {
+        List::Nil => None,
+        List::Cons(v, rest) => if spec_has(*rest, v) || spec_has(reads, v) {
+            Some(Refusal::MoveRead(v, line))
+        } else if !ret && spec_get(ps, v) is Some {
+            Some(Refusal::WriteParam(v, line))
+        } else {
+            spec_move_check(*rest, reads, ps, ret, line)
+        },
+    }
+}
+
+pub fn move_check(ns: &Names, reads: &Names, ps: &Params, ret: bool, line: u32) -> (r: Option<Refusal>)
+    ensures
+        r == spec_move_check(*ns, *reads, *ps, ret, line),
+    decreases ns,
+{
+    match ns {
+        List::Nil => None,
+        List::Cons(v, rest) => if has(rest, *v) || has(reads, *v) {
+            Some(Refusal::MoveRead(*v, line))
+        } else if !ret && get(ps, *v).is_some() {
+            Some(Refusal::WriteParam(*v, line))
+        } else {
+            move_check(rest, reads, ps, ret, line)
+        },
+    }
+}
+
+/// A statement that moves the names `ns` sets each to null after it, decision 0171.
+pub open spec fn spec_moved(d: DStmt, ns: Names) -> DStmt {
+    match ns {
+        List::Nil => d,
+        _ => DStmt::Moved(Box::new(d), ns),
+    }
+}
+
+pub fn moved(d: DStmt, ns: Names) -> (r: DStmt)
+    ensures
+        r == spec_moved(d, ns),
+{
+    match ns {
+        List::Nil => d,
+        _ => DStmt::Moved(Box::new(d), ns),
     }
 }
 
@@ -2815,6 +3154,68 @@ pub open spec fn spec_step(n: u32, dt: DTy, up: bool, out: bool) -> DStmt {
     }
 }
 
+/// The value of a return. A call gives its value to `result`, decision 0104.
+pub open spec fn spec_return(e: Expr, l: u32, all: Fns, sd: Structs) -> Result<DStmt, Refusal> {
+    match e {
+        Expr::Call(k, n, args, at) => if spec_callee_writes(all, k) {
+            Err(Refusal::Place(at))
+        } else {
+            match spec_call_lift(k, n, *args, at, all, l, sd) {
+                Ok((c, da)) => Ok(spec_pre(c, DStmt::ReturnCall(k, da))),
+                Err(r) => Err(r),
+            }
+        },
+        _ => match spec_lift(e, all, l, sd, 0, true) {
+            Ok((c, d, _)) => Ok(spec_pre(c, DStmt::Return(d))),
+            Err(r) => Err(r),
+        },
+    }
+}
+
+pub fn translate_return(e: &Expr, l: u32, all: &Fns, sd: &Structs) -> (r: Result<DStmt, Refusal>)
+    ensures
+        r == spec_return(*e, l, *all, *sd),
+{
+    match e {
+        Expr::Call(k, n, args, at) => if callee_writes(all, *k) {
+            Err(Refusal::Place(*at))
+        } else {
+            match call_lift(*k, *n, args, *at, all, l, sd) {
+                Ok((c, da)) => Ok(pre(c, DStmt::ReturnCall(*k, da))),
+                Err(r) => Err(r),
+            }
+        },
+        _ => match lift(e, all, l, sd, 0, true) {
+            Ok((c, d, _)) => Ok(pre(c, DStmt::Return(d))),
+            Err(r) => Err(r),
+        },
+    }
+}
+
+/// The start value of a local that is no vector: a call, or an expression whose calls run first, decision 0104.
+pub open spec fn spec_local_value(n: u32, dt: DTy, e: Expr, l: u32, all: Fns, ps: Params, sd: Structs) -> Result<DStmt, Refusal> {
+    match e {
+        Expr::Call(k, nm, args, at) => spec_local_call(n, dt, k, nm, *args, at, all, l, ps, sd),
+        _ => match spec_lift(e, all, l, sd, 0, true) {
+            Ok((c, d, _)) => Ok(spec_pre(c, DStmt::Local(n, dt, d))),
+            Err(r) => Err(r),
+        },
+    }
+}
+
+pub fn local_value(n: u32, dt: DTy, e: &Expr, l: u32, all: &Fns, ps: &Params, sd: &Structs) -> (r: Result<DStmt, Refusal>)
+    ensures
+        r == spec_local_value(n, dt, *e, l, *all, *ps, *sd),
+{
+    match e {
+        Expr::Call(k, nm, args, at) => local_call(n, dt, *k, *nm, args, *at, all, l, ps, sd),
+        _ => match lift(e, all, l, sd, 0, true) {
+            Ok((c, d, _)) => Ok(pre(c, DStmt::Local(n, dt, d))),
+            Err(r) => Err(r),
+        },
+    }
+}
+
 /// A statement of the body, and a list of them. `env` is the variables in scope, and `ps` the parameters. A call runs before its
 /// statement where C++ runs it once, decision 0104, and a call of a function that writes its object or gives no value stands
 /// alone. A write is to a local, never to a parameter, or to a field of the object of a member function that writes it, decision
@@ -2825,19 +3226,10 @@ pub open spec fn spec_stmt(s: Stmt, all: Fns, env: Params, ps: Params, sd: Struc
     decreases s,
 {
     match s {
-        Stmt::Return(e, l) => match e {
-            Expr::Call(k, n, args, at) => if spec_callee_writes(all, k) {
-                Err(Refusal::Place(at))
-            } else {
-                match spec_call_lift(k, n, *args, at, all, l, sd) {
-                    Ok((c, da)) => Ok(spec_pre(c, DStmt::ReturnCall(k, da))),
-                    Err(r) => Err(r),
-                }
-            },
-            _ => match spec_lift(e, all, l, sd, 0, true) {
-                Ok((c, d, _)) => Ok(spec_pre(c, DStmt::Return(d))),
-                Err(r) => Err(r),
-            },
+        // A return can move a local or a parameter, decision 0171. Nothing runs after it, so it sets nothing to null.
+        Stmt::Return(e, l) => match spec_move_check(spec_unmove(e).1, spec_var_names(e), ps, true, l) {
+            Some(r) => Err(r),
+            None => spec_return(spec_unmove(e).0, l, all, sd),
         },
         Stmt::If(c, t, f, l) => match spec_lift(c, all, l, sd, 0, true) {
             Ok((cc, dc, _)) => match spec_stmts(*t, all, env, ps, sd) {
@@ -2872,12 +3264,13 @@ pub open spec fn spec_stmt(s: Stmt, all: Fns, env: Params, ps: Params, sd: Struc
                 _ => Err(Refusal::VecLocal(l)),
             },
         },
+        // The start value of a local can move a local, decision 0171.
         Stmt::Local(n, t, e, l) => match spec_value_ty(t, l, sd) {
             Err(r) => Err(r),
-            Ok(dt) => match e {
-                Expr::Call(k, nm, args, at) => spec_local_call(n, dt, k, nm, *args, at, all, l, ps, sd),
-                _ => match spec_lift(e, all, l, sd, 0, true) {
-                    Ok((c, d, _)) => Ok(spec_pre(c, DStmt::Local(n, dt, d))),
+            Ok(dt) => match spec_move_check(spec_unmove(e).1, spec_var_names(e), ps, false, l) {
+                Some(r) => Err(r),
+                None => match spec_local_value(n, dt, spec_unmove(e).0, l, all, ps, sd) {
+                    Ok(d) => Ok(spec_moved(d, spec_unmove(e).1)),
                     Err(r) => Err(r),
                 },
             },
@@ -3038,7 +3431,14 @@ pub open spec fn spec_stmt(s: Stmt, all: Fns, env: Params, ps: Params, sd: Struc
             },
             Err(r) => Err(r),
         },
-        Stmt::Call(k, nm, args, l) => spec_call_stmt(k, nm, *args, l, all, ps, sd),
+        // A call that stands alone can move a local, decision 0171.
+        Stmt::Call(k, nm, args, l) => match spec_move_check(spec_unmove_args(*args).1, spec_var_names_args(*args), ps, false, l) {
+            Some(r) => Err(r),
+            None => match spec_call_stmt(k, nm, spec_unmove_args(*args).0, l, all, ps, sd) {
+                Ok(d) => Ok(spec_moved(d, spec_unmove_args(*args).1)),
+                Err(r) => Err(r),
+            },
+        },
         Stmt::Exit(_) => Ok(DStmt::Exit),
         Stmt::Assert(e, l) => match spec_contract(e, spec_keys(env), spec_after(env), None, List::Nil, l, sd) {
             Ok(d) => Ok(DStmt::Assert(d)),
@@ -4350,8 +4750,8 @@ pub open spec fn spec_fields(ps: Params, line: u32) -> Result<DParams, Refusal>
 {
     match ps {
         List::Nil => Ok(List::Nil),
-        // An optional of a struct is no field yet, decision 0137.
-        List::Cons((n, t), rest) => match (if (t is Opt && t->Opt_0 is Struct) || t is Ptr || t is Own || t is F64 { Err(Refusal::Element(line)) } else { spec_ty(t, line) }) {
+        // An optional of a struct is no field yet, decision 0137. A unique_ptr of a struct or an interface is a field, decision 0171.
+        List::Cons((n, t), rest) => match (if (t is Opt && t->Opt_0 is Struct) || t is Ptr || (t is Own && !(t->Own_0 is Struct)) || t is F64 { Err(Refusal::Element(line)) } else { spec_ty(t, line) }) {
             Ok(dt) => match spec_fields(*rest, line) {
                 Ok(dr) => Ok(List::Cons((n, dt), Box::new(dr))),
                 Err(r) => Err(r),
@@ -4491,6 +4891,38 @@ pub proof fn lemma_unknown_code_is_refused(e: Expr, line: u32)
     lemma_unknown_lift_is_refused(e, List::Nil, line, List::Nil, 0, false);
 }
 
+/// Taking the moves out of an expression keeps each node with no rule, decision 0171.
+pub proof fn lemma_unmove_unknown(e: Expr)
+    ensures
+        unknown_expr(e) ==> unknown_expr(spec_unmove(e).0),
+        (e is Call) == (spec_unmove(e).0 is Call),
+        e is Call ==> spec_unmove(e).0->Call_0 == e->Call_0 && spec_unmove(e).0->Call_1 == e->Call_1 && *spec_unmove(e).0->Call_2 == spec_unmove_args(*e->Call_2).0 && spec_unmove(e).0->Call_3 == e->Call_3,
+    decreases e,
+{
+    match e {
+        Expr::Call(_, _, args, _) => lemma_unmove_args_unknown(*args),
+        Expr::Construct(_, args) => lemma_unmove_args_unknown(*args),
+        Expr::Wrap(a) => lemma_unmove_unknown(*a),
+        Expr::Cast(_, a) => lemma_unmove_unknown(*a),
+        Expr::Paren(a) => lemma_unmove_unknown(*a),
+        _ => {},
+    }
+}
+
+pub proof fn lemma_unmove_args_unknown(args: Args)
+    ensures
+        unknown_args(args) ==> unknown_args(spec_unmove_args(args).0),
+    decreases args,
+{
+    match args {
+        List::Cons(a, rest) => {
+            lemma_unmove_unknown(*a);
+            lemma_unmove_args_unknown(*rest);
+        },
+        List::Nil => {},
+    }
+}
+
 pub proof fn lemma_unknown_local_call_is_refused(
     n: u32,
     dt: DTy,
@@ -4556,7 +4988,10 @@ pub proof fn lemma_unknown_stmt_is_refused(s: Stmt, all: Fns, env: Params, ps: P
     decreases s,
 {
     match s {
-        Stmt::Return(e, l) => lemma_unknown_value_is_refused(e, all, l, sd),
+        Stmt::Return(e, l) => {
+            lemma_unmove_unknown(e);
+            lemma_unknown_value_is_refused(spec_unmove(e).0, all, l, sd);
+        },
         Stmt::If(c, t, f, l) => {
             if unknown_expr(c) {
                 lemma_unknown_lift_is_refused(c, all, l, sd, 0, true);
@@ -4573,6 +5008,17 @@ pub proof fn lemma_unknown_stmt_is_refused(s: Stmt, all: Fns, env: Params, ps: P
                 }
             } else {
                 lemma_unknown_lift_is_refused(e, all, l, sd, 0, true);
+            }
+            // The start value of a local with no vector type reads its moves first, decision 0171.
+            lemma_unmove_unknown(e);
+            let e2 = spec_unmove(e).0;
+            if e2 is Call {
+                lemma_unmove_args_unknown(*e->Call_2);
+                if let Ok(dt) = spec_value_ty(t, l, sd) {
+                    lemma_unknown_local_call_is_refused(n, dt, e2->Call_0, e2->Call_1, *e2->Call_2, e2->Call_3, all, l, ps, sd);
+                }
+            } else {
+                lemma_unknown_lift_is_refused(e2, all, l, sd, 0, true);
             }
         },
         Stmt::SetField(_, e, l) => lemma_unknown_lift_is_refused(e, all, l, sd, 0, true),
@@ -4597,7 +5043,10 @@ pub proof fn lemma_unknown_stmt_is_refused(s: Stmt, all: Fns, env: Params, ps: P
                 lemma_unknown_cases_is_refused(*cs, all, env, ps, sd);
             }
         },
-        Stmt::Call(k, nm, args, l) => lemma_unknown_call_stmt_is_refused(k, nm, *args, l, all, ps, sd),
+        Stmt::Call(k, nm, args, l) => {
+            lemma_unmove_args_unknown(*args);
+            lemma_unknown_call_stmt_is_refused(k, nm, spec_unmove_args(*args).0, l, all, ps, sd);
+        },
         Stmt::Assign(_, e, l) => lemma_unknown_value_is_refused(e, all, l, sd),
         Stmt::While(c, _, body, l) => {
             if unknown_expr(c) {
@@ -4738,6 +5187,7 @@ pub open spec fn count_dstmt(s: DStmt) -> nat
         DStmt::Match(_, _, cs) => 1 + count_dcases(*cs),
         DStmt::For(init, _, _, _, _, body, step, _) => 1 + count_dstmt(*init) + count_dstmt(*step) + count_dstmts(*body),
         DStmt::Pre(_, s) => count_dstmt(*s),
+        DStmt::Moved(s, _) => count_dstmt(*s),
         _ => 1,
     }
 }
@@ -4760,6 +5210,32 @@ pub proof fn lemma_kept_return(s: Stmt, all: Fns, env: Params, ps: Params, sd: S
     reveal_with_fuel(count_dstmt, 2);
 }
 
+/// A statement that moves is one Dafny statement, as the statement inside it, decision 0171.
+pub proof fn lemma_moved_count(d: DStmt, ns: Names)
+    ensures
+        count_dstmt(spec_moved(d, ns)) == count_dstmt(d),
+{
+    reveal_with_fuel(count_dstmt, 2);
+}
+
+pub proof fn lemma_local_value_kept(n: u32, dt: DTy, e: Expr, l: u32, all: Fns, ps: Params, sd: Structs)
+    requires
+        spec_local_value(n, dt, e, l, all, ps, sd).is_ok(),
+    ensures
+        count_dstmt(spec_local_value(n, dt, e, l, all, ps, sd).unwrap()) == 1,
+{
+    reveal_with_fuel(count_dstmt, 2);
+}
+
+pub proof fn lemma_call_stmt_kept(k: u32, nm: u32, args: Args, l: u32, all: Fns, ps: Params, sd: Structs)
+    requires
+        spec_call_stmt(k, nm, args, l, all, ps, sd).is_ok(),
+    ensures
+        count_dstmt(spec_call_stmt(k, nm, args, l, all, ps, sd).unwrap()) == 1,
+{
+    reveal_with_fuel(count_dstmt, 2);
+}
+
 pub proof fn lemma_kept_local(s: Stmt, all: Fns, env: Params, ps: Params, sd: Structs)
     requires
         spec_stmt(s, all, env, ps, sd).is_ok(),
@@ -4767,7 +5243,15 @@ pub proof fn lemma_kept_local(s: Stmt, all: Fns, env: Params, ps: Params, sd: St
     ensures
         count_dstmt(spec_stmt(s, all, env, ps, sd).unwrap()) == 1,
 {
-    reveal_with_fuel(count_dstmt, 2);
+    if s->Local_1 is Vec {
+        reveal_with_fuel(count_dstmt, 2);
+    } else {
+        let (n, t, e, l) = (s->Local_0, s->Local_1, s->Local_2, s->Local_3);
+        let dt = spec_value_ty(t, l, sd).unwrap();
+        let (e2, ns) = spec_unmove(e);
+        lemma_local_value_kept(n, dt, e2, l, all, ps, sd);
+        lemma_moved_count(spec_local_value(n, dt, e2, l, all, ps, sd).unwrap(), ns);
+    }
 }
 
 pub proof fn lemma_kept_assign(s: Stmt, all: Fns, env: Params, ps: Params, sd: Structs)
@@ -4797,7 +5281,10 @@ pub proof fn lemma_kept_call(s: Stmt, all: Fns, env: Params, ps: Params, sd: Str
     ensures
         count_dstmt(spec_stmt(s, all, env, ps, sd).unwrap()) == 1,
 {
-    reveal_with_fuel(count_dstmt, 2);
+    let (k, nm, l) = (s->Call_0, s->Call_1, s->Call_3);
+    let (a2, ns) = spec_unmove_args(*s->Call_2);
+    lemma_call_stmt_kept(k, nm, a2, l, all, ps, sd);
+    lemma_moved_count(spec_call_stmt(k, nm, a2, l, all, ps, sd).unwrap(), ns);
 }
 
 
@@ -5054,6 +5541,7 @@ pub open spec fn calls_resolve_stmt(s: DStmt, all: Fns, sd: Structs) -> bool
         DStmt::LocalUpdate(_, _, _, k, _) => spec_callable(all, k, sd),
         DStmt::CallStmt(k, _) => spec_callable(all, k, sd),
         DStmt::Pre(c, s) => calls_resolve_calls(c, all, sd) && calls_resolve_stmt(*s, all, sd),
+        DStmt::Moved(s, _) => calls_resolve_stmt(*s, all, sd),
         DStmt::While(_, _, _, body) => calls_resolve(*body, all, sd),
         DStmt::For(init, _, _, _, _, body, step, _) => calls_resolve_stmt(*init, all, sd) && calls_resolve(*body, all, sd) && calls_resolve_stmt(*step, all, sd),
         _ => true,
@@ -5392,7 +5880,7 @@ pub proof fn lemma_resolves_return(s: Stmt, all: Fns, env: Params, ps: Params, s
         calls_resolve_stmt(spec_stmt(s, all, env, ps, sd).unwrap(), all, sd),
 {
     reveal_with_fuel(calls_resolve_stmt, 2);
-    lemma_value_resolves(s->Return_0, all, s->Return_1, sd);
+    lemma_value_resolves(spec_unmove(s->Return_0).0, all, s->Return_1, sd);
 }
 
 pub proof fn lemma_resolves_assign(s: Stmt, all: Fns, env: Params, ps: Params, sd: Structs)
@@ -5485,11 +5973,21 @@ pub proof fn lemma_resolves_local(s: Stmt, all: Fns, env: Params, ps: Params, sd
     ensures
         calls_resolve_stmt(spec_stmt(s, all, env, ps, sd).unwrap(), all, sd),
 {
-    reveal_with_fuel(calls_resolve_stmt, 2);
-    let e = s->Local_2;
+    reveal_with_fuel(calls_resolve_stmt, 3);
     let l = s->Local_3;
-    lemma_value_resolves(e, all, l, sd);
-    if let Expr::Call(k, nm, args, at) = e {
+    // The vector arm reads the start value as it is, and the other arm with its moves taken out, decision 0171.
+    let e1 = s->Local_2;
+    let e2 = spec_unmove(s->Local_2).0;
+    lemma_value_resolves(e1, all, l, sd);
+    lemma_value_resolves(e2, all, l, sd);
+    if let Expr::Call(k, nm, args, at) = e1 {
+        if let List::Cons(_, rest) = *args {
+            if spec_call_lift(k, nm, *rest, at, all, l, sd).is_ok() {
+                lemma_call_lift_resolves(k, nm, *rest, at, all, l, sd);
+            }
+        }
+    }
+    if let Expr::Call(k, nm, args, at) = e2 {
         if let List::Cons(_, rest) = *args {
             if spec_call_lift(k, nm, *rest, at, all, l, sd).is_ok() {
                 lemma_call_lift_resolves(k, nm, *rest, at, all, l, sd);
@@ -5505,10 +6003,10 @@ pub proof fn lemma_resolves_call(s: Stmt, all: Fns, env: Params, ps: Params, sd:
     ensures
         calls_resolve_stmt(spec_stmt(s, all, env, ps, sd).unwrap(), all, sd),
 {
-    reveal_with_fuel(calls_resolve_stmt, 2);
+    reveal_with_fuel(calls_resolve_stmt, 3);
     let k = s->Call_0;
     let nm = s->Call_1;
-    let args = *s->Call_2;
+    let args = spec_unmove_args(*s->Call_2).0;
     let l = s->Call_3;
     if spec_call_lift(k, nm, args, l, all, l, sd).is_ok() {
         lemma_call_lift_resolves(k, nm, args, l, all, l, sd);
@@ -6111,6 +6609,7 @@ pub fn lift(e: &Expr, all: &Fns, line: u32, sd: &Structs, n: u32, open: bool) ->
             },
         },
         Expr::Name(v) => Err(Refusal::Name(*v, line)),
+        Expr::Move(_, _) => Err(Refusal::MovePlace(line)),
         Expr::Unknown(k, l) => Err(Refusal::Construct(*k, *l)),
         _ => Err(Refusal::Syntax(line)),
     }
@@ -7551,19 +8050,12 @@ pub fn translate_stmt(s: &Stmt, all: &Fns, env: &Params, ps: &Params, sd: &Struc
     decreases s,
 {
     match s {
-        Stmt::Return(e, l) => match e {
-            Expr::Call(k, n, args, at) => if callee_writes(all, *k) {
-                Err(Refusal::Place(*at))
-            } else {
-                match call_lift(*k, *n, args, *at, all, *l, sd) {
-                    Ok((c, da)) => Ok(pre(c, DStmt::ReturnCall(*k, da))),
-                    Err(r) => Err(r),
-                }
-            },
-            _ => match lift(e, all, *l, sd, 0, true) {
-                Ok((c, d, _)) => Ok(pre(c, DStmt::Return(d))),
-                Err(r) => Err(r),
-            },
+        Stmt::Return(e, l) => {
+            let (e2, ns) = unmove(e);
+            match move_check(&ns, &var_names(e), ps, true, *l) {
+                Some(r) => Err(r),
+                None => translate_return(&e2, *l, all, sd),
+            }
         },
         Stmt::If(c, t, f, l) => match lift(c, all, *l, sd, 0, true) {
             Ok((cc, dc, _)) => match translate_stmts(t, all, env, ps, sd) {
@@ -7596,12 +8088,15 @@ pub fn translate_stmt(s: &Stmt, all: &Fns, env: &Params, ps: &Params, sd: &Struc
         },
         Stmt::Local(n, t, e, l) => match translate_value_ty(*t, *l, sd) {
             Err(r) => Err(r),
-            Ok(dt) => match e {
-                Expr::Call(k, nm, args, at) => local_call(*n, dt, *k, *nm, args, *at, all, *l, ps, sd),
-                _ => match lift(e, all, *l, sd, 0, true) {
-                    Ok((c, d, _)) => Ok(pre(c, DStmt::Local(*n, dt, d))),
-                    Err(r) => Err(r),
-                },
+            Ok(dt) => {
+                let (e2, ns) = unmove(e);
+                match move_check(&ns, &var_names(e), ps, false, *l) {
+                    Some(r) => Err(r),
+                    None => match local_value(*n, dt, &e2, *l, all, ps, sd) {
+                        Ok(d) => Ok(moved(d, ns)),
+                        Err(r) => Err(r),
+                    },
+                }
             },
         },
         Stmt::Assign(n, e, l) => if is_mut(ps, *n) {
@@ -7765,7 +8260,16 @@ pub fn translate_stmt(s: &Stmt, all: &Fns, env: &Params, ps: &Params, sd: &Struc
             },
             Err(r) => Err(r),
         },
-        Stmt::Call(k, nm, args, l) => call_stmt(*k, *nm, args, *l, all, ps, sd),
+        Stmt::Call(k, nm, args, l) => {
+            let (a2, ns) = unmove_args(args);
+            match move_check(&ns, &var_names_args(args), ps, false, *l) {
+                Some(r) => Err(r),
+                None => match call_stmt(*k, *nm, &a2, *l, all, ps, sd) {
+                    Ok(d) => Ok(moved(d, ns)),
+                    Err(r) => Err(r),
+                },
+            }
+        },
         Stmt::Exit(_) => Ok(DStmt::Exit),
         Stmt::Assert(e, l) => match translate_contract(e, &keys(env), &after(env), None, &List::Nil, *l, sd) {
             Ok(d) => Ok(DStmt::Assert(d)),
@@ -8691,7 +9195,7 @@ fn translate_fields(ps: &Params, line: u32) -> (r: Result<DParams, Refusal>)
 {
     match ps {
         List::Nil => Ok(List::Nil),
-        List::Cons((n, t), rest) => match if let Ty::Opt(Scalar::Struct(_)) | Ty::Ptr(_) | Ty::Own(_) | Ty::F64 = t { Err(Refusal::Element(line)) } else { translate_ty(*t, line) } {
+        List::Cons((n, t), rest) => match if matches!(t, Ty::Opt(Scalar::Struct(_)) | Ty::Ptr(_) | Ty::F64) || (matches!(t, Ty::Own(_)) && !matches!(t, Ty::Own(Scalar::Struct(_)))) { Err(Refusal::Element(line)) } else { translate_ty(*t, line) } {
             Ok(dt) => match translate_fields(rest, line) {
                 Ok(dr) => Ok(List::Cons((*n, dt), Box::new(dr))),
                 Err(r) => Err(r),
