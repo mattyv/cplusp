@@ -3913,3 +3913,12 @@ fn a_move_has_one_owner_and_a_place() {
     let List::Cons(Model::Bare(_, _, _, r), _) = *rest else { panic!("a refused body") };
     assert_eq!(r, Refusal::MovePlace(46));
 }
+
+/// A unique_ptr of a struct or an interface is a field, as an optional of it. A unique_ptr of a scalar is no field yet, decision 0171.
+#[test]
+fn a_unique_ptr_of_a_struct_is_a_field() {
+    let holder = |t: Ty| List::Cons((336, (4, List::Cons((337, t), Box::new(List::Nil)), List::Nil)), Box::new(List::Nil));
+    let want = List::Cons((337, DTy::Opt(Scalar::Struct(SHAPE))), Box::new(List::Nil));
+    assert_eq!(translate_structs(&holder(Ty::Own(Scalar::Struct(SHAPE)))), List::Cons(Ok((336, want)), Box::new(List::Nil)));
+    assert_eq!(translate_structs(&holder(Ty::Own(Scalar::I32))), List::Cons(Err(Refusal::Element(4)), Box::new(List::Nil)));
+}

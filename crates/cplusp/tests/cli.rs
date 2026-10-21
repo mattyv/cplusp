@@ -5167,8 +5167,9 @@ fn the_vector_examples_prove() {
     }
 }
 
-/// A unique_ptr of an interface as a field and as a parameter by value proves. A local moves into a constructor, into a call and
-/// into another local, and a return moves a local out, decision 0171.
+/// A unique_ptr of an interface as a field and as a parameter by value proves. A local moves into a constructor, into a call, into
+/// another local and into std::make_unique, and a return moves a local out. A moved local is null after its statement, decision
+/// 0171.
 #[test]
 fn a_unique_ptr_field_and_a_move_prove() {
     let Some(dafny) = dafny() else { return };

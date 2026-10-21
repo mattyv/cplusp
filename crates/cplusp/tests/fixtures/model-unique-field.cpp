@@ -77,3 +77,34 @@ std::unique_ptr<Component> pass() {
   std::unique_ptr<Component> a = std::make_unique<Linear>(3);
   return std::move(a);
 }
+
+//@ ensures result == 0
+int32_t after() {
+  std::unique_ptr<Component> a = std::make_unique<Linear>(1);
+  const int32_t r = run(std::move(a), 1);
+  return a != nullptr ? r : 0;
+}
+
+class Tag final : public Component {
+ public:
+  //@ requires inner != nullptr && inner->valid() && 0 <= v && v <= 1000
+  //@ ensures valid() && this->v_ == v
+  Tag(std::unique_ptr<Component> inner, int32_t v) : inner_(std::move(inner)), v_(v) {}
+  //@ ensures result == (0 <= v_ && v_ <= 1000)
+  bool valid() const override { return 0 <= v_ && v_ <= 1000; }
+  //@ requires valid() && 0 <= x && x <= 1000
+  //@ ensures result == v_
+  int32_t cost(int32_t x) const override { return v_; }
+
+ private:
+  std::unique_ptr<Component> inner_;
+  int32_t v_;
+};
+
+//@ requires 0 <= x && x <= 1000
+//@ ensures result == 5
+int32_t nested(int32_t x) {
+  std::unique_ptr<Component> base = std::make_unique<Linear>(10);
+  std::unique_ptr<Component> t = std::make_unique<Tag>(std::move(base), 5);
+  return t->cost(x);
+}
