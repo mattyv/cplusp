@@ -124,6 +124,7 @@ class Reset final : public Command {
 };
 
 // The driver. The commands are owned by the vector, and running one changes it, so the vector is a non-const parameter.
+//@ modifies cmds, c
 //@ requires cmds.size() <= 100
 //@ requires forall j :: 0 <= j < cmds.size() ==> cmds[j] != nullptr
 //@ requires forall j :: 0 <= j < cmds.size() ==> cmds[j]->valid() && !cmds[j]->done()
@@ -142,14 +143,14 @@ void run_and_undo(std::vector<std::unique_ptr<Command>>& cmds, Counter& c) {
   for (size_t i = 0; i < n; ++i) {
     cmds[i]->execute(c);
   }
-  //@ invariant 0 <= i <= n && n == cmds.size() && c.valid()
+  //@ invariant 0 <= k <= n && n == cmds.size() && c.valid()
   //@ invariant forall j :: 0 <= j < n ==> cmds[j] != nullptr
-  //@ invariant forall j :: 0 <= j < i ==> cmds[j]->valid() && cmds[j]->done()
-  //@ invariant forall j :: i <= j < n ==> cmds[j]->valid() && !cmds[j]->done()
-  //@ invariant i > 0 ==> cmds[0]->before() == old(c.value())
-  //@ invariant i == 0 ==> c.value() == old(c.value())
-  for (size_t i = n; i > 0; --i) {
-    cmds[i - 1]->undo(c);
+  //@ invariant forall j :: 0 <= j < k ==> cmds[j]->valid() && cmds[j]->done()
+  //@ invariant forall j :: k <= j < n ==> cmds[j]->valid() && !cmds[j]->done()
+  //@ invariant k > 0 ==> cmds[0]->before() == old(c.value())
+  //@ invariant k == 0 ==> c.value() == old(c.value())
+  for (size_t k = n; k > 0; --k) {
+    cmds[k - 1]->undo(c);
   }
 }
 
