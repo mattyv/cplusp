@@ -5090,3 +5090,79 @@ fn a_write_through_an_interface_with_no_rule_is_refused() {
         "{text}"
     );
 }
+
+/// A vector of unique_ptr of an interface reads through each element, a local starts empty and grows by push_back, and a call
+/// that writes an element writes it back, also through a local passed by reference, decision 0170.
+#[test]
+fn a_vector_of_unique_ptr_of_an_interface_proves() {
+    let Some(dafny) = dafny() else { return };
+    if !clang_tidy_available() {
+        return;
+    }
+    for name in ["model-vec-unique.cpp", "model-vec-unique-mut.cpp"] {
+        let o = prove(name, &[], &dafny);
+        let text = stdout(&o);
+        assert_eq!(o.status.code(), Some(0), "{name}: stdout: {text} stderr: {}", stderr(&o));
+        assert_eq!(text.lines().last(), Some("ok: proved"), "{name}: {text}");
+    }
+}
+
+/// An element that may be null, an index that may be out of range, and a read of an element before its write fail at their lines,
+/// decision 0170.
+#[test]
+fn a_vector_of_unique_ptr_keeps_its_bounds_and_its_values() {
+    let Some(dafny) = dafny() else { return };
+    if !clang_tidy_available() {
+        return;
+    }
+    let o = prove("model-vec-unique-wrong.cpp", &[], &dafny);
+    let text = stdout(&o);
+    assert_eq!(o.status.code(), Some(1), "stdout: {text} stderr: {}", stderr(&o));
+    let failed: Vec<&str> = text.lines().filter(|l| l.starts_with("Not proved: ")).map(|l| l.rsplit_once(".cpp:").unwrap().1).collect();
+    assert_eq!(
+        failed,
+        ["16: the optional may be empty or the pointer may be null here.", "21: the index may be out of range.", "39: the assert line may not hold."],
+        "{text}"
+    );
+}
+
+/// An assignment to an element, a range-for, a write through `*v[i]`, a vector of unique_ptr as a result, and an index that the call
+/// writes are refused at their lines, decision 0170.
+#[test]
+fn a_vector_of_unique_ptr_with_no_rule_is_refused() {
+    if !clang_tidy_available() {
+        return;
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let (o, _) = model("model-vec-unique-refuse.cpp", dir.path());
+    let text = stdout(&o);
+    assert_eq!(o.status.code(), Some(1), "stdout: {text} stderr: {}", stderr(&o));
+    let mut refusals: Vec<&str> = text.lines().filter(|l| l.starts_with("Not provable: ")).map(|l| l.rsplit_once(".cpp:").unwrap().1).collect();
+    refusals.sort_by_key(|l| l.split(':').next().unwrap().parse::<u32>().unwrap());
+    assert_eq!(
+        refusals,
+        [
+            "47: an assignment to a unique_ptr element: the translator has no rule for it yet.",
+            "54: a range-for over a vector of unique_ptr: the translator has no rule for it yet.",
+            "63: the call writes a value back, and the translator writes back only to a local or a reference parameter.",
+            "66: std::vector<std::unique_ptr<Observer>>: the translator has no rule for it yet.",
+            "82: the index reads a value that the call writes: the translator has no rule for it yet.",
+        ],
+        "{text}"
+    );
+}
+
+/// The examples shape_area_sum and command keep their objects in a vector of unique_ptr of an interface, decision 0170.
+#[test]
+fn the_vector_examples_prove() {
+    let Some(dafny) = dafny() else { return };
+    if !clang_tidy_available() {
+        return;
+    }
+    for example in ["shape_area_sum", "command"] {
+        let o = prove(&format!("../../../../examples/{example}/example.cpp"), &[], &dafny);
+        let text = stdout(&o);
+        assert_eq!(o.status.code(), Some(0), "{example}: stdout: {text} stderr: {}", stderr(&o));
+        assert_eq!(text.lines().last(), Some("ok: proved"), "{example}: {text}");
+    }
+}

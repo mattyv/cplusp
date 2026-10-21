@@ -3707,3 +3707,97 @@ fn value_of_a_struct_calls_its_member_value() {
     let call = DExpr::AsInt(Box::new(DExpr::FCall(key, Box::new(List::Cons(DExpr::Var(VX), Box::new(List::Nil))))));
     assert_eq!(m.ensures, List::Cons((DExpr::Bin(BinOp::Eq, Box::new(DExpr::AsInt(Box::new(DExpr::Result))), Box::new(call)), 19), Box::new(List::Nil)));
 }
+
+/// A unique_ptr of an interface is an element of a sequence, and nowhere else outside 0142. Its element reads as a unique_ptr of
+/// 0168, so a contract reads `v[0]->corners()`, decision 0170.
+#[test]
+fn a_unique_ptr_is_an_element_of_a_vector() {
+    let own = Scalar::Own(SHAPE);
+    assert_eq!(translate_ty(Ty::Seq(own, Extent::Dynamic), 3), Ok(DTy::Seq(own)));
+    assert_eq!(translate_ty(Ty::MutSeq(own), 3), Ok(DTy::Seq(own)));
+    assert_eq!(translate_ty(Ty::Vec(own), 3), Ok(DTy::Seq(own)));
+    for t in [Ty::Opt(own), Ty::Mut(own), Ty::Ptr(own), Ty::Own(own)] {
+        assert_eq!(translate_ty(t, 3), Err(Refusal::Element(3)), "{t:?}");
+    }
+    let call = Expr::MApply(b(Expr::Value(b(Expr::Index(b(Expr::Name(VX)), b(Expr::Int(0)))))), CORNERS, Box::new(List::Nil));
+    let ens = Expr::Bin(BinOp::Eq, b(Expr::Result), b(call));
+    let read = Function {
+        name: BKEY2,
+        line: 20,
+        params: List::Cons((VX, Ty::Seq(own, Extent::Dynamic)), Box::new(List::Nil)),
+        ret: Ty::I32,
+        trusted: false,
+        conds: List::Cons((CondKind::Ensures, ens, 19, names(&[VX])), Box::new(List::Nil)),
+        body: one(Stmt::Return(Expr::Lit(3, Ty::I32), 21)),
+    };
+    let all = fns(vec![base_corners(List::Nil, at_least_three()), read]);
+    let List::Cons(_, rest) = translate_unit(&all, &shape_of(&[(CORNERS, BKEY)])) else { panic!("two models") };
+    let List::Cons(Model::Full(m), _) = *rest else { panic!("a full model of read") };
+    let get = DExpr::Get(Box::new(DExpr::Index(Box::new(DExpr::Var(VX)), Box::new(DExpr::Lit(0)))));
+    let want = DExpr::AsInt(Box::new(DExpr::FCall(BKEY, Box::new(List::Cons(get, Box::new(List::Nil))))));
+    assert_eq!(m.ensures, List::Cons((DExpr::Bin(BinOp::Eq, Box::new(DExpr::AsInt(Box::new(DExpr::Result))), Box::new(want)), 19), Box::new(List::Nil)));
+}
+
+/// A local vector with no initial value is the empty sequence, and push_back of std::make_unique of a final class adds the upcast
+/// of the value that its constructor gives, decision 0170.
+#[test]
+fn a_local_vector_starts_empty_and_grows_by_make_unique() {
+    let own = Scalar::Own(SHAPE);
+    let made = Expr::Wrap(b(Expr::Cast(CastKind::Upcast(SQUARE, SHAPE), b(Expr::Construct(SQUARE, Box::new(List::Nil))))));
+    let body = List::Cons(
+        Box::new(Stmt::Local(LX, Ty::Vec(own), Expr::EmptyVec, 30)),
+        Box::new(List::Cons(Box::new(Stmt::PushBack(LX, made, 31)), Box::new(one(Stmt::Return(Expr::Lit(0, Ty::I32), 32))))),
+    );
+    let f = Function { name: 325, line: 29, params: List::Nil, ret: Ty::I32, trusted: false, conds: List::Nil, body };
+    let Model::Full(m) = translate_function(&f, &List::Nil, &shape_of(&[(CORNERS, BKEY)])) else { panic!("a full model") };
+    let List::Cons(first, rest) = strip(m.body) else { panic!("a body") };
+    assert_eq!(*first.0, DStmt::Local(LX, DTy::Seq(own), DExpr::EmptySeq));
+    let List::Cons(second, _) = *rest else { panic!("a push_back") };
+    let some = DExpr::Just(Box::new(DExpr::Upcast(SQUARE, SHAPE, Box::new(DExpr::Ctor(SQUARE, Box::new(List::Nil))))));
+    assert_eq!(*second.0, DStmt::Assign(LX, DExpr::Append(Box::new(DExpr::Var(LX)), Box::new(some))));
+}
+
+/// A call of a virtual function that writes, through an element of a vector by reference, writes the element back at its index. An
+/// index that the call writes is refused, and a call that passes a local vector by reference writes it back, decision 0170.
+#[test]
+fn a_call_through_an_element_writes_the_element_back() {
+    let own = Scalar::Own(SHAPE);
+    let elem = |i: Expr| Expr::Value(b(Expr::Index(b(Expr::Var(VX, Ty::MutSeq(own))), b(i))));
+    let call = |i: Expr| Stmt::Call(BMKEY, VBUMP, Box::new(List::Cons(b(elem(i)), Box::new(List::Nil))), 31);
+    let caller = |body: Stmts| Function {
+        name: 326,
+        line: 30,
+        params: List::Cons((VX, Ty::MutSeq(own)), Box::new(List::Nil)),
+        ret: Ty::Void,
+        trusted: false,
+        conds: modifies(&[VX], &[VX], List::Nil),
+        body,
+    };
+    let all = fns(vec![base_bump(), caller(one(call(Expr::Lit(0, Ty::U64))))]);
+    let List::Cons(_, rest) = translate_unit(&all, &shape_of(&[(VBUMP, BMKEY)])) else { panic!("two models") };
+    let List::Cons(Model::Full(m), _) = *rest else { panic!("a full model of the caller") };
+    let List::Cons(s, _) = strip(m.body) else { panic!("one statement") };
+    let DStmt::UpdateAt(obj, idx, others, key, _) = *s.0 else { panic!("an update of an element: {:?}", s.0) };
+    assert_eq!((obj, *idx, others, key), (Obj::Out(VX), DExpr::Conv(DTy::UInt64, Box::new(DExpr::Lit(0))), List::Nil, BMKEY));
+    // An index that the call writes back is read twice, so it has no rule.
+    let kparams = List::Cons((THIS, Ty::IfaceMut(SHAPE)), Box::new(List::Cons((VY, Ty::Mut(Scalar::U64)), Box::new(List::Nil))));
+    let bumpk = Function { params: kparams, conds: modifies(&[VY], &[THIS, VY], List::Nil), ..base_bump() };
+    let k = || Expr::Var(LX, Ty::U64);
+    let hazard = Stmt::Call(BMKEY, VBUMP, Box::new(List::Cons(b(elem(k())), Box::new(List::Cons(b(k()), Box::new(List::Nil))))), 31);
+    let body = List::Cons(Box::new(Stmt::Local(LX, Ty::U64, Expr::Lit(0, Ty::U64), 30)), Box::new(one(hazard)));
+    let all = fns(vec![bumpk, caller(body)]);
+    let List::Cons(_, rest) = translate_unit(&all, &shape_of(&[(VBUMP, BMKEY)])) else { panic!("two models") };
+    let List::Cons(Model::Bare(_, _, _, r), _) = *rest else { panic!("a refused body") };
+    assert_eq!(r, Refusal::IndexWritten(31));
+    // A local vector passed to a vector by reference is written back to the local.
+    let callee = Function { name: 327, line: 40, params: List::Cons((VY, Ty::MutSeq(Scalar::I32)), Box::new(List::Nil)), ret: Ty::Void, trusted: false, conds: modifies(&[VY], &[VY], List::Nil), body: List::Nil };
+    let pass = Stmt::Call(327, 327, Box::new(List::Cons(b(Expr::Var(LX, Ty::Vec(Scalar::I32))), Box::new(List::Nil))), 46);
+    let body = List::Cons(Box::new(Stmt::Local(LX, Ty::Vec(Scalar::I32), Expr::EmptyVec, 45)), Box::new(List::Cons(Box::new(pass), Box::new(one(Stmt::Return(Expr::Lit(0, Ty::I32), 47))))));
+    let local = Function { name: 328, line: 44, params: List::Nil, ret: Ty::I32, trusted: false, conds: List::Nil, body };
+    let all = fns(vec![callee, local]);
+    let List::Cons(_, rest) = translate_unit(&all, &List::Nil) else { panic!("two models") };
+    let List::Cons(Model::Full(m), _) = *rest else { panic!("a full model of the caller") };
+    let List::Cons(_, rest) = strip(m.body) else { panic!("a body") };
+    let List::Cons(s, _) = *rest else { panic!("the call") };
+    assert!(matches!(&*s.0, DStmt::Update(List::Cons(Obj::Local(v), _), 327, _) if *v == LX), "{:?}", s.0);
+}

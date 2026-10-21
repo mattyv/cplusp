@@ -174,3 +174,4 @@ Status is `decided`, `proposed` (the default until someone objects or the thin s
 | [0167](0167-a-lemma-for-the-bound-of-a-product.md) | A lemma for the bound of a product, and apply lines in a pure member function | decided |
 | [0168](0168-a-unique-ptr-of-an-interface.md) | A unique_ptr of an interface. Slice four of 0165 | decided |
 | [0169](0169-a-virtual-function-that-is-not-const.md) | A virtual function that is not const. Slice three of 0165 | decided |
+| [0170](0170-a-vector-of-unique-ptr.md) | A vector of unique_ptr of an interface. Slice six of 0165 | decided |
