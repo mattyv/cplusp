@@ -4408,8 +4408,8 @@ fn a_local_vector_is_a_copy() {
     assert_eq!(failed, ["10: the ensures line may not hold on this return.", "20: the ensures line may not hold on this return."], "{text}");
 }
 
-/// A local vector with no initial value, one from a list of values, and a call that passes one by reference have no rule yet,
-/// decision 0160.
+/// A local vector from a list of values has no rule yet, decision 0160. A local vector with no initial value is the empty sequence,
+/// and a call that passes one by reference writes it back, decision 0170.
 #[test]
 fn a_local_vector_with_no_rule_is_refused() {
     if !clang_tidy_available() {
@@ -4423,7 +4423,7 @@ fn a_local_vector_with_no_rule_is_refused() {
     let copy = "a local vector has a rule only as a copy of a vector in scope.";
     assert_eq!(
         refusals,
-        [format!("10: {copy}"), format!("15: {copy}"), "21: x is a local vector. A call that passes it by reference has no rule yet.".to_string()],
+        [format!("15: {copy}")],
         "{text}"
     );
 }

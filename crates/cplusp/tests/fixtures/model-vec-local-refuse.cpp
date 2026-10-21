@@ -1,7 +1,7 @@
 #include <cstdint>
 #include <vector>
 
-// A local vector with no rule yet, decision 0160.
+// A local vector with no rule yet, decision 0160, and two forms that 0170 gives a rule.
 //@ modifies v
 void fill(std::vector<int32_t>& v) {
 }
