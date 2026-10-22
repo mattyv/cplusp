@@ -93,3 +93,15 @@ int32_t through(int32_t x) {
 bool cheap(const Component& c, int32_t x) {
   return x > 0 && c.cost(x) < 10;
 }
+
+//@ requires c.valid() && 0 <= x <= 1000
+//@ ensures 0 <= result && result <= 3
+int32_t steps(const Component& c, int32_t x) {
+  int32_t n = 0;
+  //@ invariant 0 <= n && n <= 3
+  //@ decreases 3 - n
+  while (n < 3 && c.cost(x) >= 0) {
+    ++n;
+  }
+  return n;
+}

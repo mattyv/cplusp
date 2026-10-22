@@ -24,7 +24,7 @@ class Two final : public Shape {
  public:
   //@ ensures result == 4
   int32_t corners() const override {
-    int32_t n = 4;
+    int32_t n = 0; n = 4;
     return n;
   }
 };

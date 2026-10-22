@@ -5,7 +5,7 @@ struct Counter {
   int32_t n_;
 
   int32_t copy() const {
-    int32_t a = n_;
+    int32_t a = 0; a = n_;
     return a;
   }
 };

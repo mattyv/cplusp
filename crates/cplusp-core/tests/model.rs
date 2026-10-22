@@ -3989,3 +3989,17 @@ fn a_written_local_or_an_own_call_is_no_pure_body() {
     let Model::Full(m) = translate_function(&f, &all, &shapes(corners_member())) else { panic!("a full model of the caller") };
     assert_eq!(m.function, None);
 }
+
+/// A call of a const virtual function in a loop condition is its function, decision 0172.
+#[test]
+fn a_virtual_call_in_a_loop_condition_is_its_function() {
+    let ps = List::Cons((VX, Ty::IfaceRef(SHAPE)), Box::new(List::Nil));
+    let test = Expr::Bin(BinOp::Ge, b(corners_of(VX)), b(Expr::Lit(0, Ty::I32)));
+    let lp = Stmt::While(test, Box::new(List::Nil), Box::new(List::Nil), 21);
+    let f = Function { name: 342, line: 20, params: ps, ret: Ty::Void, trusted: false, conds: List::Nil, body: one(lp) };
+    let all = fns(vec![base_corners(List::Nil, at_least_three()), f]);
+    let List::Cons(_, rest) = translate_unit(&all, &shape_of(&[(CORNERS, BKEY)])) else { panic!("two models") };
+    let List::Cons(Model::Full(m), _) = *rest else { panic!("a full model of the loop") };
+    let want = DExpr::Bin(BinOp::Ge, Box::new(corners_fn(VX)), Box::new(lit32(0)));
+    assert_eq!(strip(m.body), List::Cons((Box::new(DStmt::While(want, List::Nil, List::Nil, Box::new(List::Nil))), 0), Box::new(List::Nil)));
+}

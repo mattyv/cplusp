@@ -3,7 +3,7 @@
 // An impure functor in a contract, a call in a branch, and a call of a bound name are refused, decisions 0098 and 0100.
 struct Twice {
   int32_t operator()(int32_t x) const {
-    int32_t y = x;
+    int32_t y = 0; y = x;
     return y;
   }
 };

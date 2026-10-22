@@ -25,7 +25,7 @@ class Two final : public Shape {
  public:
   //@ ensures result == 2
   int32_t area() const override {
-    int32_t n = 2;
+    int32_t n = 0; n = 2;
     return n;
   }
 };
