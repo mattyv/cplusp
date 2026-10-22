@@ -1,0 +1,17 @@
+# 0172: A pure member function with locals and calls of a virtual function. Step B of slice five of 0165
+
+Date: 2026-10-22. Status: decided. Amends 0090 and 0104. This is the second of two steps of slice five of 0165, after decision 0171.
+
+## Decision
+
+- A call of a `const` virtual function of an interface, decision 0166, is the function of the model in code too. It can stand in any place of an expression. Examples are the right side of `&&` or `||`, a branch of `?:` and a loop condition. The function changes no state, so its value does not depend on the place. Dafny checks the requires lines of the function at each call, with the short circuit of `&&` and `||`. A failed requires line at such a call in code gives `a requires line of the callee may not hold.`, as a method call does. In a contract line the sentence stays `a requires line of the member function may not hold here.`, decision 0095. This amends 0104, which runs each call before its statement.
+- A call of such a function as a whole statement value stays as before. `return p->f(a);` and `T x = p->f(a);` call the method of `B::f`, whose ensures line gives the value of the function, decision 0166.
+- A pure member function of 0090 can hold locals before its one `return`. Each local has a start value, and the body writes no local. Its function in the model has each local as `var x := e;` before its value, in the order of the body. The lemma calls of 0167 keep their places. The method has the same statements. This amends 0090, which let a pure body hold only its `return`.
+- A pure body can call a `const` virtual function of an interface. The call can be the value of the `return`, the start value of a local, or a part of an expression. The function of the model calls the function of the interface in the same place. So the link `result == F(this, ps)` of the method holds.
+- A pure body calls no other function. A call of a member function of its own class makes the member a method of 0096 and no function, as before. So does a call of a function that writes, or of a trusted function that is no virtual function of an interface. So does a write to a local, an `if`, a loop or an assert line. For an override, the translator then refuses the class with the sentence of 0165, `the override of B::f in D has no function in the model, so the translator cannot check it.`
+- A call of a pure member function of another struct in a pure body has no rule yet. The upgrade path is that rule with an order on the functions, as 0166 orders the virtual functions of an interface.
+- The example `decorator` proves with 0171 and this decision.
+
+## Why
+
+The decorator `Capped` answers `valid()` and `cost(x)` through the component in its field, with `inner_->valid()` on the right of `&&` and a local that holds `inner_->cost(x)`. Each override must have a function in the model, decision 0165, so its check can exist. The functions of an interface have no body, so a function that calls them makes no cycle of definitions. The upcast lines of 0166 are equations, not definitions. A call on the right of `&&` cannot run before its statement, because C++ skips it when the left side is false. The function of the model needs no such order, and Dafny checks its requires lines only where C++ runs the call. The reviewer checked this model by hand in Dafny. The whole example proves, and `quote` gets the bound 300 from the ensures line of `Capped`. A field read with no null guard fails, and so does a bound that is too tight.

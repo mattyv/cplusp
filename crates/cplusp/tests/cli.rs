@@ -5235,3 +5235,78 @@ fn a_moved_unique_ptr_has_one_owner() {
         "{text}"
     );
 }
+
+/// Pure overrides that call the interface through a field, with a local before the return, prove with their checks, and so does a
+/// call of a virtual function on the right of &&, decision 0172.
+#[test]
+fn a_pure_override_that_calls_its_field_proves() {
+    let Some(dafny) = dafny() else { return };
+    if !clang_tidy_available() {
+        return;
+    }
+    let o = prove("model-pure-calls.cpp", &[], &dafny);
+    let text = stdout(&o);
+    assert_eq!(o.status.code(), Some(0), "stdout: {text} stderr: {}", stderr(&o));
+    assert_eq!(text.lines().last(), Some("ok: proved"), "{text}");
+}
+
+/// A pure override that reads its field with no null guard fails at its return. A call on the right of && checks the requires
+/// lines of the interface. A bound that the decorator does not give fails at the return, decision 0172.
+#[test]
+fn a_pure_override_keeps_the_checks_of_its_calls() {
+    let Some(dafny) = dafny() else { return };
+    if !clang_tidy_available() {
+        return;
+    }
+    let o = prove("model-pure-calls-wrong.cpp", &[], &dafny);
+    let text = stdout(&o);
+    assert_eq!(o.status.code(), Some(1), "stdout: {text} stderr: {}", stderr(&o));
+    let failed: Vec<&str> = text.lines().filter(|l| l.starts_with("Not proved: ")).map(|l| l.rsplit_once(".cpp:").unwrap().1).collect();
+    assert_eq!(
+        failed,
+        [
+            "59: the optional may be empty or the pointer may be null here.",
+            "70: a requires line of the callee may not hold.",
+            "79: the ensures line may not hold on this return.",
+        ],
+        "{text}"
+    );
+    assert!(under(&text, "model-pure-calls-wrong.cpp:70: a requires line of the callee may not hold.").iter().any(|l| l.ends_with("model-pure-calls-wrong.cpp:10: requires valid() && 0 <= x <= 1000")), "{text}");
+}
+
+/// An override whose body writes a local, or calls a member function of its own class, has no function in the model, so its class
+/// is refused, decision 0172.
+#[test]
+fn an_override_that_is_no_pure_body_is_refused() {
+    let Some(dafny) = dafny() else { return };
+    if !clang_tidy_available() {
+        return;
+    }
+    let o = prove("model-pure-calls-refuse.cpp", &[], &dafny);
+    let text = stdout(&o);
+    assert_eq!(o.status.code(), Some(1), "stdout: {text} stderr: {}", stderr(&o));
+    let mut refusals: Vec<&str> = text.lines().filter(|l| l.starts_with("Not provable: ")).map(|l| l.rsplit_once(".cpp:").unwrap().1).collect();
+    refusals.sort_by_key(|l| l.split(':').next().unwrap().parse::<u32>().unwrap());
+    assert_eq!(
+        refusals,
+        [
+            "12: the override of Component::cost in Written has no function in the model, so the translator cannot check it.",
+            "26: the override of Component::valid in Own has no function in the model, so the translator cannot check it.",
+            "34: valid is no pure member function of its struct.",
+        ],
+        "{text}"
+    );
+}
+
+/// The example decorator proves with decisions 0171 and 0172.
+#[test]
+fn the_decorator_example_proves() {
+    let Some(dafny) = dafny() else { return };
+    if !clang_tidy_available() {
+        return;
+    }
+    let o = prove("../../../../examples/decorator/example.cpp", &[], &dafny);
+    let text = stdout(&o);
+    assert_eq!(o.status.code(), Some(0), "stdout: {text} stderr: {}", stderr(&o));
+    assert_eq!(text.lines().last(), Some("ok: proved"), "{text}");
+}

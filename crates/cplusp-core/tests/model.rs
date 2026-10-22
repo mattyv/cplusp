@@ -1449,9 +1449,11 @@ fn a_pure_member_function_is_also_a_function_and_its_method_gives_its_value() {
 }
 
 #[test]
-fn a_member_function_with_a_local_or_a_call_is_not_pure_and_a_free_function_never_is() {
+fn a_member_function_that_writes_a_local_is_not_pure_and_a_free_function_never_is() {
+    // A local alone keeps the body pure, decision 0172. A write to it does not.
     let field = || Expr::Cast(CastKind::Read, b(Expr::Field(b(Expr::Var(THIS, Ty::This(COUNTER))), CN)));
-    let body = List::Cons(Box::new(Stmt::Local(A, Ty::I32, field(), 10)), Box::new(one(Stmt::Return(read(A, Ty::I32), 11))));
+    let write = Box::new(List::Cons(Box::new(Stmt::Assign(A, field(), 11)), Box::new(one(Stmt::Return(read(A, Ty::I32), 12)))));
+    let body = List::Cons(Box::new(Stmt::Local(A, Ty::I32, field(), 10)), write);
     let Model::Full(m) = translate_function(&value_fn(body), &List::Nil, &members_table(None, None)) else { panic!("a full model") };
     assert_eq!(m.function, None);
     assert_eq!(m.ensures, List::Nil);
@@ -1512,8 +1514,8 @@ fn a_contract_that_calls_a_member_function_that_is_not_pure_is_refused() {
 
 #[test]
 fn the_unit_marks_which_members_are_pure_whatever_the_table_says() {
-    // The table claims that value is pure and valid is not. The unit computes it: value is pure, and valid, here a member with a
-    // local, is not. So a contract that calls valid() is refused, and one that calls c.value() reads the function.
+    // The table claims that value is pure and valid is not. The unit computes it: value is pure, and valid, here a member that
+    // writes a local, is not. So a contract that calls valid() is refused, and one that calls c.value() reads the function.
     let field = || Expr::Cast(CastKind::Read, b(Expr::Field(b(Expr::Var(THIS, Ty::This(COUNTER))), CN)));
     let value = value_fn(one(Stmt::Return(field(), 10)));
     let valid = Function {
@@ -1522,7 +1524,10 @@ fn the_unit_marks_which_members_are_pure_whatever_the_table_says() {
         params: List::Cons((THIS, Ty::This(COUNTER)), Box::new(List::Nil)),
         ret: Ty::Bool,
         trusted: false, conds: List::Nil,
-        body: List::Cons(Box::new(Stmt::Local(B, Ty::Bool, Expr::Bool(true), 13)), Box::new(one(Stmt::Return(read(B, Ty::Bool), 14)))),
+        body: List::Cons(
+            Box::new(Stmt::Local(B, Ty::Bool, Expr::Bool(true), 13)),
+            Box::new(List::Cons(Box::new(Stmt::Assign(B, Expr::Bool(true), 14)), Box::new(one(Stmt::Return(read(B, Ty::Bool), 15))))),
+        ),
     };
     let ens = Expr::Bin(BinOp::Eq, b(Expr::Result), b(Expr::MApply(b(Expr::Name(A)), VALUE, Box::new(List::Nil))));
     let user = Function {
@@ -3921,4 +3926,66 @@ fn a_unique_ptr_of_a_struct_is_a_field() {
     let want = List::Cons((337, DTy::Opt(Scalar::Struct(SHAPE))), Box::new(List::Nil));
     assert_eq!(translate_structs(&holder(Ty::Own(Scalar::Struct(SHAPE)))), List::Cons(Ok((336, want)), Box::new(List::Nil)));
     assert_eq!(translate_structs(&holder(Ty::Own(Scalar::I32))), List::Cons(Err(Refusal::Element(4)), Box::new(List::Nil)));
+}
+
+/// `s.corners()` on a parameter `const Shape& s`, decision 0166.
+fn corners_of(v: u32) -> Expr {
+    Expr::Call(BKEY, CORNERS, Box::new(List::Cons(b(Expr::Var(v, Ty::IfaceRef(SHAPE))), Box::new(List::Nil))), 21)
+}
+
+/// The function of `corners` on the value `v`.
+fn corners_fn(v: u32) -> DExpr {
+    DExpr::FCall(BKEY, Box::new(List::Cons(DExpr::Var(v), Box::new(List::Nil))))
+}
+
+/// A call of a const virtual function of an interface is its function in code, also on the right of && where no call runs before
+/// the statement, decision 0172.
+#[test]
+fn a_virtual_call_in_code_is_its_function() {
+    let ps = List::Cons((VY, Ty::I32), Box::new(List::Cons((VX, Ty::IfaceRef(SHAPE)), Box::new(List::Nil))));
+    let test = Expr::Bin(BinOp::Gt, b(corners_of(VX)), b(Expr::Lit(3, Ty::I32)));
+    let e = Expr::Bin(BinOp::And, b(Expr::Bin(BinOp::Gt, b(Expr::Var(VY, Ty::I32)), b(Expr::Lit(0, Ty::I32)))), b(test));
+    let f = Function { name: 340, line: 20, params: ps, ret: Ty::Bool, trusted: false, conds: List::Nil, body: one(Stmt::Return(e, 21)) };
+    let all = fns(vec![base_corners(List::Nil, at_least_three()), f]);
+    let List::Cons(_, rest) = translate_unit(&all, &shape_of(&[(CORNERS, BKEY)])) else { panic!("two models") };
+    let List::Cons(Model::Full(m), _) = *rest else { panic!("a full model of the caller") };
+    let left = DExpr::Bin(BinOp::Gt, Box::new(DExpr::Var(VY)), Box::new(lit32(0)));
+    let right = DExpr::Bin(BinOp::Gt, Box::new(corners_fn(VX)), Box::new(lit32(3)));
+    let want = DExpr::Bin(BinOp::And, Box::new(left), Box::new(right));
+    assert_eq!(strip(m.body), List::Cons((Box::new(DStmt::Return(want)), 0), Box::new(List::Nil)));
+}
+
+/// A pure member function can hold a local before its return, and can call a const virtual function of an interface as the start
+/// value of the local or as the value of the return. Its function in the model holds the local and the call, decision 0172.
+#[test]
+fn a_pure_member_function_holds_locals_and_virtual_calls() {
+    let ps = List::Cons((VX, Ty::IfaceRef(SHAPE)), Box::new(List::Nil));
+    let all = fns(vec![base_corners(List::Nil, at_least_three())]);
+    let local = List::Cons(Box::new(Stmt::Local(LX, Ty::I32, corners_of(VX), 20)), Box::new(one(Stmt::Return(Expr::Var(LX, Ty::I32), 21))));
+    let f = Function { body: local, ..derived_corners(ps, List::Nil) };
+    let Model::Full(m) = translate_function(&f, &all, &shapes(corners_member())) else { panic!("a full model") };
+    assert_eq!(m.function, Some(DExpr::Let(LX, DTy::Int32, Box::new(corners_fn(VX)), Box::new(DExpr::Var(LX)))));
+    let ps = List::Cons((VX, Ty::IfaceRef(SHAPE)), Box::new(List::Nil));
+    let f = Function { body: one(Stmt::Return(corners_of(VX), 21)), ..derived_corners(ps, List::Nil) };
+    let Model::Full(m) = translate_function(&f, &all, &shapes(corners_member())) else { panic!("a full model") };
+    assert_eq!(m.function, Some(corners_fn(VX)));
+}
+
+/// A body that writes a local, or that calls a member function of its own class, is no pure body, decision 0172.
+#[test]
+fn a_written_local_or_an_own_call_is_no_pure_body() {
+    let all = fns(vec![base_corners(List::Nil, at_least_three())]);
+    let written = List::Cons(
+        Box::new(Stmt::Local(LX, Ty::I32, Expr::Lit(4, Ty::I32), 20)),
+        Box::new(List::Cons(Box::new(Stmt::Assign(LX, Expr::Lit(5, Ty::I32), 21)), Box::new(one(Stmt::Return(Expr::Var(LX, Ty::I32), 22))))),
+    );
+    let f = Function { body: written, ..derived_corners(List::Nil, List::Nil) };
+    let Model::Full(m) = translate_function(&f, &all, &shapes(corners_member())) else { panic!("a full model") };
+    assert_eq!(m.function, None);
+    // A call of the class's own member corners, through its object.
+    let own = Expr::Call(DKEY, CORNERS, Box::new(List::Cons(b(Expr::Var(THIS, Ty::This(SQUARE))), Box::new(List::Nil))), 21);
+    let f = Function { name: 341, body: one(Stmt::Return(own, 21)), ..derived_corners(List::Nil, List::Nil) };
+    let all = fns(vec![base_corners(List::Nil, at_least_three()), derived_corners(List::Nil, List::Nil)]);
+    let Model::Full(m) = translate_function(&f, &all, &shapes(corners_member())) else { panic!("a full model of the caller") };
+    assert_eq!(m.function, None);
 }
