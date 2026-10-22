@@ -186,7 +186,9 @@ pub fn run(t: &Translation, limit: u32, refused: bool, source: &str, shown: &dyn
         // A function of the model that copies lines of its method, the function of a pure member, the function of a virtual function or the upcast, fails as the
         // lines of the original do. The original reports that failure, so a failure with the same message in the original stands for this one, decision 0167.
         if let Some((_, originals)) = map.copies.iter().find(|(r, _)| r.contains(&e.line)) {
-            if found.iter().any(|o| o.message == e.message && originals.iter().any(|r| r.contains(&o.line))) {
+            // A call in code is a function in the function and a method in the method, so Dafny words one failure two ways, decision 0172.
+            let same = |m: &str| if m == "function precondition could not be proved" { "a precondition for this call could not be proved" } else { m }.to_string();
+            if found.iter().any(|o| same(&o.message) == same(&e.message) && originals.iter().any(|r| r.contains(&o.line))) {
                 continue;
             }
         }
@@ -277,8 +279,11 @@ pub fn run(t: &Translation, limit: u32, refused: bool, source: &str, shown: &dyn
             "the divisor may be zero.".to_string()
         } else if shift {
             "the shift amount may be negative or not below the width of the type.".to_string()
-        } else if member {
+        } else if member && map.contracts.contains_key(place) {
             "a requires line of the member function may not hold here.".to_string()
+        } else if member {
+            // A call of a function of the model on a line of a body is a call in code, decision 0172. It has the sentence of a method call.
+            "a requires line of the callee may not hold.".to_string()
         } else {
             sentence(message)
         };

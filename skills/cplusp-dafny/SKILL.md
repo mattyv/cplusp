@@ -51,7 +51,7 @@ Treat SPARK guidance as an engineering method, not an LLM performance measuremen
 
 ## Contract lines that the translator reads
 
-This list is true at decision 0171. Read the later decisions before you rely on it.
+This list is true at decision 0172. Read the later decisions before you rely on it.
 `cplusp prove` translates the C++ and the `//@` lines to Dafny, and runs Dafny. It says `ok: proved`, or `Not proved: FILE:LINE: sentence` for a proof that fails, or `Not provable: FILE:LINE: sentence` for a form that has no rule.
 
 Where each line goes:
@@ -89,6 +89,7 @@ The modifies line:
 - A pure virtual function that is not `const` writes its object, decision 0169. Its contract reads the const functions of the interface, with `old(f())` for the value before. A call runs through a parameter `B& b` on the modifies line, or through a local `std::unique_ptr<B>`, which takes the new value. `prove` checks each override on the contracts: its ensures lines must give those of the interface. A class at a `B&` parameter has no rule yet.
 - A vector of `std::unique_ptr<B>` works as a `const&` parameter, a parameter by reference on the modifies line, or a local, decision 0170. A local `std::vector<T> v;` starts empty, and `v.push_back(std::make_unique<D>(a))` adds an element. `v[i]->f(a)` calls through the element, and a call that writes the object writes the element back. Its index must not read a value that the call writes. Write `v[i] != nullptr` in a requires line or an invariant above a line that reads `v[i]->f()`. A range-for over such a vector, an assignment to an element, and `std::move` of an element have no rule yet.
 - `std::unique_ptr<B>` can be a field of a struct or a final class, and a parameter by value, decision 0171. Write `f_ != nullptr && f_->valid()` in a requires line above a line that reads `f_->g()`. Give it a value with `std::move(x)` of a local, or with `std::make_unique<D>(a)`. After `f(std::move(x));` or `T y = std::move(x);`, `x` is null. A statement that moves `x` must not read `x` again. A parameter moves only in a return or a constructor init, as `f_(std::move(p))`. A move inside an `if` condition or an operator has no rule.
+- A pure member function can hold locals before its `return`, if the body writes no local, decision 0172. It can call a `const` virtual function of an interface, also through a field, as in `return inner_ != nullptr && inner_->valid();`. Such a call can stand anywhere in code, also on the right of `&&`. A call of a member function of the same class, or of a pure member function of another struct, makes the body no pure body. An override with such a body gets no function, so the translator refuses its class.
 - After a `push_back`, a read of `v.size()` in code needs a requires line or an invariant that bounds the length. Then the size fits `size_t`.
 - An ensures line that reads `v[i]` after the call needs a line before it that gives the length: `ensures v.size() == old(v.size())`, or `+ 1` after one `push_back`, decision 0146. A loop that writes `v` needs the same line as an invariant.
 - The gate also reads `modifies` and `reads` lines for globals, decision 0035. The translator has no rule for a global yet, so it refuses `reads` and a global on a `modifies` line.

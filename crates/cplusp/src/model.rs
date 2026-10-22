@@ -1169,6 +1169,8 @@ fn dexpr(e: &DExpr, names: &Names) -> String {
         DExpr::Upcast(d, b, a) => format!("{}({})", upcast_name(*d, *b, names), dexpr(a, names)),
         // The value after a call of a lemma, decision 0167. A lemma is called before the value in the body of a function.
         DExpr::Lemma(l, args, e) => format!("{}({}); {}", names.text(*l), dargs(args, names).join(", "), dexpr(e, names)),
+        // A local of a pure body, decision 0172. It stands at the head of a function body, so it needs no parentheses.
+        DExpr::Let(x, t, v, b) => format!("var {}: {} := {}; {}", mangle(names.text(*x)), local_ty(*t, names), dexpr(v, names), dexpr(b, names)),
         DExpr::SetAt(a, i, e) => format!("{}[{} := {}]", dexpr(a, names), dexpr(i, names), dexpr(e, names)),
         DExpr::Drop(a, k) => format!("{}[{}..]", dexpr(a, names), dexpr(k, names)),
         DExpr::Take(a, j) => format!("{}[..{}]", dexpr(a, names), dexpr(j, names)),
@@ -1590,11 +1592,24 @@ impl Printer<'_> {
         }
         // The lemmas that the body calls, for the check of an override, decision 0167.
         let mut calls = Vec::new();
+        // A local before a lemma call is repeated, so the arguments of the call resolve. A local after the last call is not.
         let mut cur = body;
-        while let DExpr::Lemma(l, args, rest) = cur {
-            calls.push(format!("{}({});", self.names.text(*l), dargs(args, self.names).join(", ")));
-            cur = rest;
+        let mut used = 0;
+        loop {
+            match cur {
+                DExpr::Lemma(l, args, rest) => {
+                    calls.push(format!("{}({});", self.names.text(*l), dargs(args, self.names).join(", ")));
+                    used = calls.len();
+                    cur = rest;
+                }
+                DExpr::Let(x, t, v, rest) => {
+                    calls.push(format!("var {}: {} := {};", mangle(self.names.text(*x)), local_ty(*t, self.names), dexpr(v, self.names)));
+                    cur = rest;
+                }
+                _ => break,
+            }
         }
+        calls.truncate(used);
         if !calls.is_empty() {
             self.calls.insert(m.name, calls);
         }

@@ -453,7 +453,8 @@ pub enum DTy {
 /// one operation of the double model, `fadd` to `fdiv`, and `Abs`, `Eps`, `Eta` and `DblMax` are `abs`, `EPS`, `ETA` and `MAX` of it,
 /// decision 0154. `FromInt` is `fint(e as int)` of it, the conversion of an integer, and `IntAbs` is `trunc_size(e)` of the prelude,
 /// the absolute value of an integer, decision 0159. `Upcast` is `f_D'B(e)`, the value of a final class as its interface, decision
-/// 0166. `Lemma` is `L(a); e`, the value `e` after a call of the lemma `L`, decision 0167. A Dafny expression calls no method.
+/// 0166. `Lemma` is `L(a); e`, the value `e` after a call of the lemma `L`, decision 0167. `Let` is `var x: T := e; b`, a local of
+/// a pure body, decision 0172. A Dafny expression calls no method.
 #[derive(PartialEq, Eq, Debug)]
 pub enum DExpr {
     Lit(u64),
@@ -501,6 +502,7 @@ pub enum DExpr {
     IntAbs(Box<DExpr>),
     Upcast(u32, u32, Box<DExpr>),
     Lemma(u32, Box<DArgs>, Box<DExpr>),
+    Let(u32, DTy, Box<DExpr>, Box<DExpr>),
     EmptySeq,
     Abs(Box<DExpr>),
     Eps,
@@ -1149,6 +1151,15 @@ pub open spec fn spec_code(e: Expr, line: u32) -> Result<DExpr, Refusal> {
     }
 }
 
+/// The condition of a loop. It runs each turn, so no call runs before it, except a call of a const virtual function, which is its
+/// function in place, decisions 0058 and 0172.
+pub open spec fn spec_loop_test(e: Expr, all: Fns, line: u32, sd: Structs) -> Result<DExpr, Refusal> {
+    match spec_lift(e, all, line, sd, 0, false) {
+        Ok((_, d, _)) => Ok(d),
+        Err(r) => Err(r),
+    }
+}
+
 /// A statement with the calls that run before it. With no call it is the statement alone.
 /// The value of a push_back. A value that the compiler turns into an optional, as `std::make_unique<D>(a)`, runs its calls before it,
 /// decision 0170. Any other value is code with no call, decision 0148.
@@ -1183,6 +1194,25 @@ pub open spec fn spec_callee_ty(all: Fns, key: u32, line: u32, sd: Structs) -> R
     }
 }
 
+/// The callee `key` is a const virtual function of an interface, a function of the model with no body. A call of it is that
+/// function in any place of code, because it changes no state, decision 0172.
+pub open spec fn spec_inline(all: Fns, key: u32) -> bool {
+    match spec_find(all, key) {
+        Some(f) => spec_const_virtual(f),
+        None => false,
+    }
+}
+
+pub fn inline(all: &Fns, key: u32) -> (r: bool)
+    ensures
+        r == spec_inline(*all, key),
+{
+    match find(all, key) {
+        Some(f) => const_virtual(f),
+        None => false,
+    }
+}
+
 /// An expression of code, decision 0058. Each call that C++ evaluates once runs before the statement and sets a temporary,
 /// numbered from `n`, which the expression reads, decision 0104. Where `open` is false, a call has no place: on the right of `&&`
 /// or `||`, in a branch of `?:`, and in a loop condition. A call of a function that writes its object has no place in an
@@ -1205,7 +1235,13 @@ pub open spec fn spec_lift(e: Expr, all: Fns, line: u32, sd: Structs, n: u32, op
             Ok(_) => Ok((List::Nil, spec_code_var(v, t), n)),
             Err(r) => Err(r),
         },
-        Expr::Call(k, nm, args, at) => if !open || spec_callee_writes(all, k) {
+        // A call of a const virtual function of an interface is its function in place, decision 0172.
+        Expr::Call(k, nm, args, at) => if spec_inline(all, k) && spec_callable(all, k, sd) {
+            match spec_lift_args(*args, all, line, sd, n, open) {
+                Err(r) => Err(r),
+                Ok((ca, da, n1)) => Ok((ca, DExpr::FCall(k, Box::new(da)), n1)),
+            }
+        } else if !open || spec_callee_writes(all, k) {
             Err(Refusal::Place(at))
         } else if !spec_callable(all, k, sd) {
             Err(Refusal::Callee(nm, at))
@@ -3313,7 +3349,7 @@ pub open spec fn spec_stmt(s: Stmt, all: Fns, env: Params, ps: Params, sd: Struc
             Err(r) => Err(r),
             Ok(inv) => match spec_loop_conds(*lc, CondKind::Decreases, env, sd, false) {
                 Err(r) => Err(r),
-                Ok(dec) => match spec_code(c, l) {
+                Ok(dec) => match spec_loop_test(c, all, l, sd) {
                     Err(r) => Err(r),
                     Ok(dc) => match spec_stmts(*body, all, env, ps, sd) {
                         Err(r) => Err(r),
@@ -3328,7 +3364,7 @@ pub open spec fn spec_stmt(s: Stmt, all: Fns, env: Params, ps: Params, sd: Struc
                 Err(r) => Err(r),
                 Ok(dec) => match spec_stmt(*init, all, env, ps, sd) {
                     Err(r) => Err(r),
-                    Ok(di) => match spec_code(c, l) {
+                    Ok(di) => match spec_loop_test(c, all, l, sd) {
                         Err(r) => Err(r),
                         Ok(dc) => match spec_stmt(*step, all, spec_scope(*init, env), ps, sd) {
                             Err(r) => Err(r),
@@ -3826,8 +3862,10 @@ pub open spec fn spec_bounds(ps: Params, line: u32, tail: DConds) -> DConds
 /// The body of the Dafny function of a member function: the expression of its one `return`, when the function has `this` and its
 /// body is that `return` alone, decision 0090. A `return` of a call is a `ReturnCall`, so a pure body holds no call. A function that
 /// writes a reference parameter is never pure, decision 0108.
-/// The value of a body of apply lines and one return: the value of the return after each lemma, in order, decision 0167.
-pub open spec fn spec_pure_value(body: DStmts) -> Option<DExpr>
+/// The value of a body of apply lines and one return: the value of the return after each lemma, in order, decision 0167. A local
+/// before the return is a `var` of the value, decision 0172. A call of a const virtual function of an interface as the value of the
+/// return or of a local is the function of the interface, whose method gives the same value, decision 0166.
+pub open spec fn spec_pure_value(body: DStmts, all: Fns) -> Option<DExpr>
     decreases body,
 {
     match body {
@@ -3837,9 +3875,26 @@ pub open spec fn spec_pure_value(body: DStmts) -> Option<DExpr>
             } else {
                 None
             },
-            DStmt::Apply(f, da) => match spec_pure_value(*rest) {
+            DStmt::ReturnCall(k, da) => if *rest == List::Nil && spec_inline(all, k) {
+                Some(DExpr::FCall(k, Box::new(da)))
+            } else {
+                None
+            },
+            DStmt::Apply(f, da) => match spec_pure_value(*rest, all) {
                 Some(e) => Some(DExpr::Lemma(f, Box::new(da), Box::new(e))),
                 None => None,
+            },
+            DStmt::Local(n, dt, d) => match spec_pure_value(*rest, all) {
+                Some(e) => Some(DExpr::Let(n, dt, Box::new(d), Box::new(e))),
+                None => None,
+            },
+            DStmt::LocalCall(n, dt, k, da) => if spec_inline(all, k) {
+                match spec_pure_value(*rest, all) {
+                    Some(e) => Some(DExpr::Let(n, dt, Box::new(DExpr::FCall(k, Box::new(da))), Box::new(e))),
+                    None => None,
+                }
+            } else {
+                None
             },
             _ => None,
         },
@@ -3847,12 +3902,12 @@ pub open spec fn spec_pure_value(body: DStmts) -> Option<DExpr>
     }
 }
 
-pub open spec fn spec_pure_body(ps: Params, body: DStmts) -> Option<DExpr> {
+pub open spec fn spec_pure_body(ps: Params, body: DStmts, all: Fns) -> Option<DExpr> {
     match spec_this(ps) {
         Some(_) => if spec_mutates(ps) {
             None
         } else {
-            spec_pure_value(body)
+            spec_pure_value(body, all)
         },
         None => None,
     }
@@ -4136,7 +4191,7 @@ pub open spec fn spec_pure_ret(all: Fns, key: u32, sd: Structs, strict: bool) ->
             None
         } else if strict {
             match spec_inside(f, all, sd) {
-                Ok((_, _, _, body)) => match spec_pure_body(f.params, body) {
+                Ok((_, _, _, body)) => match spec_pure_body(f.params, body, all) {
                     Some(_) => Some((f.ret, f.params)),
                     None => None,
                 },
@@ -4144,7 +4199,7 @@ pub open spec fn spec_pure_ret(all: Fns, key: u32, sd: Structs, strict: bool) ->
             }
         } else {
             match spec_stmts(f.body, all, f.params, f.params, sd) {
-                Ok(body) => match spec_pure_body(f.params, body) {
+                Ok(body) => match spec_pure_body(f.params, body, all) {
                     Some(_) => Some((f.ret, f.params)),
                     None => None,
                 },
@@ -4516,10 +4571,10 @@ pub open spec fn spec_function(f: Function, all: Fns, sd: Structs) -> Model {
                             params: ps,
                             ret,
                             requires: spec_bounds(f.params, f.line, req),
-                            ensures: spec_linked(f, ens, spec_pure_body(f.params, body)),
+                            ensures: spec_linked(f, ens, spec_pure_body(f.params, body, all)),
                             decreases: dec,
                             body,
-                            function: spec_pure_body(f.params, body),
+                            function: spec_pure_body(f.params, body, all),
                             writes: spec_writes(f.params),
                             outs: spec_outs(f.params),
                             trusted: f.trusted,
@@ -5050,7 +5105,7 @@ pub proof fn lemma_unknown_stmt_is_refused(s: Stmt, all: Fns, env: Params, ps: P
         Stmt::Assign(_, e, l) => lemma_unknown_value_is_refused(e, all, l, sd),
         Stmt::While(c, _, body, l) => {
             if unknown_expr(c) {
-                lemma_unknown_code_is_refused(c, l);
+                lemma_unknown_lift_is_refused(c, all, l, sd, 0, false);
             } else {
                 lemma_unknown_stmts_is_refused(*body, all, env, ps, sd);
             }
@@ -5059,7 +5114,7 @@ pub proof fn lemma_unknown_stmt_is_refused(s: Stmt, all: Fns, env: Params, ps: P
             if unknown_stmt(*init) {
                 lemma_unknown_stmt_is_refused(*init, all, env, ps, sd);
             } else if unknown_expr(c) {
-                lemma_unknown_code_is_refused(c, l);
+                lemma_unknown_lift_is_refused(c, all, l, sd, 0, false);
             } else if unknown_stmt(*step) {
                 lemma_unknown_stmt_is_refused(*step, all, spec_scope(*init, env), ps, sd);
             } else {
@@ -5812,6 +5867,8 @@ pub proof fn lemma_closed_runs_no_call(e: Expr, all: Fns, line: u32, sd: Structs
         Expr::Wrap(a) => lemma_closed_runs_no_call(*a, all, line, sd, n),
         Expr::Empty(a) => lemma_closed_runs_no_call(*a, all, line, sd, n),
         Expr::Construct(_, args) => lemma_closed_args_run_no_call(*args, all, line, sd, n),
+        // A call of a const virtual function is its function in place, and its arguments run no call, decision 0172.
+        Expr::Call(_, _, args, _) => lemma_closed_args_run_no_call(*args, all, line, sd, n),
         Expr::Cond(c, a, b) => {
             lemma_closed_runs_no_call(*c, all, line, sd, n);
             let n1 = spec_lift(*c, all, line, sd, n, false).unwrap().2;
@@ -6354,6 +6411,16 @@ pub fn translate_integral(from: Ty, to: Ty, d: DExpr, line: u32) -> (r: Result<D
     }
 }
 
+pub fn loop_test(e: &Expr, all: &Fns, line: u32, sd: &Structs) -> (r: Result<DExpr, Refusal>)
+    ensures
+        r == spec_loop_test(*e, *all, line, *sd),
+{
+    match lift(e, all, line, sd, 0, false) {
+        Ok((_, d, _)) => Ok(d),
+        Err(r) => Err(r),
+    }
+}
+
 pub fn translate_code(e: &Expr, line: u32) -> (r: Result<DExpr, Refusal>)
     ensures
         r == spec_code(*e, line),
@@ -6421,7 +6488,12 @@ pub fn lift(e: &Expr, all: &Fns, line: u32, sd: &Structs, n: u32, open: bool) ->
             Ok(_) => Ok((List::Nil, code_var(*v, *t), n)),
             Err(r) => Err(r),
         },
-        Expr::Call(k, nm, args, at) => if !open || callee_writes(all, *k) {
+        Expr::Call(k, nm, args, at) => if inline(all, *k) && callable(all, *k, sd) {
+            match lift_args(args, all, line, sd, n, open) {
+                Err(r) => Err(r),
+                Ok((ca, da, n1)) => Ok((ca, DExpr::FCall(*k, Box::new(da)), n1)),
+            }
+        } else if !open || callee_writes(all, *k) {
             Err(Refusal::Place(*at))
         } else if !callable(all, *k, sd) {
             Err(Refusal::Callee(*nm, *at))
@@ -8136,7 +8208,7 @@ pub fn translate_stmt(s: &Stmt, all: &Fns, env: &Params, ps: &Params, sd: &Struc
             Err(r) => Err(r),
             Ok(inv) => match translate_loop_conds(lc, CondKind::Decreases, env, sd, false) {
                 Err(r) => Err(r),
-                Ok(dec) => match translate_code(c, *l) {
+                Ok(dec) => match loop_test(c, all, *l, sd) {
                     Err(r) => Err(r),
                     Ok(dc) => match translate_stmts(body, all, env, ps, sd) {
                         Err(r) => Err(r),
@@ -8153,7 +8225,7 @@ pub fn translate_stmt(s: &Stmt, all: &Fns, env: &Params, ps: &Params, sd: &Struc
                     Err(r) => Err(r),
                     Ok(dec) => match translate_stmt(init, all, env, ps, sd) {
                         Err(r) => Err(r),
-                        Ok(di) => match translate_code(c, *l) {
+                        Ok(di) => match loop_test(c, all, *l, sd) {
                             Err(r) => Err(r),
                             Ok(dc) => match translate_stmt(step, all, &inner, ps, sd) {
                                 Err(r) => Err(r),
@@ -8742,6 +8814,7 @@ pub fn copy_dexpr(d: &DExpr) -> (r: DExpr)
         DExpr::FromInt(x0) => DExpr::FromInt(Box::new(copy_dexpr(x0))),
         DExpr::Upcast(x0, x1, x2) => DExpr::Upcast(*x0, *x1, Box::new(copy_dexpr(x2))),
         DExpr::Lemma(x0, x1, x2) => DExpr::Lemma(*x0, Box::new(copy_dargs(x1)), Box::new(copy_dexpr(x2))),
+        DExpr::Let(x0, x1, x2, x3) => DExpr::Let(*x0, *x1, Box::new(copy_dexpr(x2)), Box::new(copy_dexpr(x3))),
         DExpr::EmptySeq => DExpr::EmptySeq,
         DExpr::IntAbs(x0) => DExpr::IntAbs(Box::new(copy_dexpr(x0))),
         DExpr::Eps => DExpr::Eps,
@@ -8761,9 +8834,9 @@ pub fn copy_dargs(a: &DArgs) -> (r: DArgs)
     }
 }
 
-pub fn pure_value(body: &DStmts) -> (r: Option<DExpr>)
+pub fn pure_value(body: &DStmts, all: &Fns) -> (r: Option<DExpr>)
     ensures
-        r == spec_pure_value(*body),
+        r == spec_pure_value(*body, *all),
     decreases body,
 {
     match body {
@@ -8772,9 +8845,29 @@ pub fn pure_value(body: &DStmts) -> (r: Option<DExpr>)
                 List::Nil => Some(copy_dexpr(d)),
                 _ => None,
             },
-            DStmt::Apply(f, da) => match pure_value(rest) {
+            DStmt::ReturnCall(k, da) => match &**rest {
+                List::Nil => if inline(all, *k) {
+                    Some(DExpr::FCall(*k, Box::new(copy_dargs(da))))
+                } else {
+                    None
+                },
+                _ => None,
+            },
+            DStmt::Apply(f, da) => match pure_value(rest, all) {
                 Some(e) => Some(DExpr::Lemma(*f, Box::new(copy_dargs(da)), Box::new(e))),
                 None => None,
+            },
+            DStmt::Local(n, dt, d) => match pure_value(rest, all) {
+                Some(e) => Some(DExpr::Let(*n, *dt, Box::new(copy_dexpr(d)), Box::new(e))),
+                None => None,
+            },
+            DStmt::LocalCall(n, dt, k, da) => if inline(all, *k) {
+                match pure_value(rest, all) {
+                    Some(e) => Some(DExpr::Let(*n, *dt, Box::new(DExpr::FCall(*k, Box::new(copy_dargs(da)))), Box::new(e))),
+                    None => None,
+                }
+            } else {
+                None
             },
             _ => None,
         },
@@ -8782,15 +8875,15 @@ pub fn pure_value(body: &DStmts) -> (r: Option<DExpr>)
     }
 }
 
-pub fn pure_body(ps: &Params, body: &DStmts) -> (r: Option<DExpr>)
+pub fn pure_body(ps: &Params, body: &DStmts, all: &Fns) -> (r: Option<DExpr>)
     ensures
-        r == spec_pure_body(*ps, *body),
+        r == spec_pure_body(*ps, *body, *all),
 {
     match this_param(ps) {
         Some(_) => if mutates(ps) {
             None
         } else {
-            pure_value(body)
+            pure_value(body, all)
         },
         None => None,
     }
@@ -9053,7 +9146,7 @@ pub fn pure_ret(all: &Fns, key: u32, sd: &Structs, strict: bool) -> (r: Option<(
             None
         } else if strict {
             match translate_inside(f, all, sd) {
-                Ok((_, _, _, body)) => match pure_body(&f.params, &body) {
+                Ok((_, _, _, body)) => match pure_body(&f.params, &body, all) {
                     Some(_) => Some((f.ret, copy(&f.params))),
                     None => None,
                 },
@@ -9061,7 +9154,7 @@ pub fn pure_ret(all: &Fns, key: u32, sd: &Structs, strict: bool) -> (r: Option<(
             }
         } else {
             match translate_stmts(&f.body, all, &f.params, &f.params, sd) {
-                Ok(body) => match pure_body(&f.params, &body) {
+                Ok(body) => match pure_body(&f.params, &body, all) {
                     Some(_) => Some((f.ret, copy(&f.params))),
                     None => None,
                 },
@@ -9153,7 +9246,7 @@ pub fn translate_function(f: &Function, all: &Fns, sd: &Structs) -> (r: Model)
                 None => match translate_inside_of(f, all, sd) {
                     Err(r) => Model::Bare(f.name, ps, ret, r),
                     Ok((req, ens, dec, body)) => {
-                        let pure = pure_body(&f.params, &body);
+                        let pure = pure_body(&f.params, &body, all);
                         let ensures = linked(f, ens, &pure);
                         Model::Full(
                             Method {
