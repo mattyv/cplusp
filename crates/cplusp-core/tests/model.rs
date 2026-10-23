@@ -4248,3 +4248,41 @@ fn a_static_lists_a_global() {
     let out = globalize(&fns(vec![f]), &file_globals());
     assert!(!any_bad(&fn_list(&out)[0].conds));
 }
+
+const TABOVE: u32 = 374;
+const KTA: u32 = 375;
+
+/// A twin with an argument takes its arguments, converted to their types, before the values of its globals, decision 0174.
+#[test]
+fn a_twin_takes_its_arguments_before_its_globals() {
+    let twin_ps = List::Cons((X, Ty::I32), Box::new(List::Cons((TCOUNT, Ty::I32), Box::new(List::Nil))));
+    let table: Structs = List::Cons((TALLY, (5, List::Nil, List::Cons((TABOVE, (KTA, Some((Ty::Bool, twin_ps)))), Box::new(List::Nil)))), Box::new(List::Nil));
+    let req = Expr::Apply(TABOVE, Box::new(List::Cons(b(Expr::Int(3)), Box::new(List::Nil))));
+    let conds = List::Cons((CondKind::Requires, req, 30, names(&[TCOUNT])), Box::new(List::Nil));
+    let f = Function { name: 376, line: 31, params: List::Cons((TCOUNT, Ty::I32), Box::new(List::Nil)), ret: Ty::Void, trusted: true, conds, body: List::Nil };
+    let Model::Full(m) = translate_function(&f, &List::Nil, &table) else { panic!("a full model") };
+    let args = List::Cons(DExpr::Conv(DTy::Int32, Box::new(DExpr::Lit(3))), Box::new(List::Cons(DExpr::Var(TCOUNT), Box::new(List::Nil))));
+    assert_eq!(strip_conds(m.requires), List::Cons((DExpr::FCall(KTA, Box::new(args)), 0), Box::new(List::Nil)));
+}
+
+/// A twin with an object of any kind is no static, so a contract call of its name with no object stays a call of the companion
+/// file, decision 0174.
+#[test]
+fn a_virtual_function_is_no_static() {
+    let iface_ps = List::Cons((THIS, Ty::Iface(SHAPE)), Box::new(List::Nil));
+    let shape = (SHAPE, (5, List::Nil, List::Cons((CORNERS, (BKEY, Some((Ty::I32, iface_ps)))), Box::new(List::Nil))));
+    let table: Structs = List::Cons((COUNTER, (3, List::Nil, List::Nil)), Box::new(List::Cons(shape, Box::new(List::Nil))));
+    let ens = Expr::Bin(BinOp::Eq, b(Expr::Result), b(Expr::Apply(CORNERS, Box::new(List::Nil))));
+    let f = Function {
+        name: 377,
+        line: 41,
+        params: List::Cons((THIS, Ty::This(COUNTER)), Box::new(List::Nil)),
+        ret: Ty::I32,
+        trusted: true,
+        conds: List::Cons((CondKind::Ensures, ens, 40, names(&[THIS])), Box::new(List::Nil)),
+        body: List::Nil,
+    };
+    let Model::Full(m) = translate_function(&f, &List::Nil, &table) else { panic!("a full model") };
+    let want = DExpr::Bin(BinOp::Eq, Box::new(DExpr::AsInt(Box::new(DExpr::Result))), Box::new(DExpr::Apply(CORNERS, Box::new(List::Nil))));
+    assert!(matches!(&m.ensures, List::Cons((d, _), _) if *d == want), "{:?}", m.ensures);
+}

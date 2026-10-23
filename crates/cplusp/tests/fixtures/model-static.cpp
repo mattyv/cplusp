@@ -106,3 +106,28 @@ int32_t Counter::made = 0;
 int32_t seven(const Counter& c) {
   return c.value() + Counter::made_count();
 }
+
+// A twin with an argument takes its arguments before its globals, decision 0174.
+class Scale {
+ public:
+  Scale() = delete;
+  //@ requires -1000 <= x && x <= 1000
+  //@ ensures result == 2 * x
+  static int32_t twice(int32_t x) { return 2 * x; }
+  //@ requires -1000 <= x && x <= 1000
+  //@ reads Scale::level_
+  //@ ensures result == (Scale::level_ > x)
+  static bool above(int32_t x) { return level_ > x; }
+
+  static int32_t level_;
+};
+
+int32_t Scale::level_ = 0;
+
+//@ ensures result == Scale::twice(3)
+int32_t six() { return 6; }
+
+//@ requires Scale::above(3)
+//@ reads Scale::level_
+//@ ensures result == Scale::level_ && result > 3
+int32_t at_least_four() { return Scale::level_; }

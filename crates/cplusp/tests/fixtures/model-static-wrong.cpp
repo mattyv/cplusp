@@ -77,3 +77,23 @@ size_t Pool::used_ = 0;
 void blind_acquire(size_t size) {
   Pool::acquire(size);
 }
+
+// A twin with an argument takes its arguments before its globals, decision 0174.
+class Scale {
+ public:
+  Scale() = delete;
+  //@ requires -1000 <= x && x <= 1000
+  //@ ensures result == 2 * x
+  static int32_t twice(int32_t x) { return 2 * x; }
+  //@ requires -1000 <= x && x <= 1000
+  //@ reads Scale::level_
+  //@ ensures result == (Scale::level_ > x)
+  static bool above(int32_t x) { return level_ > x; }
+
+  static int32_t level_;
+};
+
+int32_t Scale::level_ = 0;
+
+//@ ensures result == Scale::twice(3)
+int32_t seven_wrong() { return 7; }

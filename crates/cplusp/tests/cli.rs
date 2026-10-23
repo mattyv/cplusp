@@ -5412,6 +5412,7 @@ fn a_static_keeps_the_contract_of_its_class() {
             "39: the ensures line may not hold on this return.",
             "65: a requires line of the member function may not hold here.",
             "78: a requires line of the callee may not hold.",
+            "99: the ensures line may not hold on this return.",
         ],
         "{text}"
     );
