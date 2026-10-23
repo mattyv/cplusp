@@ -4286,3 +4286,78 @@ fn a_virtual_function_is_no_static() {
     let want = DExpr::Bin(BinOp::Eq, Box::new(DExpr::AsInt(Box::new(DExpr::Result))), Box::new(DExpr::Apply(CORNERS, Box::new(List::Nil))));
     assert!(matches!(&m.ensures, List::Cons((d, _), _) if *d == want), "{:?}", m.ensures);
 }
+
+const BA: u32 = 380;
+const BB: u32 = 381;
+
+/// `a & b` in code on two unsigned values is BitAnd of the prelude on their integers, back in the type under its range check. A
+/// bit operator on a signed value has no rule, decision 0175.
+#[test]
+fn a_bit_operator_is_a_function_of_the_prelude() {
+    let ps = |t: Ty| List::Cons((BA, t), Box::new(List::Cons((BB, t), Box::new(List::Nil))));
+    let bits = |op: BinOp, t: Ty| Expr::Bits(op, b(Expr::Var(BA, t)), b(Expr::Var(BB, t)), t);
+    let f = Function { name: 382, line: 20, params: ps(Ty::U32), ret: Ty::U32, trusted: false, conds: List::Nil, body: one(Stmt::Return(bits(BinOp::BitAnd, Ty::U32), 21)) };
+    let Model::Full(m) = translate_function(&f, &List::Nil, &List::Nil) else { panic!("a full model") };
+    let want = DExpr::Conv(DTy::UInt32, Box::new(DExpr::BitOp(BinOp::BitAnd, Box::new(DExpr::AsInt(Box::new(DExpr::Var(BA)))), Box::new(DExpr::AsInt(Box::new(DExpr::Var(BB)))))));
+    assert_eq!(strip(m.body), List::Cons((Box::new(DStmt::Return(want)), 0), Box::new(List::Nil)));
+    let g = Function { params: ps(Ty::I32), ret: Ty::I32, body: one(Stmt::Return(bits(BinOp::BitOr, Ty::I32), 21)), ..f };
+    assert_eq!(refusal_of(&translate_function(&g, &List::Nil, &List::Nil)), Refusal::SignedBits(21));
+}
+
+/// A contract reads `a & b` as BitAnd, and `static_cast<T>(e)` as the value of `e` when each value of its type fits `T`. A cast
+/// that can change the value is refused at its line, decision 0175.
+#[test]
+fn a_contract_reads_bits_and_a_cast_that_keeps_the_value() {
+    let ens = |e: Expr| List::Cons((CondKind::Ensures, Expr::Bin(BinOp::Eq, b(Expr::Result), b(e)), 19, names(&[BA, BB])), Box::new(List::Nil));
+    let f = |e: Expr| Function { name: 383, line: 20, params: List::Cons((BA, Ty::U32), Box::new(List::Cons((BB, Ty::U32), Box::new(List::Nil)))), ret: Ty::U32, trusted: true, conds: ens(e), body: List::Nil };
+    let Model::Full(m) = translate_function(&f(Expr::StaticCast(Ty::U32, b(Expr::Name(BA)))), &List::Nil, &List::Nil) else { panic!("a full model") };
+    let res = || Box::new(DExpr::AsInt(Box::new(DExpr::Result)));
+    assert_eq!(strip_conds(m.ensures), List::Cons((DExpr::Bin(BinOp::Eq, res(), Box::new(DExpr::AsInt(Box::new(DExpr::Var(BA))))), 0), Box::new(List::Nil)));
+    let Model::Full(m) = translate_function(&f(Expr::Bin(BinOp::BitAnd, b(Expr::Name(BA)), b(Expr::Name(BB)))), &List::Nil, &List::Nil) else { panic!("a full model") };
+    let and = DExpr::BitOp(BinOp::BitAnd, Box::new(DExpr::AsInt(Box::new(DExpr::Var(BA)))), Box::new(DExpr::AsInt(Box::new(DExpr::Var(BB)))));
+    assert_eq!(strip_conds(m.ensures), List::Cons((DExpr::Bin(BinOp::Eq, res(), Box::new(and)), 0), Box::new(List::Nil)));
+    let m = translate_function(&f(Expr::StaticCast(Ty::U8, b(Expr::Name(BA)))), &List::Nil, &List::Nil);
+    assert_eq!(refusal_of(&m), Refusal::ContractCast(19));
+    let g = Function { params: List::Cons((BA, Ty::I32), Box::new(List::Cons((BB, Ty::U32), Box::new(List::Nil)))), ..f(Expr::Bin(BinOp::BitAnd, b(Expr::Name(BA)), b(Expr::Int(1)))) };
+    assert_eq!(refusal_of(&translate_function(&g, &List::Nil, &List::Nil)), Refusal::SignedBits(19));
+}
+
+/// The contract parser reads a cast, `&` and `|` between two values, and keeps `|e|` as the absolute value, decision 0175.
+#[test]
+fn the_parser_reads_casts_and_bits() {
+    let (x, y) = (384, 385);
+    let cast = parse_contract(&vec![Tok::Cast(Ty::U32), Tok::LParen, Tok::Ident(x), Tok::RParen], 4);
+    assert_eq!(cast, Ok(Expr::StaticCast(Ty::U32, b(Expr::Name(x)))));
+    let and = parse_contract(&vec![Tok::Ident(x), Tok::Op(BinOp::BitAnd), Tok::Ident(y)], 4);
+    assert_eq!(and, Ok(Expr::Bin(BinOp::BitAnd, b(Expr::Name(x)), b(Expr::Name(y)))));
+    let or = parse_contract(&vec![Tok::Ident(x), Tok::Bar, Tok::Ident(y)], 4);
+    assert_eq!(or, Ok(Expr::Bin(BinOp::BitOr, b(Expr::Name(x)), b(Expr::Name(y)))));
+    let abs = parse_contract(&vec![Tok::Bar, Tok::Ident(x), Tok::Bar, Tok::Op(BinOp::Add), Tok::Bar, Tok::Ident(y), Tok::Bar], 4);
+    assert_eq!(abs, Ok(Expr::Bin(BinOp::Add, b(Expr::Abs(b(Expr::Name(x)))), b(Expr::Abs(b(Expr::Name(y)))))));
+}
+
+/// `a.count()` of an int64 in a contract is `a`, as a duration in milliseconds is its count, decision 0175.
+#[test]
+fn the_count_of_a_duration_is_its_value() {
+    let req = Expr::Bin(BinOp::Ge, b(Expr::MApply(b(Expr::Name(BA)), COUNT_NAME, Box::new(List::Nil))), b(Expr::Int(0)));
+    let conds = List::Cons((CondKind::Requires, req, 19, names(&[BA])), Box::new(List::Nil));
+    let f = Function { name: 386, line: 20, params: List::Cons((BA, Ty::I64), Box::new(List::Nil)), ret: Ty::Void, trusted: true, conds, body: List::Nil };
+    let Model::Full(m) = translate_function(&f, &List::Nil, &List::Nil) else { panic!("a full model") };
+    let want = DExpr::Bin(BinOp::Ge, Box::new(DExpr::AsInt(Box::new(DExpr::Var(BA)))), Box::new(DExpr::Lit(0)));
+    assert_eq!(strip_conds(m.requires), List::Cons((want, 0), Box::new(List::Nil)));
+}
+
+/// A std::array as a result has its length as an ensures line, and `return {a, b, c};` is the sequence of the values. A list of
+/// another length is refused, decision 0175.
+#[test]
+fn an_array_result_is_a_fixed_sequence() {
+    let three = Ty::Seq(Scalar::I32, Extent::Fixed(3));
+    let list = |vs: &[u64]| Expr::List(Box::new(vs.iter().rev().fold(List::Nil, |rest, v| List::Cons(b(Expr::Lit(*v, Ty::I32)), Box::new(rest)))));
+    let f = |vs: &[u64]| Function { name: 387, line: 20, params: List::Nil, ret: three, trusted: false, conds: List::Nil, body: one(Stmt::Return(list(vs), 21)) };
+    let Model::Full(m) = translate_function(&f(&[10, 20, 30]), &List::Nil, &List::Nil) else { panic!("a full model") };
+    let lits = [10, 20, 30].iter().rev().fold(List::Nil, |rest, v| List::Cons(lit32(*v), Box::new(rest)));
+    assert_eq!(strip(m.body), List::Cons((Box::new(DStmt::Return(DExpr::SeqLit(Box::new(lits)))), 0), Box::new(List::Nil)));
+    let len = DExpr::Bin(BinOp::Eq, Box::new(DExpr::Len(Box::new(DExpr::Result))), Box::new(DExpr::Lit(3)));
+    assert!(matches!(&m.ensures, List::Cons((d, _), _) if *d == len), "{:?}", m.ensures);
+    assert_eq!(refusal_of(&translate_function(&f(&[10, 20]), &List::Nil, &List::Nil)), Refusal::BraceLen(2, 3, 21));
+}

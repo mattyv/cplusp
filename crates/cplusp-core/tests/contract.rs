@@ -2,7 +2,7 @@
 //! tokens with the text of their spans.
 
 use cplusp_core::contract::*;
-use cplusp_core::model::{BinOp, Tok};
+use cplusp_core::model::{BinOp, Tok, Ty};
 
 /// The tokens as (text of the span, kind).
 fn lex(text: &str) -> Vec<(String, LexKind)> {
@@ -300,4 +300,16 @@ fn a_decimal_with_too_many_digits_after_the_point_has_its_own_fault() {
 #[test]
 fn this_is_a_word() {
     assert_eq!(lex("this->k_ == thisx"), vec![fixed("this", Tok::This), fixed("->", Tok::Arrow), name("k_"), op("==", BinOp::Eq), name("thisx")]);
+}
+
+/// `static_cast<uint32_t>` is one token, and `&` alone is the bit operator, decision 0175.
+#[test]
+fn a_cast_and_a_bit_operator() {
+    assert_eq!(
+        lex("static_cast<uint32_t>(f) & g"),
+        [fixed("static_cast<uint32_t>", Tok::Cast(Ty::U32)), fixed("(", Tok::LParen), name("f"), fixed(")", Tok::RParen), op("&", BinOp::BitAnd), name("g")]
+    );
+    assert_eq!(lex("static_cast<size_t>(l)")[0], fixed("static_cast<size_t>", Tok::Cast(Ty::U64)));
+    assert_eq!(lex("a && b")[1], op("&&", BinOp::And));
+    assert_eq!(lex("static_cast<double>(x)")[0], name("static_cast"));
 }
