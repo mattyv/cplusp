@@ -4357,6 +4357,23 @@ public:
     Value->toString(Text);
     return llvm::json::Object{{"constant", Var->getNameAsString()}, {"value", std::string(Text)}};
   }
+  // The line of the tree for a mutable global or a static data member that the file defines, decision 0173: its name and its type. The shell
+  // lists them in this order, which is the order of the definitions.
+  llvm::json::Value globalLine(const VarDecl *Var) const {
+    if (!isGlobal(Var) || !Var->isThisDeclarationADefinition())
+      return nullptr;
+    return llvm::json::Object{{"global", nameOf(Var)}, {"ty", type(Var->getType())}};
+  }
+  // A mutable global or static data member, not a function-local static and not a name of the standard library, decision 0173.
+  static bool isGlobal(const ValueDecl *D) {
+    const auto *Var = dyn_cast<VarDecl>(D);
+    return Var && isMutableGlobal(Var) && !Var->isStaticLocal() && !Var->isInStdNamespace();
+  }
+  // The name of a variable in the tree. A static data member has its qualified name as one word, `Registry::last_id`, decision 0173.
+  static std::string nameOf(const ValueDecl *D) {
+    const auto *Var = dyn_cast<VarDecl>(D);
+    return Var && Var->isStaticDataMember() ? Var->getQualifiedNameAsString() : D->getNameAsString();
+  }
 
 private:
   ASTContext &Context;
@@ -5119,8 +5136,8 @@ private:
       if (const auto *Var = dyn_cast<VarDecl>(Decl->getSingleDecl()); Var && Var->hasLocalStorage() && Var->getInit())
         return tag("Local", llvm::json::Array{Var->getNameAsString(), varType(Var), expr(Var->getInit(), line(S->getBeginLoc())), number(line(S->getBeginLoc()))});
     if (const auto *Assign = dyn_cast<BinaryOperator>(S); Assign && Assign->getOpcode() == BO_Assign) {
-      if (const auto *Target = dyn_cast<DeclRefExpr>(Assign->getLHS()); Target && isVariable(Target->getDecl()))
-        return tag("Assign", llvm::json::Array{Target->getDecl()->getNameAsString(), expr(Assign->getRHS(), line(S->getBeginLoc())), number(line(S->getBeginLoc()))});
+      if (const auto *Target = dyn_cast<DeclRefExpr>(Assign->getLHS()); Target && isTarget(Target->getDecl()))
+        return tag("Assign", llvm::json::Array{nameOf(Target->getDecl()), expr(Assign->getRHS(), line(S->getBeginLoc())), number(line(S->getBeginLoc()))});
       // `v[i] = e` where `v` is a vector by reference, decision 0145. Any other write to a vector has no rule.
       if (const auto *Subscript = dyn_cast<CXXOperatorCallExpr>(Assign->getLHS()->IgnoreParens());
           Subscript && Subscript->getOperator() == OO_Subscript && Subscript->getNumArgs() == 2 && isMutSeq(Subscript->getArg(0)))
@@ -5146,8 +5163,8 @@ private:
     // `x = y` for a struct, with the copy assignment that the compiler makes, is the write of the variable, decision 0108.
     if (const auto *Copy = dyn_cast<CXXOperatorCallExpr>(S); Copy && Copy->getOperator() == OO_Equal && Copy->getNumArgs() == 2 && plainStruct(Copy->getArg(0)->getType()) &&
                                                              Copy->getDirectCallee() && Copy->getDirectCallee()->isTrivial())
-      if (const auto *Target = dyn_cast<DeclRefExpr>(Copy->getArg(0)->IgnoreParens()); Target && isVariable(Target->getDecl()))
-        return tag("Assign", llvm::json::Array{Target->getDecl()->getNameAsString(), expr(Copy->getArg(1), line(S->getBeginLoc())), number(line(S->getBeginLoc()))});
+      if (const auto *Target = dyn_cast<DeclRefExpr>(Copy->getArg(0)->IgnoreParens()); Target && isTarget(Target->getDecl()))
+        return tag("Assign", llvm::json::Array{nameOf(Target->getDecl()), expr(Copy->getArg(1), line(S->getBeginLoc())), number(line(S->getBeginLoc()))});
     // `x op= e` for `+ - * / %` on an integer local or a field of the object is `x = x op e`, with the conversions that the compiler made,
     // decision 0096.
     if (const auto *Compound = dyn_cast<CompoundAssignOperator>(S)) {
@@ -5218,8 +5235,8 @@ private:
         return Written;
     }
     if (const auto *Step = dyn_cast<UnaryOperator>(S); Step && Step->isIncrementDecrementOp())
-      if (const auto *Target = dyn_cast<DeclRefExpr>(Step->getSubExpr()); Target && isVariable(Target->getDecl()))
-        return tag("Step", llvm::json::Array{Target->getDecl()->getNameAsString(), varType(Target->getDecl()), Step->isIncrementOp(),
+      if (const auto *Target = dyn_cast<DeclRefExpr>(Step->getSubExpr()); Target && isTarget(Target->getDecl()))
+        return tag("Step", llvm::json::Array{nameOf(Target->getDecl()), varType(Target->getDecl()), Step->isIncrementOp(),
                                              number(line(S->getBeginLoc()))});
     if (const auto *While = dyn_cast<WhileStmt>(S); While && !While->getConditionVariable())
       return tag("While", llvm::json::Array{expr(While->getCond(), line(S->getBeginLoc())), loopConds(S), stmts(While->getBody()), number(line(S->getBeginLoc()))});
@@ -5345,7 +5362,7 @@ private:
     const auto *Name = dyn_cast<DeclRefExpr>(Left);
     const FieldDecl *Field = Name ? nullptr : objectField(Left);
     const auto [Param, RefField] = Name ? std::pair<const ParmVarDecl *, const FieldDecl *>{} : refField(Left);
-    if (!(Name && isVariable(Name->getDecl())) && !Field && !Param)
+    if (!(Name && isTarget(Name->getDecl())) && !Field && !Param)
       return nullptr;
     const auto convert = [&](llvm::json::Value V, QualType From, QualType To) -> llvm::json::Value {
       if (Context.hasSameType(From, To))
@@ -5364,11 +5381,13 @@ private:
       return tag("SetRefField", llvm::json::Array{Param->getNameAsString(), RefField->getNameAsString(), std::move(Value), number(At)});
     if (Field)
       return tag("SetField", llvm::json::Array{Field->getNameAsString(), std::move(Value), number(At)});
-    return tag("Assign", llvm::json::Array{Name->getDecl()->getNameAsString(), std::move(Value), number(At)});
+    return tag("Assign", llvm::json::Array{nameOf(Name->getDecl()), std::move(Value), number(At)});
   }
 
   // A parameter or a local: the names the translator reads and writes.
   static bool isVariable(const ValueDecl *D) { return isa<ParmVarDecl>(D) || (isa<VarDecl>(D) && cast<VarDecl>(D)->hasLocalStorage()); }
+  // A variable or a global: the names that a write can target, decision 0173.
+  static bool isTarget(const ValueDecl *D) { return isVariable(D) || isGlobal(D); }
 
   // The optional that a read names, decision 0133. The compiler holds the optional that a call or a construction gives in a temporary, and
   // the read names the temporary. A reference local is refused, row lvalue_references, so the read is always copied into a value and no
@@ -5755,8 +5774,8 @@ private:
       return tag("Lit", llvm::json::Array{number(Literal->getValue().getZExtValue()), type(Literal->getType())});
     if (const auto *Ref = dyn_cast<DeclRefExpr>(E)) {
       const ValueDecl *D = Ref->getDecl();
-      if (isa<ParmVarDecl>(D) || (isa<VarDecl>(D) && cast<VarDecl>(D)->hasLocalStorage()))
-        return tag("Var", llvm::json::Array{D->getNameAsString(), varType(D)});
+      if (isa<ParmVarDecl>(D) || (isa<VarDecl>(D) && cast<VarDecl>(D)->hasLocalStorage()) || isGlobal(D))
+        return tag("Var", llvm::json::Array{nameOf(D), varType(D)});
       // An enumerator of such an enum is its place among the enumerators, decision 0109.
       if (const auto *Enumerator = dyn_cast<EnumConstantDecl>(D))
         if (const auto *ED = dyn_cast<EnumDecl>(Enumerator->getDeclContext()); ED && plainEnum(Context.getTypeDeclType(ED)) == ED->getDefinition()) {
@@ -6091,6 +6110,7 @@ public:
     Finder->addMatcher(
         functionDecl(unless(isImplicit()), unless(isTemplateInstantiation()), unless(isExpansionInSystemHeader())).bind("fn"), this);
     Finder->addMatcher(varDecl(isConstexpr(), unless(isExpansionInSystemHeader())).bind("constant"), this);
+    Finder->addMatcher(varDecl(hasGlobalStorage(), unless(isConstexpr()), unless(isExpansionInSystemHeader())).bind("global"), this);
     Finder->addMatcher(enumDecl(isDefinition(), unless(isExpansionInSystemHeader())).bind("enum"), this);
     Finder->addMatcher(cxxRecordDecl(isDefinition(), unless(isImplicit()), unless(isExpansionInSystemHeader())).bind("class"), this);
     Finder->addMatcher(translationUnitDecl(), this);
@@ -6100,6 +6120,13 @@ public:
     // The named constants of the file, decision 0106. A contract reads them by name.
     if (const auto *Var = Result.Nodes.getNodeAs<VarDecl>("constant")) {
       llvm::json::Value Line = TreeWriter(*Context, Claimed, Structs).constantLine(Var);
+      if (Line.kind() != llvm::json::Value::Null)
+        append(Line);
+      return;
+    }
+    // The mutable globals and static data members of the file, in the order of their definitions, decision 0173.
+    if (const auto *Var = Result.Nodes.getNodeAs<VarDecl>("global")) {
+      llvm::json::Value Line = TreeWriter(*Context, Claimed, Structs).globalLine(Var);
       if (Line.kind() != llvm::json::Value::Null)
         append(Line);
       return;

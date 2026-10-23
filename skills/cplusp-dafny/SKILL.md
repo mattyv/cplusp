@@ -51,7 +51,7 @@ Treat SPARK guidance as an engineering method, not an LLM performance measuremen
 
 ## Contract lines that the translator reads
 
-This list is true at decision 0172. Read the later decisions before you rely on it.
+This list is true at decision 0173. Read the later decisions before you rely on it.
 `cplusp prove` translates the C++ and the `//@` lines to Dafny, and runs Dafny. It says `ok: proved`, or `Not proved: FILE:LINE: sentence` for a proof that fails, or `Not provable: FILE:LINE: sentence` for a form that has no rule.
 
 Where each line goes:
@@ -90,9 +90,10 @@ The modifies line:
 - A vector of `std::unique_ptr<B>` works as a `const&` parameter, a parameter by reference on the modifies line, or a local, decision 0170. A local `std::vector<T> v;` starts empty, and `v.push_back(std::make_unique<D>(a))` adds an element. `v[i]->f(a)` calls through the element, and a call that writes the object writes the element back. Its index must not read a value that the call writes. Write `v[i] != nullptr` in a requires line or an invariant above a line that reads `v[i]->f()`. A range-for over such a vector, an assignment to an element, and `std::move` of an element have no rule yet.
 - `std::unique_ptr<B>` can be a field of a struct or a final class, and a parameter by value, decision 0171. Write `f_ != nullptr && f_->valid()` in a requires line above a line that reads `f_->g()`. Give it a value with `std::move(x)` of a local, or with `std::make_unique<D>(a)`. After `f(std::move(x));` or `T y = std::move(x);`, `x` is null. A statement that moves `x` must not read `x` again. A parameter moves only in a return or a constructor init, as `f_(std::move(p))`. A move inside an `if` condition or an operator has no rule.
 - A pure member function can hold locals before its `return`, if the body writes no local, decision 0172. It can call a `const` virtual function of an interface, also through a field, as in `return inner_ != nullptr && inner_->valid();`. Such a call can stand anywhere in code, also on the right of `&&`. A call of a member function of the same class, or of a pure member function of another struct, makes the body no pure body. An override with such a body gets no function, so the translator refuses its class.
+- A free function that reads a global lists it on a `//@ reads` line, and one that changes it lists it on `//@ modifies`, decision 0173. A static data member has its full name, as in `//@ modifies Registry::last_id`. The translator makes each listed global a parameter, so a call can change only the globals that the callee lists. A function with a reads line cannot call one that changes the same global. A member function that lists a global, and a global that is no integer, `bool` or struct, have no rule yet.
 - After a `push_back`, a read of `v.size()` in code needs a requires line or an invariant that bounds the length. Then the size fits `size_t`.
 - An ensures line that reads `v[i]` after the call needs a line before it that gives the length: `ensures v.size() == old(v.size())`, or `+ 1` after one `push_back`, decision 0146. A loop that writes `v` needs the same line as an invariant.
-- The gate also reads `modifies` and `reads` lines for globals, decision 0035. The translator has no rule for a global yet, so it refuses `reads` and a global on a `modifies` line.
+- The gate also reads `modifies` and `reads` lines for globals, decision 0035.
 
 The companion file:
 - `NAME.spec.dfy` next to `NAME.cpp` holds the functions, predicates and lemmas that the contracts name, decisions 0079, 0080 and 0099.

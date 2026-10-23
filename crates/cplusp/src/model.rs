@@ -9,7 +9,7 @@ use anyhow::{Context, Result};
 use cplusp_core::companion::CompanionRefusal;
 use cplusp_core::contract::{LexKind, NumberFault};
 use cplusp_core::model::{
-    parse_contract, translate_overrides, translate_structs, translate_unit, Args, BinOp, CastKind, CondKind, Conds, DArgs, DConds, DExpr, DOverride, DParams, DStmt, DStmts, DTy, DUpcast, Expr, Extent, Fns,
+    globalize, parse_contract, translate_overrides, translate_structs, translate_unit, Args, BinOp, CastKind, CondKind, Conds, DArgs, DConds, DExpr, DOverride, DParams, DStmt, DStmts, DTy, DUpcast, Expr, Extent, Fns,
     Function, List, Members, Method, Model, Names as CNames, Obj, Objs, Params, Refusal, Scalar, Stmt, Stmts, Structs, Tok, Ty,
 };
 use serde::Deserialize;
@@ -199,6 +199,11 @@ enum Item {
         constant: String,
         real: (bool, u64, u64),
     },
+    /// A mutable global or static data member that the file defines, in the order of the definitions, decision 0173: its name and its type.
+    Global {
+        global: String,
+        ty: JTy,
+    },
     Enum(JEnum),
     Struct(JStruct),
     Function(JFunction),
@@ -317,6 +322,8 @@ struct Names {
     enums: Vec<(String, u32, Vec<String>)>,
     /// The names of the parameters and locals of the function that is being converted. They hide a constant of the same name.
     shadow: Vec<String>,
+    /// The names of the globals of the file. A contract may spell a static data member `Registry::last_id`, decision 0173.
+    globals: Vec<String>,
     /// The number of range-fors converted so far, for the name of an index that no line names, decision 0144.
     ranges: u32,
 }
@@ -647,7 +654,33 @@ fn fold_names(toks: Vec<Tok>, names: &Names) -> Vec<Tok> {
             })));
         }
     }
-    cplusp_core::fold::fold(&toks, &folds)
+    let folded = cplusp_core::fold::fold(&toks, &folds);
+    // A static data member is one name, `Registry::last_id`, decision 0173. The lexer cuts it in three tokens. The longest chain that names a global is one name.
+    // ponytail: a quantifier `forall Registry :: last_id == 0` over a bound name that spells a qualifier of a global is read as that global. Upgrade: the core merges.
+    let mut out = Vec::new();
+    let mut i = 0;
+    while i < folded.len() {
+        if let Tok::Ident(first) = folded[i] {
+            let mut text = names.text(first).to_string();
+            let mut best = None;
+            let mut j = i;
+            while let (Some(Tok::ColonColon), Some(Tok::Ident(next))) = (folded.get(j + 1), folded.get(j + 2)) {
+                text = format!("{text}::{}", names.text(*next));
+                j += 2;
+                if names.globals.contains(&text) {
+                    best = Some((j, text.clone()));
+                }
+            }
+            if let Some((end, id)) = best.and_then(|(end, text)| Some((end, names.find(&text)?))) {
+                out.push(Tok::Ident(id));
+                i = end + 1;
+                continue;
+            }
+        }
+        out.push(folded[i]);
+        i += 1;
+    }
+    out
 }
 
 /// The names of the parameters of a declaration, in order. A parameter with no name is `'N` by its place, as in `function`.
@@ -685,15 +718,17 @@ fn conds(v: Vec<JCond>, names: &mut Names) -> Conds {
         // A backslash at the end splices the next line into the comment. The line the author wrote is not the one the plugin read.
         let entries: Vec<(CondKind, Expr)> = if c.text.ends_with('\\') || c.kind.ends_with('\\') {
             vec![(CondKind::Bad(Refusal::Backslash(line)), Expr::Int(0))]
-        } else if c.kind == "modifies" {
+        } else if c.kind == "modifies" || c.kind == "reads" {
+            // `//@ reads a, b` is the same, one line for each global, decision 0173.
             // `//@ modifies a, b` is one line for each name, decision 0108. A name may have parts, `Tally::count_`, and the core refuses it as no reference
             // parameter, decision 0110. A line of any other form is one that names no name, and the core refuses it as a form it cannot read.
             let word = |w: &str| w.starts_with(|ch: char| ch.is_ascii_alphabetic() || ch == '_') && w.chars().all(|ch| ch.is_ascii_alphanumeric() || ch == '_');
             let listed: Vec<&str> = c.text.split(',').map(str::trim).collect();
+            let kind = if c.kind == "reads" { CondKind::Reads } else { CondKind::Modifies };
             if listed.iter().all(|n| n.split("::").all(word)) {
-                listed.into_iter().map(|n| (CondKind::Modifies, Expr::Name(names.id(n)))).collect()
+                listed.into_iter().map(|n| (kind, Expr::Name(names.id(n)))).collect()
             } else {
-                vec![(CondKind::Modifies, Expr::Int(0))]
+                vec![(kind, Expr::Int(0))]
             }
         } else {
             vec![match c.kind.as_str() {
@@ -880,7 +915,8 @@ fn unreadable_name(f: &JFunction) -> Option<&str> {
     let mut names = vec![dafny_word(&f.name)];
     names.extend(f.params.iter().map(|(n, _)| n.as_str()));
     f.body.iter().for_each(|s| stmt_names(s, &mut names));
-    names.into_iter().find(|n| !readable(n))
+    // A static data member has `::` in its name, and the mangling makes it `'`, decision 0173.
+    names.into_iter().find(|n| !readable(&n.replace("::", "_")))
 }
 
 /// `operator()` is a name of C++ that the Dafny text prints as `call`, decision 0098. Every other name stays as it is.
@@ -1089,7 +1125,8 @@ fn dop(o: BinOp) -> &'static str {
 /// `result`. A method has the prefix `c_`, so a variable never hides a method, decision 0060.
 // An unnamed parameter is `v_'N` and an overload is `c_{plain}'{k}`. C++ cannot write `'` in a name, so no clash is possible.
 fn mangle(name: &str) -> String {
-    format!("v_{name}")
+    // A static data member `Registry::last_id` is `v_Registry'last_id`, decision 0173.
+    format!("v_{}", name.replace("::", "'"))
 }
 
 fn dargs(args: &DArgs, names: &Names) -> Vec<String> {
@@ -1925,6 +1962,10 @@ fn sentence(r: Refusal, names: &Names) -> (u32, String) {
         Refusal::VecLocal(line) => (line, "a local vector has a rule only as a copy of a vector in scope.".to_string()),
         Refusal::PassLocal(n, line) => (line, format!("{} is a local vector. A call that passes it by reference has no rule yet.", names.text(n))),
         Refusal::PassOn(n, line) => (line, format!("{} is a vector by reference. A call that passes it on has no rule yet.", names.text(n))),
+        Refusal::ReadsOnly(f, g, line) => (line, format!("{} changes {}. The caller lists {} on its reads line only.", names.text(f), names.text(g), names.text(g))),
+        Refusal::GlobalClash(g, line) => (line, format!("{} names a global and a parameter or a local.", names.text(g))),
+        Refusal::MemberGlobal(line) => (line, "a member function that lists a global: the translator has no rule for it yet.".to_string()),
+        Refusal::GlobalType(line) => (line, "a global of this type: the translator has no rule for it yet.".to_string()),
         Refusal::Misplaced(line) => (
             line,
             "a contract line in the wrong place. A requires, an ensures, a modifies or a decreases line goes above a function. An invariant or a decreases line goes above a loop, and an index line above a range-for."
@@ -1952,12 +1993,14 @@ fn dparams(ps: &DParams) -> Vec<(u32, DTy)> {
 /// line that no function claimed is a refusal too.
 pub fn translate(lines: &str, companion: Option<(&str, &str)>) -> Result<Translation> {
     // The text `operator()` is the first word, so its id is `CALL_OP`, the id that the core uses, decision 0098. The text `value` is the second, so its id is
-    // `VALUE_NAME`, the member that `x.value()` calls on a struct, decision 0169.
-    let mut names = Names { words: vec!["operator()".to_string(), "value".to_string()], ..Default::default() };
+    // `VALUE_NAME`, the member that `x.value()` calls on a struct, decision 0169. The text `reads` is the third, so its id is `READS_NAME`, decision 0173.
+    let mut names = Names { words: vec!["operator()".to_string(), "value".to_string(), "reads".to_string()], ..Default::default() };
     let mut refusals = Vec::new();
     let mut funcs = Vec::new();
     let mut structs = Vec::new();
     let mut enums = Vec::new();
+    // The globals of the file in the order of their definitions, decision 0173.
+    let mut globals = Vec::new();
     let mut companion_ok = false;
     // The declarations of the companion file as (line of its name in the file, is a lemma), for the prover's axiom check.
     let mut decls: Vec<(usize, bool)> = Vec::new();
@@ -2014,6 +2057,12 @@ pub fn translate(lines: &str, companion: Option<(&str, &str)>) -> Result<Transla
                 let said = if word == "assert" || word == "apply" { "an assert or apply line needs a statement below it in its block." } else { "a contract line that belongs to no function." };
                 refusals.push((file, orphan, said.to_string()));
             }
+            Item::Global { global, ty } => {
+                names.globals.push(global.clone());
+                // A contract line is converted before the list of globals is, and it finds the name by its id.
+                names.id(&global);
+                globals.push((global, ty));
+            }
             Item::Constant { constant, value } => names.constants.extend(value.parse().ok().map(|v| (constant, v))),
             Item::Real { constant, real } => names.reals.push((constant, real.0, real.1, real.2)),
             Item::Enum(en) => match unreadable_enum_name(&en) {
@@ -2066,8 +2115,6 @@ pub fn translate(lines: &str, companion: Option<(&str, &str)>) -> Result<Transla
         if matches!(f.params.first(), Some((_, JTy::IfaceMut(_)))) {
             writing_virtual.insert(key);
         }
-        let mutable: Vec<u32> = f.params.iter().enumerate().filter(|(_, (_, t))| matches!(t, JTy::Mut(_) | JTy::MutSeq(_))).map(|(i, (n, _))| names.id(&if n.is_empty() { format!("'{i}") } else { n.clone() })).collect();
-        refs.insert(key, mutable);
         at.insert(key, names.place(&f.file, f.line));
         if let Some((reason, file, line)) = &f.trusted {
             reasons.insert(key, (file.clone(), *line, f.name.clone(), reason.clone()));
@@ -2117,6 +2164,23 @@ pub fn translate(lines: &str, companion: Option<(&str, &str)>) -> Result<Transla
     }
     let count = funcs.len();
     let fns = funcs.into_iter().rev().map(|f| function(f, &mut names)).fold(Fns::Nil, |rest, f| Fns::Cons(Box::new(f), Box::new(rest)));
+    // Each global that a function lists is a parameter of it, decision 0173. The core does it before it translates.
+    let gs = globals.into_iter().rev().fold(Params::Nil, |rest, (n, t)| Params::Cons((names.id(&n), ty(t, &mut names)), Box::new(rest)));
+    let fns = globalize(&fns, &gs);
+    // The reference parameters of each function, written and implicit, by the id of its key, decision 0108.
+    let mut seen_fns = &fns;
+    while let List::Cons(f, next) = seen_fns {
+        let mut ps = &f.params;
+        let mut mutable = Vec::new();
+        while let List::Cons((n, t), more) = ps {
+            if matches!(t, Ty::Mut(_) | Ty::MutSeq(_)) {
+                mutable.push(*n);
+            }
+            ps = more;
+        }
+        refs.insert(f.name, mutable);
+        seen_fns = next;
+    }
     let mut models = translate_unit(&fns, &table);
     let bases = base_rows
         .iter()
