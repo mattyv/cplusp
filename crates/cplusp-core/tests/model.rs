@@ -4126,3 +4126,25 @@ fn a_global_with_no_rule_is_refused_by_the_pass() {
     assert_eq!(fn_list(&out)[0].body, one(Stmt::Return(Expr::Var(GT, Ty::I32), 22)));
     assert!(matches!(last(unit(vec![Function { params: List::Cons((GT, Ty::I32), Box::new(List::Nil)), ..global_user(List::Nil, one(Stmt::Return(Expr::Var(GT, Ty::I32), 22))) }])), Model::Full(_)));
 }
+
+/// A parameter of a lambda hides a global of its name inside the lambda, and a comparator reads a listed global as the function
+/// does, decision 0173.
+#[test]
+fn a_lambda_parameter_hides_a_global_and_a_comparator_reads_it() {
+    let modifies = || List::Cons(lists(CondKind::Modifies, GT, 7, &[VX]), Box::new(List::Nil));
+    let test = || Expr::Bin(BinOp::Gt, b(Expr::Var(GT, Ty::I32)), b(Expr::Lit(0, Ty::I32)));
+    let count = Expr::CountIf(b(Expr::Var(VX, Ty::Seq(Scalar::I32, Extent::Dynamic))), GT, Ty::I32, b(test()));
+    let counter = Function { params: List::Cons((VX, Ty::Seq(Scalar::I32, Extent::Dynamic)), Box::new(List::Nil)), ..global_user(modifies(), one(Stmt::Return(count, 18))) };
+    let sorter = Function {
+        name: GF + 30,
+        params: List::Cons((VX, Ty::MutSeq(Scalar::I32)), Box::new(List::Nil)),
+        ret: Ty::Void,
+        ..global_user(modifies(), one(Stmt::SortBy(VX, A, B, Ty::I32, test(), 20)))
+    };
+    let out = globalize(&fns(vec![counter, sorter]), &file_globals());
+    let fs = fn_list(&out);
+    let kept = Expr::CountIf(b(Expr::Var(VX, Ty::Seq(Scalar::I32, Extent::Dynamic))), GT, Ty::I32, b(test()));
+    assert_eq!(fs[0].body, one(Stmt::Return(kept, 18)));
+    let read = Expr::Bin(BinOp::Gt, b(Expr::Var(GT, Ty::Mut(Scalar::I32))), b(Expr::Lit(0, Ty::I32)));
+    assert_eq!(fs[1].body, one(Stmt::SortBy(VX, A, B, Ty::I32, read, 20)));
+}

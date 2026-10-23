@@ -9,3 +9,7 @@ A static member function is a free function with the name of its class, `c_Tally
 ## Why
 
 The examples `singleton` and `arena` keep their data in static data members and read it through static member functions. Their contracts call those functions, such as `valid()` and `count()`.
+
+## What changes
+
+A contract that calls a static member function today gives the sentence `valid is no function of the companion file.` in the examples `singleton` and `arena`. This decision replaces it. A test checks the sentence of the new form.

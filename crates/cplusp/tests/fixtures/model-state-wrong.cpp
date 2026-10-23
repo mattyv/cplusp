@@ -40,3 +40,32 @@ void tick();
 void blind_tick() {
   tick();
 }
+
+#include <algorithm>
+#include <vector>
+
+int32_t k = 0;
+
+//@ requires v.size() == 1 && v[0] == -5 && k == 5
+//@ modifies k
+//@ ensures result == 1
+int64_t negative_counted_as_positive(const std::vector<int32_t>& v) {
+  k += 1;
+  int64_t n = std::count_if(v.begin(), v.end(), [](int32_t k) { return k > 0; });
+  return n;
+}
+
+struct Item {
+  int32_t key;
+  int32_t value;
+};
+
+int32_t g = 0;
+
+//@ requires g == 0 && items.size() == 2 && items[0].key == 1 && items[0].value == 9 && items[1].key == 2 && items[1].value == 3
+//@ modifies g, items
+//@ ensures items.size() == 2 && items[0].value <= items[1].value
+void by_global(std::vector<Item>& items) {
+  g += 1;
+  std::sort(items.begin(), items.end(), [](const Item& a, const Item& b) { return g > 0 ? a.key < b.key : a.value < b.value; });
+}

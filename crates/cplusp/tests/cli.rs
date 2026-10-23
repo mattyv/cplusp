@@ -5328,7 +5328,7 @@ fn a_global_is_an_implicit_parameter() {
 }
 
 /// A body that undoes its write, a call too few, and a trusted callee whose requires line the caller does not meet each fail at
-/// their lines, decision 0173.
+/// their lines. A lambda reads its own parameter, and a comparator reads the global after the write, decision 0173.
 #[test]
 fn a_global_keeps_the_contract_of_its_function() {
     let Some(dafny) = dafny() else { return };
@@ -5345,6 +5345,8 @@ fn a_global_keeps_the_contract_of_its_function() {
             "11: the ensures line may not hold on this return.",
             "28: the ensures line may not hold on this return.",
             "41: a requires line of the callee may not hold.",
+            "55: the ensures line may not hold on this return.",
+            "68: the ensures line may not hold on this return.",
         ],
         "{text}"
     );

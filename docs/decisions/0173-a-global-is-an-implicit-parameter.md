@@ -6,6 +6,8 @@ Date: 2026-10-23. Status: decided. Builds on 0011, 0035, 0102, 0108 and 0111. Th
 
 A global or a static data member that a function lists on its `modifies` line is a reference parameter of the function, decision 0108. The method takes it in as `v_total` and gives it back as `v_total'`. A global on the `reads` line only is a parameter by value. A function that lists no global gets no parameter. The listed globals come after the written parameters, in the order of their definitions in the file. A static data member has its qualified name as one word: `Tally::count_` is `v_Tally'count_`.
 
+A parameter of a lambda hides a global of its name inside the lambda. A comparator of `std::sort` reads a listed global as the function reads it, after the writes before the sort.
+
 The contract rules are those of a reference parameter. `total` in a requires line is the value before. `total` in an ensures line is the value after. `old(total)` is the value before.
 
 A call gives the callee each global it lists. The argument is the parameter of the caller with that name. A write-back of a global goes to the reference parameter of the caller, as a write-back to a local does, decision 0108.

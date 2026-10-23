@@ -99,3 +99,34 @@ void two_ticks() {
   tick();
   tick();
 }
+
+#include <algorithm>
+#include <vector>
+
+int32_t k = 0;
+
+// The parameter k of the lambda hides the global k inside the lambda, as in C++.
+//@ requires v.size() == 1 && v[0] == -5 && k == 5
+//@ modifies k
+//@ ensures result == 0
+int64_t positives(const std::vector<int32_t>& v) {
+  k += 1;
+  int64_t n = std::count_if(v.begin(), v.end(), [](int32_t k) { return k > 0; });
+  return n;
+}
+
+struct Item {
+  int32_t key;
+  int32_t value;
+};
+
+int32_t g = 0;
+
+// The comparator reads the global after the write, so the sort is by key.
+//@ requires g == 0 && items.size() == 2 && items[0].key == 1 && items[0].value == 9 && items[1].key == 2 && items[1].value == 3
+//@ modifies g, items
+//@ ensures items.size() == 2 && items[0].key <= items[1].key
+void by_global(std::vector<Item>& items) {
+  g += 1;
+  std::sort(items.begin(), items.end(), [](const Item& a, const Item& b) { return g > 0 ? a.key < b.key : a.value < b.value; });
+}
