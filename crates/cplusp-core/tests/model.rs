@@ -4003,3 +4003,126 @@ fn a_virtual_call_in_a_loop_condition_is_its_function() {
     let want = DExpr::Bin(BinOp::Ge, Box::new(corners_fn(VX)), Box::new(lit32(0)));
     assert_eq!(strip(m.body), List::Cons((Box::new(DStmt::While(want, List::Nil, List::Nil, Box::new(List::Nil))), 0), Box::new(List::Nil)));
 }
+
+const GT: u32 = 350;
+const GB2: u32 = 351;
+const GS: u32 = 352;
+const GADD: u32 = 353;
+const GADDNM: u32 = 354;
+const GF: u32 = 355;
+
+/// The globals of a file in the order of their definitions: `int32_t total`, `int32_t b`, `double scale`.
+fn file_globals() -> Params {
+    List::Cons((GT, Ty::I32), Box::new(List::Cons((GB2, Ty::I32), Box::new(List::Cons((GS, Ty::F64), Box::new(List::Nil))))))
+}
+
+/// A contract line that lists the global `g`, on a declaration with the parameters `ps`.
+fn lists(k: CondKind, g: u32, line: u32, ps: &[u32]) -> (CondKind, Expr, u32, Names) {
+    (k, Expr::Name(g), line, names(ps))
+}
+
+/// `void add(int32_t x) { total += x; }` with `//@ modifies total`.
+fn global_add() -> Function {
+    let body = one(Stmt::Assign(GT, Expr::Bin(BinOp::Add, b(Expr::Var(GT, Ty::I32)), b(Expr::Var(X, Ty::I32))), 12));
+    let conds = List::Cons(lists(CondKind::Modifies, GT, 9, &[X]), Box::new(List::Nil));
+    Function { name: GADD, line: 11, params: List::Cons((X, Ty::I32), Box::new(List::Nil)), ret: Ty::Void, trusted: false, conds, body }
+}
+
+/// A function of the key GF with no parameter, the lines and the body given.
+fn global_user(conds: Conds, body: Stmts) -> Function {
+    Function { name: GF, line: 20, params: List::Nil, ret: Ty::I32, trusted: false, conds, body }
+}
+
+fn fn_list(fs: &Fns) -> Vec<&Function> {
+    let mut v = Vec::new();
+    let mut rest = fs;
+    while let List::Cons(f, next) = rest {
+        v.push(&**f);
+        rest = next;
+    }
+    v
+}
+
+/// The refusal of a model, bare or refused.
+fn refusal_of(m: &Model) -> Refusal {
+    match m {
+        Model::Bare(_, _, _, r) => *r,
+        Model::Refused(r) => *r,
+        other => panic!("no refusal: {other:?}"),
+    }
+}
+
+/// A global on a modifies line is a reference parameter, and one on a reads line only is a parameter by value. Each comes after
+/// the parameters of C++, in the order of the globals in the file. The pass types each global in the body by them, adds the
+/// globals to the names of each contract line, and consumes the reads lines. A function that lists no global keeps its
+/// parameters, decision 0173.
+#[test]
+fn a_listed_global_is_an_implicit_parameter() {
+    let reads = global_user(List::Cons(lists(CondKind::Reads, GT, 16, &[]), Box::new(List::Nil)), one(Stmt::Return(Expr::Var(GT, Ty::I32), 18)));
+    let both = global_user(
+        List::Cons(lists(CondKind::Modifies, GB2, 24, &[]), Box::new(List::Cons(lists(CondKind::Modifies, GT, 25, &[]), Box::new(List::Nil)))),
+        one(Stmt::Return(Expr::Lit(0, Ty::I32), 27)),
+    );
+    let plain = Function { name: GF + 10, ..global_user(List::Nil, one(Stmt::Return(Expr::Lit(0, Ty::I32), 30))) };
+    let out = globalize(&fns(vec![global_add(), reads, Function { name: GF + 20, ..both }, plain]), &file_globals());
+    let fs = fn_list(&out);
+    let mt = (GT, Ty::Mut(Scalar::I32));
+    assert_eq!(fs[0].params, List::Cons((X, Ty::I32), Box::new(List::Cons(mt, Box::new(List::Nil)))));
+    let want = Stmt::Assign(GT, Expr::Bin(BinOp::Add, b(Expr::Var(GT, Ty::Mut(Scalar::I32))), b(Expr::Var(X, Ty::I32))), 12);
+    assert_eq!(fs[0].body, one(want));
+    assert_eq!(fs[0].conds, List::Cons(lists(CondKind::Modifies, GT, 9, &[X, GT]), Box::new(List::Nil)));
+    assert_eq!(fs[1].params, List::Cons((GT, Ty::I32), Box::new(List::Nil)));
+    assert_eq!(fs[1].conds, List::Nil);
+    assert_eq!(fs[1].body, one(Stmt::Return(Expr::Var(GT, Ty::I32), 18)));
+    assert_eq!(fs[2].params, List::Cons(mt, Box::new(List::Cons((GB2, Ty::Mut(Scalar::I32)), Box::new(List::Nil)))));
+    assert_eq!(fs[3].params, List::Nil);
+    assert_eq!(fs[3].conds, List::Nil);
+}
+
+/// A call gives the callee each global it lists, as the parameter of the caller of that name, decision 0173.
+#[test]
+fn a_call_passes_the_globals_of_its_callee() {
+    let call = Stmt::Call(GADD, GADDNM, Box::new(List::Cons(b(Expr::Var(X, Ty::I32)), Box::new(List::Nil))), 31);
+    let caller = Function {
+        params: List::Cons((X, Ty::I32), Box::new(List::Nil)),
+        ret: Ty::Void,
+        ..global_user(List::Cons(lists(CondKind::Modifies, GT, 28, &[X]), Box::new(List::Nil)), one(call))
+    };
+    let out = globalize(&fns(vec![global_add(), caller]), &file_globals());
+    let fs = fn_list(&out);
+    let args = List::Cons(b(Expr::Var(X, Ty::I32)), Box::new(List::Cons(b(Expr::Var(GT, Ty::Mut(Scalar::I32))), Box::new(List::Nil))));
+    assert_eq!(fs[1].body, one(Stmt::Call(GADD, GADDNM, Box::new(args), 31)));
+}
+
+/// A function with a reads line that calls a function with the global on its modifies line, a global with the name of a
+/// parameter, a member function that lists a global, a global of a type with no rule, and a global that no line lists are each
+/// refused, decision 0173.
+#[test]
+fn a_global_with_no_rule_is_refused_by_the_pass() {
+    let unit = |fs: Vec<Function>| translate_unit(&globalize(&fns(fs), &file_globals()), &List::Nil);
+    let last = |ms: Models| {
+        let mut rest = ms;
+        loop {
+            match rest {
+                List::Cons(m, next) => if *next == List::Nil { return m } else { rest = *next },
+                List::Nil => panic!("no model"),
+            }
+        }
+    };
+    let call = Stmt::Call(GADD, GADDNM, Box::new(List::Cons(b(Expr::Lit(1, Ty::I32)), Box::new(List::Nil))), 31);
+    let reader = Function { ret: Ty::Void, ..global_user(List::Cons(lists(CondKind::Reads, GT, 28, &[]), Box::new(List::Nil)), one(call)) };
+    assert_eq!(refusal_of(&last(unit(vec![global_add(), reader]))), Refusal::ReadsOnly(GADDNM, GT, 31));
+    let clash = Function { params: List::Cons((GT, Ty::I32), Box::new(List::Nil)), ..global_user(List::Cons(lists(CondKind::Modifies, GT, 19, &[GT]), Box::new(List::Nil)), one(Stmt::Return(Expr::Lit(0, Ty::I32), 21))) };
+    assert_eq!(refusal_of(&last(unit(vec![clash]))), Refusal::GlobalClash(GT, 19));
+    let member = Function { params: List::Cons((THIS, Ty::ThisMut(COUNTER)), Box::new(List::Nil)), ret: Ty::Void, ..global_user(List::Cons(lists(CondKind::Modifies, GT, 9, &[]), Box::new(List::Nil)), List::Nil) };
+    assert_eq!(refusal_of(&last(unit(vec![member]))), Refusal::MemberGlobal(9));
+    let real = global_user(List::Cons(lists(CondKind::Reads, GS, 13, &[]), Box::new(List::Nil)), one(Stmt::Return(Expr::Lit(0, Ty::I32), 16)));
+    assert_eq!(refusal_of(&last(unit(vec![real]))), Refusal::GlobalType(13));
+    let unlisted = global_user(List::Nil, one(Stmt::Return(Expr::Var(GT, Ty::I32), 22)));
+    assert_eq!(refusal_of(&last(unit(vec![unlisted]))), Refusal::Name(GT, 22));
+    // A parameter of the name of a global that the function does not list hides the global, as in C++.
+    let hidden = Function { params: List::Cons((GT, Ty::I32), Box::new(List::Nil)), ..global_user(List::Nil, one(Stmt::Return(Expr::Var(GT, Ty::I32), 22))) };
+    let out = globalize(&fns(vec![hidden]), &file_globals());
+    assert_eq!(fn_list(&out)[0].body, one(Stmt::Return(Expr::Var(GT, Ty::I32), 22)));
+    assert!(matches!(last(unit(vec![Function { params: List::Cons((GT, Ty::I32), Box::new(List::Nil)), ..global_user(List::Nil, one(Stmt::Return(Expr::Var(GT, Ty::I32), 22))) }])), Model::Full(_)));
+}

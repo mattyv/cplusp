@@ -5310,3 +5310,67 @@ fn the_decorator_example_proves() {
     assert_eq!(o.status.code(), Some(0), "stdout: {text} stderr: {}", stderr(&o));
     assert_eq!(text.lines().last(), Some("ok: proved"), "{text}");
 }
+
+/// A global that a function lists is an implicit parameter: a reference parameter on a modifies line, a value on a reads line. A
+/// call passes it on, a trusted function takes it, and a function can change only the globals it lists, decision 0173.
+#[test]
+fn a_global_is_an_implicit_parameter() {
+    let Some(dafny) = dafny() else { return };
+    if !clang_tidy_available() {
+        return;
+    }
+    for name in ["model-state.cpp", "../../../../examples/global_state/example.cpp"] {
+        let o = prove(name, &[], &dafny);
+        let text = stdout(&o);
+        assert_eq!(o.status.code(), Some(0), "{name}: stdout: {text} stderr: {}", stderr(&o));
+        assert_eq!(text.lines().last(), Some("ok: proved"), "{name}: {text}");
+    }
+}
+
+/// A body that undoes its write, a call too few, and a trusted callee whose requires line the caller does not meet each fail at
+/// their lines, decision 0173.
+#[test]
+fn a_global_keeps_the_contract_of_its_function() {
+    let Some(dafny) = dafny() else { return };
+    if !clang_tidy_available() {
+        return;
+    }
+    let o = prove("model-state-wrong.cpp", &[], &dafny);
+    let text = stdout(&o);
+    assert_eq!(o.status.code(), Some(1), "stdout: {text} stderr: {}", stderr(&o));
+    let failed: Vec<&str> = text.lines().filter(|l| l.starts_with("Not proved: ")).map(|l| l.rsplit_once(".cpp:").unwrap().1).collect();
+    assert_eq!(
+        failed,
+        [
+            "11: the ensures line may not hold on this return.",
+            "28: the ensures line may not hold on this return.",
+            "41: a requires line of the callee may not hold.",
+        ],
+        "{text}"
+    );
+    assert!(under(&text, "model-state-wrong.cpp:41: a requires line of the callee may not hold.").iter().any(|l| l.ends_with("model-state-wrong.cpp:32: requires total < 1000")), "{text}");
+}
+
+/// A member function that lists a global, and a global of a type with no rule, are refused at the line that lists them. A reads
+/// line that names no global keeps its old sentence, decision 0173.
+#[test]
+fn a_global_with_no_rule_is_refused() {
+    let Some(dafny) = dafny() else { return };
+    if !clang_tidy_available() {
+        return;
+    }
+    let o = prove("model-state-refuse.cpp", &[], &dafny);
+    let text = stdout(&o);
+    assert_eq!(o.status.code(), Some(1), "stdout: {text} stderr: {}", stderr(&o));
+    let mut refusals: Vec<&str> = text.lines().filter(|l| l.starts_with("Not provable: ")).map(|l| l.rsplit_once(".cpp:").unwrap().1).collect();
+    refusals.sort_by_key(|l| l.split(':').next().unwrap().parse::<u32>().unwrap());
+    assert_eq!(
+        refusals,
+        [
+            "9: a member function that lists a global: the translator has no rule for it yet.",
+            "13: a global of this type: the translator has no rule for it yet.",
+            "19: reads: the translator has no rule for it yet.",
+        ],
+        "{text}"
+    );
+}
