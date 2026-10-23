@@ -16,6 +16,10 @@ A bare call outside the class keeps the sentence of today. The sentence is "vali
 
 A static member function whose contract names a field of the class keeps the sentence of today. The sentence is "n_ in the contract is no parameter."
 
+A function is a static member function when a struct of the file lists it as a member and it has no object. Only such a function, or a member function with `this`, gets a twin. A free function never gets one, decision 0090.
+
+`return f(a);` of a function that writes a value back gives its value to `result`, writes the values back, and returns. This holds for a function that changes a global, decision 0173, and for one that changes its object, decision 0096. Before, the translator refused such a return as a call out of place.
+
 ## Why
 
 The examples `singleton` and `arena` keep their data in static data members and read it through static member functions. Their contracts call those functions, as `valid()` inside the class and `Tally::count()` outside it. With decision 0173 the globals are parameters. So a static member function is a free function with one more thing. A contract inside its class can write its name bare. The qualified name is one id. So a contract never confuses `Tally::valid` with `Pool::valid`. The plain name of a const member stays apart from the qualified name of a static.

@@ -4171,6 +4171,9 @@ public:
         Trusted ? llvm::json::Value(llvm::json::Array{Trusted->Reason, file(Trusted->At->getLocation()), number(line(Trusted->At->getLocation()))})
                 : llvm::json::Value(nullptr);
     const CXXMethodDecl *Member = member(FD);
+    // A static member function is a free function with the name of its class, `Tally::bump`, and no `this`, decision 0174.
+    // One with no contract stays refused as `CXXMethodDecl`, as the tests of decision 0089 pin.
+    const CXXMethodDecl *Static = listedStatic(FD) ? cast<CXXMethodDecl>(FD) : nullptr;
     // An interface method is written at its declaration only. A pure virtual function that has a body is none: the body has no rule, decision 0165.
     const bool PureBody = ifaceMethod(FD) && FD->isThisDeclarationADefinition();
     // A const pure virtual function that gives no value has no rule yet, decision 0166. One that writes its object gives its object back, decision 0169.
@@ -4181,7 +4184,7 @@ public:
                          : NoValue                                   ? "a pure virtual function that gives no value"
                          : FD->isTemplated()                         ? "FunctionTemplateDecl"
                          : isa<CXXConstructorDecl>(FD) && !Constructor ? "CXXConstructorDecl"
-                         : isa<CXXMethodDecl>(FD) && !Member && !Constructor ? "CXXMethodDecl"
+                         : isa<CXXMethodDecl>(FD) && !Member && !Static && !Constructor ? "CXXMethodDecl"
                          : !FD->getBody() && !Trusted && !Interface ? "FunctionDecl without body"
                                                   : nullptr;
     llvm::json::Array Params, Conds;
@@ -4214,7 +4217,7 @@ public:
                                 {"hidden", std::move(Hidden)},
                                 {"conds", std::move(Conds)},
                                 {"body", Trusted ? llvm::json::Array{} : constructorBody(Constructor)}};
-    return llvm::json::Object{{"name", FD->getNameAsString()},
+    llvm::json::Object Out{{"name", Static ? name(FD) : FD->getNameAsString()},
                               {"key", key(FD)},
                               {"file", file(FD->getLocation())},
                               {"line", number(line(FD->getLocation()))},
@@ -4227,6 +4230,10 @@ public:
                               {"body", Opaque ? llvm::json::Array{tag("Unknown", llvm::json::Array{Opaque, number(line(FD->getLocation()))})}
                                        : Trusted || Interface ? llvm::json::Array{}
                                                  : stmts(FD->getBody())}};
+    // The class of a static member function, as the contract of the function reads a bare call, decision 0174.
+    if (Static)
+      Out["static"] = Static->getParent()->getQualifiedNameAsString();
+    return Out;
   }
 
   std::string file(SourceLocation At) const { return SM.getFilename(SM.getFileLoc(At)).str(); }
@@ -4842,7 +4849,33 @@ public:
                                              {"fields", llvm::json::Array{}}, {"members", llvm::json::Array{}}, {"bases", std::move(Bases)}, {"final", false}};
   }
 
+  // The struct of a class with a static member function that has a contract is written, also when no type names it, decision 0174.
+  void staticEntry(const CXXRecordDecl *RD) const {
+    if (!plainStruct(Context.getRecordType(RD)))
+      return;
+    for (const Decl *D : RD->decls())
+      if (const auto *M = dyn_cast<CXXMethodDecl>(D); M && listedStatic(M)) {
+        type(Context.getRecordType(RD));
+        return;
+      }
+  }
+
 private:
+  // A static member function of a plain struct, decision 0174: written as a free function with the name of its class. Null for any other function.
+  const CXXMethodDecl *staticMember(const FunctionDecl *FD) const {
+    const auto *M = dyn_cast<CXXMethodDecl>(FD);
+    if (!M || !M->isStatic() || M->isOverloadedOperator() || M->isTemplated() || M->getDescribedFunctionTemplate())
+      return nullptr;
+    return plainStruct(Context.getRecordType(M->getParent())) ? M : nullptr;
+  }
+  // A static member function that the struct lists as a member: one with a contract that the file defines or trusts, decision 0174.
+  bool listedStatic(const FunctionDecl *FD) const {
+    const CXXMethodDecl *M = staticMember(FD);
+    if (!M)
+      return false;
+    const FunctionDecl *Def = M->getDefinition();
+    return (Def || trustedReason(M)) && !contractOf(SM, Def ? Def : M).Lines.empty();
+  }
   // A member function that is written as a function, decision 0089: not static, not virtual, no ref-qualifier, not an operator other
   // than `operator()`, decision 0098, a conversion, a constructor or a destructor, not a template, and a member of a plain struct. Null for any other function.
   // One that is not `const` writes its object, decision 0096.
@@ -5078,6 +5111,10 @@ private:
           // An override that writes its object is a member too, so the check finds it. A contract cannot call it, decision 0169.
           if (const auto *M = dyn_cast<CXXMethodDecl>(D); M && (constMember(M) || (M->isVirtual() && member(M))))
             Named[M->getNameAsString()].push_back(key(M));
+        // The static member functions with a contract, under their qualified names, decision 0174.
+        for (const Decl *D : RD->decls())
+          if (const auto *M = dyn_cast<CXXMethodDecl>(D); M && listedStatic(M))
+            Named[name(M)].push_back(key(M));
         llvm::json::Array Members;
         for (const auto &[Name, Keys] : Named)
           if (Keys.size() == 1)
@@ -6139,6 +6176,7 @@ public:
     // A class over interfaces is written in the table of structs for its line, decision 0165.
     if (const auto *RD = Result.Nodes.getNodeAs<CXXRecordDecl>("class")) {
       TreeWriter(*Context, Claimed, Structs).classEntry(RD);
+      TreeWriter(*Context, Claimed, Structs).staticEntry(RD);
       return;
     }
     const auto *FD = Result.Nodes.getNodeAs<FunctionDecl>("fn");

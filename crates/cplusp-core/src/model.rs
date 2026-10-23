@@ -520,7 +520,8 @@ pub type DArgs = List<DExpr>;
 
 /// A Dafny statement. `Local` is `var x: T := e;`. `LocalCall` is `var x: T := m(args);`. `ReturnCall` is `result := m(args);
 /// return;`, since Dafny takes no call in a `return`. `Assign` is `x := e;` and `AssignCall` is `x := m(args);`. `While` is the
-/// condition, the invariants, the decreases lines and the body. `Moved` is a statement, then `x := None;` for each name that it
+/// condition, the invariants, the decreases lines and the body. `ReturnUpdate` is `result, o, x := m(o, x, args); return;` of a method that
+/// writes back, decision 0174. `Moved` is a statement, then `x := None;` for each name that it
 /// moves, decision 0171. `For` prints as its start, then a `while` whose body ends with the
 /// step. The start and the step keep their own places, decision 0069. `SetField` is `this' := this'.(f := e);`. `SetOut` is
 /// `x' := e;` and `SetOutField` is `x' := x'.(f := e);` of a reference parameter, decision 0108. `Update` calls a method that writes
@@ -536,6 +537,7 @@ pub enum DStmt {
     Local(u32, DTy, DExpr),
     LocalCall(u32, DTy, u32, DArgs),
     ReturnCall(u32, DArgs),
+    ReturnUpdate(Objs, u32, DArgs),
     Assign(u32, DExpr),
     AssignCall(u32, u32, DArgs),
     While(DExpr, DConds, DConds, Box<DStmts>),
@@ -2172,8 +2174,9 @@ pub open spec fn spec_contract(e: Expr, decl: Names, ps: Params, ret: Option<Ty>
                     Err(r) => Err(r),
                 },
                 Some((_, None)) => Err(Refusal::NotPure(f, line)),
+                // A static member function, decision 0174, or a function of the companion file.
                 None => match spec_contract_args(*args, decl, ps, ret, bound, line, sd) {
-                    Ok(da) => Ok(DExpr::Apply(f, Box::new(da))),
+                    Ok(da) => spec_static_value(f, da, *args, decl, ps, line, sd),
                     Err(r) => Err(r),
                 },
             },
@@ -2181,7 +2184,7 @@ pub open spec fn spec_contract(e: Expr, decl: Names, ps: Params, ret: Option<Ty>
                 Err(Refusal::NoObject(f, line))
             } else {
                 match spec_contract_args(*args, decl, ps, ret, bound, line, sd) {
-                    Ok(da) => Ok(DExpr::Apply(f, Box::new(da))),
+                    Ok(da) => spec_static_value(f, da, *args, decl, ps, line, sd),
                     Err(r) => Err(r),
                 }
             },
@@ -3204,11 +3207,18 @@ pub open spec fn spec_step(n: u32, dt: DTy, up: bool, out: bool) -> DStmt {
     }
 }
 
-/// The value of a return. A call gives its value to `result`, decision 0104.
-pub open spec fn spec_return(e: Expr, l: u32, all: Fns, sd: Structs) -> Result<DStmt, Refusal> {
+/// The value of a return. A call gives its value to `result`, decision 0104. A call that writes a value back gives its value to
+/// `result` and writes the value back, then returns, decision 0174.
+pub open spec fn spec_return(e: Expr, l: u32, all: Fns, ps: Params, sd: Structs) -> Result<DStmt, Refusal> {
     match e {
         Expr::Call(k, n, args, at) => if spec_callee_writes(all, k) {
-            Err(Refusal::Place(at))
+            match spec_callee_writebacks(all, k, *args, ps, l) {
+                Err(r) => Err(r),
+                Ok(os) => match spec_call_lift(k, n, *args, at, all, l, sd) {
+                    Ok((c, da)) => Ok(spec_pre(c, DStmt::ReturnUpdate(os, k, da))),
+                    Err(r) => Err(r),
+                },
+            }
         } else {
             match spec_call_lift(k, n, *args, at, all, l, sd) {
                 Ok((c, da)) => Ok(spec_pre(c, DStmt::ReturnCall(k, da))),
@@ -3222,13 +3232,19 @@ pub open spec fn spec_return(e: Expr, l: u32, all: Fns, sd: Structs) -> Result<D
     }
 }
 
-pub fn translate_return(e: &Expr, l: u32, all: &Fns, sd: &Structs) -> (r: Result<DStmt, Refusal>)
+pub fn translate_return(e: &Expr, l: u32, all: &Fns, ps: &Params, sd: &Structs) -> (r: Result<DStmt, Refusal>)
     ensures
-        r == spec_return(*e, l, *all, *sd),
+        r == spec_return(*e, l, *all, *ps, *sd),
 {
     match e {
         Expr::Call(k, n, args, at) => if callee_writes(all, *k) {
-            Err(Refusal::Place(*at))
+            match callee_writebacks(all, *k, args, ps, l) {
+                Err(r) => Err(r),
+                Ok(os) => match call_lift(*k, *n, args, *at, all, l, sd) {
+                    Ok((c, da)) => Ok(pre(c, DStmt::ReturnUpdate(os, *k, da))),
+                    Err(r) => Err(r),
+                },
+            }
         } else {
             match call_lift(*k, *n, args, *at, all, l, sd) {
                 Ok((c, da)) => Ok(pre(c, DStmt::ReturnCall(*k, da))),
@@ -3270,8 +3286,8 @@ pub fn local_value(n: u32, dt: DTy, e: &Expr, l: u32, all: &Fns, ps: &Params, sd
 /// statement where C++ runs it once, decision 0104, and a call of a function that writes its object or gives no value stands
 /// alone. A write is to a local, never to a parameter, or to a field of the object of a member function that writes it, decision
 /// 0096.
-// ponytail: `return o.f();` and `x = o.f();` of a function that writes its object are refused as a call out of place. Upgrade: an
-// update to a fresh local, then the return or the write.
+// ponytail: `x = o.f();` of a function that writes its object is refused as a call out of place. Upgrade: an update to a fresh
+// local, then the write. `return o.f();` writes back and returns, decision 0174.
 pub open spec fn spec_stmt(s: Stmt, all: Fns, env: Params, ps: Params, sd: Structs) -> Result<DStmt, Refusal>
     decreases s,
 {
@@ -3279,7 +3295,7 @@ pub open spec fn spec_stmt(s: Stmt, all: Fns, env: Params, ps: Params, sd: Struc
         // A return can move a local or a parameter, decision 0171. Nothing runs after it, so it sets nothing to null.
         Stmt::Return(e, l) => match spec_move_check(spec_unmove(e).1, spec_var_names(e), ps, true, l) {
             Some(r) => Err(r),
-            None => spec_return(spec_unmove(e).0, l, all, sd),
+            None => spec_return(spec_unmove(e).0, l, all, ps, sd),
         },
         Stmt::If(c, t, f, l) => match spec_lift(c, all, l, sd, 0, true) {
             Ok((cc, dc, _)) => match spec_stmts(*t, all, env, ps, sd) {
@@ -3918,14 +3934,55 @@ pub open spec fn spec_pure_value(body: DStmts, all: Fns) -> Option<DExpr>
     }
 }
 
-pub open spec fn spec_pure_body(ps: Params, body: DStmts, all: Fns) -> Option<DExpr> {
-    match spec_this(ps) {
-        Some(_) => if spec_mutates(ps) {
-            None
-        } else {
-            spec_pure_value(body, all)
-        },
-        None => None,
+/// A member function with `this`, or a static member function, `stat`, that writes nothing, has the value of its pure body as its
+/// function, decisions 0090 and 0174. A free function never has one.
+pub open spec fn spec_pure_body(ps: Params, body: DStmts, all: Fns, stat: bool) -> Option<DExpr> {
+    if (spec_this(ps) is Some || stat) && !spec_mutates(ps) {
+        spec_pure_value(body, all)
+    } else {
+        None
+    }
+}
+
+/// The function with the key `k` is a member of a struct of the file and has no object, so it is a static member function,
+/// decision 0174.
+pub open spec fn spec_static_key(sd: Structs, k: u32) -> bool
+    decreases sd,
+{
+    match sd {
+        List::Nil => false,
+        List::Cons((_, (_, _, ms)), rest) => spec_member_key(ms, k) || spec_static_key(*rest, k),
+    }
+}
+
+pub open spec fn spec_member_key(ms: Members, k: u32) -> bool
+    decreases ms,
+{
+    match ms {
+        List::Nil => false,
+        List::Cons((_, (key, _)), rest) => key == k || spec_member_key(*rest, k),
+    }
+}
+
+pub fn static_key(sd: &Structs, k: u32) -> (r: bool)
+    ensures
+        r == spec_static_key(*sd, k),
+    decreases sd,
+{
+    match sd {
+        List::Nil => false,
+        List::Cons((_, (_, _, ms)), rest) => member_key(ms, k) || static_key(rest, k),
+    }
+}
+
+pub fn member_key(ms: &Members, k: u32) -> (r: bool)
+    ensures
+        r == spec_member_key(*ms, k),
+    decreases ms,
+{
+    match ms {
+        List::Nil => false,
+        List::Cons((_, (key, _)), rest) => *key == k || member_key(rest, k),
     }
 }
 
@@ -4207,7 +4264,7 @@ pub open spec fn spec_pure_ret(all: Fns, key: u32, sd: Structs, strict: bool) ->
             None
         } else if strict {
             match spec_inside(f, all, sd) {
-                Ok((_, _, _, body)) => match spec_pure_body(f.params, body, all) {
+                Ok((_, _, _, body)) => match spec_pure_body(f.params, body, all, spec_static_key(sd, f.name)) {
                     Some(_) => Some((f.ret, f.params)),
                     None => None,
                 },
@@ -4215,7 +4272,7 @@ pub open spec fn spec_pure_ret(all: Fns, key: u32, sd: Structs, strict: bool) ->
             }
         } else {
             match spec_stmts(f.body, all, f.params, f.params, sd) {
-                Ok(body) => match spec_pure_body(f.params, body, all) {
+                Ok(body) => match spec_pure_body(f.params, body, all, spec_static_key(sd, f.name)) {
                     Some(_) => Some((f.ret, f.params)),
                     None => None,
                 },
@@ -4587,10 +4644,10 @@ pub open spec fn spec_function(f: Function, all: Fns, sd: Structs) -> Model {
                             params: ps,
                             ret,
                             requires: spec_bounds(f.params, f.line, req),
-                            ensures: spec_linked(f, ens, spec_pure_body(f.params, body, all)),
+                            ensures: spec_linked(f, ens, spec_pure_body(f.params, body, all, spec_static_key(sd, f.name))),
                             decreases: dec,
                             body,
-                            function: spec_pure_body(f.params, body, all),
+                            function: spec_pure_body(f.params, body, all, spec_static_key(sd, f.name)),
                             writes: spec_writes(f.params),
                             outs: spec_outs(f.params),
                             trusted: f.trusted,
@@ -5616,6 +5673,7 @@ pub open spec fn calls_resolve_stmt(s: DStmt, all: Fns, sd: Structs) -> bool
         DStmt::Match(_, _, cs) => calls_resolve_cases(*cs, all, sd),
         DStmt::LocalCall(_, _, k, _) => spec_callable(all, k, sd),
         DStmt::ReturnCall(k, _) => spec_callable(all, k, sd),
+        DStmt::ReturnUpdate(_, k, _) => spec_callable(all, k, sd),
         DStmt::AssignCall(_, k, _) => spec_callable(all, k, sd),
         DStmt::Update(_, k, _) => spec_callable(all, k, sd),
         DStmt::UpdateAt(_, _, _, k, _) => spec_callable(all, k, sd),
@@ -7039,7 +7097,7 @@ pub fn translate_contract(e: &Expr, decl: &Names, ps: &Params, ret: Option<Ty>, 
                 },
                 Some((_, None)) => Err(Refusal::NotPure(*f, line)),
                 None => match translate_contract_args(args, decl, ps, ret, bound, line, sd) {
-                    Ok(da) => Ok(DExpr::Apply(*f, Box::new(da))),
+                    Ok(da) => static_value(*f, da, args, decl, ps, line, sd),
                     Err(r) => Err(r),
                 },
             },
@@ -7047,7 +7105,7 @@ pub fn translate_contract(e: &Expr, decl: &Names, ps: &Params, ret: Option<Ty>, 
                 Err(Refusal::NoObject(*f, line))
             } else {
                 match translate_contract_args(args, decl, ps, ret, bound, line, sd) {
-                    Ok(da) => Ok(DExpr::Apply(*f, Box::new(da))),
+                    Ok(da) => static_value(*f, da, args, decl, ps, line, sd),
                     Err(r) => Err(r),
                 }
             },
@@ -8153,7 +8211,7 @@ pub fn translate_stmt(s: &Stmt, all: &Fns, env: &Params, ps: &Params, sd: &Struc
             let (e2, ns) = unmove(e);
             match move_check(&ns, &var_names(e), ps, true, *l) {
                 Some(r) => Err(r),
-                None => translate_return(&e2, *l, all, sd),
+                None => translate_return(&e2, *l, all, ps, sd),
             }
         },
         Stmt::If(c, t, f, l) => match lift(c, all, *l, sd, 0, true) {
@@ -8903,17 +8961,14 @@ pub fn pure_value(body: &DStmts, all: &Fns) -> (r: Option<DExpr>)
     }
 }
 
-pub fn pure_body(ps: &Params, body: &DStmts, all: &Fns) -> (r: Option<DExpr>)
+pub fn pure_body(ps: &Params, body: &DStmts, all: &Fns, stat: bool) -> (r: Option<DExpr>)
     ensures
-        r == spec_pure_body(*ps, *body, *all),
+        r == spec_pure_body(*ps, *body, *all, stat),
 {
-    match this_param(ps) {
-        Some(_) => if mutates(ps) {
-            None
-        } else {
-            pure_value(body, all)
-        },
-        None => None,
+    if (this_param(ps).is_some() || stat) && !mutates(ps) {
+        pure_value(body, all)
+    } else {
+        None
     }
 }
 
@@ -9174,7 +9229,7 @@ pub fn pure_ret(all: &Fns, key: u32, sd: &Structs, strict: bool) -> (r: Option<(
             None
         } else if strict {
             match translate_inside(f, all, sd) {
-                Ok((_, _, _, body)) => match pure_body(&f.params, &body, all) {
+                Ok((_, _, _, body)) => match pure_body(&f.params, &body, all, static_key(sd, f.name)) {
                     Some(_) => Some((f.ret, copy(&f.params))),
                     None => None,
                 },
@@ -9182,7 +9237,7 @@ pub fn pure_ret(all: &Fns, key: u32, sd: &Structs, strict: bool) -> (r: Option<(
             }
         } else {
             match translate_stmts(&f.body, all, &f.params, &f.params, sd) {
-                Ok(body) => match pure_body(&f.params, &body, all) {
+                Ok(body) => match pure_body(&f.params, &body, all, static_key(sd, f.name)) {
                     Some(_) => Some((f.ret, copy(&f.params))),
                     None => None,
                 },
@@ -9274,7 +9329,7 @@ pub fn translate_function(f: &Function, all: &Fns, sd: &Structs) -> (r: Model)
                 None => match translate_inside_of(f, all, sd) {
                     Err(r) => Model::Bare(f.name, ps, ret, r),
                     Ok((req, ens, dec, body)) => {
-                        let pure = pure_body(&f.params, &body, all);
+                        let pure = pure_body(&f.params, &body, all, static_key(sd, f.name));
                         let ensures = linked(f, ens, &pure);
                         Model::Full(
                             Method {
@@ -11361,6 +11416,141 @@ pub fn globalize(fs: &Fns, gs: &Params) -> (r: Fns)
         r == spec_globalize(*fs, *gs),
 {
     globalize_all(fs, gs, fs)
+}
+
+// ------------------------------------------------------------------ static member functions, decision 0174
+
+/// A static member function of a struct of the file by the id of its name: a member whose twin takes no object, `this` of a struct
+/// or of an interface. A static can take a struct as its first argument. A static has its
+/// qualified name, `Tally::valid`, so it never meets a const member, whose name is plain. A member with no twin is taken as a
+/// static here too, so a contract that calls it is refused.
+// ponytail: a companion function with the plain name of a member with no twin of some struct is refused as no pure member
+// function. Upgrade: a flag for a static in the table of members.
+pub open spec fn spec_static(sd: Structs, f: u32) -> Option<(u32, Option<(Ty, Params)>)>
+    decreases sd,
+{
+    match sd {
+        List::Nil => None,
+        List::Cons((_, (_, _, ms)), rest) => match spec_get(ms, f) {
+            Some((key, Some((t, mps)))) => if spec_head_ty(mps) is Some && (spec_head_ty(mps)->Some_0 is This || spec_head_ty(mps)->Some_0 is Iface) {
+                spec_static(*rest, f)
+            } else {
+                Some((key, Some((t, mps))))
+            },
+            Some((key, None)) => Some((key, None)),
+            None => spec_static(*rest, f),
+        },
+    }
+}
+
+pub fn static_of(sd: &Structs, f: u32) -> (r: Option<(u32, Option<(Ty, Params)>)>)
+    ensures
+        r == spec_static(*sd, f),
+    decreases sd,
+{
+    match sd {
+        List::Nil => None,
+        List::Cons((_, (_, _, ms)), rest) => match get_ref(ms, f) {
+            Some((key, Some((t, mps)))) => if match mps {
+                List::Cons((_, t0), _) => matches!(t0, Ty::This(_) | Ty::Iface(_)),
+                List::Nil => false,
+            } {
+                static_of(rest, f)
+            } else {
+                Some((*key, Some((*t, copy(mps)))))
+            },
+            Some((key, None)) => Some((*key, None)),
+            None => static_of(rest, f),
+        },
+    }
+}
+
+/// The parameters of a twin after those that the arguments of the call fill.
+pub open spec fn spec_drop_params(mps: Params, args: Args) -> Params
+    decreases args,
+{
+    match args {
+        List::Nil => mps,
+        List::Cons(_, rest) => match mps {
+            List::Nil => List::Nil,
+            List::Cons(_, prest) => spec_drop_params(*prest, *rest),
+        },
+    }
+}
+
+pub fn drop_params(mps: &Params, args: &Args) -> (r: Params)
+    ensures
+        r == spec_drop_params(*mps, *args),
+    decreases args,
+{
+    match args {
+        List::Nil => copy(mps),
+        List::Cons(_, rest) => match mps {
+            List::Nil => List::Nil,
+            List::Cons(_, prest) => drop_params(prest, rest),
+        },
+    }
+}
+
+/// The values of the globals `gps` of a twin, as the contract line reads each by its name: before in a requires line and under
+/// `old`, after in an ensures line. A global that the function lists on no line is no parameter, so the line is refused.
+pub open spec fn spec_gvals(gps: Params, decl: Names, ps: Params, line: u32) -> Result<DArgs, Refusal>
+    decreases gps,
+{
+    match gps {
+        List::Nil => Ok(List::Nil),
+        List::Cons((g, _), rest) => match spec_rebind(decl, ps, g) {
+            Some((p, t)) => match spec_gvals(*rest, decl, ps, line) {
+                Ok(dr) => Ok(List::Cons(spec_var(p, t), Box::new(dr))),
+                Err(r) => Err(r),
+            },
+            None => Err(Refusal::Name(g, line)),
+        },
+    }
+}
+
+pub fn gvals(gps: &Params, decl: &Names, ps: &Params, line: u32) -> (r: Result<DArgs, Refusal>)
+    ensures
+        r == spec_gvals(*gps, *decl, *ps, line),
+    decreases gps,
+{
+    match gps {
+        List::Nil => Ok(List::Nil),
+        List::Cons((g, _), rest) => match rebind(decl, ps, *g) {
+            Some((p, t)) => match gvals(rest, decl, ps, line) {
+                Ok(dr) => Ok(List::Cons(contract_var(p, t), Box::new(dr))),
+                Err(r) => Err(r),
+            },
+            None => Err(Refusal::Name(*g, line)),
+        },
+    }
+}
+
+/// A call `f(a)` of a contract with the arguments `da` that names no member of the object: the twin of a static member function
+/// with its globals after the arguments, decision 0174, or else a function of the companion file, decision 0079.
+pub open spec fn spec_static_value(f: u32, da: DArgs, args: Args, decl: Names, ps: Params, line: u32, sd: Structs) -> Result<DExpr, Refusal> {
+    match spec_static(sd, f) {
+        Some((key, Some((t, mps)))) => match spec_gvals(spec_drop_params(mps, args), decl, ps, line) {
+            Ok(dg) => spec_leaf(DExpr::FCall(key, Box::new(spec_append(spec_convert(da, mps), dg))), t, line),
+            Err(r) => Err(r),
+        },
+        Some((_, None)) => Err(Refusal::NotPure(f, line)),
+        None => Ok(DExpr::Apply(f, Box::new(da))),
+    }
+}
+
+pub fn static_value(f: u32, da: DArgs, args: &Args, decl: &Names, ps: &Params, line: u32, sd: &Structs) -> (r: Result<DExpr, Refusal>)
+    ensures
+        r == spec_static_value(f, da, *args, *decl, *ps, line, *sd),
+{
+    match static_of(sd, f) {
+        Some((key, Some((t, mps)))) => match gvals(&drop_params(&mps, args), decl, ps, line) {
+            Ok(dg) => translate_leaf(DExpr::FCall(key, Box::new(append(convert(da, &mps), dg))), t, line),
+            Err(r) => Err(r),
+        },
+        Some((_, None)) => Err(Refusal::NotPure(f, line)),
+        None => Ok(DExpr::Apply(f, Box::new(da))),
+    }
 }
 
 } // verus!

@@ -262,6 +262,9 @@ struct JFunction {
     /// The constants of the file that C++ does not find from the function, decision 0107. They hide no constant from `shadow`, they join it.
     #[serde(default)]
     hidden: Vec<String>,
+    /// The qualified name of the class when the function is a static member function, decision 0174. Its `name` is the qualified name of the function.
+    #[serde(default, rename = "static")]
+    class: Option<String>,
     conds: Vec<JCond>,
     body: Vec<JStmt>,
 }
@@ -324,6 +327,10 @@ struct Names {
     shadow: Vec<String>,
     /// The names of the globals of the file. A contract may spell a static data member `Registry::last_id`, decision 0173.
     globals: Vec<String>,
+    /// The qualified names of the static member functions of the file, and the class of the function that is being converted, decision 0174. A bare call
+    /// in the contract of a static member function names a static of its class.
+    statics: Vec<String>,
+    class: Option<String>,
     /// The number of range-fors converted so far, for the name of an index that no line names, decision 0144.
     ranges: u32,
 }
@@ -595,6 +602,9 @@ fn lex(text: &str, line: u32, names: &mut Names) -> Vec<Tok> {
     let bytes = text.as_bytes().to_vec();
     // A name after `->` is a member of the object on the left, as a name after `.` is, decision 0168.
     let mut after_arrow = false;
+    // The qualified name that ends before the lexeme, `Tally::` of `Tally::count`, decision 0174.
+    let mut chain = String::new();
+    let mut after_colons = false;
     cplusp_core::contract::lex_contract(&bytes)
         .into_iter()
         .map(|lexeme| {
@@ -603,15 +613,29 @@ fn lex(text: &str, line: u32, names: &mut Names) -> Vec<Tok> {
             after_arrow = matches!(lexeme.kind, LexKind::Fixed(Tok::Arrow));
             match lexeme.kind {
                 LexKind::Name(call) => {
+                    chain = if after_colons { format!("{chain}::{word}") } else { word.to_string() };
+                    after_colons = false;
+                    // A static member function of the file: qualified, or bare in a contract of its class, decision 0174.
+                    let static_call = match (&names.class, chain != word) {
+                        (_, true) => names.statics.contains(&chain),
+                        (Some(class), false) => names.statics.contains(&format!("{class}::{word}")),
+                        _ => false,
+                    };
                     // A name followed by `(` is a call, and the companion file must declare it. A member name in a member function may be a call of
                     // the member, and the core decides, decision 0090.
-                    if call && !member && !names.declared.iter().any(|d| d == word) && !names.this_members.iter().any(|d| d == word) && !names.functors.iter().any(|d| d == word) {
+                    if call && !member && !static_call && !names.declared.iter().any(|d| d == word) && !names.this_members.iter().any(|d| d == word) && !names.functors.iter().any(|d| d == word) {
                         names.bad_calls.entry(line).or_insert_with(|| word.to_string());
                     }
                     Tok::Ident(names.id(word))
                 }
                 LexKind::Field => Tok::Field(names.id(&word[1..])),
-                LexKind::Fixed(tok) => tok,
+                LexKind::Fixed(tok) => {
+                    after_colons = tok == Tok::ColonColon && !chain.is_empty();
+                    if !after_colons {
+                        chain.clear();
+                    }
+                    tok
+                }
                 LexKind::Int(value) => Tok::Int(value),
                 LexKind::Real(digits, after) => Tok::Real(digits, after),
                 LexKind::BadNumber(fault) => {
@@ -655,7 +679,8 @@ fn fold_names(toks: Vec<Tok>, names: &Names) -> Vec<Tok> {
         }
     }
     let folded = cplusp_core::fold::fold(&toks, &folds);
-    // A static data member is one name, `Registry::last_id`, decision 0173. The lexer cuts it in three tokens. The longest chain that names a global is one name.
+    // A static data member is one name, `Registry::last_id`, decision 0173. So is a static member function, `Tally::valid`, decision 0174. The lexer cuts it
+    // in three tokens. The longest chain that names a global or a static member function is one name.
     // ponytail: a quantifier `forall Registry :: last_id == 0` over a bound name that spells a qualifier of a global is read as that global. Upgrade: the core merges.
     let mut out = Vec::new();
     let mut i = 0;
@@ -667,7 +692,7 @@ fn fold_names(toks: Vec<Tok>, names: &Names) -> Vec<Tok> {
             while let (Some(Tok::ColonColon), Some(Tok::Ident(next))) = (folded.get(j + 1), folded.get(j + 2)) {
                 text = format!("{text}::{}", names.text(*next));
                 j += 2;
-                if names.globals.contains(&text) {
+                if names.globals.contains(&text) || names.statics.contains(&text) {
                     best = Some((j, text.clone()));
                 }
             }
@@ -675,6 +700,19 @@ fn fold_names(toks: Vec<Tok>, names: &Names) -> Vec<Tok> {
                 out.push(Tok::Ident(id));
                 i = end + 1;
                 continue;
+            }
+        }
+        // A bare call in the contract of a static member function names a static of its class, decision 0174. A functor of that name stays.
+        if let (Tok::Ident(bare), Some(Tok::LParen), Some(class)) = (folded[i], folded.get(i + 1), &names.class) {
+            let word = names.text(bare);
+            let after_scope = i > 0 && matches!(folded[i - 1], Tok::ColonColon | Tok::Arrow);
+            let qualified = format!("{class}::{word}");
+            if !after_scope && !names.functors.iter().any(|f| f == word) && names.statics.contains(&qualified) {
+                if let Some(id) = names.find(&qualified) {
+                    out.push(Tok::Ident(id));
+                    i += 1;
+                    continue;
+                }
             }
         }
         out.push(folded[i]);
@@ -915,7 +953,7 @@ fn unreadable_name(f: &JFunction) -> Option<&str> {
     let mut names = vec![dafny_word(&f.name)];
     names.extend(f.params.iter().map(|(n, _)| n.as_str()));
     f.body.iter().for_each(|s| stmt_names(s, &mut names));
-    // A static data member has `::` in its name, and the mangling makes it `'`, decision 0173.
+    // A static data member or a static member function has `::` in its name, and the mangling makes it `'`, decisions 0173 and 0174.
     names.into_iter().find(|n| !readable(&n.replace("::", "_")))
 }
 
@@ -945,6 +983,7 @@ fn unreadable_enum_name(en: &JEnum) -> Option<&str> {
 fn function(f: JFunction, names: &mut Names) -> Function {
     let name = names.id(&f.key);
     names.file = f.file;
+    names.class = f.class;
     names.shadow = f.params.iter().map(|(n, _)| n.clone()).chain(f.hidden.iter().cloned()).collect();
     let mut used = Vec::new();
     f.body.iter().for_each(|s| stmt_names(s, &mut used));
@@ -1564,6 +1603,12 @@ impl Printer<'_> {
                 self.put(depth, format!("result := {call};"), place);
                 self.put(depth, "return;".to_string(), place);
             }
+            // `return f(a);` of a call that writes back: the value goes to `result`, then the places, decisions 0108 and 0174.
+            DStmt::ReturnUpdate(objs, m, args) => {
+                let (object, call, before, after) = self.update(objs, *m, args);
+                self.put(depth, format!("{before}result, {object} := {call};{after}"), place);
+                self.put(depth, "return;".to_string(), place);
+            }
             DStmt::Assign(x, e) => self.put(depth, format!("{} := {};", mangle(names.text(*x)), dexpr(e, names)), place),
             DStmt::AssignCall(x, m, args) => {
                 let call = self.call(*m, args);
@@ -2099,13 +2144,19 @@ pub fn translate(lines: &str, companion: Option<(&str, &str)>) -> Result<Transla
     let plain = |f: &JFunction| match (f.params.first(), &f.ret) {
         // `this` of a virtual function of an interface names it too, decision 0165.
         (Some((_, JTy::This(k) | JTy::ThisMut(k) | JTy::Iface(k) | JTy::IfaceMut(k))), _) | (_, JTy::This(k)) => format!("{}'{}", structs.iter().find(|s| s.key == *k).map_or("", |s| s.name.as_str()), dafny_word(&f.name)),
-        _ => f.name.clone(),
+        // A static member function has the name of its class, `Tally::bump` is `Tally'bump`, decision 0174.
+        _ => f.name.replace("::", "'"),
     };
     for (i, f) in funcs.iter().enumerate() {
         let same = funcs.iter().filter(|g| plain(g) == plain(f)).count();
         let k = funcs[..=i].iter().filter(|g| plain(g) == plain(f)).count();
         let dafny = if same == 1 { format!("c_{}", plain(f)) } else { format!("c_{}'{k}", plain(f)) };
         let key = names.id(&f.key);
+        if f.class.is_some() {
+            // The id of the qualified name, so a contract that spells it finds the member of the table, decision 0174.
+            names.id(&f.name);
+            names.statics.push(f.name.clone());
+        }
         names.functions.insert(key, format!("{dafny}'"));
         names.fn_names.insert(key, f.name.clone());
         methods.insert(key, dafny);
