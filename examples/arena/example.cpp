@@ -55,7 +55,7 @@ size_t second_block(size_t n, size_t m) {
 // A new frame: release everything, and the first block starts at the front.
 //@ requires 0 < size && size <= 4096
 //@ modifies Arena::used_
-//@ ensures result == 0 && Arena::used() == size && Arena::valid()
+//@ ensures Arena::valid() && result == 0 && Arena::used() == size
 size_t first_block_of_new_frame(size_t size) {
   Arena::release();
   return Arena::acquire(size);

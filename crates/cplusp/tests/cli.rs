@@ -5376,3 +5376,68 @@ fn a_global_with_no_rule_is_refused() {
         "{text}"
     );
 }
+
+/// A static member function is a free function with the name of its class. One that reads its globals and has one return has a
+/// function twin, which a contract calls with the values before or after. The examples singleton and arena prove, decision 0174.
+#[test]
+fn a_static_member_function_is_a_free_function() {
+    let Some(dafny) = dafny() else { return };
+    if !clang_tidy_available() {
+        return;
+    }
+    for name in ["model-static.cpp", "../../../../examples/singleton/example.cpp", "../../../../examples/arena/example.cpp"] {
+        let o = prove(name, &[], &dafny);
+        let text = stdout(&o);
+        assert_eq!(o.status.code(), Some(0), "{name}: stdout: {text} stderr: {}", stderr(&o));
+        assert_eq!(text.lines().last(), Some("ok: proved"), "{name}: {text}");
+    }
+}
+
+/// A static member function keeps its contract: a body that adds too much, a call too few, an ensures line that calls a twin
+/// before its requires line holds, and a caller that misses a requires line of a trusted static, decision 0174.
+#[test]
+fn a_static_keeps_the_contract_of_its_class() {
+    let Some(dafny) = dafny() else { return };
+    if !clang_tidy_available() {
+        return;
+    }
+    let o = prove("model-static-wrong.cpp", &[], &dafny);
+    let text = stdout(&o);
+    assert_eq!(o.status.code(), Some(1), "stdout: {text} stderr: {}", stderr(&o));
+    let failed: Vec<&str> = text.lines().filter(|l| l.starts_with("Not proved: ")).map(|l| l.rsplit_once(".cpp:").unwrap().1).collect();
+    assert_eq!(
+        failed,
+        [
+            "23: the ensures line may not hold on this return.",
+            "39: the ensures line may not hold on this return.",
+            "65: a requires line of the member function may not hold here.",
+            "78: a requires line of the callee may not hold.",
+        ],
+        "{text}"
+    );
+    assert!(under(&text, "model-static-wrong.cpp:78: a requires line of the callee may not hold.").iter().any(|l| l.ends_with("model-static-wrong.cpp:58: requires valid() && 0 < size && size <= 4096 - used()")), "{text}");
+}
+
+/// A contract that calls a static which writes, a static whose contract names a field, and a bare call of a static outside its
+/// class are refused, decision 0174.
+#[test]
+fn a_static_with_no_rule_is_refused() {
+    let Some(dafny) = dafny() else { return };
+    if !clang_tidy_available() {
+        return;
+    }
+    let o = prove("model-static-refuse.cpp", &[], &dafny);
+    let text = stdout(&o);
+    assert_eq!(o.status.code(), Some(1), "stdout: {text} stderr: {}", stderr(&o));
+    let mut refusals: Vec<&str> = text.lines().filter(|l| l.starts_with("Not provable: ")).map(|l| l.rsplit_once(".cpp:").unwrap().1).collect();
+    refusals.sort_by_key(|l| l.split(':').next().unwrap().parse::<u32>().unwrap());
+    assert_eq!(
+        refusals,
+        [
+            "19: Tally::bump is no pure member function of its struct.",
+            "23: n_ in the contract is no parameter.",
+            "31: valid is no function of the companion file.",
+        ],
+        "{text}"
+    );
+}

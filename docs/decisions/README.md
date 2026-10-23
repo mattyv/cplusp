@@ -178,4 +178,4 @@ Status is `decided`, `proposed` (the default until someone objects or the thin s
 | [0171](0171-a-unique-ptr-field-and-a-move.md) | A unique_ptr as a field and by value, and std::move of a local. Step A of slice five of 0165 | decided |
 | [0172](0172-a-pure-member-function-with-locals-and-virtual-calls.md) | A pure member function with locals and calls of a virtual function. Step B of slice five of 0165 | decided |
 | [0173](0173-a-global-is-an-implicit-parameter.md) | A global that a function lists is an implicit parameter of the function | decided |
-| [0174](0174-a-static-member-function.md) | A static member function is a free function with the name of its class | proposed |
+| [0174](0174-a-static-member-function.md) | A static member function is a free function with the name of its class | decided |

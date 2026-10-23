@@ -4148,3 +4148,103 @@ fn a_lambda_parameter_hides_a_global_and_a_comparator_reads_it() {
     let read = Expr::Bin(BinOp::Gt, b(Expr::Var(GT, Ty::Mut(Scalar::I32))), b(Expr::Lit(0, Ty::I32)));
     assert_eq!(fs[1].body, one(Stmt::SortBy(VX, A, B, Ty::I32, read, 20)));
 }
+
+const TALLY: u32 = 360;
+const TCOUNT: u32 = 361;
+const TVALID: u32 = 362;
+const TCOUNTF: u32 = 363;
+const TBUMP: u32 = 364;
+const KTV: u32 = 365;
+const KTC: u32 = 366;
+const KTB: u32 = 367;
+const CMADE: u32 = 368;
+const CMADEF: u32 = 369;
+const KMADE: u32 = 370;
+
+/// The class Tally with no field and the statics `Tally::valid` and `Tally::count`, whose twins read the static data member
+/// `Tally::count_`, and `Tally::bump`, which writes it, decision 0174.
+fn tally_table() -> Structs {
+    let g = || List::Cons((TCOUNT, Ty::I32), Box::new(List::Nil));
+    let ms = List::Cons(
+        (TVALID, (KTV, Some((Ty::Bool, g())))),
+        Box::new(List::Cons((TCOUNTF, (KTC, Some((Ty::I32, g())))), Box::new(List::Cons((TBUMP, (KTB, None)), Box::new(List::Nil))))),
+    );
+    List::Cons((TALLY, (5, List::Nil, ms)), Box::new(List::Nil))
+}
+
+/// The twin of `Tally::f` on the value `d` of the static data member.
+fn twin(key: u32, d: DExpr) -> DExpr {
+    DExpr::FCall(key, Box::new(List::Cons(d, Box::new(List::Nil))))
+}
+
+/// A contract calls the twin of a static member function with the values of its globals: before in a requires line and under
+/// `old`, after in an ensures line, decision 0174.
+#[test]
+fn a_contract_calls_the_twin_of_a_static() {
+    let call = |k: u32| Expr::Apply(k, Box::new(List::Nil));
+    let conds = List::Cons(
+        (CondKind::Requires, call(TVALID), 20, names(&[TCOUNT])),
+        Box::new(List::Cons(
+            (CondKind::Modifies, Expr::Name(TCOUNT), 21, names(&[TCOUNT])),
+            Box::new(List::Cons(
+                (CondKind::Ensures, call(TVALID), 22, names(&[TCOUNT])),
+                Box::new(List::Cons((CondKind::Ensures, Expr::Bin(BinOp::Eq, b(call(TCOUNTF)), b(Expr::Old(b(call(TCOUNTF))))), 22, names(&[TCOUNT])), Box::new(List::Nil))),
+            )),
+        )),
+    );
+    let bump = Function { name: KTB, line: 23, params: List::Cons((TCOUNT, Ty::Mut(Scalar::I32)), Box::new(List::Nil)), ret: Ty::Void, trusted: true, conds, body: List::Nil };
+    let Model::Full(m) = translate_function(&bump, &List::Nil, &tally_table()) else { panic!("a full model") };
+    assert_eq!(strip_conds(m.requires), List::Cons((twin(KTV, DExpr::Var(TCOUNT)), 0), Box::new(List::Nil)));
+    let after = twin(KTV, DExpr::Out(TCOUNT));
+    let count = DExpr::Bin(BinOp::Eq, Box::new(DExpr::AsInt(Box::new(twin(KTC, DExpr::Out(TCOUNT))))), Box::new(DExpr::AsInt(Box::new(twin(KTC, DExpr::Var(TCOUNT))))));
+    assert_eq!(strip_conds(m.ensures), List::Cons((after, 0), Box::new(List::Cons((count, 0), Box::new(List::Nil)))));
+}
+
+/// A static that writes has no twin, so a contract that calls it is refused, decision 0174.
+#[test]
+fn a_static_that_writes_is_no_pure_function() {
+    let modifies = List::Cons((CondKind::Modifies, Expr::Name(TCOUNT), 18, names(&[TCOUNT])), Box::new(List::Nil));
+    let conds = List::Cons((CondKind::Ensures, Expr::Apply(TBUMP, Box::new(List::Nil)), 19, names(&[TCOUNT])), Box::new(modifies));
+    let f = Function { name: 371, line: 20, params: List::Cons((TCOUNT, Ty::Mut(Scalar::I32)), Box::new(List::Nil)), ret: Ty::Bool, trusted: true, conds, body: List::Nil };
+    let m = translate_function(&f, &List::Nil, &tally_table());
+    assert_eq!(refusal_of(&m), Refusal::NotPure(TBUMP, 19));
+}
+
+/// A twin reads its globals by name, so a contract of a function that lists no such global is refused at its line. A twin cannot
+/// bring an unlisted global into a contract, decision 0174.
+#[test]
+fn a_twin_reads_a_global_the_caller_does_not_list() {
+    let conds = List::Cons((CondKind::Requires, Expr::Apply(TVALID, Box::new(List::Nil)), 30, names(&[])), Box::new(List::Nil));
+    let f = Function { name: 372, line: 31, params: List::Nil, ret: Ty::Void, trusted: true, conds, body: List::Nil };
+    let m = translate_function(&f, &List::Nil, &tally_table());
+    assert_eq!(refusal_of(&m), Refusal::Name(TCOUNT, 30));
+}
+
+/// A struct keeps its const members beside its statics: `c.value()` passes the object, and `Counter::made_count()` the static
+/// data member, decision 0174.
+#[test]
+fn a_struct_keeps_its_const_members_beside_a_static() {
+    let this_ps = List::Cons((THIS, Ty::This(COUNTER)), Box::new(List::Nil));
+    let ms = List::Cons(
+        (VALUE_NAME, (NKEY, Some((Ty::I32, this_ps)))),
+        Box::new(List::Cons((CMADEF, (KMADE, Some((Ty::I32, List::Cons((CMADE, Ty::I32), Box::new(List::Nil)))))), Box::new(List::Nil))),
+    );
+    let table: Structs = List::Cons((COUNTER, (4, List::Cons((CN, Ty::I32), Box::new(List::Nil)), ms)), Box::new(List::Nil));
+    let sum = Expr::Bin(BinOp::Add, b(Expr::MApply(b(Expr::Name(VX)), VALUE_NAME, Box::new(List::Nil))), b(Expr::Apply(CMADEF, Box::new(List::Nil))));
+    let ens = Expr::Bin(BinOp::Eq, b(Expr::Result), b(sum));
+    let ps = List::Cons((VX, Ty::Struct(COUNTER)), Box::new(List::Cons((CMADE, Ty::I32), Box::new(List::Nil))));
+    let f = Function { name: 373, line: 40, params: ps, ret: Ty::I32, trusted: true, conds: List::Cons((CondKind::Ensures, ens, 39, names(&[VX, CMADE])), Box::new(List::Nil)), body: List::Nil };
+    let Model::Full(m) = translate_function(&f, &List::Nil, &table) else { panic!("a full model") };
+    let value = DExpr::AsInt(Box::new(twin(NKEY, DExpr::Var(VX))));
+    let made = DExpr::AsInt(Box::new(twin(KMADE, DExpr::Var(CMADE))));
+    let want = DExpr::Bin(BinOp::Eq, Box::new(DExpr::AsInt(Box::new(DExpr::Result))), Box::new(DExpr::Bin(BinOp::Add, Box::new(value), Box::new(made))));
+    assert_eq!(strip_conds(m.ensures), List::Cons((want, 0), Box::new(List::Nil)));
+}
+
+/// A static member function has no object, so it can list a global, decision 0174.
+#[test]
+fn a_static_lists_a_global() {
+    let f = Function { name: GF + 40, ..global_user(List::Cons(lists(CondKind::Modifies, GT, 9, &[]), Box::new(List::Nil)), one(Stmt::Return(Expr::Lit(0, Ty::I32), 10))) };
+    let out = globalize(&fns(vec![f]), &file_globals());
+    assert!(!any_bad(&fn_list(&out)[0].conds));
+}
