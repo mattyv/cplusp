@@ -1347,7 +1347,8 @@ pub open spec fn spec_lift(e: Expr, all: Fns, line: u32, sd: Structs, n: u32, op
         } else {
             match spec_lift_args(*args, all, line, sd, n, open) {
                 Err(r) => Err(r),
-                Ok((ca, da, n1)) => match spec_callee_ty(all, k, line, sd) {
+                // A call that gives no value stays alone, decision 0177. A refusal of an argument comes first.
+                Ok((ca, da, n1)) => if spec_callee_void(all, k) { Err(Refusal::Place(at)) } else { match spec_callee_ty(all, k, line, sd) {
                     Err(r) => Err(r),
                     Ok(dt) => if n1 >= 0xFFFF_FFFF {
                         Err(Refusal::Syntax(line))
@@ -1365,7 +1366,7 @@ pub open spec fn spec_lift(e: Expr, all: Fns, line: u32, sd: Structs, n: u32, op
                     } else {
                         Ok((spec_append(ca, List::Cons(DPre::Call(n1, dt, k, da), Box::new(List::Nil))), DExpr::Temp(n1), (n1 + 1) as u32))
                     },
-                },
+                } },
             }
         },
         // `x++` inside an expression writes first into a temporary, decision 0177. Where C++ may not run it, it has no place.
@@ -8860,7 +8861,7 @@ pub fn lift(e: &Expr, all: &Fns, line: u32, sd: &Structs, n: u32, open: bool) ->
         } else {
             match lift_args(args, all, line, sd, n, open) {
                 Err(r) => Err(r),
-                Ok((ca, da, n1)) => match callee_ty(all, *k, line, sd) {
+                Ok((ca, da, n1)) => if callee_void(all, *k) { Err(Refusal::Place(*at)) } else { match callee_ty(all, *k, line, sd) {
                     Err(r) => Err(r),
                     Ok(dt) => if n1 >= 0xFFFF_FFFF {
                         Err(Refusal::Syntax(line))
@@ -8876,7 +8877,7 @@ pub fn lift(e: &Expr, all: &Fns, line: u32, sd: &Structs, n: u32, open: bool) ->
                     } else {
                         Ok((append(ca, List::Cons(DPre::Call(n1, dt, *k, da), Box::new(List::Nil))), DExpr::Temp(n1), n1 + 1))
                     },
-                },
+                } },
             }
         },
         Expr::Step(v, t, up, prefix) => if !open {

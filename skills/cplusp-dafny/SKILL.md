@@ -51,7 +51,7 @@ Treat SPARK guidance as an engineering method, not an LLM performance measuremen
 
 ## Contract lines that the translator reads
 
-This list is true at decision 0182. Read the later decisions before you rely on it.
+This list is true at decision 0183. Read the later decisions before you rely on it.
 `cplusp prove` translates the C++ and the `//@` lines to Dafny, and runs Dafny. It says `ok: proved`, or `Not proved: FILE:LINE: sentence` for a proof that fails, or `Not provable: FILE:LINE: sentence` for a form that has no rule.
 
 Where each line goes:
@@ -100,6 +100,7 @@ The modifies line:
 - A free function template with type parameters only proves at each type that the file uses it at, decision 0180. Each instance proves alone, so a contract can hold at `int64_t` and fail at `int32_t`. Put the contract lines above the line `template <...>`. Use the template in the file, or write an explicit instantiation. The translator refuses a template with no instance. Do not write a member function template or a template parameter that is not a type.
 - A temporary of a plain struct, as `Pair{1, 2}`, can be the argument of a `const T&` parameter, decision 0181. It is its value. Do not return a temporary from a function that returns a reference, because the temporary dies at the end of the `return`.
 - A function that returns a reference, a pointer or a span gives back only what its parameters by reference or `this` reach, decision 0182. A pointer or a span parameter counts as one by reference. The gate follows the `return` through each call. A local, a parameter by value, a structured binding by copy and a capture by copy die when the function returns.
+- A member function that writes its object can return `T&` and end in `return *this;`, decision 0183. Then a chain `x.f(a).g(b)` runs each step in order on `x`. Write the chain as a statement, as the value of a `return` or as the start value of a local. Do not put it in a condition, an operand, an argument or the head of a `for`. Do not write `&result == this` in its contract.
 - After a `push_back`, a read of `v.size()` in code needs a requires line or an invariant that bounds the length. Then the size fits `size_t`.
 - An ensures line that reads `v[i]` after the call needs a line before it that gives the length: `ensures v.size() == old(v.size())`, or `+ 1` after one `push_back`, decision 0146. A loop that writes `v` needs the same line as an invariant.
 - The gate also reads `modifies` and `reads` lines for globals, decision 0035.

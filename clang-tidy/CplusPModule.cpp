@@ -4230,6 +4230,7 @@ public:
                          : FD->isTemplated()                         ? "FunctionTemplateDecl"
                          : !Constructor && noDestructorMove(FD)       ? "a move constructor in a struct with no destructor"
                          : isa<CXXConstructorDecl>(FD) && !Constructor ? "CXXConstructorDecl"
+                         : fluentSignature(FD) && FD->getBody() && !fluent(FD) ? "a reference result that is not `*this`"
                          : isa<CXXMethodDecl>(FD) && !Member && !Static && !Constructor ? "CXXMethodDecl"
                          : !FD->getBody() && !Trusted && !Interface ? "FunctionDecl without body"
                                                   : nullptr;
@@ -4269,7 +4270,7 @@ public:
                               {"file", file(FD->getLocation())},
                               {"line", number(line(FD->getLocation()))},
                               {"params", std::move(Params)},
-                              {"ret", Opaque ? tag("Other", Opaque) : FD->getReturnType()->isVoidType() ? llvm::json::Value("Void") : resultType(FD->getReturnType())},
+                              {"ret", Opaque ? tag("Other", Opaque) : FD->getReturnType()->isVoidType() || fluent(FD) ? llvm::json::Value("Void") : resultType(FD->getReturnType())},
                               {"trusted", TrustedJson},
                               {"interface", Interface},
                               {"hidden", std::move(Hidden)},
@@ -4477,6 +4478,10 @@ private:
   mutable std::set<const CXXRecordDecl *> Visiting;  // the structs whose fields `plainStruct` is reading
   mutable bool InConstructorBody = false;  // `constructorBody` is writing the statements of a body, where a field and `this` have no rule, decision 0179
   mutable const FunctionDecl *Enclosing = nullptr;  // the function that `function` is writing, the floor of a loop's walk upward
+  mutable const Stmt *HoistFor = nullptr;  // the statement that may take the steps of a chain before it, decision 0183, or null
+  mutable const Expr *HoistOk = nullptr;   // the call whose object is a chain that may go before `HoistFor`
+  mutable llvm::json::Array Prelude;       // the statements that run before `HoistFor`: the fresh local of a temporary and the steps of a chain
+  mutable unsigned Chains = 0;             // the count of the fresh locals `'chain'<n>`
 
   // The contract lines as data. A line of a loop has no parameters.
   llvm::json::Array conds(const Contract &C, bool Member = false) const {
@@ -5356,15 +5361,27 @@ private:
   llvm::json::Array stmts(const Stmt *S) const {
     llvm::json::Array Out;
     if (const auto *Block = dyn_cast<CompoundStmt>(S))
-      for (const Stmt *Child : Block->body()) {
-        bodyLines(Child, Out);
-        Out.push_back(stmt(Child));
-      }
-    else {
-      bodyLines(S, Out);
-      Out.push_back(stmt(S));
-    }
+      for (const Stmt *Child : Block->body())
+        pushStmt(Child, Out);
+    else
+      pushStmt(S, Out);
     return Out;
+  }
+
+  // A statement with the lines above it, and before it the statements that a chain of calls in it needs, decision 0183.
+  // A control statement takes none: its condition runs more than once, or not at all.
+  void pushStmt(const Stmt *Child, llvm::json::Array &Out) const {
+    bodyLines(Child, Out);
+    const Stmt *SavedFor = HoistFor;
+    llvm::json::Array Saved = std::move(Prelude);
+    Prelude = llvm::json::Array();
+    HoistFor = isa<IfStmt, WhileStmt, ForStmt, CXXForRangeStmt, SwitchStmt, CompoundStmt, DoStmt>(Child) ? nullptr : Child;
+    llvm::json::Value One = stmt(Child);
+    for (llvm::json::Value &Step : Prelude)
+      Out.push_back(std::move(Step));
+    Out.push_back(std::move(One));
+    Prelude = std::move(Saved);
+    HoistFor = SavedFor;
   }
 
   // Whether the function around a `return` gives a reference.
@@ -5388,6 +5405,112 @@ private:
     return false;
   }
 
+  // A member function that writes its object and returns it, decision 0183: not const, not virtual, a member of the model, and the result `T&` of its
+  // own class. Whether each return is `return *this;` is `fluent`.
+  const CXXMethodDecl *fluentSignature(const FunctionDecl *FD) const {
+    const auto *M = dyn_cast_or_null<CXXMethodDecl>(FD);
+    if (!M || M->isConst() || M->isVirtual() || !member(M))
+      return nullptr;
+    const QualType Result = M->getReturnType();
+    if (!Result->isLValueReferenceType() || Result->getPointeeType().isConstQualified())
+      return nullptr;
+    return Result->getPointeeType().getCanonicalType().getUnqualifiedType() == Context.getRecordType(M->getParent()).getCanonicalType() ? M : nullptr;
+  }
+  static bool isReturnThis(const ReturnStmt *Return) {
+    const Expr *Value = Return->getRetValue() ? Return->getRetValue()->IgnoreParenImpCasts() : nullptr;
+    const auto *Deref = dyn_cast_or_null<UnaryOperator>(Value);
+    return Deref && Deref->getOpcode() == UO_Deref && isa<CXXThisExpr>(Deref->getSubExpr()->IgnoreParenImpCasts());
+  }
+  // Whether each `return` of a body is `return *this;`. A lambda in the body has returns of its own.
+  static bool returnsOnlyThis(const Stmt *S) {
+    if (!S || isa<LambdaExpr>(S))
+      return true;
+    if (const auto *Return = dyn_cast<ReturnStmt>(S))
+      return isReturnThis(Return);
+    for (const Stmt *Child : S->children())
+      if (!returnsOnlyThis(Child))
+        return false;
+    return true;
+  }
+  // A member function that gives back its object, whose body ends in `return *this;` and has no other return, decision 0183.
+  bool fluent(const FunctionDecl *FD) const {
+    const FunctionDecl *Def = FD ? FD->getDefinition() : nullptr;
+    const auto *Body = Def ? dyn_cast_or_null<CompoundStmt>(Def->getBody()) : nullptr;
+    const auto *Last = Body && !Body->body_empty() ? dyn_cast<ReturnStmt>(Body->body_back()) : nullptr;
+    return fluentSignature(FD) && Last && isReturnThis(Last) && returnsOnlyThis(Body);
+  }
+  // A call of such a function.
+  const CXXMemberCallExpr *fluentCall(const Expr *E) const {
+    const auto *Call = E ? dyn_cast<CXXMemberCallExpr>(E->IgnoreParenImpCasts()) : nullptr;
+    return Call && Call->getDirectCallee() && fluent(Call->getDirectCallee()) ? Call : nullptr;
+  }
+  // The call `Call` of a function that gives back its object, with the calls of its object as nested calls: the form of 0104 and 0177. The core takes it
+  // where C++ runs it once, and refuses it elsewhere.
+  llvm::json::Value nested(const CXXMemberCallExpr *Call, unsigned Near) const {
+    const Expr *Object = Call->getImplicitObjectArgument()->IgnoreParenImpCasts();
+    const auto *Callee = dyn_cast<MemberExpr>(Call->getCallee()->IgnoreParens());
+    if (!Callee || (Callee->isArrow() && !isa<CXXThisExpr>(Object)))
+      return tag("Unknown", llvm::json::Array{"the result of a call that gives back its object, used as a value", number(Near)});
+    const unsigned At = line(Call->getBeginLoc());
+    const CXXMemberCallExpr *Inner = fluentCall(Object);
+    llvm::json::Array Args{Inner ? nested(Inner, Near) : expr(Object, At)};
+    for (unsigned I = 0; I < Call->getNumArgs(); ++I)
+      Args.push_back(callArg(Call->getDirectCallee(), I, Call->getArg(I), At));
+    return tag("Call", llvm::json::Array{key(Call->getDirectCallee()), name(Call->getDirectCallee()), std::move(Args), number(At)});
+  }
+  // A chain of calls that give back their object, `x.f(a).g(b)`, as the steps in order on the object `x`, decision 0183. C++ evaluates the object of a call first,
+  // so the steps go before the statement. The arguments of a step are in its own call, so they run after the step before it. A temporary at the start gets a
+  // fresh local. `Last` is whether the last step stays out of the steps and is the result, as the statement. Otherwise the result is the object.
+  // A chain on anything but a local, a parameter or a temporary of a struct with no destructor of the model stays nested.
+  llvm::json::Value chain(const CXXMemberCallExpr *Top, unsigned Near, bool Last) const {
+    std::vector<const CXXMemberCallExpr *> Steps;
+    const Expr *Base = nullptr;
+    for (const CXXMemberCallExpr *Call = Top; Call;) {
+      Steps.insert(Steps.begin(), Call);
+      Base = Call->getImplicitObjectArgument()->IgnoreParenImpCasts();
+      Call = fluentCall(Base);
+    }
+    const auto *Callee = dyn_cast<MemberExpr>(Steps.front()->getCallee()->IgnoreParens());
+    const auto *Ref = dyn_cast<DeclRefExpr>(Base);
+    const auto *Var = Ref ? dyn_cast<VarDecl>(Ref->getDecl()) : nullptr;
+    llvm::json::Value Object = nullptr;
+    if (!Callee || Callee->isArrow()) {
+      return nested(Top, Near);
+    } else if (Var && !Var->hasGlobalStorage()) {
+      Object = expr(Base, Near);
+    } else if (Base->isPRValue() && Base->getType()->isRecordType()) {
+      const CXXRecordDecl *RD = plainStruct(Base->getType());
+      const CXXDestructorDecl *D = RD ? RD->getDestructor() : nullptr;
+      // A temporary of a struct with a destructor keeps its refusal, decision 0178.
+      if (!RD || (D && member(D)))
+        return nested(Top, Near);
+      const std::string Fresh = "'chain'" + std::to_string(++Chains);
+      llvm::json::Value Kind = type(Base->getType().getUnqualifiedType());
+      Prelude.push_back(tag("Local", llvm::json::Array{Fresh, Kind, expr(Base, Near), number(Near)}));
+      Object = tag("Var", llvm::json::Array{Fresh, Kind});
+    } else {
+      return nested(Top, Near);
+    }
+    for (size_t I = 0; I < Steps.size(); ++I) {
+      const CXXMemberCallExpr *Step = Steps[I];
+      llvm::json::Array Args{Object};
+      for (unsigned A = 0; A < Step->getNumArgs(); ++A)
+        Args.push_back(callArg(Step->getDirectCallee(), A, Step->getArg(A), Near));
+      llvm::json::Value Call = tag("Call", llvm::json::Array{key(Step->getDirectCallee()), name(Step->getDirectCallee()), std::move(Args), number(Near)});
+      if (Last && I + 1 == Steps.size())
+        return Call;
+      Prelude.push_back(std::move(Call));
+    }
+    return Object;
+  }
+  // The call that gives a value, `x.f(a).total()`, when it is the full value of a statement and its object is a chain: the one place where the steps may go
+  // before the statement, decision 0183.
+  const Expr *chainValue(const Stmt *S, const Expr *Value) const {
+    const Expr *Call = Value ? Value->IgnoreParenImpCasts() : nullptr;
+    const auto *Member = Call ? dyn_cast<CXXMemberCallExpr>(Call) : nullptr;
+    return S == HoistFor && Member && !fluentCall(Call) && fluentCall(Member->getImplicitObjectArgument()) ? Call : nullptr;
+  }
+
   llvm::json::Value stmt(const Stmt *S) const {
     // The body of a constructor cannot read or write a field, or use `this`, and it cannot return early, decision 0179. A control statement holds its
     // expressions and its statements, which come here or to `expr` themselves.
@@ -5402,6 +5525,9 @@ private:
                                          number(line(S->getBeginLoc()))});
     if (const auto *Return = dyn_cast<ReturnStmt>(S); Return && !Return->getRetValue())
       return tag("Exit", number(line(S->getBeginLoc())));
+    // `return *this;` of a function that gives back its object is a return with no value, decision 0183.
+    if (const auto *Return = dyn_cast<ReturnStmt>(S); Return && isReturnThis(Return) && fluent(Enclosing))
+      return tag("Exit", number(line(S->getBeginLoc())));
     // `return f();` of a void call has no rule: the return gives no value.
     if (const auto *Return = dyn_cast<ReturnStmt>(S); Return && Return->getRetValue() && Return->getRetValue()->getType()->isVoidType())
       return unknown(S, describe(S), line(S->getBeginLoc()));
@@ -5409,12 +5535,16 @@ private:
     if (const auto *Return = dyn_cast<ReturnStmt>(S); Return && Return->getRetValue() && returnsReference(Return) && holdsTemporary(Return->getRetValue()))
       return unknown(S, "a temporary in the return of a function that returns a reference", line(S->getBeginLoc()));
     if (const auto *Return = dyn_cast<ReturnStmt>(S); Return && Return->getRetValue())
+      HoistOk = chainValue(S, Return->getRetValue());
+    if (const auto *Return = dyn_cast<ReturnStmt>(S); Return && Return->getRetValue())
       return tag("Return", llvm::json::Array{expr(Return->getRetValue(), line(S->getBeginLoc())), number(line(S->getBeginLoc()))});
     if (const auto *Switch = dyn_cast<SwitchStmt>(S); Switch && !Switch->getInit() && !Switch->getConditionVariable() && plainEnum(Switch->getCond()->IgnoreParenImpCasts()->getType()))
       return switchOf(Switch);
     if (const auto *Decl = dyn_cast<DeclStmt>(S); Decl && Decl->isSingleDecl())
-      if (const auto *Var = dyn_cast<VarDecl>(Decl->getSingleDecl()); Var && Var->hasLocalStorage() && Var->getInit())
+      if (const auto *Var = dyn_cast<VarDecl>(Decl->getSingleDecl()); Var && Var->hasLocalStorage() && Var->getInit()) {
+        HoistOk = chainValue(S, Var->getInit());
         return tag("Local", llvm::json::Array{Var->getNameAsString(), varType(Var), expr(Var->getInit(), line(S->getBeginLoc())), number(line(S->getBeginLoc()))});
+      }
     if (const auto *Assign = dyn_cast<BinaryOperator>(S); Assign && Assign->getOpcode() == BO_Assign) {
       if (const auto *Target = dyn_cast<DeclRefExpr>(Assign->getLHS()); Target && isTarget(Target->getDecl()))
         return tag("Assign", llvm::json::Array{nameOf(Target->getDecl()), expr(Assign->getRHS(), line(S->getBeginLoc())), number(line(S->getBeginLoc()))});
@@ -5459,6 +5589,15 @@ private:
     if (const auto *Bound = dyn_cast<CXXBindTemporaryExpr>(Inner))
       if (const CXXRecordDecl *RD = plainStruct(Bound->getType()); RD && RD->hasUserDeclaredDestructor())
         Inner = Bound->getSubExpr();
+    // A call that gives back its object, as a statement, with the calls of a chain before it, decision 0183.
+    // Only the start and the step of a `for` come here with `S` not the hoist statement. A chain there has no rule.
+    if (const auto *Top = fluentCall(dyn_cast<Expr>(Inner))) {
+      if (S == HoistFor)
+        return chain(Top, line(S->getBeginLoc()), true);
+      if (fluentCall(Top->getImplicitObjectArgument()))
+        return unknown(S, "a chain of calls in the head of a for", line(S->getBeginLoc()));
+      return nested(Top, line(S->getBeginLoc()));
+    }
     // `v.push_back(e)` where `v` is a vector by reference, decision 0148. The other member calls of a vector have no rule.
     if (const auto *Push = dyn_cast<CXXMemberCallExpr>(Inner); Push && Push->getNumArgs() == 1 && Push->getMethodDecl() && Push->getMethodDecl()->getDeclName().isIdentifier() &&
                                                            Push->getMethodDecl()->getName() == "push_back" && Push->getImplicitObjectArgument() &&
@@ -5590,10 +5729,8 @@ private:
       if (!Current.empty() && isa<BreakStmt>(Current.back()))
         Current.pop_back();
       llvm::json::Array Out;
-      for (const Stmt *Child : Current) {
-        bodyLines(Child, Out);
-        Out.push_back(stmt(Child));
-      }
+      for (const Stmt *Child : Current)
+        pushStmt(Child, Out);
       Cases.back().getAsArray()->push_back(std::move(Out));
       Current.clear();
     };
@@ -6000,6 +6137,9 @@ private:
   llvm::json::Value expr(const Expr *E, unsigned Near) const {
     if (InConstructorBody && readsObject(E))
       return unknown(E, "a field in the body of a constructor", Near);
+    // The result of a call that gives back its object is the object of a call, or a statement, and both are read before this. Any other use has no rule, decision 0183.
+    if (fluentCall(E) == E)
+      return tag("Unknown", llvm::json::Array{"the result of a call that gives back its object, used as a value", number(Near)});
     // A temporary that needs a cleanup, such as an optional made from `x + 1`, wraps the expression. The wrapper is not the construct.
     if (const auto *Cleanups = dyn_cast<ExprWithCleanups>(E))
       return expr(Cleanups->getSubExpr(), Near);
@@ -6451,7 +6591,9 @@ private:
       if (Callee && Callee->hasQualifier() && Call->getMethodDecl() && Call->getMethodDecl()->isVirtual())
         return unknown(E, "a qualified call of a virtual function", Near);
       if (Callee && (!Callee->isArrow() || isa<CXXThisExpr>(Object))) {
-        llvm::json::Array Args{expr(Object, line(E->getBeginLoc()))};
+        // The object can be a chain of calls that give back their object, decision 0183.
+        const CXXMemberCallExpr *Chain = fluentCall(Object);
+        llvm::json::Array Args{Chain ? (E == HoistOk ? chain(Chain, line(HoistFor->getBeginLoc()), false) : nested(Chain, line(E->getBeginLoc()))) : expr(Object, line(E->getBeginLoc()))};
         for (unsigned I = 0; I < Call->getNumArgs(); ++I)
           Args.push_back(callArg(Call->getDirectCallee(), I, Call->getArg(I), line(E->getBeginLoc())));
         return tag("Call", llvm::json::Array{key(Call->getDirectCallee()), name(Call->getDirectCallee()), std::move(Args), number(line(E->getBeginLoc()))});
