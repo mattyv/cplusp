@@ -1155,6 +1155,27 @@ fn policy_show_marks_a_loosened_rule() {
     assert!(row.contains("allow") && row.contains("loosened"), "{row}");
 }
 
+/// A view in a local does not hide the local that it views. When a team loosens array_span and raw_pointer, a return through a span
+/// local or a pointer local of a local is still refused, decision 0182.
+#[test]
+fn a_view_local_does_not_hide_a_local() {
+    if !clang_tidy_available() {
+        return;
+    }
+    let team = fixture("team-loosen-views.yaml");
+    let f = fixture("return-local-view.cpp");
+    let o = gated(&["--policy", team.to_str().unwrap(), f.to_str().unwrap(), "--", "-std=c++23", "-ffp-contract=off"]);
+    let text = stdout(&o);
+    assert_eq!(o.status.code(), Some(1), "stdout: {text} stderr: {}", stderr(&o));
+    let lines: BTreeSet<&str> = text
+        .lines()
+        .filter(|l| l.contains("Returning a reference or pointer to a local"))
+        .filter_map(|l| l.split("return-local-view.cpp:").nth(1))
+        .filter_map(|r| r.split(':').next())
+        .collect();
+    assert_eq!(lines, BTreeSet::from(["8", "14"]), "{text}");
+}
+
 /// The invariant behind every sample pair: `allowed.cpp` is clean, and `banned.cpp`
 /// is reported on exactly the lines marked `// BANNED`, each by its own rule. A line that
 /// a second row also refuses says so: `// BANNED also: other_rule`.

@@ -1,0 +1,9 @@
+version: 1
+extends: cplusp:default
+rules:
+  - id: array_span
+    decision: allow
+    loosened_because: A team that stores spans in locals.
+  - id: raw_pointer
+    decision: allow
+    loosened_because: A team that keeps pointer locals.

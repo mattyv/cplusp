@@ -186,3 +186,4 @@ Status is `decided`, `proposed` (the default until someone objects or the thin s
 | [0179](0179-a-move-of-a-struct.md) | A move of a struct | decided |
 | [0180](0180-a-function-template.md) | A function template | decided |
 | [0181](0181-a-temporary-bound-to-a-const-reference.md) | A temporary bound to a const reference | decided |
+| [0182](0182-a-reference-to-a-local-through-a-call.md) | A reference to a local through a call | decided |
