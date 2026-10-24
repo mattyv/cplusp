@@ -4347,6 +4347,8 @@ public:
   void writeEnum(const EnumDecl *ED) const {
     if (plainEnum(Context.getTypeDeclType(ED)))
       enumType(ED);
+    else if (valuedEnum(Context.getTypeDeclType(ED)))
+      valuedType(ED);
   }
   // The line of the tree for a named constant, or null.
   llvm::json::Value constantLine(const VarDecl *Var) const {
@@ -4540,7 +4542,8 @@ private:
   // a span of const elements, any extent, and a const std::array, decision 0132. A reference is looked through. The element is a scalar or a plain struct, decision 0076. A
   // `Field` is a field of a struct, decision 0076: a vector with no const, and no span.
   QualType seqElement(QualType T, bool Field = false) const {
-    if (T->isReferenceType())
+    const bool Reference = T->isReferenceType();
+    if (Reference)
       T = T->getPointeeType();
     const auto *Spec = dyn_cast_or_null<ClassTemplateSpecializationDecl>(T->getAsCXXRecordDecl());
     if (!Spec || !Spec->isInStdNamespace() || Spec->getTemplateArgs().size() == 0 || Spec->getTemplateArgs()[0].getKind() != TemplateArgument::Type)
@@ -4561,7 +4564,8 @@ private:
     }
     // A const std::array of a scalar or a plain struct is a sequence of fixed length, decision 0132. The plugin passes an array of bool on, and the core
     // refuses it, decision 0136.
-    if (!Field && Spec->getName() == "array" && T.isConstQualified() && !Elem.getCanonicalType().hasQualifiers())
+    // A std::array by value is a copy that only the function sees, so it is a read-only sequence too, decision 0175.
+    if (!Field && Spec->getName() == "array" && (T.isConstQualified() || !Reference) && !T.isVolatileQualified() && !Elem.getCanonicalType().hasQualifiers())
       return scalar(Elem) || plainStruct(Elem) ? Elem : QualType();
     return QualType();
   }
@@ -4956,6 +4960,62 @@ private:
     return tag("Enum", Key);
   }
 
+  // The enum class of the file that is its underlying integer, decision 0175, or null: a definition in a user file, scoped, with a fixed
+  // underlying type of the subset other than bool, a value written for an enumerator, and no negative value. A qualified type is none, as for `plainEnum`.
+  const EnumDecl *valuedEnum(QualType T) const {
+    QualType Canon = T.getCanonicalType();
+    Canon.removeLocalConst();
+    if (Canon.hasQualifiers())
+      return nullptr;
+    const auto *Type = dyn_cast<EnumType>(Canon.getTypePtr());
+    const EnumDecl *ED = Type ? Type->getDecl()->getDefinition() : nullptr;
+    if (!ED || !ED->isScoped() || !ED->isFixed() || SM.isInSystemHeader(ED->getLocation()) || ED->enumerators().empty())
+      return nullptr;
+    const char *Under = scalar(ED->getIntegerType()) ? scalar(ED->getIntegerType()) : smallScalar(ED->getIntegerType());
+    if (!Under || StringRef(Under) == "Bool")
+      return nullptr;
+    bool Written = false;
+    for (const EnumConstantDecl *E : ED->enumerators()) {
+      if (E->getInitVal().isNegative())
+        return nullptr;
+      Written |= E->getInitExpr() != nullptr;
+    }
+    return Written ? ED : nullptr;
+  }
+  // The valued enum as a type: its underlying integer. The line with its enumerators and their values is written once, for the contracts.
+  llvm::json::Value valuedType(const EnumDecl *ED) const {
+    const std::string Key = enumKey(ED);
+    if (!Structs.count(Key)) {
+      llvm::json::Array Values;
+      for (const EnumConstantDecl *E : ED->enumerators())
+        Values.push_back(llvm::json::Array{E->getNameAsString(), number(E->getInitVal().getZExtValue())});
+      Structs.emplace(Key, llvm::json::Object{{"valued", ED->getNameAsString()}, {"values", std::move(Values)}});
+    }
+    return scalar(ED->getIntegerType()) ? llvm::json::Value(scalar(ED->getIntegerType())) : llvm::json::Value(smallScalar(ED->getIntegerType()));
+  }
+  // `std::chrono::milliseconds`, decision 0175: `std::chrono::duration<int64_t, std::milli>`. Any other duration is none.
+  bool isMillis(QualType T) const {
+    QualType Canon = T.getCanonicalType();
+    Canon.removeLocalConst();
+    const auto *Spec = dyn_cast_or_null<ClassTemplateSpecializationDecl>(Canon.hasQualifiers() ? nullptr : Canon->getAsCXXRecordDecl());
+    if (!Spec || Spec->getQualifiedNameAsString() != "std::chrono::duration" || Spec->getTemplateArgs().size() != 2 ||
+        Spec->getTemplateArgs()[0].getKind() != TemplateArgument::Type || Spec->getTemplateArgs()[1].getKind() != TemplateArgument::Type)
+      return false;
+    const auto *Ratio = dyn_cast_or_null<ClassTemplateSpecializationDecl>(Spec->getTemplateArgs()[1].getAsType()->getAsCXXRecordDecl());
+    if (!Ratio || Ratio->getName() != "ratio" || Ratio->getTemplateArgs().size() != 2 || Ratio->getTemplateArgs()[0].getKind() != TemplateArgument::Integral ||
+        Ratio->getTemplateArgs()[1].getKind() != TemplateArgument::Integral)
+      return false;
+    const char *Rep = scalar(Spec->getTemplateArgs()[0].getAsType());
+    return Rep && StringRef(Rep) == "I64" && Ratio->getTemplateArgs()[0].getAsIntegral() == 1 && Ratio->getTemplateArgs()[1].getAsIntegral() == 1000;
+  }
+  // A `std::array`, by value or by reference, with no qualifier looked at.
+  static bool isStdArray(QualType T) {
+    if (T->isReferenceType())
+      T = T->getPointeeType();
+    const auto *Spec = dyn_cast_or_null<ClassTemplateSpecializationDecl>(T->getAsCXXRecordDecl());
+    return Spec && Spec->isInStdNamespace() && Spec->getName() == "array";
+  }
+
   // A parameter of type `T&` for a scalar or a struct of the file is `Mut(T)`, decision 0108, else null. A const reference is a value, and any other
   // reference stays `Other`.
   llvm::json::Value mutRef(QualType T) const {
@@ -4974,6 +5034,16 @@ private:
       return tag("Mut", tag("Struct", structKey(RD->getDefinition())));
     }
     return nullptr;
+  }
+  // The operators that a free function may overload as a function of the model, decision 0175.
+  static bool freeOperator(OverloadedOperatorKind Kind) {
+    switch (Kind) {
+    case OO_Plus: case OO_Minus: case OO_Star: case OO_Slash: case OO_Percent: case OO_Amp: case OO_Pipe:
+    case OO_EqualEqual: case OO_ExclaimEqual: case OO_Less: case OO_LessEqual: case OO_Greater: case OO_GreaterEqual:
+      return true;
+    default:
+      return false;
+    }
   }
   // The element of a pointer to const, decisions 0140 and 0141, or null: `const T*` for a scalar or a plain struct, with no other qualifier.
   QualType constPointee(QualType T) const {
@@ -5053,6 +5123,12 @@ private:
         interfaceEntry(RD);
         return tag("IfaceRef", structKey(RD->getDefinition()));
       }
+    // A parameter `const T&` of a scalar `T` is the scalar by value, decision 0175.
+    if (T->isLValueReferenceType() && T->getPointeeType().isConstQualified()) {
+      const QualType Pointee = T->getPointeeType().getUnqualifiedType();
+      if (scalar(Pointee) || smallScalar(Pointee))
+        return type(Pointee);
+    }
     return type(T);
   }
   // The type of a result. A `std::vector<T>` by value with no qualifier is a `Vec`, decision 0163: the function gives a copy. A span stays `Other`.
@@ -5076,7 +5152,7 @@ private:
                                                  Var->getType().isLocalConstQualified()) {
       QualType Plain = Var->getType();
       Plain.removeLocalConst();
-      if (scalar(Plain) || smallScalar(Plain) || plainEnum(Plain))
+      if (scalar(Plain) || smallScalar(Plain) || plainEnum(Plain) || valuedEnum(Plain) || isMillis(Plain))
         return type(Plain);
     }
     // The parameter of a lambda is the element, whether it is by value or by const reference, decision 0149.
@@ -5092,6 +5168,11 @@ private:
       return S;
     if (const EnumDecl *ED = plainEnum(T))
       return enumType(ED);
+    if (const EnumDecl *ED = valuedEnum(T))
+      return valuedType(ED);
+    // A duration in milliseconds is its count, decision 0175.
+    if (isMillis(T))
+      return "I64";
     // A `double` by value is a real that only compares, decision 0150. A field, a sequence, an optional and a reference of it stay out.
     if (!Field && isDouble(T))
       return "F64";
@@ -5718,6 +5799,9 @@ private:
     // A temporary that needs a cleanup, such as an optional made from `x + 1`, wraps the expression. The wrapper is not the construct.
     if (const auto *Cleanups = dyn_cast<ExprWithCleanups>(E))
       return expr(Cleanups->getSubExpr(), Near);
+    // A std::array that a call gives is held in a temporary, which is not the value, decision 0175.
+    if (const auto *Held = dyn_cast<MaterializeTemporaryExpr>(E); Held && isStdArray(Held->getType()) && isSeq(Held->getType()))
+      return expr(Held->getSubExpr(), Near);
     // A vector that a call gives is held in a temporary, which is not the value, decision 0163.
     if (const auto *Bound = dyn_cast<CXXBindTemporaryExpr>(E); Bound && !localVec(Bound->getType()).isNull())
       return expr(Bound->getSubExpr(), Near);
@@ -5819,6 +5903,10 @@ private:
           enumType(ED);
           return tag("Enumerator", llvm::json::Array{enumKey(ED), number(enumeratorPlace(ED, Enumerator))});
         }
+      // An enumerator of a valued enum is its value, a literal of the underlying integer, decision 0175.
+      if (const auto *Enumerator = dyn_cast<EnumConstantDecl>(D))
+        if (const auto *ED = dyn_cast<EnumDecl>(Enumerator->getDeclContext()); ED && valuedEnum(Context.getTypeDeclType(ED)) == ED->getDefinition())
+          return tag("Lit", llvm::json::Array{number(Enumerator->getInitVal().getZExtValue()), valuedType(ED)});
       // A named double constant is its value as a literal is, decision 0158.
       if (const std::optional<double> Real = realConstant(D)) {
         if (llvm::json::Value Form = realForm(*Real); !Form.getAsNull())
@@ -5889,6 +5977,11 @@ private:
       // Two values of an enum are compared for equality only, decision 0109.
       if (Op && StringRef(Op) != "Eq" && StringRef(Op) != "Ne" && plainEnum(Binary->getLHS()->getType()))
         return unknown(E, describe(E), Near);
+      // `a & b` and `a | b` of integers carry the type of their result, decision 0175. The core refuses a signed result.
+      // ponytail: two operands narrower than int promote to int, so `uint8 & uint8` is refused as signed. Upgrade: the operands'
+      // unsigned type when both are narrower than int.
+      if (!Op && (Binary->getOpcode() == BO_And || Binary->getOpcode() == BO_Or) && Binary->getType()->isIntegerType())
+        return tag("Bits", llvm::json::Array{Binary->getOpcode() == BO_And ? "BitAnd" : "BitOr", expr(Binary->getLHS(), Near), expr(Binary->getRHS(), Near), type(Binary->getType())});
       // A right shift carries the type of its result, decision 0106. A left shift has no rule.
       if (!Op && Binary->getOpcode() == BO_Shr)
         return tag("Shr", llvm::json::Array{expr(Binary->getLHS(), Near), expr(Binary->getRHS(), Near), type(Binary->getType())});
@@ -5912,6 +6005,49 @@ private:
       if (Unary->getOpcode() == UO_Minus)
         return tag("Neg", expr(Unary->getSubExpr(), Near));
       return unknown(E, describe(E), Near);
+    }
+    // `std::chrono::milliseconds{n}` is `n` as an int64, and a copy of one is the value, decision 0175.
+    {
+      const Expr *Built = E;
+      if (const auto *Cast = dyn_cast<CXXFunctionalCastExpr>(E); Cast && Cast->getCastKind() == CK_ConstructorConversion)
+        Built = Cast->getSubExpr()->IgnoreParens();
+      if (const auto *Construct = dyn_cast<CXXConstructExpr>(Built); Construct && Construct->getNumArgs() == 1 && isMillis(Construct->getType())) {
+        const Expr *Arg = Construct->getArg(0);
+        if (const auto *Temporary = dyn_cast<MaterializeTemporaryExpr>(Arg))
+          Arg = Temporary->getSubExpr();
+        if (isMillis(Arg->getType()))
+          return expr(Arg, Near);
+        const QualType From = Arg->getType().getUnqualifiedType();
+        const char *Count = scalar(From) ? scalar(From) : smallScalar(From);
+        if (Count && StringRef(Count) != "Bool")
+          return StringRef(Count) == "I64" ? expr(Arg, Near) : tag("Cast", llvm::json::Array{tag("Integral", llvm::json::Array{type(From), "I64"}), expr(Arg, Near)});
+      }
+    }
+    // `a.count()` of a duration in milliseconds is `a`, and the sum of two is the sum of the counts, decision 0175.
+    if (const auto *Count = dyn_cast<CXXMemberCallExpr>(E); Count && Count->getNumArgs() == 0 && Count->getMethodDecl() && Count->getMethodDecl()->getNameAsString() == "count")
+      if (const Expr *Object = Count->getImplicitObjectArgument(); Object && isMillis(Object->getType()))
+        return expr(Object->IgnoreParenImpCasts(), Near);
+    if (const auto *Sum = dyn_cast<CXXOperatorCallExpr>(E); Sum && Sum->getOperator() == OO_Plus && Sum->getNumArgs() == 2 && isMillis(Sum->getType()) &&
+                                                             isMillis(Sum->getArg(0)->getType()) && isMillis(Sum->getArg(1)->getType()))
+      return tag("Bin", llvm::json::Array{"Add", expr(Sum->getArg(0)->IgnoreParenImpCasts(), Near), expr(Sum->getArg(1)->IgnoreParenImpCasts(), Near)});
+    // A use of a free operator function of the file is a call of it, decision 0175. A member operator and a library operator keep their refusal.
+    if (const auto *Use = dyn_cast<CXXOperatorCallExpr>(E); Use && Use->getDirectCallee() && !isa<CXXMethodDecl>(Use->getDirectCallee()) &&
+                                                             freeOperator(Use->getOperator()) && !SM.isInSystemHeader(Use->getDirectCallee()->getLocation())) {
+      llvm::json::Array Args;
+      for (const Expr *Arg : Use->arguments())
+        Args.push_back(expr(Arg, line(E->getBeginLoc())));
+      return tag("Call", llvm::json::Array{key(Use->getDirectCallee()), name(Use->getDirectCallee()), std::move(Args), number(line(E->getBeginLoc()))});
+    }
+    // `{a, b, c}` of a std::array is the list of its values, decision 0175. The braces of the member array inside are looked through.
+    if (const auto *List = dyn_cast<InitListExpr>(E); List && isStdArray(List->getType()) && isSeq(List->getType())) {
+      const InitListExpr *Values = List;
+      if (List->getNumInits() == 1)
+        if (const auto *Inner = dyn_cast<InitListExpr>(List->getInit(0)); Inner && Inner->getType()->isArrayType())
+          Values = Inner;
+      llvm::json::Array Items;
+      for (const Expr *Init : Values->inits())
+        Items.push_back(expr(Init, Near));
+      return tag("List", std::move(Items));
     }
     // A call of a value constructor, `S s(a)`, `S s{a}`, `S(a)` and `return S(a)`, is a call of it, decision 0094. The functional cast of
     // one argument wraps the construction, and the call stands for both.

@@ -38,7 +38,9 @@ bool both_may_write(Flag a, Flag b) {
 //@ ensures result == true
 bool reader_and_writer_cannot_exec() {
   Flag f = Flag::Read | Flag::Write;
-  return has(f, Flag::Write) && !has(f, Flag::Exec);
+  bool w = has(f, Flag::Write);
+  bool x = has(f, Flag::Exec);
+  return w && !x;
 }
 
 // An enum class as an index, and a std::array by value and as a result with a brace return.

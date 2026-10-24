@@ -221,7 +221,7 @@ pub enum Ty {
 }
 
 /// A binary operator. In code it is the machine operator of its operand type. In a contract it is the operator on the exact
-/// integers.
+/// integers. `BitAnd` and `BitOr` are `&` and `|` on unsigned integers, the functions of the prelude, decision 0175.
 #[derive(Structural, PartialEq, Eq, Clone, Copy, Debug)]
 pub enum BinOp {
     Add,
@@ -238,6 +238,8 @@ pub enum BinOp {
     And,
     Or,
     Implies,
+    BitAnd,
+    BitOr,
 }
 
 /// A cast that the compiler made or the author wrote. `Read` is the read of a variable, an lvalue-to-rvalue cast, and `NoOp` changes
@@ -271,7 +273,9 @@ pub enum CastKind {
 /// no such decimal, decision 0158. `Finite` is `std::isfinite(e)` in a contract. `Abs` is `|e|`, and `Eps`, `Eta` and
 /// `DblMax` are the words `eps`, `eta` and `DBL_MAX` of a contract, decision 0154. `Move` is `std::move(x)` of a local or a
 /// parameter `x` of type `std::unique_ptr`, where C++ makes a new `std::unique_ptr` from it, by the name and the type of `x`,
-/// decision 0171. `Unknown` is a construct with no rule, by the id of its kind and its line.
+/// decision 0171. `Bits` is `a & b` or `a | b` in code, with the type of its result, `StaticCast` is `static_cast<T>(e)` in a
+/// contract, and `List` is a braced list `{a, b, c}` in code, decision 0175. `Unknown` is a construct with no rule, by the id of
+/// its kind and its line.
 #[derive(PartialEq, Eq, Debug)]
 pub enum Expr {
     Int(u64),
@@ -321,6 +325,9 @@ pub enum Expr {
     DblMax,
     EmptyVec,
     Move(u32, Ty),
+    Bits(BinOp, Box<Expr>, Box<Expr>, Ty),
+    StaticCast(Ty, Box<Expr>),
+    List(Box<Args>),
     Unknown(u32, u32),
 }
 
@@ -456,7 +463,8 @@ pub enum DTy {
 /// decision 0154. `FromInt` is `fint(e as int)` of it, the conversion of an integer, and `IntAbs` is `trunc_size(e)` of the prelude,
 /// the absolute value of an integer, decision 0159. `Upcast` is `f_D'B(e)`, the value of a final class as its interface, decision
 /// 0166. `Lemma` is `L(a); e`, the value `e` after a call of the lemma `L`, decision 0167. `Let` is `var x: T := e; b`, a local of
-/// a pure body, decision 0172. A Dafny expression calls no method.
+/// a pure body, decision 0172. `BitOp` is `BitAnd(a, b)` or `BitOr(a, b)` of the prelude on two naturals, and `SeqLit` is the
+/// sequence `[a, b, c]`, decision 0175. A Dafny expression calls no method.
 #[derive(PartialEq, Eq, Debug)]
 pub enum DExpr {
     Lit(u64),
@@ -505,6 +513,8 @@ pub enum DExpr {
     Upcast(u32, u32, Box<DExpr>),
     Lemma(u32, Box<DArgs>, Box<DExpr>),
     Let(u32, DTy, Box<DExpr>, Box<DExpr>),
+    BitOp(BinOp, Box<DExpr>, Box<DExpr>),
+    SeqLit(Box<DArgs>),
     EmptySeq,
     Abs(Box<DExpr>),
     Eps,
@@ -645,7 +655,9 @@ pub type Models = List<Model>;
 /// with no rule, by the line, decision 0171. `ReadsOnly` is a call that changes a global that the caller lists on its reads line only,
 /// by the id of the name of the callee, the id of the global and the line of the call. `GlobalClash` is a global that the function
 /// lists with the name of a parameter or a local, by its id and the line. `MemberGlobal` is a member function that lists a global,
-/// and `GlobalType` is a listed global of a type with no rule, each by the line that lists it, decision 0173.
+/// and `GlobalType` is a listed global of a type with no rule, each by the line that lists it, decision 0173. `SignedBits` is a
+/// bit operator on a signed integer, and `ContractCast` is a cast in a contract that can change the value, each by the line.
+/// `BraceLen` is a braced list of `m` values for a std::array of `n`, by `m`, `n` and the line, decision 0175.
 #[derive(Structural, PartialEq, Eq, Clone, Copy, Debug)]
 pub enum Refusal {
     Construct(u32, u32),
@@ -690,6 +702,9 @@ pub enum Refusal {
     GlobalClash(u32, u32),
     MemberGlobal(u32),
     GlobalType(u32),
+    SignedBits(u32),
+    ContractCast(u32),
+    BraceLen(u32, u32, u32),
 }
 
 // ------------------------------------------------------------------ the rules
@@ -704,6 +719,9 @@ pub const VALUE_NAME: u32 = 1;
 /// The id of the word `reads`. The shell gives this id to that text, so a reads line that names no global keeps the sentence of a
 /// word with no rule, decision 0173.
 pub const READS_NAME: u32 = 2;
+
+/// The id of the name `count`. The shell gives this id to that text, so `a.count()` of a duration is its count, decision 0175.
+pub const COUNT_NAME: u32 = 3;
 
 /// The Dafny type of a scalar, decision 0108.
 pub open spec fn spec_scalar_dty(s: Scalar) -> DTy {
@@ -1046,6 +1064,31 @@ pub open spec fn spec_shift(da: DExpr, dn: DExpr, t: Ty, line: u32) -> Result<DE
     }
 }
 
+/// An unsigned integer type, decision 0175.
+pub open spec fn is_unsigned(t: Ty) -> bool {
+    t == Ty::U8 || t == Ty::U16 || t == Ty::U32 || t == Ty::U64
+}
+
+/// A bit operator.
+pub open spec fn is_bit_op(op: BinOp) -> bool {
+    op == BinOp::BitAnd || op == BinOp::BitOr
+}
+
+/// `a & b` or `a | b` of code on the type `t`, decision 0175: the function of the prelude on both operands as exact integers, back
+/// in `t`. Dafny proves that the value fits `t`. A signed type has no rule.
+pub open spec fn spec_bits(op: BinOp, da: DExpr, db: DExpr, t: Ty, line: u32) -> Result<DExpr, Refusal> {
+    match spec_ty(t, line) {
+        Err(r) => Err(r),
+        Ok(dt) => if !is_bit_op(op) {
+            Err(Refusal::Syntax(line))
+        } else if !is_unsigned(t) {
+            Err(Refusal::SignedBits(line))
+        } else {
+            Ok(DExpr::Conv(dt, Box::new(DExpr::BitOp(op, Box::new(DExpr::AsInt(Box::new(da))), Box::new(DExpr::AsInt(Box::new(db)))))))
+        },
+    }
+}
+
 /// An integral cast, decision 0058. Both types must be in the subset, and neither may be `bool`. The cast is `(e as T)`, so Dafny
 /// proves that the value fits `T`, and the model never wraps.
 /// A callee of the file that gives a double.
@@ -1203,6 +1246,8 @@ pub open spec fn spec_callee_ty(all: Fns, key: u32, line: u32, sd: Structs) -> R
     match spec_find(all, key) {
         Some(f) => match f.ret {
             Ty::This(_) => spec_ret_ty(f.ret, line, sd),
+            // The std::array that a call gives is a temporary of the statement, decision 0175.
+            Ty::Seq(_, Extent::Fixed(_)) => spec_ret_ty(f.ret, line, sd),
             _ => spec_value_ty(f.ret, line, sd),
         },
         None => Err(Refusal::Syntax(line)),
@@ -1299,7 +1344,7 @@ pub open spec fn spec_lift(e: Expr, all: Fns, line: u32, sd: Structs, n: u32, op
                     },
                 }
             }
-        } else if op == BinOp::Div || op == BinOp::Rem || spec_ptr_var(*a) || spec_ptr_var(*b) {
+        } else if op == BinOp::Div || op == BinOp::Rem || is_bit_op(op) || spec_ptr_var(*a) || spec_ptr_var(*b) {
             Err(Refusal::Syntax(line))
         } else {
             match spec_lift(*a, all, line, sd, n, open) {
@@ -1341,6 +1386,16 @@ pub open spec fn spec_lift(e: Expr, all: Fns, line: u32, sd: Structs, n: u32, op
             Ok((ca, da, n1)) => match spec_lift(*b, all, line, sd, n1, open) {
                 Err(r) => Err(r),
                 Ok((cb, db, n2)) => match spec_shift(da, db, t, line) {
+                    Err(r) => Err(r),
+                    Ok(d) => Ok((spec_append(ca, cb), d, n2)),
+                },
+            },
+        },
+        Expr::Bits(op, a, b, t) => match spec_lift(*a, all, line, sd, n, open) {
+            Err(r) => Err(r),
+            Ok((ca, da, n1)) => match spec_lift(*b, all, line, sd, n1, open) {
+                Err(r) => Err(r),
+                Ok((cb, db, n2)) => match spec_bits(op, da, db, t, line) {
                     Err(r) => Err(r),
                     Ok(d) => Ok((spec_append(ca, cb), d, n2)),
                 },
@@ -1556,6 +1611,9 @@ pub fn copy_expr(e: &Expr) -> (r: Expr)
         Expr::EmptyVec => Expr::EmptyVec,
         Expr::Unknown(f0, f1) => Expr::Unknown(*f0, *f1),
         Expr::Move(f0, f1) => Expr::Move(*f0, *f1),
+        Expr::Bits(f0, f1, f2, f3) => Expr::Bits(*f0, Box::new(copy_expr(f1)), Box::new(copy_expr(f2)), *f3),
+        Expr::StaticCast(f0, f1) => Expr::StaticCast(*f0, Box::new(copy_expr(f1))),
+        Expr::List(f0) => Expr::List(Box::new(copy_args(f0))),
     }
 }
 
@@ -1657,6 +1715,9 @@ pub open spec fn spec_var_names(e: Expr) -> Names
         Expr::Old(f0) => spec_var_names(*f0),
         Expr::Cond(f0, f1, f2) => spec_append(spec_var_names(*f0), spec_append(spec_var_names(*f1), spec_var_names(*f2))),
         Expr::Shr(f0, f1, _) => spec_append(spec_var_names(*f0), spec_var_names(*f1)),
+        Expr::Bits(_, f1, f2, _) => spec_append(spec_var_names(*f1), spec_var_names(*f2)),
+        Expr::StaticCast(_, f1) => spec_var_names(*f1),
+        Expr::List(f0) => spec_var_names_args(*f0),
         Expr::Enumerator(_, _) => List::Nil,
         Expr::CountIf(f0, _, _, f3) => spec_append(spec_var_names(*f0), spec_var_names(*f3)),
         Expr::RealLit(_, _) => List::Nil,
@@ -1723,6 +1784,9 @@ pub fn var_names(e: &Expr) -> (r: Names)
         Expr::Old(f0) => var_names(f0),
         Expr::Cond(f0, f1, f2) => append(var_names(f0), append(var_names(f1), var_names(f2))),
         Expr::Shr(f0, f1, _) => append(var_names(f0), var_names(f1)),
+        Expr::Bits(_, f1, f2, _) => append(var_names(f1), var_names(f2)),
+        Expr::StaticCast(_, f1) => var_names(f1),
+        Expr::List(f0) => var_names_args(f0),
         Expr::Enumerator(_, _) => List::Nil,
         Expr::CountIf(f0, _, _, f3) => append(var_names(f0), var_names(f3)),
         Expr::RealLit(_, _) => List::Nil,
@@ -2058,6 +2122,38 @@ pub open spec fn spec_contract(e: Expr, decl: Names, ps: Params, ret: Option<Ty>
         Expr::Bin(op, a, b) if spec_ptr_operand(*a, decl, ps, ret, bound, line, sd) || spec_ptr_operand(*b, decl, ps, ret, bound, line, sd) => Err(
             Refusal::Syntax(line),
         ),
+        // `a & b` and `a | b` are the functions of the prelude on two naturals, decision 0175. A signed operand has no rule, and
+        // neither has an operand that is true or false.
+        Expr::Bin(op, a, b) if is_bit_op(op) => if spec_signed_operand(*a, decl, ps, ret, bound, line, sd) || spec_signed_operand(*b, decl, ps, ret, bound, line, sd) {
+            Err(Refusal::SignedBits(line))
+        } else if spec_boolish(*a) || spec_boolish(*b) {
+            Err(Refusal::Syntax(line))
+        } else {
+            match spec_contract(*a, decl, ps, ret, bound, line, sd) {
+                Ok(da) => match spec_contract(*b, decl, ps, ret, bound, line, sd) {
+                    Ok(db) => Ok(DExpr::BitOp(op, Box::new(da), Box::new(db))),
+                    Err(r) => Err(r),
+                },
+                Err(r) => Err(r),
+            }
+        },
+        // `static_cast<T>(e)` is the value of `e` when each value of its type fits `T`, decision 0175.
+        Expr::StaticCast(t, a) => match *a {
+            Expr::Int(v) => if is_integer(t) && v <= spec_max(t) {
+                Ok(DExpr::Lit(v))
+            } else {
+                Err(Refusal::ContractCast(line))
+            },
+            _ => match spec_path(*a, decl, ps, ret, bound, line, sd) {
+                Ok((d, at)) => if spec_fits(at, t) {
+                    spec_leaf(d, at, line)
+                } else {
+                    Err(Refusal::ContractCast(line))
+                },
+                Err(Refusal::Syntax(_)) => Err(Refusal::ContractCast(line)),
+                Err(r) => Err(r),
+            },
+        },
         Expr::Bin(op, a, b) => if spec_ordered(op) && (spec_enum_operand(*a, decl, ps, ret, bound, line, sd) || spec_enum_operand(
             *b,
             decl,
@@ -2215,7 +2311,12 @@ pub open spec fn spec_contract(e: Expr, decl: Names, ps: Params, ret: Option<Ty>
                     },
                     _ => Err(Refusal::NotPure(f, line)),
                 },
-                None => Err(Refusal::Syntax(line)),
+                // `a.count()` of a duration is its count, an int64, decision 0175.
+                None => if f == COUNT_NAME && *args is Nil && t == Ty::I64 {
+                    spec_leaf(d, t, line)
+                } else {
+                    Err(Refusal::Syntax(line))
+                },
             },
             Err(r) => Err(r),
         },
@@ -2323,6 +2424,51 @@ pub open spec fn spec_ptr_operand(e: Expr, decl: Names, ps: Params, ret: Option<
             Ok((_, Ty::Own(_))) => true,
             _ => false,
         },
+    }
+}
+
+/// An operand of a bit operator in a contract that is a signed integer, decision 0175.
+pub open spec fn spec_signed_operand(e: Expr, decl: Names, ps: Params, ret: Option<Ty>, bound: Names, line: u32, sd: Structs) -> bool
+    decreases e, 1nat,
+{
+    match spec_path(e, decl, ps, ret, bound, line, sd) {
+        Ok((_, t)) => is_integer(t) && !is_unsigned(t),
+        Err(_) => false,
+    }
+}
+
+/// An operand that is true or false: a comparison, a logical operator, `!` or a literal of bool. C++ binds `==` tighter than `&`,
+/// so `a & b == c` has such an operand.
+pub open spec fn spec_boolish(e: Expr) -> bool {
+    match e {
+        Expr::Bin(op, _, _) => !spec_arith(op) && !is_bit_op(op),
+        Expr::Chain(_, _, _, _, _) => true,
+        Expr::Not(_) => true,
+        Expr::Bool(_) => true,
+        _ => false,
+    }
+}
+
+/// The largest value of an integer type.
+pub open spec fn spec_max(t: Ty) -> u64 {
+    match t {
+        Ty::U8 => 0xff,
+        Ty::U16 => 0xffff,
+        Ty::U32 => 0xffff_ffff,
+        Ty::I8 => 0x7f,
+        Ty::I16 => 0x7fff,
+        Ty::I32 => 0x7fff_ffff,
+        Ty::I64 => 0x7fff_ffff_ffff_ffff,
+        _ => 0xffff_ffff_ffff_ffff,
+    }
+}
+
+/// Each value of the integer type `from` is a value of the integer type `to`, decision 0175.
+pub open spec fn spec_fits(from: Ty, to: Ty) -> bool {
+    is_integer(from) && is_integer(to) && if is_unsigned(from) {
+        if is_unsigned(to) { spec_width(from) <= spec_width(to) } else { spec_width(from) < spec_width(to) }
+    } else {
+        !is_unsigned(to) && spec_width(from) <= spec_width(to)
     }
 }
 
@@ -2701,6 +2847,8 @@ pub open spec fn spec_ret_ty(t: Ty, line: u32, sd: Structs) -> Result<DTy, Refus
             Ok(DTy::Struct(k))
         },
         Ty::Void => Ok(DTy::Void),
+        // A std::array as a result is a sequence of its fixed extent, decision 0175.
+        Ty::Seq(_, Extent::Fixed(_)) => spec_ty(t, line),
         _ => spec_value_ty(t, line, sd),
     }
 }
@@ -3225,6 +3373,12 @@ pub open spec fn spec_return(e: Expr, l: u32, all: Fns, ps: Params, sd: Structs)
                 Err(r) => Err(r),
             }
         },
+        // `return {a, b, c};` of a std::array is the sequence of the values, decision 0175. The function checks the count first,
+        // `spec_braces`.
+        Expr::List(args) => match spec_lift_args(*args, all, l, sd, 0, true) {
+            Ok((c, da, _)) => Ok(spec_pre(c, DStmt::Return(DExpr::SeqLit(Box::new(da))))),
+            Err(r) => Err(r),
+        },
         _ => match spec_lift(e, all, l, sd, 0, true) {
             Ok((c, d, _)) => Ok(spec_pre(c, DStmt::Return(d))),
             Err(r) => Err(r),
@@ -3251,10 +3405,193 @@ pub fn translate_return(e: &Expr, l: u32, all: &Fns, ps: &Params, sd: &Structs) 
                 Err(r) => Err(r),
             }
         },
+        Expr::List(args) => match lift_args(args, all, l, sd, 0, true) {
+            Ok((c, da, _)) => Ok(pre(c, DStmt::Return(DExpr::SeqLit(Box::new(da))))),
+            Err(r) => Err(r),
+        },
         _ => match lift(e, all, l, sd, 0, true) {
             Ok((c, d, _)) => Ok(pre(c, DStmt::Return(d))),
             Err(r) => Err(r),
         },
+    }
+}
+
+/// The count of the values of a braced list, which stops at the largest u32.
+pub open spec fn spec_count_args(args: Args) -> u32
+    decreases args,
+{
+    match args {
+        List::Nil => 0,
+        List::Cons(_, rest) => {
+            let c = spec_count_args(*rest);
+            if c == u32::MAX { c } else { (c + 1) as u32 }
+        },
+    }
+}
+
+pub fn count_args(args: &Args) -> (r: u32)
+    ensures
+        r == spec_count_args(*args),
+    decreases args,
+{
+    match args {
+        List::Nil => 0,
+        List::Cons(_, rest) => {
+            let c = count_args(rest);
+            if c == u32::MAX { c } else { c + 1 }
+        },
+    }
+}
+
+/// The fixed extent of a std::array result, decision 0175.
+pub open spec fn spec_fixed(t: Ty) -> Option<u64> {
+    match t {
+        Ty::Seq(_, Extent::Fixed(k)) => Some(k),
+        _ => None,
+    }
+}
+
+pub fn fixed(t: Ty) -> (r: Option<u64>)
+    ensures
+        r == spec_fixed(t),
+{
+    match t {
+        Ty::Seq(_, Extent::Fixed(k)) => Some(k),
+        _ => None,
+    }
+}
+
+/// The extent as a u32 for a refusal, which stops at the largest u32.
+pub open spec fn spec_extent32(k: u64) -> u32 {
+    if k > u32::MAX as u64 { u32::MAX } else { k as u32 }
+}
+
+pub fn extent32(k: u64) -> (r: u32)
+    ensures
+        r == spec_extent32(k),
+{
+    if k > u32::MAX as u64 { u32::MAX } else { k as u32 }
+}
+
+/// The first `return {...};` of a body whose count of values is not the extent `n` of the result, decision 0175. A braced list
+/// is a value only for a std::array result.
+pub open spec fn spec_brace_stmt(s: Stmt, n: Option<u64>) -> Option<Refusal>
+    decreases s,
+{
+    match s {
+        Stmt::Return(Expr::List(args), l) => match n {
+            Some(k) => if spec_count_args(*args) as u64 == k {
+                None
+            } else {
+                Some(Refusal::BraceLen(spec_count_args(*args), spec_extent32(k), l))
+            },
+            None => Some(Refusal::Syntax(l)),
+        },
+        Stmt::If(_, t, f, _) => match spec_braces(*t, n) {
+            Some(r) => Some(r),
+            None => spec_braces(*f, n),
+        },
+        Stmt::While(_, _, body, _) => spec_braces(*body, n),
+        Stmt::For(_, _, _, _, body, _) => spec_braces(*body, n),
+        Stmt::RangeFor(_, _, _, _, _, body, _) => spec_braces(*body, n),
+        Stmt::Switch(_, _, cs, _) => spec_brace_cases(*cs, n),
+        _ => None,
+    }
+}
+
+pub open spec fn spec_braces(ss: Stmts, n: Option<u64>) -> Option<Refusal>
+    decreases ss,
+{
+    match ss {
+        List::Nil => None,
+        List::Cons(s, rest) => match spec_brace_stmt(*s, n) {
+            Some(r) => Some(r),
+            None => spec_braces(*rest, n),
+        },
+    }
+}
+
+pub open spec fn spec_brace_cases(cs: Cases, n: Option<u64>) -> Option<Refusal>
+    decreases cs,
+{
+    match cs {
+        List::Nil => None,
+        List::Cons((_, body), rest) => match spec_braces(*body, n) {
+            Some(r) => Some(r),
+            None => spec_brace_cases(*rest, n),
+        },
+    }
+}
+
+pub fn brace_stmt(s: &Stmt, n: Option<u64>) -> (r: Option<Refusal>)
+    ensures
+        r == spec_brace_stmt(*s, n),
+    decreases s,
+{
+    match s {
+        Stmt::Return(Expr::List(args), l) => match n {
+            Some(k) => if count_args(args) as u64 == k {
+                None
+            } else {
+                Some(Refusal::BraceLen(count_args(args), extent32(k), *l))
+            },
+            None => Some(Refusal::Syntax(*l)),
+        },
+        Stmt::If(_, t, f, _) => match braces(t, n) {
+            Some(r) => Some(r),
+            None => braces(f, n),
+        },
+        Stmt::While(_, _, body, _) => braces(body, n),
+        Stmt::For(_, _, _, _, body, _) => braces(body, n),
+        Stmt::RangeFor(_, _, _, _, _, body, _) => braces(body, n),
+        Stmt::Switch(_, _, cs, _) => brace_cases(cs, n),
+        _ => None,
+    }
+}
+
+pub fn braces(ss: &Stmts, n: Option<u64>) -> (r: Option<Refusal>)
+    ensures
+        r == spec_braces(*ss, n),
+    decreases ss,
+{
+    match ss {
+        List::Nil => None,
+        List::Cons(s, rest) => match brace_stmt(s, n) {
+            Some(r) => Some(r),
+            None => braces(rest, n),
+        },
+    }
+}
+
+pub fn brace_cases(cs: &Cases, n: Option<u64>) -> (r: Option<Refusal>)
+    ensures
+        r == spec_brace_cases(*cs, n),
+    decreases cs,
+{
+    match cs {
+        List::Nil => None,
+        List::Cons((_, body), rest) => match braces(body, n) {
+            Some(r) => Some(r),
+            None => brace_cases(rest, n),
+        },
+    }
+}
+
+/// The ensures lines `ens`, after one for a std::array result: its length is the extent, decision 0175.
+pub open spec fn spec_ret_len(t: Ty, line: u32, ens: DConds) -> DConds {
+    match t {
+        Ty::Seq(_, Extent::Fixed(k)) => List::Cons((DExpr::Bin(BinOp::Eq, Box::new(DExpr::Len(Box::new(DExpr::Result))), Box::new(DExpr::Lit(k))), line), Box::new(ens)),
+        _ => ens,
+    }
+}
+
+pub fn ret_len(t: Ty, line: u32, ens: DConds) -> (r: DConds)
+    ensures
+        r == spec_ret_len(t, line, ens),
+{
+    match t {
+        Ty::Seq(_, Extent::Fixed(k)) => List::Cons((DExpr::Bin(BinOp::Eq, Box::new(DExpr::Len(Box::new(DExpr::Result))), Box::new(DExpr::Lit(k))), line), Box::new(ens)),
+        _ => ens,
     }
 }
 
@@ -4636,6 +4973,8 @@ pub open spec fn spec_function(f: Function, all: Fns, sd: Structs) -> Model {
             Err(r) => Model::Refused(r),
             Ok(ret) => match spec_checks(f) {
                 Some(r) => Model::Refused(r),
+                None => match spec_braces(f.body, spec_fixed(f.ret)) {
+                Some(r) => Model::Bare(f.name, ps, ret, r),
                 None => match spec_inside_of(f, all, sd) {
                     Err(r) => Model::Bare(f.name, ps, ret, r),
                     Ok((req, ens, dec, body)) => Model::Full(
@@ -4644,7 +4983,7 @@ pub open spec fn spec_function(f: Function, all: Fns, sd: Structs) -> Model {
                             params: ps,
                             ret,
                             requires: spec_bounds(f.params, f.line, req),
-                            ensures: spec_linked(f, ens, spec_pure_body(f.params, body, all, spec_static_key(sd, f.name))),
+                            ensures: spec_ret_len(f.ret, f.line, spec_linked(f, ens, spec_pure_body(f.params, body, all, spec_static_key(sd, f.name)))),
                             decreases: dec,
                             body,
                             function: spec_pure_body(f.params, body, all, spec_static_key(sd, f.name)),
@@ -4653,6 +4992,7 @@ pub open spec fn spec_function(f: Function, all: Fns, sd: Structs) -> Model {
                             trusted: f.trusted,
                         },
                     ),
+                },
                 },
             },
         },
@@ -4960,6 +5300,9 @@ pub open spec fn unknown_expr(e: Expr) -> bool
         Expr::Slice(a, i, j) => unknown_expr(*a) || unknown_expr(*i) || unknown_expr(*j),
         Expr::Divide(_, a, b, _) => unknown_expr(*a) || unknown_expr(*b),
         Expr::Shr(a, b, _) => unknown_expr(*a) || unknown_expr(*b),
+        Expr::Bits(_, a, b, _) => unknown_expr(*a) || unknown_expr(*b),
+        Expr::StaticCast(_, a) => unknown_expr(*a),
+        Expr::List(args) => unknown_args(*args),
         Expr::Old(a) => unknown_expr(*a),
         Expr::Cond(c, a, b) => unknown_expr(*c) || unknown_expr(*a) || unknown_expr(*b),
         _ => false,
@@ -5117,6 +5460,20 @@ pub proof fn lemma_unknown_value_is_refused(e: Expr, all: Fns, line: u32, sd: St
     }
 }
 
+/// A return value with a node that has no rule is refused, a braced list too, decision 0175.
+pub proof fn lemma_unknown_return_is_refused(e: Expr, l: u32, all: Fns, ps: Params, sd: Structs)
+    requires
+        unknown_expr(e),
+    ensures
+        spec_return(e, l, all, ps, sd).is_err(),
+{
+    if e is List {
+        lemma_unknown_lift_args_is_refused(*e->List_0, all, l, sd, 0, true);
+    } else {
+        lemma_unknown_value_is_refused(e, all, l, sd);
+    }
+}
+
 #[verifier::rlimit(40)]
 pub proof fn lemma_unknown_stmt_is_refused(s: Stmt, all: Fns, env: Params, ps: Params, sd: Structs)
     requires
@@ -5128,7 +5485,7 @@ pub proof fn lemma_unknown_stmt_is_refused(s: Stmt, all: Fns, env: Params, ps: P
     match s {
         Stmt::Return(e, l) => {
             lemma_unmove_unknown(e);
-            lemma_unknown_value_is_refused(spec_unmove(e).0, all, l, sd);
+            lemma_unknown_return_is_refused(spec_unmove(e).0, l, all, ps, sd);
         },
         Stmt::If(c, t, f, l) => {
             if unknown_expr(c) {
@@ -5746,6 +6103,12 @@ pub proof fn lemma_lift_resolves(e: Expr, all: Fns, line: u32, sd: Structs, n: u
             lemma_lift_resolves(*b, all, line, sd, n1, open);
             lemma_append_resolves(spec_lift(*a, all, line, sd, n, open).unwrap().0, spec_lift(*b, all, line, sd, n1, open).unwrap().0, all, sd);
         },
+        Expr::Bits(_, a, b, _) => {
+            lemma_lift_resolves(*a, all, line, sd, n, open);
+            let n1 = spec_lift(*a, all, line, sd, n, open).unwrap().2;
+            lemma_lift_resolves(*b, all, line, sd, n1, open);
+            lemma_append_resolves(spec_lift(*a, all, line, sd, n, open).unwrap().0, spec_lift(*b, all, line, sd, n1, open).unwrap().0, all, sd);
+        },
         Expr::Index(a, b) => {
             lemma_lift_resolves(*a, all, line, sd, n, open);
             let n1 = spec_lift(*a, all, line, sd, n, open).unwrap().2;
@@ -5828,6 +6191,13 @@ pub proof fn lemma_unknown_lift_is_refused(e: Expr, all: Fns, line: u32, sd: Str
             }
         },
         Expr::Shr(a, b, _) => {
+            if unknown_expr(*a) {
+                lemma_unknown_lift_is_refused(*a, all, line, sd, n, open);
+            } else if spec_lift(*a, all, line, sd, n, open).is_ok() {
+                lemma_unknown_lift_is_refused(*b, all, line, sd, spec_lift(*a, all, line, sd, n, open).unwrap().2, open);
+            }
+        },
+        Expr::Bits(_, a, b, _) => {
             if unknown_expr(*a) {
                 lemma_unknown_lift_is_refused(*a, all, line, sd, n, open);
             } else if spec_lift(*a, all, line, sd, n, open).is_ok() {
@@ -5930,6 +6300,10 @@ pub proof fn lemma_closed_runs_no_call(e: Expr, all: Fns, line: u32, sd: Structs
             lemma_closed_runs_no_call(*a, all, line, sd, n);
             lemma_closed_runs_no_call(*b, all, line, sd, spec_lift(*a, all, line, sd, n, false).unwrap().2);
         },
+        Expr::Bits(_, a, b, _) => {
+            lemma_closed_runs_no_call(*a, all, line, sd, n);
+            lemma_closed_runs_no_call(*b, all, line, sd, spec_lift(*a, all, line, sd, n, false).unwrap().2);
+        },
         Expr::Index(a, b) => {
             lemma_closed_runs_no_call(*a, all, line, sd, n);
             lemma_closed_runs_no_call(*b, all, line, sd, spec_lift(*a, all, line, sd, n, false).unwrap().2);
@@ -6021,7 +6395,15 @@ pub proof fn lemma_resolves_return(s: Stmt, all: Fns, env: Params, ps: Params, s
         calls_resolve_stmt(spec_stmt(s, all, env, ps, sd).unwrap(), all, sd),
 {
     reveal_with_fuel(calls_resolve_stmt, 2);
-    lemma_value_resolves(spec_unmove(s->Return_0).0, all, s->Return_1, sd);
+    let e = spec_unmove(s->Return_0).0;
+    let l = s->Return_1;
+    if e is List {
+        lemma_lift_args_resolves(*e->List_0, all, l, sd, 0, true);
+        let (c, da, _) = spec_lift_args(*e->List_0, all, l, sd, 0, true).unwrap();
+        lemma_pre_resolves(c, DStmt::Return(DExpr::SeqLit(Box::new(da))), all, sd);
+    } else {
+        lemma_value_resolves(e, all, l, sd);
+    }
 }
 
 pub proof fn lemma_resolves_assign(s: Stmt, all: Fns, env: Params, ps: Params, sd: Structs)
@@ -6548,6 +6930,7 @@ pub fn callee_ty(all: &Fns, key: u32, line: u32, sd: &Structs) -> (r: Result<DTy
     match find(all, key) {
         Some(f) => match f.ret {
             Ty::This(_) => ret_ty(f.ret, line, sd),
+            Ty::Seq(_, Extent::Fixed(_)) => ret_ty(f.ret, line, sd),
             _ => translate_value_ty(f.ret, line, sd),
         },
         None => Err(Refusal::Syntax(line)),
@@ -6617,7 +7000,7 @@ pub fn lift(e: &Expr, all: &Fns, line: u32, sd: &Structs, n: u32, open: bool) ->
                     },
                 }
             }
-        } else if *op == BinOp::Div || *op == BinOp::Rem || a.is_ptr_var() || b.is_ptr_var() {
+        } else if *op == BinOp::Div || *op == BinOp::Rem || bit_op(*op) || a.is_ptr_var() || b.is_ptr_var() {
             Err(Refusal::Syntax(line))
         } else {
             match lift(a, all, line, sd, n, open) {
@@ -6659,6 +7042,16 @@ pub fn lift(e: &Expr, all: &Fns, line: u32, sd: &Structs, n: u32, open: bool) ->
             Ok((ca, da, n1)) => match lift(b, all, line, sd, n1, open) {
                 Err(r) => Err(r),
                 Ok((cb, db, n2)) => match shift(da, db, *t, line) {
+                    Err(r) => Err(r),
+                    Ok(d) => Ok((append(ca, cb), d, n2)),
+                },
+            },
+        },
+        Expr::Bits(op, a, b, t) => match lift(a, all, line, sd, n, open) {
+            Err(r) => Err(r),
+            Ok((ca, da, n1)) => match lift(b, all, line, sd, n1, open) {
+                Err(r) => Err(r),
+                Ok((cb, db, n2)) => match bits(*op, da, db, *t, line) {
                     Err(r) => Err(r),
                     Ok(d) => Ok((append(ca, cb), d, n2)),
                 },
@@ -6923,6 +7316,36 @@ pub fn shift(da: DExpr, dn: DExpr, t: Ty, line: u32) -> (r: Result<DExpr, Refusa
     }
 }
 
+pub fn unsigned(t: Ty) -> (r: bool)
+    ensures
+        r == is_unsigned(t),
+{
+    t == Ty::U8 || t == Ty::U16 || t == Ty::U32 || t == Ty::U64
+}
+
+pub fn bit_op(op: BinOp) -> (r: bool)
+    ensures
+        r == is_bit_op(op),
+{
+    op == BinOp::BitAnd || op == BinOp::BitOr
+}
+
+pub fn bits(op: BinOp, da: DExpr, db: DExpr, t: Ty, line: u32) -> (r: Result<DExpr, Refusal>)
+    ensures
+        r == spec_bits(op, da, db, t, line),
+{
+    match translate_ty(t, line) {
+        Err(r) => Err(r),
+        Ok(dt) => if !bit_op(op) {
+            Err(Refusal::Syntax(line))
+        } else if !unsigned(t) {
+            Err(Refusal::SignedBits(line))
+        } else {
+            Ok(DExpr::Conv(dt, Box::new(DExpr::BitOp(op, Box::new(DExpr::AsInt(Box::new(da))), Box::new(DExpr::AsInt(Box::new(db)))))))
+        },
+    }
+}
+
 pub fn translate_leaf(d: DExpr, t: Ty, line: u32) -> (r: Result<DExpr, Refusal>)
     ensures
         r == spec_leaf(d, t, line),
@@ -6998,6 +7421,35 @@ pub fn translate_contract(e: &Expr, decl: &Names, ps: &Params, ret: Option<Ty>, 
             }
         },
         Expr::Bin(_, a, b) if ptr_operand(a, decl, ps, ret, bound, line, sd) || ptr_operand(b, decl, ps, ret, bound, line, sd) => Err(Refusal::Syntax(line)),
+        Expr::Bin(op, a, b) if bit_op(*op) => if signed_operand(a, decl, ps, ret, bound, line, sd) || signed_operand(b, decl, ps, ret, bound, line, sd) {
+            Err(Refusal::SignedBits(line))
+        } else if boolish(a) || boolish(b) {
+            Err(Refusal::Syntax(line))
+        } else {
+            match translate_contract(a, decl, ps, ret, bound, line, sd) {
+                Ok(da) => match translate_contract(b, decl, ps, ret, bound, line, sd) {
+                    Ok(db) => Ok(DExpr::BitOp(*op, Box::new(da), Box::new(db))),
+                    Err(r) => Err(r),
+                },
+                Err(r) => Err(r),
+            }
+        },
+        Expr::StaticCast(t, a) => match &**a {
+            Expr::Int(v) => if integer(*t) && *v <= max_of(*t) {
+                Ok(DExpr::Lit(*v))
+            } else {
+                Err(Refusal::ContractCast(line))
+            },
+            _ => match path(a, decl, ps, ret, bound, line, sd) {
+                Ok((d, at)) => if fits(at, *t) {
+                    translate_leaf(d, at, line)
+                } else {
+                    Err(Refusal::ContractCast(line))
+                },
+                Err(Refusal::Syntax(_)) => Err(Refusal::ContractCast(line)),
+                Err(r) => Err(r),
+            },
+        },
         Expr::Bin(op, a, b) => if ordered(*op) && (enum_operand(a, decl, ps, ret, bound, line, sd) || enum_operand(b, decl, ps, ret, bound, line, sd)) {
             Err(Refusal::Syntax(line))
         } else {
@@ -7136,7 +7588,11 @@ pub fn translate_contract(e: &Expr, decl: &Names, ps: &Params, ret: Option<Ty>, 
                     },
                     _ => Err(Refusal::NotPure(*f, line)),
                 },
-                None => Err(Refusal::Syntax(line)),
+                None => if *f == COUNT_NAME && matches!(**args, List::Nil) && t == Ty::I64 {
+                    translate_leaf(d, t, line)
+                } else {
+                    Err(Refusal::Syntax(line))
+                },
             },
             Err(r) => Err(r),
         },
@@ -7223,6 +7679,57 @@ pub fn enum_operand(e: &Expr, decl: &Names, ps: &Params, ret: Option<Ty>, bound:
             Ok((_, Ty::Enum(_))) => true,
             _ => false,
         },
+    }
+}
+
+pub fn signed_operand(e: &Expr, decl: &Names, ps: &Params, ret: Option<Ty>, bound: &Names, line: u32, sd: &Structs) -> (r: bool)
+    ensures
+        r == spec_signed_operand(*e, *decl, *ps, ret, *bound, line, *sd),
+    decreases e, 1nat,
+{
+    match path(e, decl, ps, ret, bound, line, sd) {
+        Ok((_, t)) => integer(t) && !unsigned(t),
+        Err(_) => false,
+    }
+}
+
+pub fn boolish(e: &Expr) -> (r: bool)
+    ensures
+        r == spec_boolish(*e),
+{
+    match e {
+        Expr::Bin(op, _, _) => !arith(*op) && !bit_op(*op),
+        Expr::Chain(_, _, _, _, _) => true,
+        Expr::Not(_) => true,
+        Expr::Bool(_) => true,
+        _ => false,
+    }
+}
+
+pub fn max_of(t: Ty) -> (r: u64)
+    ensures
+        r == spec_max(t),
+{
+    match t {
+        Ty::U8 => 0xff,
+        Ty::U16 => 0xffff,
+        Ty::U32 => 0xffff_ffff,
+        Ty::I8 => 0x7f,
+        Ty::I16 => 0x7fff,
+        Ty::I32 => 0x7fff_ffff,
+        Ty::I64 => 0x7fff_ffff_ffff_ffff,
+        _ => 0xffff_ffff_ffff_ffff,
+    }
+}
+
+pub fn fits(from: Ty, to: Ty) -> (r: bool)
+    ensures
+        r == spec_fits(from, to),
+{
+    integer(from) && integer(to) && if unsigned(from) {
+        if unsigned(to) { width(from) <= width(to) } else { width(from) < width(to) }
+    } else {
+        !unsigned(to) && width(from) <= width(to)
     }
 }
 
@@ -7650,6 +8157,7 @@ pub fn ret_ty(t: Ty, line: u32, sd: &Structs) -> (r: Result<DTy, Refusal>)
             Ok(DTy::Struct(k))
         },
         Ty::Void => Ok(DTy::Void),
+        Ty::Seq(_, Extent::Fixed(_)) => translate_ty(t, line),
         _ => translate_value_ty(t, line, sd),
     }
 }
@@ -8901,6 +9409,8 @@ pub fn copy_dexpr(d: &DExpr) -> (r: DExpr)
         DExpr::Upcast(x0, x1, x2) => DExpr::Upcast(*x0, *x1, Box::new(copy_dexpr(x2))),
         DExpr::Lemma(x0, x1, x2) => DExpr::Lemma(*x0, Box::new(copy_dargs(x1)), Box::new(copy_dexpr(x2))),
         DExpr::Let(x0, x1, x2, x3) => DExpr::Let(*x0, *x1, Box::new(copy_dexpr(x2)), Box::new(copy_dexpr(x3))),
+        DExpr::BitOp(x0, x1, x2) => DExpr::BitOp(*x0, Box::new(copy_dexpr(x1)), Box::new(copy_dexpr(x2))),
+        DExpr::SeqLit(x0) => DExpr::SeqLit(Box::new(copy_dargs(x0))),
         DExpr::EmptySeq => DExpr::EmptySeq,
         DExpr::IntAbs(x0) => DExpr::IntAbs(Box::new(copy_dexpr(x0))),
         DExpr::Eps => DExpr::Eps,
@@ -9326,11 +9836,13 @@ pub fn translate_function(f: &Function, all: &Fns, sd: &Structs) -> (r: Model)
             Err(r) => Model::Refused(r),
             Ok(ret) => match checks(f) {
                 Some(r) => Model::Refused(r),
+                None => match braces(&f.body, fixed(f.ret)) {
+                Some(r) => Model::Bare(f.name, ps, ret, r),
                 None => match translate_inside_of(f, all, sd) {
                     Err(r) => Model::Bare(f.name, ps, ret, r),
                     Ok((req, ens, dec, body)) => {
                         let pure = pure_body(&f.params, &body, all, static_key(sd, f.name));
-                        let ensures = linked(f, ens, &pure);
+                        let ensures = ret_len(f.ret, f.line, linked(f, ens, &pure));
                         Model::Full(
                             Method {
                                 name: f.name,
@@ -9347,6 +9859,7 @@ pub fn translate_function(f: &Function, all: &Fns, sd: &Structs) -> (r: Model)
                             },
                         )
                     },
+                },
                 },
             },
         },
@@ -9596,6 +10109,7 @@ pub fn translate_overrides(bases: &List<(u32, (Names, bool))>, all: &Fns, sd: &S
 /// `HasValue` and `Value` are the texts `.has_value()` and `.value()`, decision 0075. `Empty` is `.empty()`, decision 0078. `Comma`
 /// parts the arguments of a call, decision 0079. `Bool` is `true`
 /// or `false`, decision 0084. `Old` is the word `old`, decision 0096. `Question` and `Colon` are `?` and `:`, decision 0098.
+/// `Cast` is `static_cast<T>` of an integer type `T`, decision 0175.
 /// `Unknown` is text with no token, by the id of
 /// its kind and its line.
 #[derive(Structural, PartialEq, Eq, Clone, Copy, Debug)]
@@ -9633,6 +10147,7 @@ pub enum Tok {
     Eta,
     DblMax,
     This,
+    Cast(Ty),
     Unknown(u32, u32),
 }
 
@@ -9652,7 +10167,7 @@ fn is_cmp(op: BinOp) -> (b: bool) {
     }
 }
 
-/// The precedence of the contract language, lowest first: `==>`, which groups to the right, then `?:`, then `||`, `&&`, a comparison or a
+/// The precedence of the contract language, lowest first: `==>`, which groups to the right, then `?:`, then `||`, `&&`, `|`, `&`, a comparison or a
 /// chain of two, `+` and `-`, `*`, the prefix `!` and `-`, and the postfix `.size()` and `[e]`. Parentheses group, and `forall j ::`
 /// takes all that follows, decision 0064.
 /// ponytail: the parser is proved to end and to read each token once, not to follow a grammar written as a spec. Upgrade: the
@@ -9662,7 +10177,7 @@ fn parse_implies(toks: &Vec<Tok>, pos: usize, line: u32) -> (r: Result<(Expr, us
         pos <= toks.len(),
     ensures
         parsed(r, toks@, pos),
-    decreases toks.len() - pos, 9usize,
+    decreases toks.len() - pos, 11usize,
 {
     let (a, p) = match parse_cond(toks, pos, line) {
         Ok(x) => x,
@@ -9684,7 +10199,7 @@ fn parse_cond(toks: &Vec<Tok>, pos: usize, line: u32) -> (r: Result<(Expr, usize
         pos <= toks.len(),
     ensures
         parsed(r, toks@, pos),
-    decreases toks.len() - pos, 8usize,
+    decreases toks.len() - pos, 10usize,
 {
     let (c, p) = match parse_or(toks, pos, line) {
         Ok(x) => x,
@@ -9713,7 +10228,7 @@ fn parse_or(toks: &Vec<Tok>, pos: usize, line: u32) -> (r: Result<(Expr, usize),
         pos <= toks.len(),
     ensures
         parsed(r, toks@, pos),
-    decreases toks.len() - pos, 7usize,
+    decreases toks.len() - pos, 9usize,
 {
     let (mut a, mut p) = match parse_and(toks, pos, line) {
         Ok(x) => x,
@@ -9741,9 +10256,9 @@ fn parse_and(toks: &Vec<Tok>, pos: usize, line: u32) -> (r: Result<(Expr, usize)
         pos <= toks.len(),
     ensures
         parsed(r, toks@, pos),
-    decreases toks.len() - pos, 6usize,
+    decreases toks.len() - pos, 8usize,
 {
-    let (mut a, mut p) = match parse_cmp(toks, pos, line) {
+    let (mut a, mut p) = match parse_bitor(toks, pos, line) {
         Ok(x) => x,
         Err(e) => return Err(e),
     };
@@ -9753,9 +10268,68 @@ fn parse_and(toks: &Vec<Tok>, pos: usize, line: u32) -> (r: Result<(Expr, usize)
             !unknown_expr(a),
         decreases toks.len() - p,
     {
-        match parse_cmp(toks, p + 1, line) {
+        match parse_bitor(toks, p + 1, line) {
             Ok((b, q)) => {
                 a = Expr::Bin(BinOp::And, Box::new(a), Box::new(b));
+                p = q;
+            },
+            Err(e) => return Err(e),
+        }
+    }
+    Ok((a, p))
+}
+
+/// `a | b`, below `&` and above `&&`, as C++ has it, decision 0175. A `|` after a whole operand is this operator. A `|` at the start
+/// of an operand opens the absolute value of decision 0154, whose operand stops at the next `|`.
+fn parse_bitor(toks: &Vec<Tok>, pos: usize, line: u32) -> (r: Result<(Expr, usize), Refusal>)
+    requires
+        pos <= toks.len(),
+    ensures
+        parsed(r, toks@, pos),
+    decreases toks.len() - pos, 7usize,
+{
+    let (mut a, mut p) = match parse_bitand(toks, pos, line) {
+        Ok(x) => x,
+        Err(e) => return Err(e),
+    };
+    while p < toks.len() && toks[p] == Tok::Bar
+        invariant
+            pos < p <= toks.len(),
+            !unknown_expr(a),
+        decreases toks.len() - p,
+    {
+        match parse_bitand(toks, p + 1, line) {
+            Ok((b, q)) => {
+                a = Expr::Bin(BinOp::BitOr, Box::new(a), Box::new(b));
+                p = q;
+            },
+            Err(e) => return Err(e),
+        }
+    }
+    Ok((a, p))
+}
+
+/// `a & b`, below a comparison, as C++ has it, decision 0175.
+fn parse_bitand(toks: &Vec<Tok>, pos: usize, line: u32) -> (r: Result<(Expr, usize), Refusal>)
+    requires
+        pos <= toks.len(),
+    ensures
+        parsed(r, toks@, pos),
+    decreases toks.len() - pos, 6usize,
+{
+    let (mut a, mut p) = match parse_cmp(toks, pos, line) {
+        Ok(x) => x,
+        Err(e) => return Err(e),
+    };
+    while p < toks.len() && toks[p] == Tok::Op(BinOp::BitAnd)
+        invariant
+            pos < p <= toks.len(),
+            !unknown_expr(a),
+        decreases toks.len() - p,
+    {
+        match parse_cmp(toks, p + 1, line) {
+            Ok((b, q)) => {
+                a = Expr::Bin(BinOp::BitAnd, Box::new(a), Box::new(b));
                 p = q;
             },
             Err(e) => return Err(e),
@@ -10041,7 +10615,7 @@ fn parse_binders(toks: &Vec<Tok>, pos: usize, all: bool, line: u32) -> (r: Resul
         pos <= toks.len(),
     ensures
         parsed(r, toks@, pos),
-    decreases toks.len() - pos, 10usize,
+    decreases toks.len() - pos, 12usize,
 {
     if toks.len() - pos < 2 {
         return Err(Refusal::Syntax(line));
@@ -10086,7 +10660,7 @@ fn parse_args(toks: &Vec<Tok>, pos: usize, line: u32) -> (r: Result<(Args, usize
         pos <= toks.len(),
     ensures
         parsed_args(r, toks@, pos),
-    decreases toks.len() - pos, 10usize,
+    decreases toks.len() - pos, 12usize,
 {
     match parse_implies(toks, pos, line) {
         Ok((a, p)) => if p < toks.len() && toks[p] == Tok::RParen {
@@ -10120,7 +10694,8 @@ fn parse_atom(toks: &Vec<Tok>, pos: usize, line: u32) -> (r: Result<(Expr, usize
         Tok::Eps => Ok((Expr::Eps, pos + 1)),
         Tok::Eta => Ok((Expr::Eta, pos + 1)),
         Tok::DblMax => Ok((Expr::DblMax, pos + 1)),
-        Tok::Bar => match parse_implies(toks, pos + 1, line) {
+        // The operand of `|e|` reads no `|` of its own, so the next `|` closes it.
+        Tok::Bar => match parse_bitand(toks, pos + 1, line) {
             Ok((e, p)) => if p < toks.len() && toks[p] == Tok::Bar {
                 Ok((Expr::Abs(Box::new(e)), p + 1))
             } else {
@@ -10175,6 +10750,19 @@ fn parse_atom(toks: &Vec<Tok>, pos: usize, line: u32) -> (r: Result<(Expr, usize
             Err(Refusal::Syntax(line))
         },
         Tok::Nullptr => Ok((Expr::Nullopt, pos + 1)),
+        // `static_cast<T>(e)`, decision 0175.
+        Tok::Cast(t) => if toks.len() - pos > 1 && toks[pos + 1] == Tok::LParen {
+            match parse_implies(toks, pos + 2, line) {
+                Ok((e, p)) => if p < toks.len() && toks[p] == Tok::RParen {
+                    Ok((Expr::StaticCast(t, Box::new(e)), p + 1))
+                } else {
+                    Err(Refusal::Syntax(line))
+                },
+                Err(e) => Err(e),
+            }
+        } else {
+            Err(Refusal::Syntax(line))
+        },
         // `this->x` reads `x`, and `this->f(a)` calls `f(a)`, decision 0166.
         Tok::This => if toks.len() - pos > 1 && toks[pos + 1] == Tok::Arrow {
             parse_atom(toks, pos + 2, line)
@@ -10471,6 +11059,9 @@ pub open spec fn spec_gexpr(e: Expr, gs: Params, gps: Params, hide: Names, fs: F
         Expr::Old(f0) => Expr::Old(Box::new(spec_gexpr(*f0, gs, gps, hide, fs))),
         Expr::Cond(f0, f1, f2) => Expr::Cond(Box::new(spec_gexpr(*f0, gs, gps, hide, fs)), Box::new(spec_gexpr(*f1, gs, gps, hide, fs)), Box::new(spec_gexpr(*f2, gs, gps, hide, fs))),
         Expr::Shr(f0, f1, f2) => Expr::Shr(Box::new(spec_gexpr(*f0, gs, gps, hide, fs)), Box::new(spec_gexpr(*f1, gs, gps, hide, fs)), f2),
+        Expr::Bits(f0, f1, f2, f3) => Expr::Bits(f0, Box::new(spec_gexpr(*f1, gs, gps, hide, fs)), Box::new(spec_gexpr(*f2, gs, gps, hide, fs)), f3),
+        Expr::StaticCast(f0, f1) => Expr::StaticCast(f0, Box::new(spec_gexpr(*f1, gs, gps, hide, fs))),
+        Expr::List(f0) => Expr::List(Box::new(spec_gargs(*f0, gs, gps, hide, fs))),
         Expr::Enumerator(f0, f1) => Expr::Enumerator(f0, f1),
         // The parameter of the lambda hides a global of its name in the body, as in C++.
         Expr::CountIf(f0, f1, f2, f3) => Expr::CountIf(Box::new(spec_gexpr(*f0, gs, gps, hide, fs)), f1, f2, Box::new(spec_gexpr(*f3, gs, gps, List::Cons(f1, Box::new(hide)), fs))),
@@ -10538,6 +11129,9 @@ pub fn gexpr(e: &Expr, gs: &Params, gps: &Params, hide: &Names, fs: &Fns) -> (r:
         Expr::Old(f0) => Expr::Old(Box::new(gexpr(f0, gs, gps, hide, fs))),
         Expr::Cond(f0, f1, f2) => Expr::Cond(Box::new(gexpr(f0, gs, gps, hide, fs)), Box::new(gexpr(f1, gs, gps, hide, fs)), Box::new(gexpr(f2, gs, gps, hide, fs))),
         Expr::Shr(f0, f1, f2) => Expr::Shr(Box::new(gexpr(f0, gs, gps, hide, fs)), Box::new(gexpr(f1, gs, gps, hide, fs)), *f2),
+        Expr::Bits(f0, f1, f2, f3) => Expr::Bits(*f0, Box::new(gexpr(f1, gs, gps, hide, fs)), Box::new(gexpr(f2, gs, gps, hide, fs)), *f3),
+        Expr::StaticCast(f0, f1) => Expr::StaticCast(*f0, Box::new(gexpr(f1, gs, gps, hide, fs))),
+        Expr::List(f0) => Expr::List(Box::new(gargs(f0, gs, gps, hide, fs))),
         Expr::Enumerator(f0, f1) => Expr::Enumerator(*f0, *f1),
         Expr::CountIf(f0, f1, f2, f3) => Expr::CountIf(Box::new(gexpr(f0, gs, gps, hide, fs)), *f1, *f2, Box::new(gexpr(f3, gs, gps, &List::Cons(*f1, Box::new(copy(hide))), fs))),
         Expr::RealLit(f0, f1) => Expr::RealLit(*f0, *f1),
@@ -10605,6 +11199,9 @@ pub open spec fn spec_gcalls(e: Expr) -> List<(u32, u32, u32)>
         Expr::Old(f0) => spec_gcalls(*f0),
         Expr::Cond(f0, f1, f2) => spec_append(spec_gcalls(*f0), spec_append(spec_gcalls(*f1), spec_gcalls(*f2))),
         Expr::Shr(f0, f1, _) => spec_append(spec_gcalls(*f0), spec_gcalls(*f1)),
+        Expr::Bits(_, f1, f2, _) => spec_append(spec_gcalls(*f1), spec_gcalls(*f2)),
+        Expr::StaticCast(_, f1) => spec_gcalls(*f1),
+        Expr::List(f0) => spec_gcalls_args(*f0),
         Expr::Enumerator(_, _) => List::Nil,
         Expr::CountIf(f0, _, _, f3) => spec_append(spec_gcalls(*f0), spec_gcalls(*f3)),
         Expr::RealLit(_, _) => List::Nil,
@@ -10671,6 +11268,9 @@ pub fn gcalls(e: &Expr) -> (r: List<(u32, u32, u32)>)
         Expr::Old(f0) => gcalls(f0),
         Expr::Cond(f0, f1, f2) => append(gcalls(f0), append(gcalls(f1), gcalls(f2))),
         Expr::Shr(f0, f1, _) => append(gcalls(f0), gcalls(f1)),
+        Expr::Bits(_, f1, f2, _) => append(gcalls(f1), gcalls(f2)),
+        Expr::StaticCast(_, f1) => gcalls(f1),
+        Expr::List(f0) => gcalls_args(f0),
         Expr::Enumerator(_, _) => List::Nil,
         Expr::CountIf(f0, _, _, f3) => append(gcalls(f0), gcalls(f3)),
         Expr::RealLit(_, _) => List::Nil,

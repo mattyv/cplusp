@@ -1,6 +1,6 @@
+#include <array>
 #include <chrono>
 #include <cstdint>
-
 // A cast in a contract that can change the value, a duration that is not milliseconds, and an operator that is a member,
 // decision 0175.
 enum class Flag : uint32_t { None = 0, Read = 1, Write = 2 };
@@ -25,3 +25,8 @@ struct Point {
     return Point{x + b.x, y};
   }
 };
+
+// A braced list with fewer values than the std::array.
+std::array<int32_t, 3> short_table() {
+  return {10, 20};
+}

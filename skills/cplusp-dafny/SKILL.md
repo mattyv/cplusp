@@ -51,7 +51,7 @@ Treat SPARK guidance as an engineering method, not an LLM performance measuremen
 
 ## Contract lines that the translator reads
 
-This list is true at decision 0174. Read the later decisions before you rely on it.
+This list is true at decision 0175. Read the later decisions before you rely on it.
 `cplusp prove` translates the C++ and the `//@` lines to Dafny, and runs Dafny. It says `ok: proved`, or `Not proved: FILE:LINE: sentence` for a proof that fails, or `Not provable: FILE:LINE: sentence` for a form that has no rule.
 
 Where each line goes:
@@ -92,6 +92,7 @@ The modifies line:
 - A pure member function can hold locals before its `return`, if the body writes no local, decision 0172. It can call a `const` virtual function of an interface, also through a field, as in `return inner_ != nullptr && inner_->valid();`. Such a call can stand anywhere in code, also on the right of `&&`. A call of a member function of the same class, or of a pure member function of another struct, makes the body no pure body. An override with such a body gets no function, so the translator refuses its class.
 - A free function that reads a global lists it on a `//@ reads` line, and one that changes it lists it on `//@ modifies`, decision 0173. A static data member has its full name, as in `//@ modifies Registry::last_id`. The translator makes each listed global a parameter, so a call can change only the globals that the callee lists. A function with a reads line cannot call one that changes the same global. A member function that lists a global, and a global that is no integer, `bool` or struct, have no rule yet.
 - A static member function is a free function with its full name, decision 0174. One with a reads line, no modifies line and one `return` can be called in a contract, as `valid()` inside its class or `Tally::count()` anywhere. Put `valid()` first in a line that also calls a function that requires it. `return f();` works also when `f` changes a global. A static with no contract line has no rule yet.
+- An `enum class` with a value written for an enumerator is its underlying integer, and `Flag::Read` is its value, decision 0175. `a & b` and `a | b` on unsigned integers prove with the laws of the bits. Write parentheses around a bit operator in a contract, because `==` binds tighter. A contract reads `static_cast<T>(e)` of a parameter, a field or `result` only when each value of `e` fits `T`. A free `operator+` is a function. `std::chrono::milliseconds` is its count, so a contract writes `a.count()`. A `std::array` by value or as a result is a sequence of its fixed length, and `return {a, b, c};` gives it. A `const int32_t&` parameter is the value.
 - After a `push_back`, a read of `v.size()` in code needs a requires line or an invariant that bounds the length. Then the size fits `size_t`.
 - An ensures line that reads `v[i]` after the call needs a line before it that gives the length: `ensures v.size() == old(v.size())`, or `+ 1` after one `push_back`, decision 0146. A loop that writes `v` needs the same line as an invariant.
 - The gate also reads `modifies` and `reads` lines for globals, decision 0035.

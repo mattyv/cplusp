@@ -4318,6 +4318,11 @@ fn a_contract_reads_bits_and_a_cast_that_keeps_the_value() {
     assert_eq!(strip_conds(m.ensures), List::Cons((DExpr::Bin(BinOp::Eq, res(), Box::new(and)), 0), Box::new(List::Nil)));
     let m = translate_function(&f(Expr::StaticCast(Ty::U8, b(Expr::Name(BA)))), &List::Nil, &List::Nil);
     assert_eq!(refusal_of(&m), Refusal::ContractCast(19));
+    // Each uint32 fits an int64, and not each fits an int32.
+    let m = translate_function(&f(Expr::StaticCast(Ty::I32, b(Expr::Name(BA)))), &List::Nil, &List::Nil);
+    assert_eq!(refusal_of(&m), Refusal::ContractCast(19));
+    let Model::Full(m) = translate_function(&f(Expr::StaticCast(Ty::I64, b(Expr::Name(BA)))), &List::Nil, &List::Nil) else { panic!("a full model") };
+    assert_eq!(strip_conds(m.ensures), List::Cons((DExpr::Bin(BinOp::Eq, res(), Box::new(DExpr::AsInt(Box::new(DExpr::Var(BA))))), 0), Box::new(List::Nil)));
     let g = Function { params: List::Cons((BA, Ty::I32), Box::new(List::Cons((BB, Ty::U32), Box::new(List::Nil)))), ..f(Expr::Bin(BinOp::BitAnd, b(Expr::Name(BA)), b(Expr::Int(1)))) };
     assert_eq!(refusal_of(&translate_function(&g, &List::Nil, &List::Nil)), Refusal::SignedBits(19));
 }

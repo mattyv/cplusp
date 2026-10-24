@@ -2,7 +2,7 @@
 //! each with its span. It proves that the lexer drops no text except ASCII white space, `lex_contract`, and that a number is the
 //! value of its digits in its base, `spec_number`.
 
-use crate::model::{BinOp, Tok};
+use crate::model::{BinOp, Tok, Ty};
 use vstd::prelude::*;
 
 verus! {
@@ -281,6 +281,33 @@ pub open spec fn spec_op(t: Seq<u8>, i: int) -> Option<(int, BinOp)> {
         Some((1, BinOp::Div))
     } else if at(t, i, b"%"@) {
         Some((1, BinOp::Rem))
+    } else if at(t, i, b"&"@) {
+        Some((1, BinOp::BitAnd))
+    } else {
+        None
+    }
+}
+
+/// `static_cast<T>` of an integer type `T` of the subset, and its length, decision 0175. Any other type is no cast token.
+pub open spec fn spec_cast(t: Seq<u8>, i: int) -> Option<(int, Ty)> {
+    if at(t, i, b"static_cast<int8_t>"@) {
+        Some((19, Ty::I8))
+    } else if at(t, i, b"static_cast<int16_t>"@) {
+        Some((20, Ty::I16))
+    } else if at(t, i, b"static_cast<int32_t>"@) {
+        Some((20, Ty::I32))
+    } else if at(t, i, b"static_cast<int64_t>"@) {
+        Some((20, Ty::I64))
+    } else if at(t, i, b"static_cast<uint8_t>"@) {
+        Some((20, Ty::U8))
+    } else if at(t, i, b"static_cast<uint16_t>"@) {
+        Some((21, Ty::U16))
+    } else if at(t, i, b"static_cast<uint32_t>"@) {
+        Some((21, Ty::U32))
+    } else if at(t, i, b"static_cast<uint64_t>"@) {
+        Some((21, Ty::U64))
+    } else if at(t, i, b"static_cast<size_t>"@) {
+        Some((19, Ty::U64))
     } else {
         None
     }
@@ -346,6 +373,8 @@ pub open spec fn spec_token(t: Seq<u8>, i: int) -> (int, LexKind) {
     let c = t[i];
     if at(t, i, b"std::isfinite"@) && !(i + 13 < t.len() && name_byte(t[i + 13])) {
         (i + 13, LexKind::Fixed(Tok::IsFinite))
+    } else if let Some((n, ty)) = spec_cast(t, i) {
+        (i + n, LexKind::Fixed(Tok::Cast(ty)))
     } else if name_start(c) {
         let e = name_end(t, i + 1);
         (e, spec_word(t, i, e))
@@ -397,6 +426,9 @@ proof fn lemma_token(t: Seq<u8>, i: int)
     }
     if let Some((n, o)) = spec_op(t, i) {
         assert(1 <= n <= 3);
+    }
+    if let Some((n, ty)) = spec_cast(t, i) {
+        assert(18 <= n <= 21 && i + n <= t.len());
     }
 }
 
@@ -949,6 +981,41 @@ fn op_exec(t: &Vec<u8>, i: usize) -> (r: Option<(usize, BinOp)>)
         Some((1, BinOp::Div))
     } else if at_exec(t, i, b"%") {
         Some((1, BinOp::Rem))
+    } else if at_exec(t, i, b"&") {
+        Some((1, BinOp::BitAnd))
+    } else {
+        None
+    }
+}
+
+fn cast_exec(t: &Vec<u8>, i: usize) -> (r: Option<(usize, Ty)>)
+    requires
+        i <= t.len(),
+    ensures
+        match (r, spec_cast(t@, i as int)) {
+            (Some((n, a)), Some((m, b))) => n == m && a == b,
+            (None, None) => true,
+            _ => false,
+        },
+{
+    if at_exec(t, i, b"static_cast<int8_t>") {
+        Some((19, Ty::I8))
+    } else if at_exec(t, i, b"static_cast<int16_t>") {
+        Some((20, Ty::I16))
+    } else if at_exec(t, i, b"static_cast<int32_t>") {
+        Some((20, Ty::I32))
+    } else if at_exec(t, i, b"static_cast<int64_t>") {
+        Some((20, Ty::I64))
+    } else if at_exec(t, i, b"static_cast<uint8_t>") {
+        Some((20, Ty::U8))
+    } else if at_exec(t, i, b"static_cast<uint16_t>") {
+        Some((21, Ty::U16))
+    } else if at_exec(t, i, b"static_cast<uint32_t>") {
+        Some((21, Ty::U32))
+    } else if at_exec(t, i, b"static_cast<uint64_t>") {
+        Some((21, Ty::U64))
+    } else if at_exec(t, i, b"static_cast<size_t>") {
+        Some((19, Ty::U64))
     } else {
         None
     }
@@ -1030,6 +1097,8 @@ fn token(t: &Vec<u8>, i: usize) -> (r: (usize, LexKind))
         (0x30 <= d && d <= 0x39) || (0x41 <= d && d <= 0x5a) || (0x61 <= d && d <= 0x7a) || d == 0x5f
     }) {
         (i + 13, LexKind::Fixed(Tok::IsFinite))
+    } else if let Some((n, ty)) = cast_exec(t, i) {
+        (i + n, LexKind::Fixed(Tok::Cast(ty)))
     } else if (0x41 <= c && c <= 0x5a) || (0x61 <= c && c <= 0x7a) || c == 0x5f {
         let e = name_end_exec(t, i + 1);
         (e, word_exec(t, i, e))

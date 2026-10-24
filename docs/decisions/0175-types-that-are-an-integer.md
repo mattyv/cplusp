@@ -4,7 +4,7 @@ Date: 2026-10-23. Status: decided. Builds on 0058, 0109, 0114, 0132 and 0150. Th
 
 ## Decision
 
-An `enum class` with a fixed underlying type and a value written for an enumerator is its underlying integer. `Flag : uint32_t` is `uint32`. An enumerator is its value: `Flag::Read` is `1`. A value of the type is any value of the integer, as C++ has it. `static_cast` between the enum and an integer is the integral cast of decision 0058. The gate lets such a cast through, decision 0114. The model has every value, so it needs no enumerator for the cast. An `enum class` with no value written stays a datatype, decision 0109.
+An `enum class` with a fixed underlying type and a value written for an enumerator is its underlying integer. `Flag : uint32_t` is `uint32`. An enumerator is its value: `Flag::Read` is `1`. A value of the type is any value of the integer, as C++ has it. `static_cast` between the enum and an integer is the integral cast of decision 0058. The gate lets such a cast through, decision 0114. The model has every value, so it needs no enumerator for the cast. An `enum class` with no value written stays a datatype, decision 0109. An `enum class` with a negative value written has no rule yet. The sentence is the one of today.
 
 The bit operators `&` and `|` on unsigned integers are the functions `BitAnd` and `BitOr` of the prelude. Each is a recursive function on the bits, with no axiom. The prelude proves their laws as lemmas. A result of `BitAnd` is at most each operand. A result of `BitOr` of two values below `2^32` is below `2^32`. The laws of absorption and of a subset of bits hold. One lemma, `Laws`, gives all of them as quantified facts. Each method of a file that uses a bit operator calls `Laws()` as its first statement. In a contract, `a & b` and `a | b` are the same functions. A `|` between two values is `BitOr`. A `|e|` with no value before it stays the absolute value of decision 0154. A bit operator on a signed integer has no rule. The sentence is "a bit operator on a signed integer: the translator has no rule for it yet."
 
@@ -12,7 +12,7 @@ A free operator such as `operator+` or `operator|` is a function. Its Dafny name
 
 `std::chrono::milliseconds` is its count, an `int64`. `a.count()` is `a`, in code and in a contract. `a + b` of two values is the checked sum of the counts. `std::chrono::milliseconds{n}` is `n`. Any other duration has no rule yet.
 
-`std::array<T, N>` by value is a read-only sequence of the fixed extent `N`, as the const form is in decision 0132. As a result it gives `|result| == N`. `return {a, b, c};` of such a result is the sequence `[a, b, c]`. A list with another number of values than `N` has no rule.
+`std::array<T, N>` by value is a read-only sequence of the fixed extent `N`, as the const form is in decision 0132. As a result it gives `|result| == N`. `return {a, b, c};` of such a result is the sequence `[a, b, c]`. A list with another number of values than `N` has no rule. The sentence is "a braced list of m values for a std::array of n: the translator has no rule for it yet."
 
 A parameter `const T&` of a scalar `T` is the scalar by value. The gate refuses a call that passes one object under two names, row `aliasing`, so the value is the same for the whole call.
 

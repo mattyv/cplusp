@@ -83,6 +83,8 @@ enum JOp {
     Ne,
     And,
     Or,
+    BitAnd,
+    BitOr,
 }
 
 #[derive(Deserialize)]
@@ -106,6 +108,10 @@ enum JExpr {
     Bin(JOp, Box<JExpr>, Box<JExpr>),
     Divide(JOp, Box<JExpr>, Box<JExpr>, JTy),
     Shr(Box<JExpr>, Box<JExpr>, JTy),
+    /// `a & b` or `a | b` of unsigned operands, by the type of the result, decision 0175.
+    Bits(JOp, Box<JExpr>, Box<JExpr>, JTy),
+    /// `return {a, b, c};` of a std::array result, decision 0175.
+    List(Vec<JExpr>),
     /// An enumerator by the key of its enum and its place, decision 0109.
     Enumerator(String, u32),
     Not(Box<JExpr>),
@@ -203,6 +209,11 @@ enum Item {
     Global {
         global: String,
         ty: JTy,
+    },
+    /// An enum class that is its underlying integer, decision 0175: its plain name and its enumerators with their values.
+    Valued {
+        valued: String,
+        values: Vec<(String, u64)>,
     },
     Enum(JEnum),
     Struct(JStruct),
@@ -325,6 +336,8 @@ struct Names {
     enums: Vec<(String, u32, Vec<String>)>,
     /// The names of the parameters and locals of the function that is being converted. They hide a constant of the same name.
     shadow: Vec<String>,
+    /// The valued enums of the file as (plain name, enumerators with their values), decision 0175. A contract reads `Flag::Write` as its value.
+    valued: Vec<(String, Vec<(String, u64)>)>,
     /// The names of the globals of the file. A contract may spell a static data member `Registry::last_id`, decision 0173.
     globals: Vec<String>,
     /// The qualified names of the static member functions of the file, and the class of the function that is being converted, decision 0174. A bare call
@@ -424,6 +437,8 @@ fn op(o: JOp) -> BinOp {
         JOp::Ne => BinOp::Ne,
         JOp::And => BinOp::And,
         JOp::Or => BinOp::Or,
+        JOp::BitAnd => BinOp::BitAnd,
+        JOp::BitOr => BinOp::BitOr,
     }
 }
 
@@ -438,6 +453,11 @@ fn expr(e: JExpr, names: &mut Names) -> Expr {
         JExpr::Bin(o, a, b) => Expr::Bin(op(o), Box::new(expr(*a, names)), Box::new(expr(*b, names))),
         JExpr::Divide(o, a, b, t) => Expr::Divide(op(o), Box::new(expr(*a, names)), Box::new(expr(*b, names)), ty(t, names)),
         JExpr::Shr(a, b, t) => Expr::Shr(Box::new(expr(*a, names)), Box::new(expr(*b, names)), ty(t, names)),
+        JExpr::Bits(o, a, b, t) => Expr::Bits(op(o), Box::new(expr(*a, names)), Box::new(expr(*b, names)), ty(t, names)),
+        JExpr::List(args) => {
+            let args: Vec<Expr> = args.into_iter().map(|a| expr(a, names)).collect();
+            Expr::List(Box::new(args.into_iter().rev().fold(Args::Nil, |rest, a| Args::Cons(Box::new(a), Box::new(rest)))))
+        }
         JExpr::Enumerator(k, i) => Expr::Enumerator(names.id(&k), i),
         JExpr::Not(a) => Expr::Not(Box::new(expr(*a, names))),
         JExpr::Neg(a) => Expr::Neg(Box::new(expr(*a, names))),
@@ -664,6 +684,23 @@ fn lex(text: &str, line: u32, names: &mut Names) -> Vec<Tok> {
 /// The fold of a contract line, decisions 0106, 0109 and 0124. The core does it, from the tables of the shell by id. A name that is not in the table of
 /// words cannot be in the tokens, so it is left out. An enumerator that is not in the table still takes its place among the members of its enum.
 fn fold_names(toks: Vec<Tok>, names: &Names) -> Vec<Tok> {
+    // `Flag::Write` of a valued enum is the integer token of its value, decision 0175.
+    // ponytail: a quantifier or a parameter that spells the name of the enum does not hide it, and two valued enums of one plain name take the first. Upgrade: the core folds it.
+    let mut valued = Vec::new();
+    let mut at = 0;
+    while at < toks.len() {
+        if let (Tok::Ident(a), Some(Tok::ColonColon), Some(Tok::Ident(b))) = (toks[at], toks.get(at + 1), toks.get(at + 2)) {
+            let value = names.valued.iter().find(|(n, _)| n == names.text(a)).and_then(|(_, vs)| vs.iter().find(|(m, _)| m == names.text(*b)));
+            if let Some((_, v)) = value {
+                valued.push(Tok::Int(*v));
+                at += 3;
+                continue;
+            }
+        }
+        valued.push(toks[at]);
+        at += 1;
+    }
+    let toks = valued;
     let mut missing = u32::MAX;
     let mut folds = cplusp_core::fold::Folds { constants: Vec::new(), reals: Vec::new(), shadow: Vec::new(), enums: Vec::new(), enumerators: Vec::new() };
     folds.constants = names.constants.iter().filter_map(|(c, v)| Some((names.find(c)?, *v))).collect();
@@ -867,7 +904,7 @@ fn scan_companion(text: &str) -> (Vec<(u32, String)>, Vec<Declared>) {
 fn expr_names<'a>(e: &'a JExpr, out: &mut Vec<&'a str>) {
     match e {
         JExpr::Var(v, _) | JExpr::Move(v, _) => out.push(v),
-        JExpr::Bin(_, a, b) | JExpr::Divide(_, a, b, _) | JExpr::Shr(a, b, _) | JExpr::Index(a, b) | JExpr::Subspan(a, b) => {
+        JExpr::Bin(_, a, b) | JExpr::Divide(_, a, b, _) | JExpr::Shr(a, b, _) | JExpr::Bits(_, a, b, _) | JExpr::Index(a, b) | JExpr::Subspan(a, b) => {
             expr_names(a, out);
             expr_names(b, out);
         }
@@ -882,7 +919,7 @@ fn expr_names<'a>(e: &'a JExpr, out: &mut Vec<&'a str>) {
             expr_names(b, out);
         }
         JExpr::Not(a) | JExpr::Neg(a) | JExpr::Cast(_, a) | JExpr::Paren(a) | JExpr::Brace(a) | JExpr::Size(a) | JExpr::Empty(a) | JExpr::Copy(a, ..) | JExpr::Field(a, _) | JExpr::HasValue(a) | JExpr::Value(a) | JExpr::Wrap(a) => expr_names(a, out),
-        JExpr::Call(_, _, args, _) | JExpr::Construct(_, args) => args.iter().for_each(|a| expr_names(a, out)),
+        JExpr::Call(_, _, args, _) | JExpr::Construct(_, args) | JExpr::List(args) => args.iter().for_each(|a| expr_names(a, out)),
         JExpr::Lit(..) | JExpr::Bool(_) | JExpr::RealLit(..) | JExpr::Ratio(..) | JExpr::Nullopt | JExpr::EmptyVec | JExpr::Enumerator(..) | JExpr::Unknown(..) => {}
     }
 }
@@ -950,7 +987,7 @@ fn unreadable_name(f: &JFunction) -> Option<&str> {
     if matches!(f.ret, JTy::Other(_)) || f.params.iter().any(|(_, t)| matches!(t, JTy::Other(_))) {
         return None;
     }
-    let mut names = vec![dafny_word(&f.name)];
+    let mut names = vec![if operator_word(&f.name).is_some() { "op" } else { dafny_word(&f.name) }];
     names.extend(f.params.iter().map(|(n, _)| n.as_str()));
     f.body.iter().for_each(|s| stmt_names(s, &mut names));
     // A static data member or a static member function has `::` in its name, and the mangling makes it `'`, decisions 0173 and 0174.
@@ -958,6 +995,26 @@ fn unreadable_name(f: &JFunction) -> Option<&str> {
 }
 
 /// `operator()` is a name of C++ that the Dafny text prints as `call`, decision 0098. Every other name stays as it is.
+/// The readable name of a free operator function, decision 0175: `operator+` is `op'plus`. C++ cannot write `'`, so it clashes with no name.
+fn operator_word(name: &str) -> Option<&'static str> {
+    Some(match name {
+        "operator+" => "op'plus",
+        "operator-" => "op'minus",
+        "operator*" => "op'times",
+        "operator/" => "op'div",
+        "operator%" => "op'mod",
+        "operator&" => "op'bitand",
+        "operator|" => "op'bitor",
+        "operator==" => "op'eq",
+        "operator!=" => "op'ne",
+        "operator<" => "op'lt",
+        "operator<=" => "op'le",
+        "operator>" => "op'gt",
+        "operator>=" => "op'ge",
+        _ => return None,
+    })
+}
+
 fn dafny_word(name: &str) -> &str {
     if name == "operator()" {
         "call"
@@ -1092,6 +1149,47 @@ pub const SHR: &str = r"function shr(a: int, n: int, w: int): int
 }
 ";
 
+/// The model of `&` and `|` on unsigned integers, decision 0175: two recursive functions on the bits and the lemmas that prove their laws. It follows the
+/// methods when one of them has a bit operator, and each such method calls `Laws()` first.
+pub const BITS: &str = r#"function Pow2(k: nat): nat { if k == 0 then 1 else 2 * Pow2(k - 1) }
+function BitAnd(a: nat, b: nat): nat decreases a { if a == 0 || b == 0 then 0 else (if a % 2 == 1 && b % 2 == 1 then 1 else 0) + 2 * BitAnd(a / 2, b / 2) }
+function BitOr(a: nat, b: nat): nat decreases a + b { if a == 0 then b else if b == 0 then a else (if a % 2 == 1 || b % 2 == 1 then 1 else 0) + 2 * BitOr(a / 2, b / 2) }
+lemma AndLe(a: nat, b: nat) ensures BitAnd(a, b) <= a && BitAnd(a, b) <= b { if a != 0 && b != 0 { AndLe(a / 2, b / 2); } }
+lemma OrBound(a: nat, b: nat, k: nat) requires a < Pow2(k) && b < Pow2(k) ensures BitOr(a, b) < Pow2(k)
+{ if a != 0 && b != 0 { OrBound(a / 2, b / 2, k - 1); } }
+lemma Absorb(a: nat, b: nat) ensures BitAnd(BitOr(a, b), a) == a
+{ if a != 0 && b != 0 { Absorb(a / 2, b / 2); } else if a != 0 { AndSelf(a); } }
+lemma AndSelf(a: nat) ensures BitAnd(a, a) == a { if a != 0 { AndSelf(a / 2); } }
+lemma AndComm(a: nat, b: nat) ensures BitAnd(a, b) == BitAnd(b, a) { if a != 0 && b != 0 { AndComm(a / 2, b / 2); } }
+lemma AndAbsorb(a: nat, b: nat) ensures BitAnd(a, BitAnd(a, b)) == BitAnd(a, b) && BitAnd(b, BitAnd(a, b)) == BitAnd(a, b)
+{ if a != 0 && b != 0 { AndAbsorb(a / 2, b / 2); } }
+lemma SubsetOr(c: nat, d: nat, a: nat) requires BitAnd(c, a) == a ensures BitAnd(BitOr(c, d), a) == a
+{ if c != 0 && d != 0 && a != 0 { SubsetOr(c / 2, d / 2, a / 2); } else if c == 0 { } else if d == 0 { } else { AndLe(c, a); } }
+lemma SubsetAnd(a: nat, b: nat, w: nat) ensures (BitAnd(BitAnd(a, b), w) == w) <==> (BitAnd(a, w) == w && BitAnd(b, w) == w)
+{ if a != 0 && b != 0 && w != 0 { SubsetAnd(a / 2, b / 2, w / 2); } else { AndLe(a, b); AndLe(a, w); AndLe(b, w); AndLe(BitAnd(a, b), w); } }
+lemma Laws()
+  ensures forall a: nat, b: nat {:trigger BitAnd(a, b)} :: BitAnd(a, b) <= a && BitAnd(a, b) <= b
+  ensures forall a: nat, b: nat {:trigger BitOr(a, b)} :: a < 0x1_0000_0000 && b < 0x1_0000_0000 ==> BitOr(a, b) < 0x1_0000_0000
+  ensures forall a: nat, b: nat {:trigger BitAnd(BitOr(a, b), a)} :: BitAnd(BitOr(a, b), a) == a
+  ensures forall a: nat, b: nat {:trigger BitAnd(BitOr(a, b), b)} :: BitAnd(BitOr(a, b), b) == b
+  ensures forall a: nat, b: nat {:trigger BitAnd(a, BitAnd(a, b))} :: BitAnd(a, BitAnd(a, b)) == BitAnd(a, b)
+  ensures forall a: nat, b: nat {:trigger BitAnd(b, BitAnd(a, b))} :: BitAnd(b, BitAnd(a, b)) == BitAnd(a, b)
+  ensures forall c: nat, d: nat, a: nat {:trigger BitAnd(BitOr(c, d), a)} :: BitAnd(c, a) == a ==> BitAnd(BitOr(c, d), a) == a
+  ensures forall a: nat, b: nat, w: nat {:trigger BitAnd(BitAnd(a, b), w)} :: (BitAnd(BitAnd(a, b), w) == w) <==> (BitAnd(a, w) == w && BitAnd(b, w) == w)
+{
+  forall a: nat, b: nat ensures BitAnd(a, b) <= a && BitAnd(a, b) <= b { AndLe(a, b); }
+  forall a: nat, b: nat | a < 0x1_0000_0000 && b < 0x1_0000_0000 ensures BitOr(a, b) < 0x1_0000_0000 { Pow2_32(); OrBound(a, b, 32); }
+  forall a: nat, b: nat ensures BitAnd(BitOr(a, b), a) == a { Absorb(a, b); }
+  forall a: nat, b: nat ensures BitAnd(BitOr(a, b), b) == b { OrComm(a, b); Absorb(b, a); }
+  forall a: nat, b: nat ensures BitAnd(a, BitAnd(a, b)) == BitAnd(a, b) { AndAbsorb(a, b); }
+  forall a: nat, b: nat ensures BitAnd(b, BitAnd(a, b)) == BitAnd(a, b) { AndAbsorb(a, b); }
+  forall c: nat, d: nat, a: nat | BitAnd(c, a) == a ensures BitAnd(BitOr(c, d), a) == a { SubsetOr(c, d, a); }
+  forall a: nat, b: nat, w: nat ensures (BitAnd(BitAnd(a, b), w) == w) <==> (BitAnd(a, w) == w && BitAnd(b, w) == w) { SubsetAnd(a, b, w); }
+}
+lemma Pow2_32() ensures Pow2(32) == 0x1_0000_0000 { assert {:fuel Pow2, 34} Pow2(32) == 0x1_0000_0000; }
+lemma OrComm(a: nat, b: nat) ensures BitOr(a, b) == BitOr(b, a) { if a != 0 && b != 0 { OrComm(a / 2, b / 2); } }
+"#;
+
 fn dscalar(s: Scalar, names: &Names) -> String {
     match s {
         Scalar::I32 => "int32".to_string(),
@@ -1156,6 +1254,9 @@ fn dop(o: BinOp) -> &'static str {
         BinOp::And => "&&",
         BinOp::Or => "||",
         BinOp::Implies => "==>",
+        // A bit operator prints as a call of the prelude, in `dexpr`, decision 0175.
+        BinOp::BitAnd => "BitAnd",
+        BinOp::BitOr => "BitOr",
     }
 }
 
@@ -1198,6 +1299,8 @@ fn dexpr(e: &DExpr, names: &Names) -> String {
         DExpr::Just(a) => format!("Some({})", dexpr(a, names)),
         DExpr::Enumerator(k, i) => format!("{}'{}", names.datatypes[k], names.enums.iter().find(|e| e.1 == *k).and_then(|e| e.2.get(*i as usize)).map_or("'unknown", String::as_str)),
         DExpr::Ctor(k, args) => format!("{}({})", names.datatypes[k], dargs(args, names).join(", ")),
+        DExpr::BitOp(o, a, b) => format!("{}({}, {})", dop(*o), dexpr(a, names), dexpr(b, names)),
+        DExpr::SeqLit(args) => format!("[{}]", dargs(args, names).join(", ")),
         DExpr::Len(a) => format!("|{}|", dexpr(a, names)),
         DExpr::Index(a, i) => format!("{}[{}]", dexpr(a, names), dexpr(i, names)),
         DExpr::Append(a, e) => format!("({} + [{}])", dexpr(a, names), dexpr(e, names)),
@@ -1374,6 +1477,8 @@ struct Printer<'a> {
     fresh: u32,
     /// The count of the temporaries of the method so far, `v_'tN`, decision 0104.
     temps: u32,
+    /// The file has a bit operator, so each method with a body calls `Laws()` first, decision 0175.
+    laws: bool,
 }
 
 impl Printer<'_> {
@@ -1923,6 +2028,9 @@ impl Printer<'_> {
             return;
         }
         self.put(0, "{".to_string(), place);
+        if self.laws {
+            self.put(1, "Laws();".to_string(), place);
+        }
         // A method with more than one result returns a value as `result := e; return;`.
         self.writes = m.writes || !outs.is_empty();
         if m.writes {
@@ -2011,6 +2119,9 @@ fn sentence(r: Refusal, names: &Names) -> (u32, String) {
         Refusal::GlobalClash(g, line) => (line, format!("{} names a global and a parameter or a local.", names.text(g))),
         Refusal::MemberGlobal(line) => (line, "a member function that lists a global: the translator has no rule for it yet.".to_string()),
         Refusal::GlobalType(line) => (line, "a global of this type: the translator has no rule for it yet.".to_string()),
+        Refusal::SignedBits(line) => (line, "a bit operator on a signed integer: the translator has no rule for it yet.".to_string()),
+        Refusal::ContractCast(line) => (line, "a static_cast in a contract that can change the value: the translator has no rule for it yet.".to_string()),
+        Refusal::BraceLen(m, n, line) => (line, format!("a braced list of {m} values for a std::array of {n}: the translator has no rule for it yet.")),
         Refusal::Misplaced(line) => (
             line,
             "a contract line in the wrong place. A requires, an ensures, a modifies or a decreases line goes above a function. An invariant or a decreases line goes above a loop, and an index line above a range-for."
@@ -2038,8 +2149,8 @@ fn dparams(ps: &DParams) -> Vec<(u32, DTy)> {
 /// line that no function claimed is a refusal too.
 pub fn translate(lines: &str, companion: Option<(&str, &str)>) -> Result<Translation> {
     // The text `operator()` is the first word, so its id is `CALL_OP`, the id that the core uses, decision 0098. The text `value` is the second, so its id is
-    // `VALUE_NAME`, the member that `x.value()` calls on a struct, decision 0169. The text `reads` is the third, so its id is `READS_NAME`, decision 0173.
-    let mut names = Names { words: vec!["operator()".to_string(), "value".to_string(), "reads".to_string()], ..Default::default() };
+    // `VALUE_NAME`, the member that `x.value()` calls on a struct, decision 0169. The text `reads` is the third, so its id is `READS_NAME`, decision 0173. The text `count` is the fourth, so its id is `COUNT_NAME`, decision 0175.
+    let mut names = Names { words: vec!["operator()".to_string(), "value".to_string(), "reads".to_string(), "count".to_string()], ..Default::default() };
     let mut refusals = Vec::new();
     let mut funcs = Vec::new();
     let mut structs = Vec::new();
@@ -2108,6 +2219,7 @@ pub fn translate(lines: &str, companion: Option<(&str, &str)>) -> Result<Transla
                 names.id(&global);
                 globals.push((global, ty));
             }
+            Item::Valued { valued, values } => names.valued.push((valued, values)),
             Item::Constant { constant, value } => names.constants.extend(value.parse().ok().map(|v| (constant, v))),
             Item::Real { constant, real } => names.reals.push((constant, real.0, real.1, real.2)),
             Item::Enum(en) => match unreadable_enum_name(&en) {
@@ -2145,7 +2257,7 @@ pub fn translate(lines: &str, companion: Option<(&str, &str)>) -> Result<Transla
         // `this` of a virtual function of an interface names it too, decision 0165.
         (Some((_, JTy::This(k) | JTy::ThisMut(k) | JTy::Iface(k) | JTy::IfaceMut(k))), _) | (_, JTy::This(k)) => format!("{}'{}", structs.iter().find(|s| s.key == *k).map_or("", |s| s.name.as_str()), dafny_word(&f.name)),
         // A static member function has the name of its class, `Tally::bump` is `Tally'bump`, decision 0174.
-        _ => f.name.replace("::", "'"),
+        _ => operator_word(&f.name).map_or_else(|| f.name.replace("::", "'"), str::to_string),
     };
     for (i, f) in funcs.iter().enumerate() {
         let same = funcs.iter().filter(|g| plain(g) == plain(f)).count();
@@ -2256,7 +2368,7 @@ pub fn translate(lines: &str, companion: Option<(&str, &str)>) -> Result<Transla
         };
         seen = next;
     }
-    let mut p = Printer { copies: Vec::new(), pending: Vec::new(), method_lines: HashMap::new(), calls: HashMap::new(), owned: HashMap::new(), writing: writing_virtual, refs: refs.clone(), names: &names, methods: &methods, rets: &rets, out: PRELUDE.to_string(), lines: Vec::new(), scope: Vec::new(), own: Vec::new(), writes: false, fresh: 0, temps: 0 };
+    let mut p = Printer { copies: Vec::new(), pending: Vec::new(), method_lines: HashMap::new(), calls: HashMap::new(), owned: HashMap::new(), writing: writing_virtual, refs: refs.clone(), names: &names, methods: &methods, rets: &rets, out: PRELUDE.to_string(), lines: Vec::new(), scope: Vec::new(), own: Vec::new(), writes: false, fresh: 0, temps: 0, laws: format!("{models:?}").contains("BitOp(") };
     p.lines.extend(PRELUDE.lines().map(|_| None));
     let mut refused_at = Vec::new();
     for (en, (place, key)) in enums.iter().zip(enum_places) {
@@ -2344,6 +2456,11 @@ pub fn translate(lines: &str, companion: Option<(&str, &str)>) -> Result<Transla
     if p.out.contains("shr(") {
         p.out.push_str(SHR);
         p.lines.extend(SHR.lines().map(|_| None));
+    }
+    // ponytail: a model has a bit operator when its debug text names `BitOp(`. Upgrade: a walk over the models.
+    if p.laws {
+        p.out.push_str(BITS);
+        p.lines.extend(BITS.lines().map(|_| None));
     }
     // The model of a double operation is the file `Double.dfy` as it is, decision 0154, and the names of the module are in scope. It follows the
     // methods that name it, as `shr` does.

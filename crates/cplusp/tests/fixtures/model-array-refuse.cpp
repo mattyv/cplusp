@@ -6,7 +6,7 @@
 int32_t first(std::array<int32_t, 4>& a) {
   return a[0];
 }
-
+// A std::array by value is in the subset, decision 0175. It stays here as the line of decision 0132.
 int32_t copy(std::array<int32_t, 4> a) {
   return a[0];
 }

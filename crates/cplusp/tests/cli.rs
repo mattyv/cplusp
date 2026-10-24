@@ -3793,7 +3793,6 @@ fn an_array_with_no_const_and_an_array_field_are_refused() {
         text.lines().filter(|l| l.starts_with("Not provable: ")).map(|l| l.rsplit_once(".cpp:").unwrap().1).collect::<Vec<_>>(),
         vec![
             "6: std::array<int32_t, 4> &: the translator has no rule for it yet.",
-            "10: std::array<int32_t, 4>: the translator has no rule for it yet.",
             "18: Pair: the translator has no rule for it yet.",
             "23: an optional of a struct or a sequence of bool has no rule yet.",
         ],
@@ -5477,8 +5476,8 @@ fn types_that_are_an_integer_keep_their_contracts() {
     assert_eq!(failed, want, "{text}");
 }
 
-/// A contract cast that can change the value, a duration other than milliseconds, and a member operator are refused, decision
-/// 0175.
+/// A contract cast that can change the value, a duration other than milliseconds, a member operator, and a braced list that is
+/// short of the extent are refused, decision 0175.
 #[test]
 fn types_that_are_an_integer_with_no_rule_are_refused() {
     let Some(dafny) = dafny() else { return };
@@ -5496,6 +5495,7 @@ fn types_that_are_an_integer_with_no_rule_are_refused() {
             "8: a static_cast in a contract that can change the value: the translator has no rule for it yet.",
             "14: std::chrono::seconds: the translator has no rule for it yet.",
             "24: CXXMethodDecl: the translator has no rule for it yet.",
+            "31: a braced list of 2 values for a std::array of 3: the translator has no rule for it yet.",
         ],
         "{text}"
     );

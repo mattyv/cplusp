@@ -4,7 +4,7 @@
 // written, a cast of an enum, and an order of enums, are refused at their lines, decision 0109. The gate refuses a switch that
 // misses an enumerator, and a fall with no mark.
 enum class Kind : uint8_t { Small, Medium, Large };
-enum class Flag : uint32_t { Read = 1, Write = 2 };
+enum class Flag : int32_t { Read = -1, Write = 2 };  // A negative value has no rule yet, decision 0175.
 
 int32_t marked(Kind k) {
   int32_t n = 0;
