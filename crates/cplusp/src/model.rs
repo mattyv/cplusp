@@ -316,7 +316,10 @@ struct Names {
     /// The sentence of a body line that the core refuses as `Syntax`, by the place of the line.
     said: HashMap<u32, String>,
     /// The first call to an undeclared name in a contract line, by the place of the line.
-    bad_calls: HashMap<u32, String>,
+    /// With `true` when the name is a function of the file and of the companion file, decision 0176.
+    bad_calls: HashMap<u32, (String, bool)>,
+    /// The plain names of the free functions that the table of structs lists under the file, decision 0176. A contract calls them.
+    file_fns: Vec<String>,
     /// The member names of each struct by its key, for the contracts of its member functions, decision 0090.
     members: HashMap<String, Vec<String>>,
     /// The member names of the struct of `this` in the function that is being converted. Empty for any other function.
@@ -643,8 +646,13 @@ fn lex(text: &str, line: u32, names: &mut Names) -> Vec<Tok> {
                     };
                     // A name followed by `(` is a call, and the companion file must declare it. A member name in a member function may be a call of
                     // the member, and the core decides, decision 0090.
-                    if call && !member && !static_call && !names.declared.iter().any(|d| d == word) && !names.this_members.iter().any(|d| d == word) && !names.functors.iter().any(|d| d == word) {
-                        names.bad_calls.entry(line).or_insert_with(|| word.to_string());
+                    let listed = names.file_fns.iter().any(|d| d == word);
+                    if call && !member && !static_call && !listed && !names.declared.iter().any(|d| d == word) && !names.this_members.iter().any(|d| d == word) && !names.functors.iter().any(|d| d == word) {
+                        names.bad_calls.entry(line).or_insert_with(|| (word.to_string(), false));
+                    }
+                    // A name of the file and of the companion file is two functions in a contract, decision 0176.
+                    if call && !member && listed && names.declared.iter().any(|d| d == word) {
+                        names.bad_calls.entry(line).or_insert_with(|| (word.to_string(), true));
                     }
                     Tok::Ident(names.id(word))
                 }
@@ -922,6 +930,31 @@ fn expr_names<'a>(e: &'a JExpr, out: &mut Vec<&'a str>) {
         JExpr::Call(_, _, args, _) | JExpr::Construct(_, args) | JExpr::List(args) => args.iter().for_each(|a| expr_names(a, out)),
         JExpr::Lit(..) | JExpr::Bool(_) | JExpr::RealLit(..) | JExpr::Ratio(..) | JExpr::Nullopt | JExpr::EmptyVec | JExpr::Enumerator(..) | JExpr::Unknown(..) => {}
     }
+}
+
+/// Every contract text of a statement: the assert and apply lines and the lines of the loops, at any depth, for decision 0176.
+fn stmt_conds<'a>(s: &'a JStmt, out: &mut Vec<&'a str>) {
+    match s {
+        JStmt::Assert(c) | JStmt::Apply(c) => out.push(&c.text),
+        JStmt::If(_, t, f, _) => t.iter().chain(f).for_each(|s| stmt_conds(s, out)),
+        JStmt::Switch(_, _, cases, _) => cases.iter().flat_map(|(_, body)| body).for_each(|s| stmt_conds(s, out)),
+        JStmt::While(_, cs, body, _) | JStmt::RangeFor(_, _, _, cs, body, _) => {
+            out.extend(cs.iter().map(|c| c.text.as_str()));
+            body.iter().for_each(|s| stmt_conds(s, out));
+        }
+        JStmt::For(init, _, step, cs, body, _) => {
+            out.extend(cs.iter().map(|c| c.text.as_str()));
+            stmt_conds(init, out);
+            stmt_conds(step, out);
+            body.iter().for_each(|s| stmt_conds(s, out));
+        }
+        _ => {}
+    }
+}
+
+/// Whether a contract text calls the name: the name, not part of a longer name, then `(`.
+fn calls_name(text: &str, name: &str) -> bool {
+    text.match_indices(name).any(|(i, _)| !text[..i].ends_with(|c: char| c.is_ascii_alphanumeric() || c == '_') && text[i + name.len()..].trim_start().starts_with('('))
 }
 
 fn stmt_names<'a>(s: &'a JStmt, out: &mut Vec<&'a str>) {
@@ -1811,7 +1844,8 @@ impl Printer<'_> {
             cs = next;
         }
         self.put(0, "{".to_string(), place);
-        self.put(1, dexpr(body, self.names), place);
+        // A function of a file with a bit operator calls `Laws()` first, as a method does, so the value of a bit operator fits its type, decision 0176.
+        self.put(1, format!("{}{}", if self.laws { "Laws(); " } else { "" }, dexpr(body, self.names)), place);
         self.put(0, "}".to_string(), place);
         self.scope.clear();
         // The function of a pure member has the requires lines and the body of its method, so a failure in it stands for the failure of the method, decision 0167.
@@ -2063,8 +2097,9 @@ fn sentence(r: Refusal, names: &Names) -> (u32, String) {
         Refusal::Construct(k, line) => (line, format!("{}: the translator has no rule for it yet.", names.text(k))),
         Refusal::Name(n, line) => (line, format!("{} in the contract is no parameter.", names.text(n))),
         Refusal::NoField(f, line) => (line, format!("{} in the contract is no field of the struct.", names.text(f))),
-        Refusal::NotPure(n, line) => (line, format!("{} is no pure member function of its struct.", names.text(n))),
-        Refusal::Syntax(line) if names.bad_calls.contains_key(&line) => (line, format!("{} is no function of the companion file.", names.bad_calls[&line])),
+        Refusal::NotPure(n, line) => (line, format!("{} is no pure function. A contract calls a function with one return and no write.", names.text(n))),
+        Refusal::Syntax(line) if names.bad_calls.get(&line).is_some_and(|c| c.1) => (line, format!("{} is a function of the file and of the companion file. Rename one.", names.bad_calls[&line].0)),
+        Refusal::Syntax(line) if names.bad_calls.contains_key(&line) => (line, format!("{} is no function of the companion file.", names.bad_calls[&line].0)),
         Refusal::Syntax(line) if names.said.contains_key(&line) => (line, names.said[&line].clone()),
         Refusal::Syntax(line) => (line, "the contract line has a form the translator cannot read.".to_string()),
         Refusal::Backslash(line) => (line, "a contract line that ends in a backslash.".to_string()),
@@ -2325,6 +2360,29 @@ pub fn translate(lines: &str, companion: Option<(&str, &str)>) -> Result<Transla
         let members = st.members.into_iter().rev().fold(Members::Nil, |rest, (n, k)| Members::Cons((names.id(&n), (names.id(&k), None)), Box::new(rest)));
         table = Structs::Cons((key, (place, fields, members)), Box::new(table));
     }
+    // The free functions with a contract are one entry of the table, under a key that no C++ name can spell, decision 0176. The core marks the pure ones
+    // and finds them by name, as it finds a static. A name that two of them share is left out: a contract cannot tell the overloads apart.
+    let free: Vec<&JFunction> = funcs
+        .iter()
+        .filter(|f| f.class.is_none() && !f.conds.is_empty() && !matches!(f.params.first(), Some((n, _)) if n == "this") && !matches!(f.ret, JTy::This(_)))
+        .filter(|f| funcs.iter().filter(|g| g.name == f.name).count() == 1)
+        // ponytail: only a function that a contract of the file calls is listed. Decision 0176 lists each free function with a contract, but a twin and its link
+        // line show the body to every caller, so each function with a contract would move the verdicts of files that never call it in a contract. Upgrade: list them all.
+        .filter(|f| {
+            let mut texts = Vec::new();
+            funcs.iter().for_each(|g| {
+                texts.extend(g.conds.iter().map(|c| c.text.as_str()));
+                g.body.iter().for_each(|s| stmt_conds(s, &mut texts));
+            });
+            texts.iter().any(|t| calls_name(t, &f.name))
+        })
+        .collect();
+    let file_entry = !free.is_empty();
+    if file_entry {
+        names.file_fns = free.iter().map(|f| f.name.clone()).collect();
+        let members = free.iter().rev().fold(Members::Nil, |rest, f| Members::Cons((names.id(&f.name), (names.id(&f.key), None)), Box::new(rest)));
+        table = Structs::Cons((names.id("'file"), (0, Params::Nil, members)), Box::new(table));
+    }
     let count = funcs.len();
     let fns = funcs.into_iter().rev().map(|f| function(f, &mut names)).fold(Fns::Nil, |rest, f| Fns::Cons(Box::new(f), Box::new(rest)));
     // Each global that a function lists is a parameter of it, decision 0173. The core does it before it translates.
@@ -2351,6 +2409,11 @@ pub fn translate(lines: &str, companion: Option<(&str, &str)>) -> Result<Transla
         .fold(List::Nil, |rest, (d, bs, fin)| List::Cons((*d, (bs.iter().rev().fold(List::Nil, |r, b| List::Cons(*b, Box::new(r))), *fin)), Box::new(rest)));
     let overrides = translate_overrides(&bases, &fns, &table);
     let mut smodels = translate_structs(&table);
+    // The entry of the file is no datatype, decision 0176.
+    if file_entry {
+        let List::Cons(_, rest) = smodels else { unreachable!("one model for each entry") };
+        smodels = *rest;
+    }
     // The companion file, when the scan passed it, goes after the methods. Each of its lines is a place in its own file.
     let (mut companion_text, mut companion_places) = (String::new(), Vec::new());
     if let Some((path, text)) = companion.filter(|(_, text)| companion_ok && !text.is_empty()) {
