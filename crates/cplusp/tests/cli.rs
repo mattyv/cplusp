@@ -3097,7 +3097,7 @@ fn writes_with_no_rule_are_refused_at_their_lines() {
         "model-mut-refuse.cpp:23: the call writes a value back, and the translator writes back only to a local or a reference parameter.",
         "model-mut-refuse.cpp:27: the contract line has a form the translator cannot read.",
         "model-mut-refuse.cpp:37: ReturnStmt: the translator has no rule for it yet.",
-        "model-mut-refuse.cpp:45: a call out of place. The translator takes a call when C++ runs it once and the statement uses its value. It takes a call that writes a value back or gives no value only alone.",
+        "model-mut-refuse.cpp:45: a call out of place. The translator takes a call when C++ runs it once and the statement uses its value. It takes a call that gives no value only alone.",
         "model-mut-refuse.cpp:53: CXXOperatorCallExpr: the translator has no rule for it yet.",
     ] {
         assert!(refusals.iter().any(|l| l.ends_with(want)), "{want}: {text}");
@@ -3148,8 +3148,8 @@ fn prove_names_a_conditional_that_does_not_meet_its_contract() {
     assert_eq!(failed.len(), 2, "{text}");
 }
 
-/// A contract that calls a functor whose operator() is not pure, a call in a branch of a conditional, and a call of a name that a
-/// quantifier binds, are refused at their lines, decisions 0098 and 0100.
+/// A contract that calls a functor whose operator() is not pure, and a call of a name that a quantifier binds, are refused at
+/// their lines, decisions 0098 and 0100. A call in a branch of a conditional in a return has a model, decision 0177.
 #[test]
 fn conditionals_and_functors_with_no_rule_are_refused_at_their_lines() {
     if !clang_tidy_available() {
@@ -3162,12 +3162,11 @@ fn conditionals_and_functors_with_no_rule_are_refused_at_their_lines() {
     let refusals: Vec<&str> = text.lines().filter(|l| l.starts_with("Not provable: ")).collect();
     for want in [
         "model-cond-refuse.cpp:11: operator() is no pure function. A contract calls a function with one return and no write.",
-        "model-cond-refuse.cpp:21: a call out of place. The translator takes a call when C++ runs it once and the statement uses its value. It takes a call that writes a value back or gives no value only alone.",
         "model-cond-refuse.cpp:24: the contract line has a form the translator cannot read.",
     ] {
         assert!(refusals.iter().any(|l| l.ends_with(want)), "{want}: {text}");
     }
-    assert_eq!(refusals.len(), 3, "{text}");
+    assert_eq!(refusals.len(), 2, "{text}");
 }
 
 /// Assert lines, apply lines that call lemmas of the companion file, and a loop contract that names a field of the object in a
@@ -3382,8 +3381,8 @@ fn prove_names_a_call_inside_an_expression_that_does_not_meet_a_contract() {
     assert_eq!(failed.len(), 3, "{text}");
 }
 
-/// A call on the right of && or ||, in a branch of ?:, or in a while or for condition, is refused at its line: C++ may not run
-/// it, or runs it again at each turn, decisions 0104 and 0105.
+/// A call in a while or for condition is refused at its line: C++ runs it again at each turn, decisions 0104 and 0105. A call on
+/// the right of && or || or in a branch of ?: in a return has a model, decision 0177.
 #[test]
 fn a_call_that_cpp_may_not_run_once_is_refused_at_its_line() {
     if !clang_tidy_available() {
@@ -3394,12 +3393,12 @@ fn a_call_that_cpp_may_not_run_once_is_refused_at_its_line() {
     let text = stdout(&o);
     assert_eq!(o.status.code(), Some(1), "stdout: {text} stderr: {}", stderr(&o));
     let refusals: Vec<&str> = text.lines().filter(|l| l.starts_with("Not provable: ")).collect();
-    let place = "a call out of place. The translator takes a call when C++ runs it once and the statement uses its value. It takes a call that writes a value back or gives no value only alone.";
-    for line in [9, 13, 18, 25, 30] {
+    let place = "a call out of place. The translator takes a call when C++ runs it once and the statement uses its value. It takes a call that gives no value only alone.";
+    for line in [18, 30] {
         let want = format!("model-lift-refuse.cpp:{line}: {place}");
         assert!(refusals.iter().any(|l| l.ends_with(&want)), "{want}: {text}");
     }
-    assert_eq!(refusals.len(), 5, "{text}");
+    assert_eq!(refusals.len(), 2, "{text}");
 }
 
 /// int8_t, int16_t and uint16_t, a right shift of an unsigned and of a negative signed value, a named constexpr constant in code
@@ -5569,4 +5568,61 @@ fn a_name_of_the_file_and_of_the_companion_file_is_refused() {
     let want = "model-free-twin-clash.cpp:10: twice is a function of the file and of the companion file. Rename one.";
     assert!(refusals.iter().any(|l| l.ends_with(want)), "{want}: {text}");
     assert_eq!(refusals.len(), 1, "{text}");
+}
+
+/// `x++` and `++x` inside an expression, a call that writes a value back inside an expression, and a call or a write on the right
+/// of && or || or in a branch of ?: prove. The example evaluation_order proves, decision 0177.
+#[test]
+fn a_write_inside_an_expression_proves() {
+    let Some(dafny) = dafny() else { return };
+    if !clang_tidy_available() {
+        return;
+    }
+    for name in ["model-writes.cpp", "../../../../examples/evaluation_order/example.cpp"] {
+        let o = prove(name, &[], &dafny);
+        let text = stdout(&o);
+        assert_eq!(o.status.code(), Some(0), "{name}: stdout: {text} stderr: {}", stderr(&o));
+        assert_eq!(text.lines().last(), Some("ok: proved"), "{name}: {text}");
+    }
+}
+
+/// A next that gives the new value, a write on the right of && that runs whatever the left was, and a write on the right of ||
+/// against a contract that says nothing changes, fail at their returns, decision 0177.
+#[test]
+fn a_write_inside_an_expression_keeps_its_contract() {
+    let Some(dafny) = dafny() else { return };
+    if !clang_tidy_available() {
+        return;
+    }
+    let o = prove("model-writes-wrong.cpp", &[], &dafny);
+    let text = stdout(&o);
+    assert_eq!(o.status.code(), Some(1), "stdout: {text} stderr: {}", stderr(&o));
+    let failed: Vec<&str> = text.lines().filter(|l| l.starts_with("Not proved: ")).map(|l| l.rsplit_once(".cpp:").unwrap().1).collect();
+    let want = [10, 26, 33].map(|l| format!("{l}: the ensures line may not hold on this return."));
+    assert_eq!(failed, want, "{text}");
+}
+
+/// A compound assignment as a value, a write in the condition of a loop, and a call in the condition of a loop are refused at
+/// their lines, decision 0177.
+#[test]
+fn a_write_inside_an_expression_with_no_rule_is_refused() {
+    let Some(dafny) = dafny() else { return };
+    if !clang_tidy_available() {
+        return;
+    }
+    let o = prove("model-writes-refuse.cpp", &[], &dafny);
+    let text = stdout(&o);
+    assert_eq!(o.status.code(), Some(1), "stdout: {text} stderr: {}", stderr(&o));
+    let mut refusals: Vec<&str> = text.lines().filter(|l| l.starts_with("Not provable: ")).map(|l| l.rsplit_once(".cpp:").unwrap().1).collect();
+    refusals.sort_by_key(|l| l.split(':').next().unwrap().parse::<u32>().unwrap());
+    let place = "a call out of place. The translator takes a call when C++ runs it once and the statement uses its value. It takes a call that gives no value only alone.";
+    assert_eq!(
+        refusals,
+        [
+            "8: BinaryOperator +=: the translator has no rule for it yet.".to_string(),
+            "16: a write in the condition of a loop: the translator has no rule for it yet.".to_string(),
+            format!("32: {place}"),
+        ],
+        "{text}"
+    );
 }

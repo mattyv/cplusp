@@ -53,6 +53,8 @@ fn strip_stmt(s: DStmt) -> DStmt {
             Box::new(strip_stmt(*step)),
             0,
         ),
+        DStmt::Block(b) => DStmt::Block(Box::new(strip(*b))),
+        DStmt::Pre(c, x) => DStmt::Pre(c, Box::new(strip_stmt(*x))),
         other => other,
     }
 }
@@ -219,7 +221,7 @@ fn a_call_inside_an_expression_runs_before_its_statement() {
     let all = fns(vec![sat(one(Stmt::Return(Expr::Lit(0, Ty::I32), 15)))]);
     let c = |l: u32| call(SAT, vec![Expr::Lit(1, Ty::I32), Expr::Lit(2, Ty::I32)], l);
     let args = || List::Cons(lit32(1), Box::new(List::Cons(lit32(2), Box::new(List::Nil))));
-    let run = |t: u32, a: DArgs, rest: DCalls| List::Cons((t, DTy::Int32, SAT, a), Box::new(rest));
+    let run = |t: u32, a: DArgs, rest: DCalls| List::Cons(DPre::Call(t, DTy::Int32, SAT, a), Box::new(rest));
     // return sat(1, 2) + 1;
     let plus = Expr::Bin(BinOp::Add, b(c(38)), b(Expr::Lit(1, Ty::I32)));
     let Model::Full(m) = translate_function(&succ(plus), &all, &List::Nil) else { panic!("a full model") };
@@ -2265,10 +2267,13 @@ fn a_reference_parameter_of_the_caller_is_written_back_and_a_call_that_gives_a_v
     assert_eq!(m.outs, int_params(&[X]));
     let List::Cons((local, _), _) = strip(m.body) else { panic!("a body") };
     assert_eq!(*local, DStmt::LocalUpdate(FIRST, DTy::Int32, objs(&[Obj::Out(X)]), NEXT, dargs(vec![DExpr::Out(X)])));
-    // The call writes x, so it has no place inside an expression: return next(x) + 1;
+    // A call that writes x runs first inside an expression too, into a temporary, decision 0177: return next(x) + 1;
     let inside = Expr::Bin(BinOp::Add, b(call(NEXT, vec![Expr::Var(X, mut32())], 43)), b(Expr::Lit(1, Ty::I32)));
     let g = Function { body: one(Stmt::Return(inside, 43)), ..user };
-    assert_eq!(bare_refusal(translate_function(&g, &all, &List::Nil)), Refusal::Place(43));
+    let Model::Full(m) = translate_function(&g, &all, &List::Nil) else { panic!("a full model") };
+    let pre = List::Cons(DPre::Update(0, DTy::Int32, objs(&[Obj::Out(X)]), NEXT, dargs(vec![DExpr::Out(X)])), Box::new(List::Nil));
+    let want = DStmt::Pre(pre, Box::new(DStmt::Return(DExpr::Bin(BinOp::Add, Box::new(DExpr::Temp(0)), Box::new(lit32(1))))));
+    assert_eq!(strip(m.body), List::Cons((Box::new(want), 0), Box::new(List::Nil)));
 }
 
 #[test]
@@ -4459,4 +4464,146 @@ fn a_free_function_with_no_twin_is_refused_in_a_contract() {
     let all = fns(vec![g]);
     let Model::Full(m) = translate_function(&f, &all, &file_table(ms)) else { panic!("a full model") };
     assert_eq!(m.function, None);
+}
+
+const WY: u32 = 420;
+const UNDER: u32 = 421;
+const WTAKE: u32 = 422;
+
+fn step(n: u32, t: Ty, up: bool, prefix: bool) -> Expr {
+    Expr::Step(n, t, up, prefix)
+}
+
+fn pres(v: Vec<DPre>) -> DCalls {
+    v.into_iter().rev().fold(List::Nil, |rest, p| List::Cons(p, Box::new(rest)))
+}
+
+fn block(v: Vec<DStmt>) -> DStmt {
+    DStmt::Block(Box::new(v.into_iter().rev().fold(List::Nil, |rest, d| List::Cons((Box::new(d), 0), Box::new(rest)))))
+}
+
+fn gt0(d: DExpr) -> DExpr {
+    DExpr::Bin(BinOp::Gt, Box::new(d), Box::new(lit32(0)))
+}
+
+/// `int32_t f(int32_t& x, int32_t& y)` with modifies x, y, and a body of `body`.
+fn writer(body: Stmts) -> Function {
+    let ps = List::Cons((X, mut32()), Box::new(List::Cons((WY, mut32()), Box::new(List::Nil))));
+    Function { name: 423, line: 10, params: ps, ret: Ty::I32, trusted: false, conds: modifies(&[X, WY], &[X, WY], List::Nil), body }
+}
+
+fn the_body(m: Model) -> DStmt {
+    let Model::Full(m) = m else { panic!("a full model: {m:?}") };
+    let List::Cons((s, _), _) = strip(m.body) else { panic!("a body") };
+    *s
+}
+
+/// `x++` and `++x` inside an expression write before the statement into a temporary, decision 0177. A by-value parameter cannot
+/// be written.
+#[test]
+fn a_step_in_an_expression_writes_first() {
+    let ret = |e: Expr| one(Stmt::Return(e, 11));
+    let post = the_body(translate_function(&writer(ret(step(X, mut32(), true, false))), &List::Nil, &List::Nil));
+    assert_eq!(post, DStmt::Pre(pres(vec![DPre::Step(0, DTy::Int32, X, true, false, true)]), Box::new(DStmt::Return(DExpr::Temp(0)))));
+    let pre = the_body(translate_function(&writer(ret(step(X, mut32(), true, true))), &List::Nil, &List::Nil));
+    assert_eq!(pre, DStmt::Pre(pres(vec![DPre::Step(0, DTy::Int32, X, true, true, true)]), Box::new(DStmt::Return(DExpr::Temp(0)))));
+    // A local: int32_t a = 0; return a--;
+    let body = List::Cons(Box::new(Stmt::Local(A, Ty::I32, Expr::Lit(0, Ty::I32), 11)), Box::new(one(Stmt::Return(step(A, Ty::I32, false, false), 12))));
+    let Model::Full(m) = translate_function(&writer(body), &List::Nil, &List::Nil) else { panic!("a full model") };
+    let List::Cons(_, rest) = strip(m.body) else { panic!("a body") };
+    let List::Cons((second, _), _) = *rest else { panic!("two statements") };
+    assert_eq!(*second, DStmt::Pre(pres(vec![DPre::Step(0, DTy::Int32, A, false, false, false)]), Box::new(DStmt::Return(DExpr::Temp(0)))));
+    // A by-value parameter: int32_t g(int32_t x) { return x++; }
+    let g = Function { name: 424, line: 10, params: List::Cons((X, Ty::I32), Box::new(List::Nil)), ret: Ty::I32, trusted: false, conds: List::Nil, body: ret(step(X, Ty::I32, true, false)) };
+    assert_eq!(bare_refusal(translate_function(&g, &List::Nil, &List::Nil)), Refusal::WriteParam(X, 11));
+}
+
+/// A call that writes a value back runs before the statement into a temporary, and writes back its places, decision 0177.
+#[test]
+fn a_call_that_writes_lifts_into_a_temporary() {
+    let all = fns(vec![next_fn()]);
+    let body = one(Stmt::Return(Expr::Bin(BinOp::Gt, b(call(NEXT, vec![Expr::Var(X, mut32())], 11)), b(Expr::Lit(0, Ty::I32))), 11));
+    let f = Function { ret: Ty::Bool, ..writer(body) };
+    let got = the_body(translate_function(&f, &all, &List::Nil));
+    let pre = pres(vec![DPre::Update(0, DTy::Int32, objs(&[Obj::Out(X)]), NEXT, dargs(vec![DExpr::Out(X)]))]);
+    assert_eq!(got, DStmt::Pre(pre, Box::new(DStmt::Return(gt0(DExpr::Temp(0))))));
+}
+
+/// A `return` with a call on the right of && or || or in a branch of ?: becomes an if, so the call runs only when C++ runs
+/// it. A pure call there takes the same path, decision 0177.
+#[test]
+fn a_call_on_the_right_of_and_becomes_an_if() {
+    let under = Function { name: UNDER, line: 3, params: List::Cons((A, Ty::I32), Box::new(List::Nil)), ret: Ty::Bool, trusted: false, conds: List::Nil, body: one(Stmt::Return(Expr::Bool(true), 4)) };
+    let all = fns(vec![next_fn(), under]);
+    let next = |v: u32| Expr::Bin(BinOp::Gt, b(call(NEXT, vec![Expr::Var(v, mut32())], 11)), b(Expr::Lit(0, Ty::I32)));
+    let upd = |t: u32, v: u32| DPre::Update(t, DTy::Int32, objs(&[Obj::Out(v)]), NEXT, dargs(vec![DExpr::Out(v)]));
+    let set = |t: u32, d: DExpr| DStmt::AssignTemp(t, d);
+    let ret_bool = |e: Expr| Function { ret: Ty::Bool, ..writer(one(Stmt::Return(e, 11))) };
+    // return next(x) > 0 && next(y) > 0;
+    let and = Expr::Bin(BinOp::And, b(next(X)), b(next(WY)));
+    let got = the_body(translate_function(&ret_bool(and), &all, &List::Nil));
+    let right = List::Cons((Box::new(DStmt::Pre(pres(vec![upd(2, WY)]), Box::new(set(0, gt0(DExpr::Temp(2)))))), 0), Box::new(List::Nil));
+    let want = block(vec![
+        DStmt::DeclTemp(0, DTy::Bool),
+        DStmt::Pre(pres(vec![upd(1, X)]), Box::new(set(0, gt0(DExpr::Temp(1))))),
+        DStmt::If(DExpr::Temp(0), Box::new(right), Box::new(List::Nil)),
+        DStmt::Return(DExpr::Temp(0)),
+    ]);
+    assert_eq!(got, want);
+    // return next(x) > 0 || next(y) > 0; the right side runs when the left is false.
+    let or = Expr::Bin(BinOp::Or, b(next(X)), b(next(WY)));
+    let DStmt::Block(got) = the_body(translate_function(&ret_bool(or), &all, &List::Nil)) else { panic!("a block") };
+    let List::Cons(_, rest) = *got else { panic!("statements") };
+    let List::Cons(_, rest) = *rest else { panic!("statements") };
+    let List::Cons((cond, _), _) = *rest else { panic!("statements") };
+    assert!(matches!(&*cond, DStmt::If(DExpr::Not(t), _, _) if **t == DExpr::Temp(0)), "{cond:?}");
+    // return take ? next(x) : 0; each branch returns its value.
+    let pick = Expr::Cond(b(Expr::Var(WTAKE, Ty::Bool)), b(call(NEXT, vec![Expr::Var(X, mut32())], 11)), b(Expr::Lit(0, Ty::I32)));
+    let f = writer(one(Stmt::Return(pick, 11)));
+    let f = Function { params: List::Cons((WTAKE, Ty::Bool), Box::new(f.params)), ..f };
+    let got = the_body(translate_function(&f, &all, &List::Nil));
+    let then = List::Cons((Box::new(DStmt::Pre(pres(vec![upd(0, X)]), Box::new(DStmt::Return(DExpr::Temp(0))))), 0), Box::new(List::Nil));
+    let other = List::Cons((Box::new(DStmt::Return(lit32(0))), 0), Box::new(List::Nil));
+    assert_eq!(got, block(vec![DStmt::If(DExpr::Var(WTAKE), Box::new(then), Box::new(other))]));
+    // return a > 0 && under_ten(a); a pure call on the right is no call out of place.
+    let small = Expr::Bin(BinOp::And, b(Expr::Bin(BinOp::Gt, b(read(A, Ty::I32)), b(Expr::Lit(0, Ty::I32)))), b(call(UNDER, vec![read(A, Ty::I32)], 11)));
+    let f = Function { name: 425, line: 10, params: List::Cons((A, Ty::I32), Box::new(List::Nil)), ret: Ty::Bool, trusted: false, conds: List::Nil, body: one(Stmt::Return(small, 11)) };
+    let got = the_body(translate_function(&f, &all, &List::Nil));
+    let right = List::Cons((Box::new(DStmt::Pre(pres(vec![DPre::Call(1, DTy::Bool, UNDER, dargs(vec![DExpr::Var(A)]))]), Box::new(set(0, DExpr::Temp(1))))), 0), Box::new(List::Nil));
+    let want = block(vec![
+        DStmt::DeclTemp(0, DTy::Bool),
+        set(0, gt0(DExpr::Var(A))),
+        DStmt::If(DExpr::Temp(0), Box::new(right), Box::new(List::Nil)),
+        DStmt::Return(DExpr::Temp(0)),
+    ]);
+    assert_eq!(got, want);
+}
+
+/// Two writes where C++ fixes no order, or a write and a read of one name, are refused. The two sides of && are two regions,
+/// decision 0177.
+#[test]
+fn two_writes_or_a_write_and_a_read_are_refused() {
+    let all = fns(vec![next_fn()]);
+    let ret = |e: Expr| writer(one(Stmt::Return(e, 11)));
+    let add = |a: Expr, c: Expr| Expr::Bin(BinOp::Add, b(a), b(c));
+    let two = add(step(X, mut32(), true, false), step(WY, mut32(), true, false));
+    assert_eq!(bare_refusal(translate_function(&ret(two), &all, &List::Nil)), Refusal::TwoWrites(11));
+    let read_too = add(step(X, mut32(), true, false), read(X, mut32()));
+    assert_eq!(bare_refusal(translate_function(&ret(read_too), &all, &List::Nil)), Refusal::WriteRead(X, 11));
+    let call_read = add(call(NEXT, vec![Expr::Var(X, mut32())], 11), read(X, mut32()));
+    assert_eq!(bare_refusal(translate_function(&ret(call_read), &all, &List::Nil)), Refusal::WriteRead(X, 11));
+    let gt = |e: Expr| Expr::Bin(BinOp::Gt, b(e), b(Expr::Lit(0, Ty::I32)));
+    let regions = Expr::Bin(BinOp::And, b(gt(step(X, mut32(), true, false))), b(gt(step(WY, mut32(), true, false))));
+    let f = Function { ret: Ty::Bool, ..ret(regions) };
+    assert!(matches!(translate_function(&f, &all, &List::Nil), Model::Full(_)));
+}
+
+/// A write in the condition of a loop has no rule, and a call there keeps the refusal of decision 0104, decision 0177.
+#[test]
+fn a_write_in_a_loop_condition_is_refused() {
+    let all = fns(vec![next_fn()]);
+    let lt = |e: Expr| Expr::Bin(BinOp::Lt, b(e), b(Expr::Lit(10, Ty::I32)));
+    let looped = |c: Expr| writer(List::Cons(Box::new(Stmt::While(c, Box::new(List::Nil), Box::new(List::Nil), 12)), Box::new(one(Stmt::Return(Expr::Lit(0, Ty::I32), 14)))));
+    assert_eq!(bare_refusal(translate_function(&looped(lt(step(X, mut32(), true, false))), &all, &List::Nil)), Refusal::LoopWrite(12));
+    assert_eq!(bare_refusal(translate_function(&looped(lt(call(NEXT, vec![Expr::Var(X, mut32())], 12))), &all, &List::Nil)), Refusal::Place(12));
 }
