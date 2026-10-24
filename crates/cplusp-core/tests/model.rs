@@ -4861,3 +4861,24 @@ fn a_local_array_from_a_brace_list_is_a_sequence() {
     assert!(matches!(&*second, DStmt::Assign(v, DExpr::SetAt(..)) if *v == X), "{second:?}");
     assert_eq!(refusal_of(&translate_function(&f(&[10, 20]), &List::Nil, &List::Nil)), Refusal::BraceLen(2, 3, 21));
 }
+
+/// `v(n, x)` of a local vector is a sequence of n copies of x. A move of a local vector gives the new local its value, then leaves
+/// the source with any value, decision 0185.
+#[test]
+fn a_local_vector_from_a_fill_and_from_a_move() {
+    let vec = Ty::Vec(Scalar::I32);
+    let fill = Expr::Fill(b(Expr::Lit(3, Ty::U64)), b(Expr::Lit(0, Ty::I32)));
+    let body = List::Cons(
+        Box::new(Stmt::Local(X, vec, fill, 21)),
+        Box::new(List::Cons(Box::new(Stmt::Local(A, vec, Expr::Move(X, vec), 22)), Box::new(one(Stmt::Return(Expr::Lit(0, Ty::I32), 23))))),
+    );
+    let f = Function { name: 453, line: 20, params: List::Nil, ret: Ty::I32, trusted: false, conds: List::Nil, body };
+    let Model::Full(m) = translate_function(&f, &List::Nil, &List::Nil) else { panic!("a full model") };
+    let List::Cons((first, _), rest) = strip(m.body) else { panic!("a body") };
+    assert!(matches!(&*first, DStmt::Local(v, _, DExpr::SeqFill(..)) if *v == X), "{first:?}");
+    let List::Cons((second, _), _) = *rest else { panic!("a move") };
+    assert!(
+        matches!(&*second, DStmt::Gone(inner, w, false) if *w == X && matches!(&**inner, DStmt::Local(v, _, DExpr::Var(src)) if *v == A && *src == X)),
+        "{second:?}"
+    );
+}

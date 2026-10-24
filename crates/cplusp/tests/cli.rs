@@ -5761,6 +5761,94 @@ fn a_move_with_no_rule_is_refused() {
     assert_eq!(refusals, want, "{text}");
 }
 
+/// A vector by rvalue reference is a reference parameter, a move into a local vector gives the local the value, and `v(n, x)` is
+/// a vector of n copies, decision 0185.
+#[test]
+fn a_vector_that_the_code_gives_up_proves() {
+    let Some(dafny) = dafny() else { return };
+    if !clang_tidy_available() {
+        return;
+    }
+    for name in ["model-vec-move.cpp", "../../../../examples/rvalue_references/example.cpp"] {
+        let o = prove(name, &[], &dafny);
+        let text = stdout(&o);
+        assert_eq!(o.status.code(), Some(0), "{name}: stdout: {text} stderr: {}", stderr(&o));
+        assert_eq!(text.lines().last(), Some("ok: proved"), "{name}: {text}");
+    }
+}
+
+/// A moved-from vector has any value, so a claim about it fails, and a vector of n copies holds only the value it copies,
+/// decision 0185.
+#[test]
+fn a_vector_that_the_code_gives_up_keeps_no_value() {
+    let Some(dafny) = dafny() else { return };
+    if !clang_tidy_available() {
+        return;
+    }
+    let o = prove("model-vec-move-wrong.cpp", &[], &dafny);
+    let text = stdout(&o);
+    assert_eq!(o.status.code(), Some(1), "stdout: {text} stderr: {}", stderr(&o));
+    let failed: Vec<&str> = text.lines().filter(|l| l.starts_with("Not proved: ") || l.starts_with("Not provable: ")).map(|l| l.rsplit_once(".cpp:").unwrap().1).collect();
+    let want = ["12", "18", "27", "35"].map(|l| format!("{l}: the ensures line may not hold on this return."));
+    assert_eq!(failed, want, "{text}");
+}
+
+/// A team that loosens rvalue_references reads a vector after its move. The model keeps no value for a moved local, and the
+/// caller gets back a vector with any value, so neither claim proves, decision 0185.
+#[test]
+fn a_vector_that_the_code_gives_up_has_no_value_without_the_gate() {
+    let Some(dafny) = dafny() else { return };
+    if !clang_tidy_available() {
+        return;
+    }
+    let team = fixture("team-loosen-move.yaml");
+    let o = prove("model-vec-move-loose.cpp", &["--policy", team.to_str().unwrap()], &dafny);
+    let text = stdout(&o);
+    assert_eq!(o.status.code(), Some(1), "stdout: {text} stderr: {}", stderr(&o));
+    let failed: Vec<&str> = text.lines().filter(|l| l.starts_with("Not proved: ") || l.starts_with("Not provable: ")).map(|l| l.rsplit_once(".cpp:").unwrap().1).collect();
+    assert_eq!(failed, ["19: the ensures line may not hold on this return.", "26: the ensures line may not hold on this return."], "{text}");
+}
+
+/// The count and the value of `v(n, x)` are two arguments of one call, and the core checks them as it checks any call, so a write
+/// and a read of one name in them is refused, decision 0185.
+#[test]
+fn a_vector_of_copies_keeps_the_order_check() {
+    if !clang_tidy_available() {
+        return;
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let (o, _) = model("model-vec-fill-order.cpp", dir.path());
+    let text = stdout(&o);
+    assert_eq!(o.status.code(), Some(1), "stdout: {text} stderr: {}", stderr(&o));
+    let want = "model-vec-fill-order.cpp:8: k has a write and a read in one expression. C++ does not fix the order.";
+    assert!(text.lines().any(|l| l.starts_with("Not provable: ") && l.ends_with(want)), "{want}: {text}");
+}
+
+/// A vector by rvalue reference that the modifies line does not name, a vector parameter by value, `v(n)`, `v{a, b}`, and a move
+/// in a return or an assignment are refused, decision 0185.
+#[test]
+fn a_vector_that_the_code_gives_up_with_no_rule_is_refused() {
+    let Some(dafny) = dafny() else { return };
+    if !clang_tidy_available() {
+        return;
+    }
+    let o = prove("model-vec-move-refuse.cpp", &[], &dafny);
+    let text = stdout(&o);
+    assert_eq!(o.status.code(), Some(1), "stdout: {text} stderr: {}", stderr(&o));
+    let refused: Vec<&str> = text.lines().filter(|l| l.starts_with("Not proved: ") || l.starts_with("Not provable: ")).map(|l| l.rsplit_once(".cpp:").unwrap().1).collect();
+    let local = "a local vector has a rule only as a copy of a vector in scope.";
+    let want = [
+        "9: v is a reference parameter that the modifies line does not name.".to_string(),
+        "15: std::vector<int32_t>: the translator has no rule for it yet.".to_string(),
+        format!("22: {local}"),
+        format!("28: {local}"),
+        "36: CXXConstructExpr: the translator has no rule for it yet.".to_string(),
+        "44: CXXOperatorCallExpr: the translator has no rule for it yet.".to_string(),
+        "50: CXXTemporaryObjectExpr: the translator has no rule for it yet.".to_string(),
+    ];
+    assert_eq!(refused, want, "{text}");
+}
+
 /// A local std::array from a brace list of its length is the sequence of the values. The code reads it, writes an element and
 /// passes it to a span parameter, decision 0184.
 #[test]

@@ -1,0 +1,6 @@
+version: 1
+extends: cplusp:default
+rules:
+  - id: rvalue_references
+    decision: allow
+    loosened_because: A test reads a vector after its move, to show that the model keeps no value for it.

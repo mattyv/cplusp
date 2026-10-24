@@ -189,3 +189,4 @@ Status is `decided`, `proposed` (the default until someone objects or the thin s
 | [0182](0182-a-reference-to-a-local-through-a-call.md) | A reference to a local through a call | decided |
 | [0183](0183-a-member-function-that-returns-its-object.md) | A member function that returns its object | decided |
 | [0184](0184-a-local-array-from-a-brace-list.md) | A local array from a brace list | decided |
+| [0185](0185-a-vector-that-the-code-gives-up.md) | A vector that the code gives up | decided |
