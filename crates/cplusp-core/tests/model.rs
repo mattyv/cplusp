@@ -54,6 +54,8 @@ fn strip_stmt(s: DStmt) -> DStmt {
             0,
         ),
         DStmt::Block(b) => DStmt::Block(Box::new(strip(*b))),
+        DStmt::Scope(b) => DStmt::Scope(Box::new(strip(*b))),
+        DStmt::Dtors(b) => DStmt::Dtors(Box::new(strip(*b))),
         DStmt::Pre(c, x) => DStmt::Pre(c, Box::new(strip_stmt(*x))),
         other => other,
     }
@@ -4129,8 +4131,15 @@ fn a_global_with_no_rule_is_refused_by_the_pass() {
     assert_eq!(refusal_of(&last(unit(vec![global_add(), reader]))), Refusal::ReadsOnly(GADDNM, GT, 31));
     let clash = Function { params: List::Cons((GT, Ty::I32), Box::new(List::Nil)), ..global_user(List::Cons(lists(CondKind::Modifies, GT, 19, &[GT]), Box::new(List::Nil)), one(Stmt::Return(Expr::Lit(0, Ty::I32), 21))) };
     assert_eq!(refusal_of(&last(unit(vec![clash]))), Refusal::GlobalClash(GT, 19));
+    // A member that writes its object can list a global, decision 0178. A const member cannot yet, since its twin takes no global.
     let member = Function { params: List::Cons((THIS, Ty::ThisMut(COUNTER)), Box::new(List::Nil)), ret: Ty::Void, ..global_user(List::Cons(lists(CondKind::Modifies, GT, 9, &[]), Box::new(List::Nil)), List::Nil) };
-    assert_eq!(refusal_of(&last(unit(vec![member]))), Refusal::MemberGlobal(9));
+    let out = globalize(&fns(vec![member]), &file_globals());
+    assert!(!any_bad(&fn_list(&out)[0].conds));
+    assert_eq!(fn_list(&out)[0].params, List::Cons((THIS, Ty::ThisMut(COUNTER)), Box::new(List::Cons((GT, Ty::Mut(Scalar::I32)), Box::new(List::Nil)))));
+    let reader = Function { params: List::Cons((THIS, Ty::This(COUNTER)), Box::new(List::Nil)), ..global_user(List::Cons(lists(CondKind::Reads, GT, 9, &[]), Box::new(List::Nil)), List::Nil) };
+    assert_eq!(refusal_of(&last(unit(vec![reader]))), Refusal::MemberGlobal(9));
+    let virt = Function { params: List::Cons((THIS, Ty::IfaceMut(COUNTER)), Box::new(List::Nil)), ret: Ty::Void, ..global_user(List::Cons(lists(CondKind::Modifies, GT, 9, &[]), Box::new(List::Nil)), List::Nil) };
+    assert_eq!(refusal_of(&last(unit(vec![virt]))), Refusal::MemberGlobal(9));
     let real = global_user(List::Cons(lists(CondKind::Reads, GS, 13, &[]), Box::new(List::Nil)), one(Stmt::Return(Expr::Lit(0, Ty::I32), 16)));
     assert_eq!(refusal_of(&last(unit(vec![real]))), Refusal::GlobalType(13));
     let unlisted = global_user(List::Nil, one(Stmt::Return(Expr::Var(GT, Ty::I32), 22)));
@@ -4484,7 +4493,7 @@ fn pres(v: Vec<DPre>) -> DCalls {
 }
 
 fn block(v: Vec<DStmt>) -> DStmt {
-    DStmt::Block(Box::new(v.into_iter().rev().fold(List::Nil, |rest, d| List::Cons((Box::new(d), 0), Box::new(rest)))))
+    DStmt::Block(Box::new(stmts(v)))
 }
 
 fn gt0(d: DExpr) -> DExpr {
@@ -4611,4 +4620,181 @@ fn a_write_in_a_loop_condition_is_refused() {
     let looped = |c: Expr| writer(List::Cons(Box::new(Stmt::While(c, Box::new(List::Nil), Box::new(List::Nil), 12)), Box::new(one(Stmt::Return(Expr::Lit(0, Ty::I32), 14)))));
     assert_eq!(bare_refusal(translate_function(&looped(lt(step(X, mut32(), true, false))), &all, &List::Nil)), Refusal::LoopWrite(12));
     assert_eq!(bare_refusal(translate_function(&looped(lt(call(NEXT, vec![Expr::Var(X, mut32())], 12))), &all, &List::Nil)), Refusal::Place(12));
+}
+
+const GUARD: u32 = 430;
+const KCTOR: u32 = 431;
+const KDTOR: u32 = 432;
+const KHANDLE: u32 = 433;
+const HANDLE_N: u32 = 434;
+const HANDLE_F: u32 = 435;
+const GG: u32 = 436;
+const GB: u32 = 437;
+const GN: u32 = 438;
+const GTAKE: u32 = 439;
+const QUIET: u32 = 440;
+const KQCTOR: u32 = 441;
+const KQDTOR: u32 = 442;
+const GO: u32 = 443;
+
+fn ps(v: &[(u32, Ty)]) -> Params {
+    v.iter().rev().fold(List::Nil, |rest, p| List::Cons(*p, Box::new(rest)))
+}
+
+fn mods(line: u32, decl: &[u32]) -> Conds {
+    List::Cons((CondKind::Modifies, Expr::Name(GO), line, names(decl)), Box::new(List::Nil))
+}
+
+/// A guard with a constructor and a destructor that each write the global `open`, and a const member `handle()`, decision 0178.
+fn guard_fns() -> Fns {
+    let ctor = Function { name: KCTOR, line: 27, params: ps(&[(GO, mut32())]), ret: Ty::This(GUARD), trusted: true, conds: mods(25, &[GO]), body: List::Nil };
+    let dtor = Function { name: KDTOR, line: 32, params: ps(&[(THIS, Ty::ThisMut(GUARD)), (GO, mut32())]), ret: Ty::Void, trusted: true, conds: mods(30, &[THIS, GO]), body: List::Nil };
+    let handle = Function { name: KHANDLE, line: 35, params: ps(&[(THIS, Ty::This(GUARD))]), ret: Ty::I32, trusted: true, conds: List::Nil, body: List::Nil };
+    let qctor = Function { name: KQCTOR, line: 42, params: List::Nil, ret: Ty::This(QUIET), trusted: true, conds: List::Nil, body: List::Nil };
+    let qdtor = Function { name: KQDTOR, line: 43, params: ps(&[(THIS, Ty::ThisMut(QUIET))]), ret: Ty::Void, trusted: false, conds: List::Nil, body: List::Nil };
+    fns(vec![ctor, dtor, handle, qctor, qdtor])
+}
+
+fn guard_table() -> Structs {
+    let ms = List::Cons(
+        (DTOR_NAME, (KDTOR, None)),
+        Box::new(List::Cons((HANDLE_N, (KHANDLE, Some((Ty::I32, ps(&[(THIS, Ty::This(GUARD))]))))), Box::new(List::Nil))),
+    );
+    let guard = (GUARD, (22, ps(&[(HANDLE_F, Ty::I32)]), ms));
+    let quiet = (QUIET, (39, ps(&[(GN, Ty::I32)]), List::Cons((DTOR_NAME, (KQDTOR, None)), Box::new(List::Nil))));
+    List::Cons(guard, Box::new(List::Cons(quiet, Box::new(List::Nil))))
+}
+
+fn guard_local(v: u32, line: u32) -> Stmt {
+    Stmt::Local(v, Ty::Struct(GUARD), call(KCTOR, vec![Expr::Var(GO, mut32())], line), line)
+}
+
+fn guard_user(body: Stmts) -> Function {
+    Function { name: 444, line: 44, params: ps(&[(GO, mut32())]), ret: Ty::I32, trusted: false, conds: mods(42, &[GO]), body }
+}
+
+fn stmts(v: Vec<DStmt>) -> DStmts {
+    v.into_iter().rev().fold(List::Nil, |rest, d| List::Cons((Box::new(d), 0), Box::new(rest)))
+}
+
+fn made(v: u32) -> DStmt {
+    DStmt::LocalUpdate(v, DTy::Struct(GUARD), objs(&[Obj::Out(GO)]), KCTOR, dargs(vec![DExpr::Out(GO)]))
+}
+
+fn dies(v: u32) -> DStmt {
+    DStmt::Update(objs(&[Obj::Local(v), Obj::Out(GO)]), KDTOR, dargs(vec![DExpr::Var(v), DExpr::Out(GO)]))
+}
+
+/// The statements of a `return` with live locals: the value, then each destructor, then the exit.
+fn dying(value: DStmt, ds: Vec<DStmt>) -> DStmt {
+    block(vec![value, DStmt::Dtors(Box::new(stmts(ds))), DStmt::Exit])
+}
+
+/// A local of a struct with a destructor dies before a return, after the value of the return. The destructor takes the
+/// global back, decision 0178.
+#[test]
+fn a_destructor_runs_before_a_return() {
+    let body = List::Cons(Box::new(guard_local(GG, 45)), Box::new(one(Stmt::Return(call(KHANDLE, vec![read(GG, Ty::Struct(GUARD))], 46), 46))));
+    let Model::Full(m) = translate_function(&guard_user(body), &guard_fns(), &guard_table()) else { panic!("a full model") };
+    let value = DStmt::Pre(pres(vec![DPre::Call(0, DTy::Int32, KHANDLE, dargs(vec![DExpr::Var(GG)]))]), Box::new(DStmt::SetResult(DExpr::Temp(0))));
+    assert_eq!(strip(m.body), stmts(vec![made(GG), dying(value, vec![dies(GG)])]));
+}
+
+/// Two locals die in the reverse order, and a local of a bare block dies at its end, decision 0178.
+#[test]
+fn locals_die_in_reverse_order_and_at_the_end_of_their_block() {
+    let inner = List::Cons(Box::new(guard_local(GB, 57)), Box::new(one(Stmt::Assign(GN, read(GO, mut32()), 58))));
+    let body = List::Cons(
+        Box::new(guard_local(GG, 54)),
+        Box::new(List::Cons(
+            Box::new(Stmt::Local(GN, Ty::I32, Expr::Lit(0, Ty::I32), 55)),
+            Box::new(List::Cons(Box::new(Stmt::Block(Box::new(inner), 56)), Box::new(one(Stmt::Return(read(GN, Ty::I32), 60))))),
+        )),
+    );
+    let Model::Full(m) = translate_function(&guard_user(body), &guard_fns(), &guard_table()) else { panic!("a full model") };
+    let scope = DStmt::Scope(Box::new(stmts(vec![made(GB), DStmt::Assign(GN, DExpr::Out(GO)), DStmt::Dtors(Box::new(stmts(vec![dies(GB)])))])));
+    let want = stmts(vec![made(GG), DStmt::Local(GN, DTy::Int32, lit32(0)), scope, dying(DStmt::SetResult(DExpr::Var(GN)), vec![dies(GG)])]);
+    assert_eq!(strip(m.body), want);
+    // Two locals of one block: the later one dies first.
+    let body = List::Cons(Box::new(guard_local(GG, 54)), Box::new(List::Cons(Box::new(guard_local(GB, 55)), Box::new(one(Stmt::Return(Expr::Lit(0, Ty::I32), 56))))));
+    let Model::Full(m) = translate_function(&guard_user(body), &guard_fns(), &guard_table()) else { panic!("a full model") };
+    let List::Cons(_, rest) = strip(m.body) else { panic!("a body") };
+    let List::Cons(_, rest) = *rest else { panic!("a body") };
+    let List::Cons((last, _), _) = *rest else { panic!("a body") };
+    assert_eq!(*last, dying(DStmt::SetResult(lit32(0)), vec![dies(GB), dies(GG)]));
+}
+
+/// A return inside an if destroys the locals of the enclosing blocks, and a branch that returns gets no destructor at its end,
+/// decision 0178.
+#[test]
+fn a_return_in_a_branch_destroys_the_enclosing_locals() {
+    let then = one(Stmt::Return(Expr::Lit(1, Ty::I32), 70));
+    let body = List::Cons(
+        Box::new(guard_local(GG, 68)),
+        Box::new(List::Cons(Box::new(Stmt::If(read(GTAKE, Ty::Bool), Box::new(then), Box::new(List::Nil), 69)), Box::new(one(Stmt::Return(Expr::Lit(2, Ty::I32), 72))))),
+    );
+    let f = Function { params: ps(&[(GTAKE, Ty::Bool), (GO, mut32())]), conds: mods(65, &[GTAKE, GO]), ..guard_user(body) };
+    let Model::Full(m) = translate_function(&f, &guard_fns(), &guard_table()) else { panic!("a full model") };
+    let branch = stmts(vec![dying(DStmt::SetResult(lit32(1)), vec![dies(GG)])]);
+    let want = stmts(vec![made(GG), DStmt::If(DExpr::Var(GTAKE), Box::new(branch), Box::new(List::Nil)), dying(DStmt::SetResult(lit32(2)), vec![dies(GG)])]);
+    assert_eq!(strip(m.body), want);
+}
+
+/// A copy of a struct with a destructor has no rule: a return of a local, a local made from a local, and a parameter by value,
+/// decision 0178.
+#[test]
+fn a_copy_of_a_struct_with_a_destructor_is_refused() {
+    let ret = List::Cons(Box::new(guard_local(GG, 25)), Box::new(one(Stmt::Return(read(GG, Ty::Struct(GUARD)), 26))));
+    let f = Function { ret: Ty::Struct(GUARD), ..guard_user(ret) };
+    assert_eq!(refusal_of(&translate_function(&f, &guard_fns(), &guard_table())), Refusal::Copy(26));
+    let copy = List::Cons(
+        Box::new(guard_local(GG, 25)),
+        Box::new(List::Cons(Box::new(Stmt::Local(GB, Ty::Struct(GUARD), read(GG, Ty::Struct(GUARD)), 27)), Box::new(one(Stmt::Return(Expr::Lit(0, Ty::I32), 28))))),
+    );
+    assert_eq!(refusal_of(&translate_function(&guard_user(copy), &guard_fns(), &guard_table())), Refusal::Copy(27));
+    let by_value = Function { name: 445, line: 30, params: ps(&[(GG, Ty::Struct(GUARD))]), ret: Ty::I32, trusted: false, conds: List::Nil, body: one(Stmt::Return(Expr::Lit(0, Ty::I32), 31)) };
+    assert_eq!(refusal_of(&translate_function(&by_value, &guard_fns(), &guard_table())), Refusal::Copy(30));
+}
+
+/// A local of a struct whose destructor has no contract has no rule, decision 0178.
+#[test]
+fn a_destructor_with_no_contract_is_refused() {
+    let body = List::Cons(Box::new(Stmt::Local(GG, Ty::Struct(QUIET), call(KQCTOR, vec![], 50), 50)), Box::new(one(Stmt::Return(Expr::Lit(1, Ty::I32), 51))));
+    let f = Function { name: 446, line: 49, params: List::Nil, ret: Ty::I32, trusted: false, conds: List::Nil, body };
+    assert_eq!(refusal_of(&translate_function(&f, &guard_fns(), &guard_table())), Refusal::NoDtorContract(50));
+}
+
+/// A local of an if branch or of a loop body dies at the end of the branch or the body. A `return;` and the end of a void
+/// function destroy the live locals, decision 0178.
+#[test]
+fn a_destructor_runs_at_the_end_of_a_branch_a_loop_body_and_a_void_function() {
+    // Each name is declared once in a function, decision 0058, so the branch and the loop hold two guards.
+    let inner = |v: u32, line: u32| Box::new(one(guard_local(v, line)));
+    let body = List::Cons(
+        Box::new(guard_local(GG, 68)),
+        Box::new(List::Cons(
+            Box::new(Stmt::If(read(GTAKE, Ty::Bool), Box::new(one(Stmt::Exit(70))), inner(GB, 71), 69)),
+            Box::new(one(Stmt::While(read(GTAKE, Ty::Bool), Box::new(List::Nil), inner(GN, 73), 72))),
+        )),
+    );
+    let f = Function { params: ps(&[(GTAKE, Ty::Bool), (GO, mut32())]), ret: Ty::Void, conds: mods(65, &[GTAKE, GO]), ..guard_user(body) };
+    let Model::Full(m) = translate_function(&f, &guard_fns(), &guard_table()) else { panic!("a full model") };
+    let own = |v: u32| Box::new(stmts(vec![made(v), DStmt::Dtors(Box::new(stmts(vec![dies(v)])))]));
+    let exit = stmts(vec![block(vec![DStmt::Dtors(Box::new(stmts(vec![dies(GG)]))), DStmt::Exit])]);
+    let want = stmts(vec![made(GG), DStmt::If(DExpr::Var(GTAKE), Box::new(exit), own(GB)), DStmt::While(DExpr::Var(GTAKE), List::Nil, List::Nil, own(GN)), DStmt::Dtors(Box::new(stmts(vec![dies(GG)])))]);
+    assert_eq!(strip(m.body), want);
+}
+
+/// A return that runs a call only sometimes, decision 0177, sets the result in each branch, and then the locals die,
+/// decision 0178.
+#[test]
+fn a_lowered_return_sets_the_result_before_the_locals_die() {
+    let pick = Expr::Cond(b(read(GTAKE, Ty::Bool)), b(call(KHANDLE, vec![read(GG, Ty::Struct(GUARD))], 67)), b(Expr::Lit(1, Ty::I32)));
+    let body = List::Cons(Box::new(guard_local(GG, 66)), Box::new(one(Stmt::Return(pick, 67))));
+    let f = Function { params: ps(&[(GTAKE, Ty::Bool), (GO, mut32())]), conds: mods(63, &[GTAKE, GO]), ..guard_user(body) };
+    let Model::Full(m) = translate_function(&f, &guard_fns(), &guard_table()) else { panic!("a full model") };
+    let then = stmts(vec![DStmt::Pre(pres(vec![DPre::Call(0, DTy::Int32, KHANDLE, dargs(vec![DExpr::Var(GG)]))]), Box::new(DStmt::SetResult(DExpr::Temp(0))))]);
+    let other = stmts(vec![DStmt::SetResult(lit32(1))]);
+    let want = stmts(vec![made(GG), block(vec![DStmt::If(DExpr::Var(GTAKE), Box::new(then), Box::new(other)), DStmt::Dtors(Box::new(stmts(vec![dies(GG)]))), DStmt::Exit])]);
+    assert_eq!(strip(m.body), want);
 }

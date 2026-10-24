@@ -5367,7 +5367,7 @@ fn a_global_with_no_rule_is_refused() {
     assert_eq!(
         refusals,
         [
-            "9: a member function that lists a global: the translator has no rule for it yet.",
+            "9: a const or virtual member function that lists a global: the translator has no rule for it yet.",
             "13: a global of this type: the translator has no rule for it yet.",
             "19: reads: the translator has no rule for it yet.",
         ],
@@ -5625,4 +5625,56 @@ fn a_write_inside_an_expression_with_no_rule_is_refused() {
         ],
         "{text}"
     );
+}
+
+/// A struct with a destructor: the destructor runs at the end of the block of each local, in the reverse order, and before each
+/// return after its value. A member that writes its object can list a global. The example classes_raii proves, decision 0178.
+#[test]
+fn a_struct_with_a_destructor_proves() {
+    let Some(dafny) = dafny() else { return };
+    if !clang_tidy_available() {
+        return;
+    }
+    for name in ["model-dtor.cpp", "../../../../examples/classes_raii/example.cpp"] {
+        let o = prove(name, &[], &dafny);
+        let text = stdout(&o);
+        assert_eq!(o.status.code(), Some(0), "{name}: stdout: {text} stderr: {}", stderr(&o));
+        assert_eq!(text.lines().last(), Some("ok: proved"), "{name}: {text}");
+    }
+}
+
+/// A destructor that releases nothing, and a caller that forgets that the guard dies, fail at their returns. A destructor whose
+/// requires line fails is reported at the line where its local dies, decision 0178.
+#[test]
+fn a_struct_with_a_destructor_keeps_its_contract() {
+    let Some(dafny) = dafny() else { return };
+    if !clang_tidy_available() {
+        return;
+    }
+    let o = prove("model-dtor-wrong.cpp", &[], &dafny);
+    let text = stdout(&o);
+    assert_eq!(o.status.code(), Some(1), "stdout: {text} stderr: {}", stderr(&o));
+    let failed: Vec<&str> = text.lines().filter(|l| l.starts_with("Not proved: ")).map(|l| l.rsplit_once(".cpp:").unwrap().1).collect();
+    let want = ["23: the ensures line may not hold on this return.", "37: the ensures line may not hold on this return.", "46: a requires line of the callee may not hold."];
+    assert_eq!(failed, want, "{text}");
+}
+
+/// A copy of a struct with a destructor, as a return of a local, a parameter, a field, a temporary and a container, a local whose
+/// destructor has no contract, and a local in the head of a for, are refused, decision 0178.
+#[test]
+fn a_struct_with_a_destructor_and_no_rule_is_refused() {
+    let Some(dafny) = dafny() else { return };
+    if !clang_tidy_available() {
+        return;
+    }
+    let o = prove("model-dtor-refuse.cpp", &[], &dafny);
+    let text = stdout(&o);
+    assert_eq!(o.status.code(), Some(1), "stdout: {text} stderr: {}", stderr(&o));
+    let mut refusals: Vec<&str> = text.lines().filter(|l| l.starts_with("Not provable: ")).map(|l| l.rsplit_once(".cpp:").unwrap().1).collect();
+    refusals.sort_by_key(|l| l.split(':').next().unwrap().parse::<u32>().unwrap());
+    let copy = "a copy of a struct with a destructor: the translator has no rule for it yet.";
+    let mut want: Vec<String> = [28, 32, 36, 69, 76, 80, 86, 94].map(|l| format!("{l}: {copy}")).to_vec();
+    want.insert(3, "52: a destructor with no contract: the translator has no rule for it yet.".to_string());
+    want.push("103: ForStmt: the translator has no rule for it yet.".to_string());
+    assert_eq!(refusals, want, "{text}");
 }
