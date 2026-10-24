@@ -5761,6 +5761,71 @@ fn a_move_with_no_rule_is_refused() {
     assert_eq!(refusals, want, "{text}");
 }
 
+/// A member function that writes its object and returns `*this` is a call that writes its object, and a chain runs its steps in
+/// order on one object: a local, a temporary or a reference parameter, decision 0183.
+#[test]
+fn a_chain_of_calls_on_one_object_proves() {
+    let Some(dafny) = dafny() else { return };
+    if !clang_tidy_available() {
+        return;
+    }
+    for name in ["model-this.cpp", "../../../../examples/builder/example.cpp"] {
+        let o = prove(name, &[], &dafny);
+        let text = stdout(&o);
+        assert_eq!(o.status.code(), Some(0), "{name}: stdout: {text} stderr: {}", stderr(&o));
+        assert_eq!(text.lines().last(), Some("ok: proved"), "{name}: {text}");
+    }
+}
+
+/// A chain runs each step, so a claim with a step left out fails at the return. A step whose requires line fails is named at the
+/// line of the chain, decision 0183.
+#[test]
+fn a_chain_of_calls_keeps_each_step() {
+    let Some(dafny) = dafny() else { return };
+    if !clang_tidy_available() {
+        return;
+    }
+    let o = prove("model-this-wrong.cpp", &[], &dafny);
+    let text = stdout(&o);
+    assert_eq!(o.status.code(), Some(1), "stdout: {text} stderr: {}", stderr(&o));
+    let failed: Vec<&str> = text.lines().filter(|l| l.starts_with("Not proved: ") || l.starts_with("Not provable: ")).map(|l| l.rsplit_once(".cpp:").unwrap().1).collect();
+    assert_eq!(
+        failed,
+        ["26: the ensures line may not hold on this return.", "32: a requires line of the callee may not hold.", "39: a requires line of the callee may not hold."],
+        "{text}"
+    );
+}
+
+/// A reference result that is not `*this`, and the result of a call that gives back its object used as a value, are refused,
+/// decision 0183. A step with no return or with a return that is not `*this`, a step that returns a copy, a temporary with a
+/// destructor, and a chain where C++ may not run it once or inside an expression are refused too.
+#[test]
+fn a_chain_with_no_rule_is_refused() {
+    let Some(dafny) = dafny() else { return };
+    if !clang_tidy_available() {
+        return;
+    }
+    let o = prove("model-this-refuse.cpp", &[], &dafny);
+    let text = stdout(&o);
+    assert_eq!(o.status.code(), Some(1), "stdout: {text} stderr: {}", stderr(&o));
+    let refused: Vec<&str> = text.lines().filter(|l| l.starts_with("Not proved: ") || l.starts_with("Not provable: ")).map(|l| l.rsplit_once(".cpp:").unwrap().1).collect();
+    let place = "a call out of place. The translator takes a call when C++ runs it once and the statement uses its value. It takes a call that gives no value only alone.";
+    let want = [
+        "19: a reference result that is not `*this`: the translator has no rule for it yet.".to_string(),
+        "39: the result of a call that gives back its object, used as a value: the translator has no rule for it yet.".to_string(),
+        "52: a reference result that is not `*this`: the translator has no rule for it yet.".to_string(),
+        "60: UnaryOperator *: the translator has no rule for it yet.".to_string(),
+        "66: a reference result that is not `*this`: the translator has no rule for it yet.".to_string(),
+        "110: a copy of a struct with a destructor: the translator has no rule for it yet.".to_string(),
+        format!("117: {place}"),
+        format!("123: {place}"),
+        format!("133: {place}"),
+        format!("142: {place}"),
+        "148: a chain of calls in the head of a for: the translator has no rule for it yet.".to_string(),
+    ];
+    assert_eq!(refused, want, "{text}");
+}
+
 /// A temporary of a plain struct, bound to a `const T&` parameter, is its value, decision 0181.
 #[test]
 fn a_temporary_bound_to_a_const_reference_proves() {

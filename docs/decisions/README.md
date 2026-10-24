@@ -187,3 +187,4 @@ Status is `decided`, `proposed` (the default until someone objects or the thin s
 | [0180](0180-a-function-template.md) | A function template | decided |
 | [0181](0181-a-temporary-bound-to-a-const-reference.md) | A temporary bound to a const reference | decided |
 | [0182](0182-a-reference-to-a-local-through-a-call.md) | A reference to a local through a call | decided |
+| [0183](0183-a-member-function-that-returns-its-object.md) | A member function that returns its object | decided |

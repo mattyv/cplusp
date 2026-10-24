@@ -1,5 +1,5 @@
 // A builder is a datatype, decision 0029, and each step is a method that takes it in and gives it back. A step returns the builder
-// itself, which the C++ contract says with `&result == this`, so the chain is one object changed three times. The model hoists the
+// itself, which the plugin checks in each `return *this;`, decision 0183, so the chain is one object changed three times. The model hoists the
 // calls in the order C++ gives them: the object of each call first, and the inner call before the outer one.
 newtype int32 = x: int | -0x8000_0000 <= x < 0x8000_0000
 

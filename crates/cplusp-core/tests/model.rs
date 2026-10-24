@@ -4830,3 +4830,12 @@ fn an_assignment_of_a_temporary_with_a_destructor_is_refused() {
     let all = List::Cons(Box::new(make), Box::new(guard_fns()));
     assert_eq!(refusal_of(&translate_function(&guard_user(body), &all, &guard_table())), Refusal::Copy(46));
 }
+
+/// A call that gives no value has no place inside an expression, decision 0177. The core says so, whatever the callee writes.
+#[test]
+fn a_call_that_gives_no_value_inside_an_expression_is_out_of_place() {
+    let vf = Function { name: 451, line: 20, params: List::Nil, ret: Ty::Void, trusted: true, conds: List::Nil, body: List::Nil };
+    let all = fns(vec![vf]);
+    let e = Expr::Bin(BinOp::Add, b(call(451, vec![], 30)), b(Expr::Lit(1, Ty::I32)));
+    assert_eq!(bare_refusal(translate_function(&succ(e), &all, &List::Nil)), Refusal::Place(30));
+}
