@@ -51,7 +51,7 @@ Treat SPARK guidance as an engineering method, not an LLM performance measuremen
 
 ## Contract lines that the translator reads
 
-This list is true at decision 0184. Read the later decisions before you rely on it.
+This list is true at decision 0185. Read the later decisions before you rely on it.
 `cplusp prove` translates the C++ and the `//@` lines to Dafny, and runs Dafny. It says `ok: proved`, or `Not proved: FILE:LINE: sentence` for a proof that fails, or `Not provable: FILE:LINE: sentence` for a form that has no rule.
 
 Where each line goes:
@@ -102,6 +102,7 @@ The modifies line:
 - A function that returns a reference, a pointer or a span gives back only what its parameters by reference or `this` reach, decision 0182. A pointer or a span parameter counts as one by reference. The gate follows the `return` through each call. A local, a parameter by value, a structured binding by copy and a capture by copy die when the function returns.
 - A member function that writes its object can return `T&` and end in `return *this;`, decision 0183. Then a chain `x.f(a).g(b)` runs each step in order on `x`. Write the chain as a statement, as the value of a `return` or as the start value of a local. Do not put it in a condition, an operand, an argument or the head of a `for`. Do not write `&result == this` in its contract.
 - A local `std::array<T, N>` can start from a brace list of exactly `N` values, decision 0184. The code reads and writes its elements, and passes it to a sequence parameter. The translator refuses a shorter list and any other start value.
+- A function can take `std::vector<T>&&` and list it on the `modifies` line, decision 0185. Pass `std::move(v)` to it. `std::vector<T> w = std::move(v);` gives `w` the value of `v`, and then `v` has any value. Do not read `v` after the move. A local `std::vector<T> v(n, x);` holds `n` copies of `x`.
 - After a `push_back`, a read of `v.size()` in code needs a requires line or an invariant that bounds the length. Then the size fits `size_t`.
 - An ensures line that reads `v[i]` after the call needs a line before it that gives the length: `ensures v.size() == old(v.size())`, or `+ 1` after one `push_back`, decision 0146. A loop that writes `v` needs the same line as an invariant.
 - The gate also reads `modifies` and `reads` lines for globals, decision 0035.

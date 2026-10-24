@@ -5193,8 +5193,9 @@ private:
   }
   // The element of a vector by reference that the function writes, decision 0145, or null: `std::vector<T>&` with no const, for a scalar `T` other
   // than bool, or a plain struct, decision 0163. A vector of bool stays `Other`.
+  // A parameter `std::vector<T>&&` is the same, decision 0185.
   QualType mutSeq(QualType T) const {
-    if (!T->isLValueReferenceType())
+    if (!T->isReferenceType())
       return QualType();
     const QualType Vector = T->getPointeeType();
     const auto *Spec = dyn_cast_or_null<ClassTemplateSpecializationDecl>(Vector->getAsCXXRecordDecl());
@@ -5243,6 +5244,47 @@ private:
       return !mutSeq(Ref->getDecl()->getType()).isNull();
     const auto *Var = dyn_cast<VarDecl>(Ref->getDecl());
     return Var && Var->hasLocalStorage() && (!localVec(Var->getType()).isNull() || !localArray(Var->getType()).isNull());
+  }
+  // The element of a vector that a name holds and the function can write: a vector parameter by reference, or a local vector, decision 0185. Else null.
+  QualType sourceVec(const ValueDecl *D) const {
+    if (isa<ParmVarDecl>(D))
+      return mutSeq(D->getType());
+    const auto *Var = dyn_cast<VarDecl>(D);
+    return Var && Var->hasLocalStorage() ? localVec(Var->getType()) : QualType();
+  }
+  // `std::move(v)` of a vector `v` that the function writes, as the start value of the local `Var`, of the same element: `Move(v, type)`, decision 0185. The core reads
+  // the value of `v` as the body leaves it, then `v` with any value. Any other place of a move of a vector keeps its refusal. Null for any other form.
+  llvm::json::Value vecMove(const Expr *Init, QualType Target) const {
+    const auto *Construct = dyn_cast<CXXConstructExpr>(Init->IgnoreParenImpCasts());
+    if (!Construct || Construct->getNumArgs() != 1 || !Construct->getConstructor()->isMoveConstructor() || localVec(Target).isNull())
+      return nullptr;
+    const auto *Move = dyn_cast<CallExpr>(Construct->getArg(0)->IgnoreParenImpCasts());
+    if (!Move || Move->getNumArgs() != 1 || !Move->getDirectCallee() || !Move->getDirectCallee()->isInStdNamespace() || !Move->getDirectCallee()->getDeclName().isIdentifier() ||
+        Move->getDirectCallee()->getName() != "move")
+      return nullptr;
+    const auto *Ref = dyn_cast<DeclRefExpr>(Move->getArg(0)->IgnoreParenImpCasts());
+    if (!Ref || !sameElement(sourceVec(Ref->getDecl()), localVec(Target)))
+      return nullptr;
+    return tag("Move", llvm::json::Array{Ref->getDecl()->getNameAsString(), tag("Seq", llvm::json::Array{elementType(localVec(Target)), nullptr})});
+  }
+  // `std::vector<T> v(n, x);` as the start value of a local is a vector of n copies of x: `Fill(n, x)`, decision 0185. The count is a size_t. Only the constructor
+  // `(size_type, const value_type&, const allocator_type&)` with the allocator as its default, written with parentheses, is it: `v(3)` and `v{3, 0}` are not.
+  // In any other place the construction keeps its refusal. Null for any other form.
+  llvm::json::Value vecFill(const Expr *Init, unsigned Near) const {
+    const auto *Construct = dyn_cast<CXXConstructExpr>(Init->IgnoreParenImpCasts());
+    if (!Construct || Construct->getNumArgs() != 3 || Construct->isListInitialization() || localVec(Construct->getType()).isNull() ||
+        Construct->getArg(0)->getType().getUnqualifiedType().getCanonicalType() != Context.getSizeType() || isa<CXXDefaultArgExpr>(Construct->getArg(1)) ||
+        !isa<CXXDefaultArgExpr>(Construct->getArg(2)) || !Construct->getConstructor()->getParamDecl(1)->getType()->isLValueReferenceType() ||
+        !sameElement(Construct->getConstructor()->getParamDecl(1)->getType()->getPointeeType(), localVec(Construct->getType())))
+      return nullptr;
+    // The value binds to `const T&`, so a temporary holds it. The temporary is not the value.
+    const Expr *Value = Construct->getArg(1);
+    if (const auto *Held = dyn_cast<MaterializeTemporaryExpr>(Value))
+      Value = Held->getSubExpr();
+    return tag("Fill", llvm::json::Array{expr(Construct->getArg(0), Near), expr(Value, Near)});
+  }
+  static bool sameElement(QualType A, QualType B) {
+    return !A.isNull() && !B.isNull() && A.getCanonicalType().getUnqualifiedType() == B.getCanonicalType().getUnqualifiedType();
   }
   // The type of a parameter, or of a name that reads one. A pointer to const is a `Ptr` of what it points to, decisions 0140 and 0141.
   llvm::json::Value paramType(QualType T) const {
@@ -5553,7 +5595,12 @@ private:
     if (const auto *Decl = dyn_cast<DeclStmt>(S); Decl && Decl->isSingleDecl())
       if (const auto *Var = dyn_cast<VarDecl>(Decl->getSingleDecl()); Var && Var->hasLocalStorage() && Var->getInit()) {
         HoistOk = chainValue(S, Var->getInit());
-        return tag("Local", llvm::json::Array{Var->getNameAsString(), varType(Var), expr(Var->getInit(), line(S->getBeginLoc())), number(line(S->getBeginLoc()))});
+        llvm::json::Value Start = vecMove(Var->getInit(), Var->getType());
+        if (Start.getAsNull())
+          Start = vecFill(Var->getInit(), line(S->getBeginLoc()));
+        if (Start.getAsNull())
+          Start = expr(Var->getInit(), line(S->getBeginLoc()));
+        return tag("Local", llvm::json::Array{Var->getNameAsString(), varType(Var), std::move(Start), number(line(S->getBeginLoc()))});
       }
     if (const auto *Assign = dyn_cast<BinaryOperator>(S); Assign && Assign->getOpcode() == BO_Assign) {
       if (const auto *Target = dyn_cast<DeclRefExpr>(Assign->getLHS()); Target && isTarget(Target->getDecl()))
@@ -6122,14 +6169,16 @@ private:
   }
 
   // The argument `std::move(x)` of a local or a parameter `x` of a plain struct, at a parameter `T&&` of a plain struct, is `x`: the callee writes it back,
-  // decision 0179. Any other argument is its expression.
+  // decision 0179. The same holds for a vector `x` at a parameter `std::vector<T>&&`, decision 0185. Any other argument is its expression.
   llvm::json::Value callArg(const FunctionDecl *Callee, unsigned I, const Expr *Arg, unsigned Near) const {
-    if (Callee && I < Callee->getNumParams() && Callee->getParamDecl(I)->getType()->isRValueReferenceType() && !mutRef(Callee->getParamDecl(I)->getType()).getAsNull())
+    if (Callee && I < Callee->getNumParams() && Callee->getParamDecl(I)->getType()->isRValueReferenceType() &&
+        (!mutRef(Callee->getParamDecl(I)->getType()).getAsNull() || !mutSeq(Callee->getParamDecl(I)->getType()).isNull()))
       if (const auto *Move = dyn_cast<CallExpr>(Arg->IgnoreParenImpCasts()); Move && Move->getNumArgs() == 1 && Move->getDirectCallee() &&
                                                                               Move->getDirectCallee()->isInStdNamespace() && Move->getDirectCallee()->getDeclName().isIdentifier() &&
                                                                               Move->getDirectCallee()->getName() == "move")
         if (const auto *Ref = dyn_cast<DeclRefExpr>(Move->getArg(0)->IgnoreParenImpCasts());
-            Ref && (isa<ParmVarDecl>(Ref->getDecl()) || (isa<VarDecl>(Ref->getDecl()) && cast<VarDecl>(Ref->getDecl())->hasLocalStorage())) && plainStruct(Ref->getType()))
+            Ref && (isa<ParmVarDecl>(Ref->getDecl()) || (isa<VarDecl>(Ref->getDecl()) && cast<VarDecl>(Ref->getDecl())->hasLocalStorage())) &&
+            (plainStruct(Ref->getType()) || sameElement(sourceVec(Ref->getDecl()), mutSeq(Callee->getParamDecl(I)->getType()))))
           return expr(Ref, Near);
     // A temporary of a plain struct with no destructor of the model, at a parameter `const T&`, is its value, decision 0181. Any other place keeps its refusal.
     if (Callee && I < Callee->getNumParams() && Callee->getParamDecl(I)->getType()->isLValueReferenceType() &&

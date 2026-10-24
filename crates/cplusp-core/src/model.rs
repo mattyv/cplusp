@@ -275,7 +275,8 @@ pub enum CastKind {
 /// parameter `x` of type `std::unique_ptr`, where C++ makes a new `std::unique_ptr` from it, by the name and the type of `x`,
 /// decision 0171. `Bits` is `a & b` or `a | b` in code, with the type of its result, `StaticCast` is `static_cast<T>(e)` in a
 /// contract, and `List` is a braced list `{a, b, c}` in code, decision 0175. `Step` is `x++`, `x--`, `++x` or `--x` inside an
-/// expression, by the name and type of `x`, whether it adds one, and whether it is a prefix, decision 0177. `Unknown` is a construct with no rule, by the id of
+/// expression, by the name and type of `x`, whether it adds one, and whether it is a prefix, decision 0177. `Fill` is the start
+/// value `v(n, x)` of a local vector, by the count and the value, decision 0185. `Unknown` is a construct with no rule, by the id of
 /// its kind and its line.
 #[derive(PartialEq, Eq, Debug)]
 pub enum Expr {
@@ -325,6 +326,7 @@ pub enum Expr {
     Eta,
     DblMax,
     EmptyVec,
+    Fill(Box<Expr>, Box<Expr>),
     Move(u32, Ty),
     Bits(BinOp, Box<Expr>, Box<Expr>, Ty),
     Step(u32, Ty, bool, bool),
@@ -469,7 +471,8 @@ pub enum DTy {
 /// the absolute value of an integer, decision 0159. `Upcast` is `f_D'B(e)`, the value of a final class as its interface, decision
 /// 0166. `Lemma` is `L(a); e`, the value `e` after a call of the lemma `L`, decision 0167. `Let` is `var x: T := e; b`, a local of
 /// a pure body, decision 0172. `BitOp` is `BitAnd(a, b)` or `BitOr(a, b)` of the prelude on two naturals, and `SeqLit` is the
-/// sequence `[a, b, c]`, decision 0175. A Dafny expression calls no method.
+/// sequence `[a, b, c]`, decision 0175. `SeqFill` is `seq(n as int, _ => x)`, a sequence of `n` copies of `x`, decision 0185. A
+/// Dafny expression calls no method.
 #[derive(PartialEq, Eq, Debug)]
 pub enum DExpr {
     Lit(u64),
@@ -520,6 +523,7 @@ pub enum DExpr {
     Let(u32, DTy, Box<DExpr>, Box<DExpr>),
     BitOp(BinOp, Box<DExpr>, Box<DExpr>),
     SeqLit(Box<DArgs>),
+    SeqFill(Box<DExpr>, Box<DExpr>),
     EmptySeq,
     Abs(Box<DExpr>),
     Eps,
@@ -547,7 +551,8 @@ pub type DArgs = List<DExpr>;
 /// return;`, since Dafny takes no call in a `return`. `Assign` is `x := e;` and `AssignCall` is `x := m(args);`. `While` is the
 /// condition, the invariants, the decreases lines and the body. `ReturnUpdate` is `result, o, x := m(o, x, args); return;` of a method that
 /// writes back, decision 0174. `Moved` is a statement, then `x := None;` for each name that it
-/// moves, decision 0171. `Block` is the statements of one `return` that runs a call only where C++ runs it, `DeclTemp` is
+/// moves, decision 0171. `Gone` is a statement, then `x :| true;` of the vector `x` that it moves, or `x' :| true;` of a vector
+/// reference parameter, decision 0185. `Block` is the statements of one `return` that runs a call only where C++ runs it, `DeclTemp` is
 /// `var t: T;` of a temporary and `AssignTemp` is `t := e;`, decision 0177. `Scope` is a bare block `{ ... }`, `Dtors` is the calls
 /// of the destructors of the locals that die at the end of a block, which is no statement of C++, and `SetResult` is
 /// `result := e;` before the destructors run at a return, decision 0178. `For` prints as its start, then a `while` whose body ends with the
@@ -585,6 +590,7 @@ pub enum DStmt {
     Sort(Box<DExpr>, DTy),
     SortBy(Box<DExpr>, u32, u32, DTy, Box<DExpr>),
     Moved(Box<DStmt>, Names),
+    Gone(Box<DStmt>, u32, bool),
     Block(Box<DStmts>),
     DeclTemp(u32, DTy),
     AssignTemp(u32, DExpr),
@@ -1676,6 +1682,7 @@ pub fn copy_expr(e: &Expr) -> (r: Expr)
         Expr::Eta => Expr::Eta,
         Expr::DblMax => Expr::DblMax,
         Expr::EmptyVec => Expr::EmptyVec,
+        Expr::Fill(f0, f1) => Expr::Fill(Box::new(copy_expr(f0)), Box::new(copy_expr(f1))),
         Expr::Unknown(f0, f1) => Expr::Unknown(*f0, *f1),
         Expr::Move(f0, f1) => Expr::Move(*f0, *f1),
         Expr::Bits(f0, f1, f2, f3) => Expr::Bits(*f0, Box::new(copy_expr(f1)), Box::new(copy_expr(f2)), *f3),
@@ -1797,6 +1804,7 @@ pub open spec fn spec_var_names(e: Expr) -> Names
         Expr::Eta => List::Nil,
         Expr::DblMax => List::Nil,
         Expr::EmptyVec => List::Nil,
+        Expr::Fill(f0, f1) => spec_append(spec_var_names(*f0), spec_var_names(*f1)),
         Expr::Move(_, _) => List::Nil,
         Expr::Unknown(_, _) => List::Nil,
     }
@@ -1867,6 +1875,7 @@ pub fn var_names(e: &Expr) -> (r: Names)
         Expr::Eta => List::Nil,
         Expr::DblMax => List::Nil,
         Expr::EmptyVec => List::Nil,
+        Expr::Fill(f0, f1) => append(var_names(f0), var_names(f1)),
         Expr::Move(_, _) => List::Nil,
         Expr::Unknown(_, _) => List::Nil,
     }
@@ -4199,7 +4208,41 @@ pub open spec fn spec_check_expr(e: Expr, all: Fns, ps: Params, sd: Structs, lin
             },
         },
         Expr::Paren(a) => spec_check_expr(*a, all, ps, sd, line),
+        // The count and the value of `v(n, x)` are one region, as the arguments of a call are, decision 0185.
+        Expr::Fill(c, x) => match spec_lift(*c, all, line, sd, 0, true) {
+            Err(_) => None,
+            Ok((c1, _, n1)) => match spec_lift(*x, all, line, sd, n1, true) {
+                Err(_) => None,
+                Ok((c2, _, _)) => spec_check_pres(spec_append(c1, c2), spec_var_names(e), ps, line),
+            },
+        },
         _ => spec_check_region(e, all, ps, sd, line),
+    }
+}
+
+/// The checks of a region on the calls `c` that run before it, and the names `reads` that it reads, decision 0177.
+pub open spec fn spec_check_pres(c: DCalls, reads: Names, ps: Params, line: u32) -> Option<Refusal> {
+    match spec_bad_pres(c, ps, line) {
+        Some(r) => Some(r),
+        None => if spec_writes_twice(c) {
+            Some(Refusal::TwoWrites(line))
+        } else {
+            spec_read_too(spec_written_names(c), reads, line)
+        },
+    }
+}
+
+pub fn check_pres(c: &DCalls, reads: &Names, ps: &Params, line: u32) -> (r: Option<Refusal>)
+    ensures
+        r == spec_check_pres(*c, *reads, *ps, line),
+{
+    match bad_pres(c, ps, line) {
+        Some(r) => Some(r),
+        None => if writes_twice(c) {
+            Some(Refusal::TwoWrites(line))
+        } else {
+            read_too(&written_names(c), reads, line)
+        },
     }
 }
 
@@ -4225,6 +4268,13 @@ pub fn check_expr(e: &Expr, all: &Fns, ps: &Params, sd: &Structs, line: u32) -> 
             },
         },
         Expr::Paren(a) => check_expr(a, all, ps, sd, line),
+        Expr::Fill(c, x) => match lift(c, all, line, sd, 0, true) {
+            Err(_) => None,
+            Ok((c1, _, n1)) => match lift(x, all, line, sd, n1, true) {
+                Err(_) => None,
+                Ok((c2, _, _)) => check_pres(&append(c1, c2), &var_names(e), ps, line),
+            },
+        },
         _ => check_region(e, all, ps, sd, line),
     }
 }
@@ -5253,6 +5303,31 @@ pub open spec fn spec_local_stmt(n: u32, t: Ty, e: Expr, l: u32, all: Fns, env: 
                 },
                 // A local vector with no initial value is the empty sequence, decision 0170.
                 Expr::EmptyVec => Ok(DStmt::Local(n, dt, DExpr::EmptySeq)),
+                // `v(n, x)` is a vector of n copies of x, decision 0185. The count lifts first, then the value.
+                Expr::Fill(c, x) => match spec_lift(*c, all, l, sd, 0, true) {
+                    Err(r) => Err(r),
+                    Ok((c1, dc, n1)) => match spec_lift(*x, all, l, sd, n1, true) {
+                        Err(r) => Err(r),
+                        Ok((c2, dx, _)) => Ok(spec_pre(spec_append(c1, c2), DStmt::Local(n, dt, DExpr::SeqFill(Box::new(dc), Box::new(dx))))),
+                    },
+                },
+                // A move of a vector gives the local its value, and the source then has any value, decision 0185.
+                Expr::Move(w, _) => match spec_get(ps, w) {
+                    Some(Ty::MutSeq(s2)) => if s2 == s {
+                        Ok(DStmt::Gone(Box::new(DStmt::Local(n, dt, DExpr::Out(w))), w, true))
+                    } else {
+                        Err(Refusal::VecLocal(l))
+                    },
+                    Some(_) => Err(Refusal::WriteParam(w, l)),
+                    None => match spec_get(env, w) {
+                        Some(Ty::Vec(s2)) => if s2 == s {
+                            Ok(DStmt::Gone(Box::new(DStmt::Local(n, dt, DExpr::Var(w))), w, false))
+                        } else {
+                            Err(Refusal::VecLocal(l))
+                        },
+                        _ => Err(Refusal::VecLocal(l)),
+                    },
+                },
                 _ => Err(Refusal::VecLocal(l)),
             },
         } },
@@ -7050,6 +7125,7 @@ pub open spec fn unknown_expr(e: Expr) -> bool
         Expr::Divide(_, a, b, _) => unknown_expr(*a) || unknown_expr(*b),
         Expr::Shr(a, b, _) => unknown_expr(*a) || unknown_expr(*b),
         Expr::Bits(_, a, b, _) => unknown_expr(*a) || unknown_expr(*b),
+        Expr::Fill(a, b) => unknown_expr(*a) || unknown_expr(*b),
         Expr::StaticCast(_, a) => unknown_expr(*a),
         Expr::List(args) => unknown_args(*args),
         Expr::Step(_, _, _, _) => false,
@@ -7229,6 +7305,25 @@ pub proof fn lemma_unknown_return_is_refused(e: Expr, l: u32, all: Fns, ps: Para
     }
 }
 
+/// A local vector `v(n, x)` that holds a node with no rule is refused, decision 0185.
+pub proof fn lemma_unknown_fill_local_is_refused(n: u32, t: Ty, e: Expr, l: u32, all: Fns, env: Params, ps: Params, sd: Structs)
+    requires
+        t is Vec,
+        e is Fill,
+        unknown_expr(e),
+    ensures
+        spec_local_stmt(n, t, e, l, all, env, ps, sd).is_err(),
+{
+    reveal(spec_local_stmt);
+    let c = *e->Fill_0;
+    let x = *e->Fill_1;
+    if unknown_expr(c) {
+        lemma_unknown_lift_is_refused(c, all, l, sd, 0, true);
+    } else if spec_lift(c, all, l, sd, 0, true).is_ok() {
+        lemma_unknown_lift_is_refused(x, all, l, sd, spec_lift(c, all, l, sd, 0, true).unwrap().2, true);
+    }
+}
+
 /// A local std::array from a brace list that holds a node with no rule is refused, decision 0184.
 pub proof fn lemma_unknown_array_local_is_refused(n: u32, t: Ty, e: Expr, l: u32, all: Fns, env: Params, ps: Params, sd: Structs)
     requires
@@ -7271,6 +7366,8 @@ pub proof fn lemma_unknown_stmt_is_refused(s: Stmt, all: Fns, env: Params, ps: P
         },
         Stmt::Local(n, t, e, l) => if t is Seq && t->Seq_1 is Fixed {
             lemma_unknown_array_local_is_refused(n, t, e, l, all, env, ps, sd);
+        } else if t is Vec && e is Fill {
+            lemma_unknown_fill_local_is_refused(n, t, e, l, all, env, ps, sd);
         } else {
             reveal(spec_local_stmt);
             if e is Call {
@@ -7473,6 +7570,7 @@ pub open spec fn count_dstmt(s: DStmt) -> nat
         DStmt::For(init, _, _, _, _, body, step, _) => 1 + count_dstmt(*init) + count_dstmt(*step) + count_dstmts(*body),
         DStmt::Pre(_, s) => count_dstmt(*s),
         DStmt::Moved(s, _) => count_dstmt(*s),
+        DStmt::Gone(s, _, _) => count_dstmt(*s),
         // A bare block is a statement with its statements, and the destructors that run at the end of a block are none, decision 0178.
         DStmt::Scope(b) => 1 + count_dstmts(*b),
         DStmt::Dtors(_) => 0,
@@ -7860,6 +7958,7 @@ pub open spec fn calls_resolve_stmt(s: DStmt, all: Fns, sd: Structs) -> bool
         DStmt::CallStmt(k, _) => spec_callable(all, k, sd),
         DStmt::Pre(c, s) => calls_resolve_calls(c, all, sd) && calls_resolve_stmt(*s, all, sd),
         DStmt::Moved(s, _) => calls_resolve_stmt(*s, all, sd),
+        DStmt::Gone(s, _, _) => calls_resolve_stmt(*s, all, sd),
         DStmt::Block(b) => calls_resolve(*b, all, sd),
         DStmt::Scope(b) => calls_resolve(*b, all, sd),
         DStmt::Dtors(b) => calls_resolve(*b, all, sd),
@@ -8419,6 +8518,17 @@ pub proof fn lemma_resolves_local(s: Stmt, all: Fns, env: Params, ps: Params, sd
     // The vector arm reads the start value as it is, and the other arm with its moves taken out, decision 0171.
     let e1 = s->Local_2;
     let e2 = spec_unmove(s->Local_2).0;
+    // `v(n, x)` lifts its count, then its value, decision 0185.
+    if let Expr::Fill(c, x) = e1 {
+        if spec_lift(*c, all, l, sd, 0, true).is_ok() {
+            lemma_lift_resolves(*c, all, l, sd, 0, true);
+            let (c1, _, n1) = spec_lift(*c, all, l, sd, 0, true).unwrap();
+            if spec_lift(*x, all, l, sd, n1, true).is_ok() {
+                lemma_lift_resolves(*x, all, l, sd, n1, true);
+                lemma_append_resolves(c1, spec_lift(*x, all, l, sd, n1, true).unwrap().0, all, sd);
+            }
+        }
+    }
     // A local std::array from a brace list lifts each value, decision 0184.
     if let Expr::List(args) = e1 {
         if spec_lift_args(*args, all, l, sd, 0, true).is_ok() {
@@ -10728,6 +10838,29 @@ pub fn translate_stmt(s: &Stmt, all: &Fns, env: &Params, ps: &Params, sd: &Struc
                     Err(Refusal::VecLocal(*l))
                 },
                 Expr::EmptyVec => Ok(DStmt::Local(*n, dt, DExpr::EmptySeq)),
+                Expr::Fill(c, x) => match lift(c, all, *l, sd, 0, true) {
+                    Err(r) => Err(r),
+                    Ok((c1, dc, n1)) => match lift(x, all, *l, sd, n1, true) {
+                        Err(r) => Err(r),
+                        Ok((c2, dx, _)) => Ok(pre(append(c1, c2), DStmt::Local(*n, dt, DExpr::SeqFill(Box::new(dc), Box::new(dx))))),
+                    },
+                },
+                Expr::Move(w, _) => match get(ps, *w) {
+                    Some(Ty::MutSeq(s2)) => if s2 == *s {
+                        Ok(DStmt::Gone(Box::new(DStmt::Local(*n, dt, DExpr::Out(*w))), *w, true))
+                    } else {
+                        Err(Refusal::VecLocal(*l))
+                    },
+                    Some(_) => Err(Refusal::WriteParam(*w, *l)),
+                    None => match get(env, *w) {
+                        Some(Ty::Vec(s2)) => if s2 == *s {
+                            Ok(DStmt::Gone(Box::new(DStmt::Local(*n, dt, DExpr::Var(*w))), *w, false))
+                        } else {
+                            Err(Refusal::VecLocal(*l))
+                        },
+                        _ => Err(Refusal::VecLocal(*l)),
+                    },
+                },
                 _ => Err(Refusal::VecLocal(*l)),
             },
         } },
@@ -11452,6 +11585,7 @@ pub fn copy_dexpr(d: &DExpr) -> (r: DExpr)
         DExpr::BitOp(x0, x1, x2) => DExpr::BitOp(*x0, Box::new(copy_dexpr(x1)), Box::new(copy_dexpr(x2))),
         DExpr::SeqLit(x0) => DExpr::SeqLit(Box::new(copy_dargs(x0))),
         DExpr::EmptySeq => DExpr::EmptySeq,
+        DExpr::SeqFill(x0, x1) => DExpr::SeqFill(Box::new(copy_dexpr(x0)), Box::new(copy_dexpr(x1))),
         DExpr::IntAbs(x0) => DExpr::IntAbs(Box::new(copy_dexpr(x0))),
         DExpr::Eps => DExpr::Eps,
         DExpr::Eta => DExpr::Eta,
@@ -13129,6 +13263,7 @@ pub open spec fn spec_gexpr(e: Expr, gs: Params, gps: Params, hide: Names, fs: F
         Expr::Eta => Expr::Eta,
         Expr::DblMax => Expr::DblMax,
         Expr::EmptyVec => Expr::EmptyVec,
+        Expr::Fill(f0, f1) => Expr::Fill(Box::new(spec_gexpr(*f0, gs, gps, hide, fs)), Box::new(spec_gexpr(*f1, gs, gps, hide, fs))),
         Expr::Move(f0, f1) => Expr::Move(f0, f1),
         Expr::Unknown(f0, f1) => Expr::Unknown(f0, f1),
     }
@@ -13202,6 +13337,7 @@ pub fn gexpr(e: &Expr, gs: &Params, gps: &Params, hide: &Names, fs: &Fns) -> (r:
         Expr::Eta => Expr::Eta,
         Expr::DblMax => Expr::DblMax,
         Expr::EmptyVec => Expr::EmptyVec,
+        Expr::Fill(f0, f1) => Expr::Fill(Box::new(gexpr(f0, gs, gps, hide, fs)), Box::new(gexpr(f1, gs, gps, hide, fs))),
         Expr::Move(f0, f1) => Expr::Move(*f0, *f1),
         Expr::Unknown(f0, f1) => Expr::Unknown(*f0, *f1),
     }
@@ -13273,6 +13409,7 @@ pub open spec fn spec_gcalls(e: Expr) -> List<(u32, u32, u32)>
         Expr::Eta => List::Nil,
         Expr::DblMax => List::Nil,
         Expr::EmptyVec => List::Nil,
+        Expr::Fill(f0, f1) => spec_append(spec_gcalls(*f0), spec_gcalls(*f1)),
         Expr::Move(_, _) => List::Nil,
         Expr::Unknown(_, _) => List::Nil,
     }
@@ -13343,6 +13480,7 @@ pub fn gcalls(e: &Expr) -> (r: List<(u32, u32, u32)>)
         Expr::Eta => List::Nil,
         Expr::DblMax => List::Nil,
         Expr::EmptyVec => List::Nil,
+        Expr::Fill(f0, f1) => append(gcalls(f0), gcalls(f1)),
         Expr::Move(_, _) => List::Nil,
         Expr::Unknown(_, _) => List::Nil,
     }

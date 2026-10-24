@@ -125,6 +125,8 @@ enum JExpr {
     Empty(Box<JExpr>),
     /// A local vector with no initial value, decision 0170.
     EmptyVec,
+    /// `v(n, x)`, the start value of a local vector, by the count and the value, decision 0185.
+    Fill(Box<JExpr>, Box<JExpr>),
     Subspan(Box<JExpr>, Box<JExpr>),
     Copy(Box<JExpr>, JTy, JTy),
     Field(Box<JExpr>, String),
@@ -488,6 +490,7 @@ fn expr(e: JExpr, names: &mut Names) -> Expr {
         JExpr::Size(a) => Expr::Size(Box::new(expr(*a, names))),
         JExpr::Empty(a) => Expr::Empty(Box::new(expr(*a, names))),
         JExpr::EmptyVec => Expr::EmptyVec,
+        JExpr::Fill(n, x) => Expr::Fill(Box::new(expr(*n, names)), Box::new(expr(*x, names))),
         JExpr::Subspan(a, k) => Expr::Subspan(Box::new(expr(*a, names)), Box::new(expr(*k, names))),
         JExpr::Copy(a, from, to) => Expr::Copy(Box::new(expr(*a, names)), ty(from, names), ty(to, names)),
         JExpr::Field(a, f) => Expr::Field(Box::new(expr(*a, names)), names.id(&f)),
@@ -921,7 +924,7 @@ fn scan_companion(text: &str) -> (Vec<(u32, String)>, Vec<Declared>) {
 fn expr_names<'a>(e: &'a JExpr, out: &mut Vec<&'a str>) {
     match e {
         JExpr::Var(v, _) | JExpr::Move(v, _) | JExpr::Step(v, ..) => out.push(v),
-        JExpr::Bin(_, a, b) | JExpr::Divide(_, a, b, _) | JExpr::Shr(a, b, _) | JExpr::Bits(_, a, b, _) | JExpr::Index(a, b) | JExpr::Subspan(a, b) => {
+        JExpr::Bin(_, a, b) | JExpr::Divide(_, a, b, _) | JExpr::Shr(a, b, _) | JExpr::Bits(_, a, b, _) | JExpr::Index(a, b) | JExpr::Subspan(a, b) | JExpr::Fill(a, b) => {
             expr_names(a, out);
             expr_names(b, out);
         }
@@ -1350,6 +1353,7 @@ fn dexpr(e: &DExpr, names: &Names) -> String {
         DExpr::Ctor(k, args) => format!("{}({})", names.datatypes[k], dargs(args, names).join(", ")),
         DExpr::BitOp(o, a, b) => format!("{}({}, {})", dop(*o), dexpr(a, names), dexpr(b, names)),
         DExpr::SeqLit(args) => format!("[{}]", dargs(args, names).join(", ")),
+        DExpr::SeqFill(n, x) => format!("seq({} as int, _ => {})", dexpr(n, names), dexpr(x, names)),
         DExpr::Len(a) => format!("|{}|", dexpr(a, names)),
         DExpr::Index(a, i) => format!("{}[{}]", dexpr(a, names), dexpr(i, names)),
         DExpr::Append(a, e) => format!("({} + [{}])", dexpr(a, names), dexpr(e, names)),
@@ -1784,6 +1788,12 @@ impl Printer<'_> {
                     self.put(depth, format!("{} := None;", mangle(names.text(*x))), place);
                     rest = next;
                 }
+            }
+            // The statement, then the vector that it moved has any value, decision 0185.
+            DStmt::Gone(inner, w, out) => {
+                self.stmt(inner, place, depth);
+                let w = if *out { format!("{}'", mangle(names.text(*w))) } else { mangle(names.text(*w)) };
+                self.put(depth, format!("{w} :| true;"), place);
             }
             DStmt::Apply(l, args) => self.put(depth, format!("{}({});", names.text(*l), dargs(args, names).join(", ")), place),
             // `std::sort` of a whole vector with the default `<`, decision 0161. `StdSort` is the method of the module `Algorithm`.
