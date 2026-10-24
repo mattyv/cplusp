@@ -184,3 +184,4 @@ Status is `decided`, `proposed` (the default until someone objects or the thin s
 | [0177](0177-a-write-inside-an-expression.md) | A write inside an expression | decided |
 | [0178](0178-a-struct-with-a-destructor.md) | A struct with a destructor | decided |
 | [0179](0179-a-move-of-a-struct.md) | A move of a struct | decided |
+| [0180](0180-a-function-template.md) | A function template | decided |

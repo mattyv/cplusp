@@ -1608,8 +1608,8 @@ fn every_function_and_contract_line_in_view_is_modelled_or_refused() {
     assert_eq!(o.status.code(), Some(1), "stdout: {text} stderr: {}", stderr(&o));
     let refusals: Vec<&str> = text.lines().filter(|l| l.starts_with("Not provable: ")).collect();
     for expected in [
-        "model-coverage.cpp:7: FunctionTemplateDecl: the translator has no rule for it yet.",
-        "model-coverage.cpp:12: FunctionTemplateDecl: the translator has no rule for it yet.",
+        "model-coverage.cpp:7: a function template with no instance: the translator has no rule for it yet.",
+        "model-coverage.cpp:12: a function template with no instance: the translator has no rule for it yet.",
         "model-coverage.cpp:16: a contract line that belongs to no function.",
         "model-coverage.cpp:22: a contract line that belongs to no function.",
         "model-coverage.cpp:28: a contract line that ends in a backslash.",
@@ -5738,4 +5738,95 @@ fn a_move_with_no_rule_is_refused() {
     want.push("82: a copy or a move by a constructor that the model cannot call: the translator has no rule for it yet.".to_string());
     want.push("103: a copy or a move by a constructor that the model cannot call: the translator has no rule for it yet.".to_string());
     assert_eq!(refusals, want, "{text}");
+}
+
+/// Each instance of a function template is a function of the model with the contract of the template, and it proves on its own,
+/// decision 0180. An instance has the Dafny name of the template, `'of'` and its Dafny types. Two functions with one such name are
+/// numbered as overloads are.
+#[test]
+fn a_function_template_proves_at_each_type() {
+    let Some(dafny) = dafny() else { return };
+    if !clang_tidy_available() {
+        return;
+    }
+    for name in ["model-template.cpp", "../../../../examples/templates/example.cpp"] {
+        let o = prove(name, &[], &dafny);
+        let text = stdout(&o);
+        assert_eq!(o.status.code(), Some(0), "{name}: stdout: {text} stderr: {}", stderr(&o));
+        assert_eq!(text.lines().last(), Some("ok: proved"), "{name}: {text}");
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let (o, out) = model("model-template.cpp", dir.path());
+    assert_eq!(o.status.code(), Some(0), "stdout: {} stderr: {}", stdout(&o), stderr(&o));
+    let text = std::fs::read_to_string(out).unwrap();
+    for header in [
+        "method c_larger'of'int32(v_a: int32, v_b: int32) returns (result: int32)",
+        "method c_larger'of'uint8(v_a: uint8, v_b: uint8) returns (result: uint8)",
+        "method c_larger'of'int64(v_a: int64, v_b: int64) returns (result: int64)",
+        "method c_largest'of'int64(v_a: int64, v_b: int64, v_c: int64) returns (result: int64)",
+        "method c_first'of'int32'bool(v_a: int32, v_b: bool) returns (result: int32)",
+    ] {
+        assert_eq!(text.matches(header).count(), 1, "{header}: {text}");
+    }
+    assert!(text.contains("method c_pick'of'int32'1(") && text.contains("method c_pick'of'int32'2("), "{text}");
+}
+
+/// A contract of a template that holds at one type fails at another, and the shell names the type. An explicit instantiation is an
+/// instance. A line that fails with one sentence in two instances prints once, and two sentences on one line both print, decision
+/// 0180.
+#[test]
+fn a_function_template_keeps_its_contract_at_each_type() {
+    let Some(dafny) = dafny() else { return };
+    if !clang_tidy_available() {
+        return;
+    }
+    let o = prove("model-template-wrong.cpp", &[], &dafny);
+    let text = stdout(&o);
+    assert_eq!(o.status.code(), Some(1), "stdout: {text} stderr: {}", stderr(&o));
+    let mut failed: Vec<&str> = text.lines().filter(|l| l.starts_with("Not proved: ")).map(|l| l.rsplit_once(".cpp:").unwrap().1).collect();
+    failed.sort_by_key(|l| (l.split(':').next().unwrap().parse::<u32>().unwrap(), l.to_string()));
+    assert_eq!(
+        failed,
+        [
+            "8: the value may not fit int32_t.",
+            "14: the ensures line may not hold on this return.",
+            "49: the ensures line may not hold on this return.",
+            "58: the value may not fit int32_t.",
+            "58: the value may not fit uint32_t.",
+            "73: the value may not fit int32_t.",
+            "73: the value may not fit int32_t.",
+        ],
+        "{text}"
+    );
+}
+
+/// A member function template, an instance whose body has no rule, a template with no instance, a call of an instance that the
+/// file only declares, and a type argument with no type of the model are refused. A refused instance has no contract for its
+/// callers, decision 0180.
+#[test]
+fn a_function_template_with_no_rule_is_refused() {
+    let Some(dafny) = dafny() else { return };
+    if !clang_tidy_available() {
+        return;
+    }
+    let o = prove("model-template-refuse.cpp", &[], &dafny);
+    let text = stdout(&o);
+    assert_eq!(o.status.code(), Some(1), "stdout: {text} stderr: {}", stderr(&o));
+    let mut refusals: Vec<&str> = text.lines().filter(|l| l.starts_with("Not provable: ")).map(|l| l.rsplit_once(".cpp:").unwrap().1).collect();
+    refusals.sort_by_key(|l| l.split(':').next().unwrap().parse::<u32>().unwrap());
+    let want = [
+        "9: a member function template: the translator has no rule for it yet.",
+        "17: UnaryExprOrTypeTraitExpr: the translator has no rule for it yet.",
+        "28: a function template with no instance: the translator has no rule for it yet.",
+        "43: a call to larger<int>, which has no model in view.",
+        "54: Box<int>: the translator has no rule for it yet.",
+        "58: Box<int32_t>: the translator has no rule for it yet.",
+        "65: a function template with no instance: the translator has no rule for it yet.",
+        "84: a type argument with no Dafny name: the translator has no rule for it yet.",
+        "90: a call to count<std::vector<int>>, which has no model in view.",
+    ];
+    assert_eq!(refusals, want, "{text}");
+    let failed: Vec<&str> = text.lines().filter(|l| l.starts_with("Not proved: ")).map(|l| l.rsplit_once(".cpp:").unwrap().1).collect();
+    assert_eq!(failed, ["22: the ensures line may not hold on this return."], "{text}");
+    assert!(!text.contains("Dafny says"), "{text}");
 }
