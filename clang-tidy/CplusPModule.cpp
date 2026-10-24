@@ -669,6 +669,49 @@ public:
   }
 };
 
+// cplusp-return-local: decision 0182. A function that returns a reference, a pointer or a span may not return one to its own local,
+// to a parameter by value, to a structured binding by copy or to a capture of a lambda by copy. These die when the function returns.
+// The roots are those of the aliasing check: through a call, the object of the call and every argument that binds to a name.
+// A root that is a parameter and a handle, a reference, a pointer or a span, is not a local: the object under it lives after the
+// call. A local handle is a local. `this`, a static local and a global are not this row's. A global is the row aliasing's.
+// ponytail: every argument at a reference parameter counts, also when the callee gives back only its object. Upgrade: read the
+// returns of a callee that the file defines. An iterator by value has no roots, so a return through one passes the gate.
+// `release()` of a local owner is refused here, though the pointer outlives the owner. The owning raw pointer breaks the limit of
+// raw_pointer, and the fix is the same: return the owner by value. Upgrade: a check for `release` under raw_pointer.
+class ReturnLocalCheck : public ClangTidyCheck {
+public:
+  using ClangTidyCheck::ClangTidyCheck;
+  void registerMatchers(MatchFinder *Finder) override {
+    Finder->addMatcher(returnStmt(forFunction(functionDecl(unless(notJudged())).bind("function")), unless(isExpansionInSystemHeader())).bind("return"), this);
+  }
+  void check(const MatchFinder::MatchResult &Result) override {
+    const auto *Return = Result.Nodes.getNodeAs<ReturnStmt>("return");
+    const auto *Function = Result.Nodes.getNodeAs<FunctionDecl>("function");
+    if (!Return->getRetValue() || !bindsToName(Function->getReturnType()))
+      return;
+    const auto Dies = [&](const RootPath &P) {
+      if (P.Steps[0] == &StateKey || P.Steps[0] == &ThisKey)
+        return false;
+      const auto *Root = static_cast<const Decl *>(P.Steps[0]);
+      // A structured binding by copy is a part of the hidden variable that it decomposes. A binding to a reference is not a local.
+      const auto *Binding = dyn_cast<BindingDecl>(Root);
+      const auto *Var = Binding ? dyn_cast_or_null<VarDecl>(Binding->getDecomposedDecl()) : dyn_cast<VarDecl>(Root);
+      if (!Var || !Var->hasLocalStorage() || (Binding && Var->getType()->isReferenceType()))
+        return false;
+      if (isa<ParmVarDecl>(Var) && llvm::any_of(P.Steps, [](const void *Step) { return bindsToName(static_cast<const ValueDecl *>(Step)->getType()); }))
+        return false;
+      if (Var->getDeclContext() == Function)
+        return true;
+      // A variable of the enclosing function, seen from the body of a lambda: a copy in the closure dies with it.
+      const auto *Method = dyn_cast<CXXMethodDecl>(Function);
+      return Method && Method->getParent()->isLambda() &&
+             llvm::any_of(Method->getParent()->captures(), [&](const LambdaCapture &C) { return C.capturesVariable() && C.getCapturedVar() == Var && C.getCaptureKind() == LCK_ByCopy; });
+    };
+    if (llvm::any_of(rootsOf(Return->getRetValue()).Paths, Dies))
+      diag(Return->getBeginLoc(), "a reference to a local escapes");
+  }
+};
+
 // A declaration of the library: it is in std, and in a system header. The place decides, not the namespace. A file may open `namespace std`.
 bool inLibrary(const Decl *Declaration) {
   return inStdNamespace(Declaration) && Declaration->getASTContext().getSourceManager().isInSystemHeader(Declaration->getLocation());
@@ -6588,6 +6631,7 @@ public:
     Factories.registerCheck<LambdaLimitsCheck>("cplusp-lambda-limits");
     Factories.registerCheck<EvaluationOrderCheck>("cplusp-evaluation-order");
     Factories.registerCheck<AliasingCheck>("cplusp-aliasing");
+    Factories.registerCheck<ReturnLocalCheck>("cplusp-return-local");
     Factories.registerCheck<ConstHandleCheck>("cplusp-const-handle");
     Factories.registerCheck<AllowlistCheck>("cplusp-allowlist");
     Factories.registerCheck<UnlistedStateCheck>("cplusp-unlisted-state");

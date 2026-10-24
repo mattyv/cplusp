@@ -65,7 +65,7 @@ const RULE_FIRST: &[&str] = &[MATCHER, ALLOWLIST, "cplusp-unlisted-state", "cplu
 // ponytail: a hand-kept list. Upgrade: load the plugin and read its `--list-checks`.
 const PLANNED_CHECKS: &[&str] = &[
     MATCHER, "cplusp-mutable", "cplusp-multiple-inheritance", "cplusp-iterator-arithmetic", "cplusp-impure-operator", "cplusp-lambda-limits",
-    "cplusp-evaluation-order", "cplusp-inexact-literal", "cplusp-raw-copy", "cplusp-aliasing", "cplusp-const-handle", "cplusp-allowlist", "cplusp-unlisted-state",
+    "cplusp-evaluation-order", "cplusp-inexact-literal", "cplusp-raw-copy", "cplusp-aliasing", "cplusp-return-local", "cplusp-const-handle", "cplusp-allowlist", "cplusp-unlisted-state",
     "cplusp-indirect-call", LINE_DIRECTIVE, PRAGMA,
 ];
 

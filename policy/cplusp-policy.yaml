@@ -361,6 +361,7 @@ rules:
     stage: gate
     detect:
       - check: clang-diagnostic-return-stack-address
+      - check: cplusp-return-local
 
   # -------------------------------------------------------------- library
   - id: array_span
