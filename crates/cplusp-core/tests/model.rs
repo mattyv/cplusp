@@ -4839,3 +4839,25 @@ fn a_call_that_gives_no_value_inside_an_expression_is_out_of_place() {
     let e = Expr::Bin(BinOp::Add, b(call(451, vec![], 30)), b(Expr::Lit(1, Ty::I32)));
     assert_eq!(bare_refusal(translate_function(&succ(e), &all, &List::Nil)), Refusal::Place(30));
 }
+
+/// A local std::array from a brace list of its length is a local of the sequence of the values, and a write to an element is a new
+/// value of the local. A list of another length is refused, decision 0184.
+#[test]
+fn a_local_array_from_a_brace_list_is_a_sequence() {
+    let three = Ty::Seq(Scalar::I32, Extent::Fixed(3));
+    let list = |vs: &[u64]| Expr::List(Box::new(vs.iter().rev().fold(List::Nil, |rest, v| List::Cons(b(Expr::Lit(*v, Ty::I32)), Box::new(rest)))));
+    let f = |vs: &[u64]| {
+        let body = List::Cons(
+            Box::new(Stmt::Local(X, three, list(vs), 21)),
+            Box::new(List::Cons(Box::new(Stmt::SetIndex(X, Expr::Lit(0, Ty::U64), Expr::Lit(5, Ty::I32), 22)), Box::new(one(Stmt::Return(Expr::Lit(0, Ty::I32), 23))))),
+        );
+        Function { name: 452, line: 20, params: List::Nil, ret: Ty::I32, trusted: false, conds: List::Nil, body }
+    };
+    let Model::Full(m) = translate_function(&f(&[10, 20, 30]), &List::Nil, &List::Nil) else { panic!("a full model") };
+    let lits = [10, 20, 30].iter().rev().fold(List::Nil, |rest, v| List::Cons(lit32(*v), Box::new(rest)));
+    let List::Cons((first, _), rest) = strip(m.body) else { panic!("a body") };
+    assert!(matches!(&*first, DStmt::Local(v, _, DExpr::SeqLit(l)) if *v == X && **l == lits), "{first:?}");
+    let List::Cons((second, _), _) = *rest else { panic!("a write") };
+    assert!(matches!(&*second, DStmt::Assign(v, DExpr::SetAt(..)) if *v == X), "{second:?}");
+    assert_eq!(refusal_of(&translate_function(&f(&[10, 20]), &List::Nil, &List::Nil)), Refusal::BraceLen(2, 3, 21));
+}

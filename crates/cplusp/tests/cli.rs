@@ -5761,6 +5761,61 @@ fn a_move_with_no_rule_is_refused() {
     assert_eq!(refusals, want, "{text}");
 }
 
+/// A local std::array from a brace list of its length is the sequence of the values. The code reads it, writes an element and
+/// passes it to a span parameter, decision 0184.
+#[test]
+fn a_local_array_from_a_brace_list_proves() {
+    let Some(dafny) = dafny() else { return };
+    if !clang_tidy_available() {
+        return;
+    }
+    for name in ["model-array-local.cpp", "../../../../examples/strings/example.cpp"] {
+        let o = prove(name, &[], &dafny);
+        let text = stdout(&o);
+        assert_eq!(o.status.code(), Some(0), "{name}: stdout: {text} stderr: {}", stderr(&o));
+        assert_eq!(text.lines().last(), Some("ok: proved"), "{name}: {text}");
+    }
+}
+
+/// The values of a local array keep their order, and a write changes one element only, so a claim about another element fails,
+/// decision 0184.
+#[test]
+fn a_local_array_keeps_its_values() {
+    let Some(dafny) = dafny() else { return };
+    if !clang_tidy_available() {
+        return;
+    }
+    let o = prove("model-array-local-wrong.cpp", &[], &dafny);
+    let text = stdout(&o);
+    assert_eq!(o.status.code(), Some(1), "stdout: {text} stderr: {}", stderr(&o));
+    let failed: Vec<&str> = text.lines().filter(|l| l.starts_with("Not proved: ") || l.starts_with("Not provable: ")).map(|l| l.rsplit_once(".cpp:").unwrap().1).collect();
+    assert_eq!(
+        failed,
+        ["8: the ensures line may not hold on this return.", "16: the ensures line may not hold on this return.", "35: the ensures line may not hold on this return.", "42: the index may be out of range."],
+        "{text}"
+    );
+}
+
+/// A brace list of another count, a local array from another array, and an array of a struct with a destructor, are refused,
+/// decision 0184.
+#[test]
+fn a_local_array_with_no_rule_is_refused() {
+    let Some(dafny) = dafny() else { return };
+    if !clang_tidy_available() {
+        return;
+    }
+    let o = prove("model-array-local-refuse.cpp", &[], &dafny);
+    let text = stdout(&o);
+    assert_eq!(o.status.code(), Some(1), "stdout: {text} stderr: {}", stderr(&o));
+    let refused: Vec<&str> = text.lines().filter(|l| l.starts_with("Not proved: ") || l.starts_with("Not provable: ")).map(|l| l.rsplit_once(".cpp:").unwrap().1).collect();
+    let want = [
+        "7: a braced list of 2 values for a std::array of 3: the translator has no rule for it yet.",
+        "13: a sequence is in the subset only as a parameter.",
+        "25: a copy of a struct with a destructor: the translator has no rule for it yet.",
+    ];
+    assert_eq!(refused, want, "{text}");
+}
+
 /// A member function that writes its object and returns `*this` is a call that writes its object, and a chain runs its steps in
 /// order on one object: a local, a temporary or a reference parameter, decision 0183.
 #[test]
