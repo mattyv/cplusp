@@ -4182,6 +4182,8 @@ public:
     const CXXConstructorDecl *Constructor = valueConstructor(FD);
     const char *Opaque = PureBody                                  ? "a body of a pure virtual function"
                          : NoValue                                   ? "a pure virtual function that gives no value"
+                         : FD->isTemplated() && isa<CXXMethodDecl>(FD) && FD->getDescribedFunctionTemplate() ? "a member function template"
+                         : noInstance(FD)                            ? "a function template with no instance"
                          : FD->isTemplated()                         ? "FunctionTemplateDecl"
                          : !Constructor && noDestructorMove(FD)       ? "a move constructor in a struct with no destructor"
                          : isa<CXXConstructorDecl>(FD) && !Constructor ? "CXXConstructorDecl"
@@ -4235,7 +4237,44 @@ public:
     // The class of a static member function, as the contract of the function reads a bare call, decision 0174.
     if (Static)
       Out["static"] = Static->getParent()->getQualifiedNameAsString();
+    // An instance of a function template names its type arguments, and the shell makes `larger'of'int32` of them, decision 0180.
+    if (const TemplateArgumentList *Args = FD->getTemplateSpecializationArgs()) {
+      llvm::json::Array Of;
+      for (const TemplateArgument &Arg : Args->asArray())
+        Of.push_back(type(Arg.getAsType()));
+      Out["of"] = std::move(Of);
+    }
     return Out;
+  }
+
+  // A free function template with type parameters only has instances that are functions of the model, decision 0180. Any other template is refused.
+  static bool typeOnlyTemplate(const FunctionTemplateDecl *T) {
+    if (!T || isa<CXXMethodDecl>(T->getTemplatedDecl()))
+      return false;
+    for (const NamedDecl *P : *T->getTemplateParameters())
+      if (!isa<TemplateTypeParmDecl>(P) || cast<TemplateTypeParmDecl>(P)->isParameterPack())
+        return false;
+    return true;
+  }
+
+  // A function template of the main file that the file never uses, decision 0180. An instance has a body here, or an `extern template` names it. A
+  // specialization that overload resolution made and dropped is an implicit instantiation with no body, and it is no instance.
+  static bool noInstance(const FunctionDecl *FD) {
+    const FunctionTemplateDecl *T = FD->getDescribedFunctionTemplate();
+    if (!typeOnlyTemplate(T) || !FD->getASTContext().getSourceManager().isInMainFile(FD->getLocation()))
+      return false;
+    for (const FunctionDecl *Instance : T->specializations())
+      if (Instance->isThisDeclarationADefinition() || Instance->getTemplateSpecializationKind() == TSK_ExplicitInstantiationDeclaration)
+        return false;
+    return true;
+  }
+
+  // The lines in the body of a template that has no instance belong to no function. The walk claims them and drops the result.
+  // ponytail: the walk of a dependent body does not reach every statement. A `//@` line of a loop inside a dependent range-for of an unused template is still
+  // an orphan. Upgrade: claim each `//@` line in the source range of the body.
+  void claimBody(const FunctionDecl *FD) const {
+    Enclosing = FD;
+    (void)stmts(FD->getBody());
   }
 
   std::string file(SourceLocation At) const { return SM.getFilename(SM.getFileLoc(At)).str(); }
@@ -6386,7 +6425,7 @@ public:
   TreeCheck(StringRef Name, ClangTidyContext *Context) : ClangTidyCheck(Name, Context), Output(Options.get("Output", "")) {}
   void registerMatchers(MatchFinder *Finder) override {
     Finder->addMatcher(
-        functionDecl(unless(isImplicit()), unless(isTemplateInstantiation()), unless(isExpansionInSystemHeader())).bind("fn"), this);
+        functionDecl(unless(isImplicit()), unless(isExpansionInSystemHeader())).bind("fn"), this);
     Finder->addMatcher(varDecl(isConstexpr(), unless(isExpansionInSystemHeader())).bind("constant"), this);
     Finder->addMatcher(varDecl(hasGlobalStorage(), unless(isConstexpr()), unless(isExpansionInSystemHeader())).bind("global"), this);
     Finder->addMatcher(enumDecl(isDefinition(), unless(isExpansionInSystemHeader())).bind("enum"), this);
@@ -6428,9 +6467,20 @@ public:
     // The call operator of a lambda is no function of its own, decision 0149. The call that takes the lambda reads its body, or is refused.
     if (const auto *Method = dyn_cast<CXXMethodDecl>(FD); Method && Method->getParent()->isLambda())
       return;
+    // An instance of a function template is a function of the model, decision 0180. Any other instance is the template, which is refused once.
+    if (FD->isTemplateInstantiation() && !(FD->getPrimaryTemplate() && TreeWriter::typeOnlyTemplate(FD->getPrimaryTemplate()) && FD->isThisDeclarationADefinition()))
+      return;
     const Contract C = contractOf(Context->getSourceManager(), FD);
     for (const Contract::Line &L : C.Lines)
       Claimed.insert({L.File, L.Number});
+    // The template itself is written for each instance and not alone. One with no instance has no model, decision 0180.
+    if (TreeWriter::typeOnlyTemplate(FD->getDescribedFunctionTemplate())) {
+      if (FD->getBody())
+        TreeWriter(*Context, Claimed, Structs).claimBody(FD);
+      // One with no instance in the main file is refused at its line.
+      if (!TreeWriter::noInstance(FD))
+        return;
+    }
     // The member functions of a class over an interface that is not final, and the defaulted destructor of an interface, are left out, decision 0165.
     if (TreeWriter(*Context, Claimed, Structs).leftOut(FD))
       return;

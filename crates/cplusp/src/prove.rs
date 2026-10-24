@@ -1,6 +1,7 @@
 //! The prover side of `cplusp prove`, decision 0068. It runs Dafny on the model, reads its errors, and names each one at the C++ line
 //! it comes from. The map from Dafny lines to C++ is built by `model.rs`. Nothing here decides what is allowed.
 
+use std::collections::HashMap;
 use std::fs;
 use std::process::{Command, ExitCode, Stdio};
 
@@ -159,12 +160,29 @@ pub fn run(t: &Translation, limit: u32, refused: bool, source: &str, shown: &dyn
     // A failure prints one block for each position, sentence and set of contract lines that it shows, decisions 0155 and 0164. Two checks at one position
     // with different contract lines both stay, and so do two positions on one C++ line.
     let mut seen: Vec<(usize, Option<usize>, String)> = Vec::new();
+    // A line of a function template fails in each instance that it fails in, decision 0180. A block prints as many times as one instance gives it, so the
+    // count of a block is the greatest count of one instance. An instance is a method with `'of'` in its name.
+    // ponytail: the text of the model is searched upward for the method. Upgrade: the core names the method of each line.
+    let mut counts: HashMap<(String, usize), usize> = HashMap::new();
+    let mut printed: HashMap<String, usize> = HashMap::new();
     let mut emit = |e: &Error, block: String| {
         let key = (e.line, e.column, block);
-        if !seen.contains(&key) {
-            println!("{}", key.2);
-            seen.push(key);
+        if seen.contains(&key) {
+            return;
         }
+        let lines: Vec<&str> = t.dafny.lines().take(e.line).collect();
+        if let Some(m) = lines.iter().rposition(|l| l.starts_with("method ")).filter(|&m| lines[m].contains("'of'")) {
+            let n = counts.entry((key.2.clone(), m)).or_insert(0);
+            *n += 1;
+            let done = printed.entry(key.2.clone()).or_insert(0);
+            if *n > *done {
+                *done = *n;
+                println!("{}", key.2);
+            }
+        } else {
+            println!("{}", key.2);
+        }
+        seen.push(key);
     };
     // A related location in the companion file is a line of it that the failure breaks. It is shown as a contract line, as the lines of a method are, decision 0164.
     // ponytail: a clause that goes on to the next line shows its first line only, the line that Dafny names. Upgrade: read on while the next line starts

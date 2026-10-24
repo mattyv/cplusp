@@ -280,6 +280,9 @@ struct JFunction {
     /// The qualified name of the class when the function is a static member function, decision 0174. Its `name` is the qualified name of the function.
     #[serde(default, rename = "static")]
     class: Option<String>,
+    /// The type arguments of an instance of a function template, decision 0180.
+    #[serde(default)]
+    of: Vec<JTy>,
     conds: Vec<JCond>,
     body: Vec<JStmt>,
 }
@@ -2341,6 +2344,11 @@ pub fn translate(lines: &str, companion: Option<(&str, &str)>) -> Result<Transla
             Item::Function(f) if unreadable_keys.iter().any(|k| l.contains(k.as_str())) => {
                 first_dropped.get_or_insert((f.file.clone(), f.line));
             }
+            // A type argument with no word has no name in the model, decision 0180. ponytail: a scalar, a struct or an enum. Upgrade: a word for a sequence, an optional.
+            // A signature the core refuses is reported by its own type first.
+            Item::Function(f) if !matches!(f.ret, JTy::Other(_)) && !f.params.iter().any(|(_, t)| matches!(t, JTy::Other(_))) && f.of.iter().any(|t| !matches!(t, JTy::I8 | JTy::I16 | JTy::I32 | JTy::I64 | JTy::U8 | JTy::U16 | JTy::U32 | JTy::U64 | JTy::Bool | JTy::F64 | JTy::Struct(_) | JTy::Enum(_))) => {
+                refusals.push((f.file.clone(), f.line, "a type argument with no Dafny name: the translator has no rule for it yet.".to_string()))
+            }
             Item::Function(f) => match unreadable_name(&f) {
                 Some(n) => refusals.push((f.file.clone(), f.line, format!("{n}: a name with a character Dafny cannot read."))),
                 None => funcs.push(f),
@@ -2365,7 +2373,26 @@ pub fn translate(lines: &str, companion: Option<(&str, &str)>) -> Result<Transla
         // `this` of a virtual function of an interface names it too, decision 0165.
         (Some((_, JTy::This(k) | JTy::ThisMut(k) | JTy::Iface(k) | JTy::IfaceMut(k))), _) | (_, JTy::This(k)) => format!("{}'{}", structs.iter().find(|s| s.key == *k).map_or("", |s| s.name.as_str()), dafny_word(&f.name)),
         // A static member function has the name of its class, `Tally::bump` is `Tally'bump`, decision 0174.
-        _ => operator_word(&f.name).map_or_else(|| f.name.replace("::", "'"), str::to_string),
+        // An instance of a function template is the template, `'of'`, and the Dafny type of each argument, joined by `'`, decision 0180. A `'` never clashes.
+        _ => {
+            let base = operator_word(&f.name).map_or_else(|| f.name.replace("::", "'"), str::to_string);
+            let word = |t: &JTy| match t {
+                JTy::I8 => "int8".to_string(),
+                JTy::I16 => "int16".to_string(),
+                JTy::I32 => "int32".to_string(),
+                JTy::I64 => "int64".to_string(),
+                JTy::U8 => "uint8".to_string(),
+                JTy::U16 => "uint16".to_string(),
+                JTy::U32 => "uint32".to_string(),
+                JTy::U64 => "uint64".to_string(),
+                JTy::F64 => "real".to_string(),
+                JTy::Struct(k) => format!("S_{}", structs.iter().find(|s| s.key == *k).map_or("", |s| s.name.as_str())),
+                JTy::Enum(k) => format!("E_{}", enums.iter().find(|e| e.key == *k).map_or("", |e| e.name.as_str())),
+                JTy::Bool => "bool".to_string(),
+                _ => "other".to_string(),
+            };
+            if f.of.is_empty() { base } else { format!("{base}'of'{}", f.of.iter().map(word).collect::<Vec<_>>().join("'")) }
+        }
     };
     for (i, f) in funcs.iter().enumerate() {
         let same = funcs.iter().filter(|g| plain(g) == plain(f)).count();

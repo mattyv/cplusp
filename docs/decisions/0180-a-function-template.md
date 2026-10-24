@@ -17,8 +17,10 @@ These forms have no rule:
 - a member function template, at the line of the function. The sentence is "a member function template: the translator has no rule for it yet."
 - a function template of the main file with no instance, at the line of the function. The sentence is "a function template with no instance: the translator has no rule for it yet."
 - a form in the body of an instance that has no rule, at its line in the template. The instance then has no contract for its callers, as each refused function has. So a caller can fail to prove.
-- a type argument that is no type of the model, as `Box<int32_t>`, at the line of the function. It has the sentence of that type.
-- a type argument with no Dafny name, as `std::vector<int32_t>`, at the line of the function. A caller of such an instance gets the sentence of a call with no model. The sentence is "a type argument with no Dafny name: the translator has no rule for it yet."
+- a parameter or a result with a type that is no type of the model, as `Box<int32_t>`, at the line of the function. It has the sentence of that type.
+- any other type argument with no Dafny name, at the line of the function. Examples are `std::vector<int32_t>`, and a `Box<int32_t>` that no parameter holds. The sentence is "a type argument with no Dafny name: the translator has no rule for it yet."
+
+A caller of such an instance gets the sentence of a call with no model.
 
 The gate already refuses a specialization and a template parameter that is not a type, in the row `templates` of the policy. A class template is a later decision.
 
