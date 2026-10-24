@@ -5324,6 +5324,27 @@ private:
     return Out;
   }
 
+  // Whether the function around a `return` gives a reference.
+  bool returnsReference(const ReturnStmt *Return) const {
+    DynTypedNode Node = DynTypedNode::create(*Return);
+    for (;;) {
+      const auto Parents = Context.getParents(Node);
+      if (Parents.empty())
+        return false;
+      Node = Parents[0];
+      if (const auto *FD = Node.get<FunctionDecl>())
+        return FD->getReturnType()->isReferenceType();
+    }
+  }
+  static bool holdsTemporary(const Stmt *S) {
+    if (isa<MaterializeTemporaryExpr>(S))
+      return true;
+    for (const Stmt *Child : S->children())
+      if (Child && holdsTemporary(Child))
+        return true;
+    return false;
+  }
+
   llvm::json::Value stmt(const Stmt *S) const {
     // The body of a constructor cannot read or write a field, or use `this`, and it cannot return early, decision 0179. A control statement holds its
     // expressions and its statements, which come here or to `expr` themselves.
@@ -5341,6 +5362,9 @@ private:
     // `return f();` of a void call has no rule: the return gives no value.
     if (const auto *Return = dyn_cast<ReturnStmt>(S); Return && Return->getRetValue() && Return->getRetValue()->getType()->isVoidType())
       return unknown(S, describe(S), line(S->getBeginLoc()));
+    // A temporary in the return of a function that returns a reference dies at the end of the return, decision 0181.
+    if (const auto *Return = dyn_cast<ReturnStmt>(S); Return && Return->getRetValue() && returnsReference(Return) && holdsTemporary(Return->getRetValue()))
+      return unknown(S, "a temporary in the return of a function that returns a reference", line(S->getBeginLoc()));
     if (const auto *Return = dyn_cast<ReturnStmt>(S); Return && Return->getRetValue())
       return tag("Return", llvm::json::Array{expr(Return->getRetValue(), line(S->getBeginLoc())), number(line(S->getBeginLoc()))});
     if (const auto *Switch = dyn_cast<SwitchStmt>(S); Switch && !Switch->getInit() && !Switch->getConditionVariable() && plainEnum(Switch->getCond()->IgnoreParenImpCasts()->getType()))
@@ -5917,6 +5941,16 @@ private:
         if (const auto *Ref = dyn_cast<DeclRefExpr>(Move->getArg(0)->IgnoreParenImpCasts());
             Ref && (isa<ParmVarDecl>(Ref->getDecl()) || (isa<VarDecl>(Ref->getDecl()) && cast<VarDecl>(Ref->getDecl())->hasLocalStorage())) && plainStruct(Ref->getType()))
           return expr(Ref, Near);
+    // A temporary of a plain struct with no destructor of the model, at a parameter `const T&`, is its value, decision 0181. Any other place keeps its refusal.
+    if (Callee && I < Callee->getNumParams() && Callee->getParamDecl(I)->getType()->isLValueReferenceType() &&
+        Callee->getParamDecl(I)->getType()->getPointeeType().isConstQualified()) {
+      if (const auto *Held = dyn_cast<MaterializeTemporaryExpr>(Arg))
+        if (const CXXRecordDecl *RD = plainStruct(Held->getType())) {
+          const CXXDestructorDecl *D = RD->getDestructor();
+          if (!(D && member(D)))
+            return expr(Held->getSubExpr(), Near);
+        }
+    }
     return expr(Arg, Near);
   }
 
