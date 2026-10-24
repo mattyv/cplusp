@@ -185,3 +185,4 @@ Status is `decided`, `proposed` (the default until someone objects or the thin s
 | [0178](0178-a-struct-with-a-destructor.md) | A struct with a destructor | decided |
 | [0179](0179-a-move-of-a-struct.md) | A move of a struct | decided |
 | [0180](0180-a-function-template.md) | A function template | decided |
+| [0181](0181-a-temporary-bound-to-a-const-reference.md) | A temporary bound to a const reference | decided |

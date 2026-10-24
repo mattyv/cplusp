@@ -5740,6 +5740,51 @@ fn a_move_with_no_rule_is_refused() {
     assert_eq!(refusals, want, "{text}");
 }
 
+/// A temporary of a plain struct, bound to a `const T&` parameter, is its value, decision 0181.
+#[test]
+fn a_temporary_bound_to_a_const_reference_proves() {
+    let Some(dafny) = dafny() else { return };
+    if !clang_tidy_available() {
+        return;
+    }
+    for name in ["model-temp-ref.cpp", "../../../../examples/callbacks/example.cpp"] {
+        let o = prove(name, &[], &dafny);
+        let text = stdout(&o);
+        assert_eq!(o.status.code(), Some(0), "{name}: stdout: {text} stderr: {}", stderr(&o));
+        assert_eq!(text.lines().last(), Some("ok: proved"), "{name}: {text}");
+    }
+}
+
+/// A temporary is the value it is built from, so a claim about another value fails at the return, decision 0181.
+#[test]
+fn a_temporary_bound_to_a_const_reference_keeps_its_value() {
+    let Some(dafny) = dafny() else { return };
+    if !clang_tidy_available() {
+        return;
+    }
+    let o = prove("model-temp-ref-wrong.cpp", &[], &dafny);
+    let text = stdout(&o);
+    assert_eq!(o.status.code(), Some(1), "stdout: {text} stderr: {}", stderr(&o));
+    let failed: Vec<&str> = text.lines().filter(|l| l.starts_with("Not proved: ") || l.starts_with("Not provable: ")).map(|l| l.rsplit_once(".cpp:").unwrap().1).collect();
+    assert_eq!(failed, ["16: the ensures line may not hold on this return."], "{text}");
+}
+
+/// A temporary in the return of a function that returns a reference has no rule, decision 0181. The temporary dies at the end of the
+/// return, before the caller reads the reference.
+#[test]
+fn a_temporary_in_a_return_by_reference_is_refused() {
+    let Some(dafny) = dafny() else { return };
+    if !clang_tidy_available() {
+        return;
+    }
+    let o = prove("model-temp-ref-refuse.cpp", &[], &dafny);
+    let text = stdout(&o);
+    assert_eq!(o.status.code(), Some(1), "stdout: {text} stderr: {}", stderr(&o));
+    let refused: Vec<&str> = text.lines().filter(|l| l.starts_with("Not provable: ") || l.starts_with("Not proved: ")).map(|l| l.rsplit_once(".cpp:").unwrap().1).collect();
+    let sentence = "a temporary in the return of a function that returns a reference: the translator has no rule for it yet.";
+    assert_eq!(refused, [format!("16: {sentence}"), format!("33: {sentence}"), "56: MaterializeTemporaryExpr: the translator has no rule for it yet.".to_string()], "{text}");
+}
+
 /// Each instance of a function template is a function of the model with the contract of the template, and it proves on its own,
 /// decision 0180. An instance has the Dafny name of the template, `'of'` and its Dafny types. Two functions with one such name are
 /// numbered as overloads are.
