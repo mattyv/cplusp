@@ -2,7 +2,7 @@
 
 // A set of flags in an enum class. The enumerators are powers of two, and a value of the type is any bit pattern of uint32_t, because the
 // underlying type is fixed. So Read | Write is a legal value that no enumerator names. The enum_cast rule asks that a cast from an integer
-// is an enumerator, and a flags type cannot meet it. The model is a bv32 for that reason, and a datatype of enumerators or a set of them
+// is an enumerator, and a flags type cannot meet it. The model is the uint32 with the bit functions of the prelude, and a datatype of enumerators or a set of them
 // would have no value for Read | Write, nor for a bit that no enumerator names. The operators are free functions with by-value
 // parameters, and they have no precondition: every pattern is a value. Each contract states the result on the bits. has(flags, flag)
 // says that every bit of flag is set in flags, which is the usual test for one flag.
@@ -40,5 +40,7 @@ bool both_may_write(Flag a, Flag b) {
 //@ ensures result == true
 bool reader_and_writer_cannot_exec() {
   Flag f = Flag::Read | Flag::Write;
-  return has(f, Flag::Write) && !has(f, Flag::Exec);
+  bool w = has(f, Flag::Write);
+  bool x = has(f, Flag::Exec);
+  return w && !x;
 }

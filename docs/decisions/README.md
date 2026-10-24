@@ -180,3 +180,4 @@ Status is `decided`, `proposed` (the default until someone objects or the thin s
 | [0173](0173-a-global-is-an-implicit-parameter.md) | A global that a function lists is an implicit parameter of the function | decided |
 | [0174](0174-a-static-member-function.md) | A static member function is a free function with the name of its class | decided |
 | [0175](0175-types-that-are-an-integer.md) | Types that are an integer or a fixed sequence in the model | decided |
+| [0176](0176-a-free-function-twin.md) | A free function with one return has a function twin that a contract can call | decided |

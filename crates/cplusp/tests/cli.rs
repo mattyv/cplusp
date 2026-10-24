@@ -2974,10 +2974,10 @@ fn a_contract_that_calls_a_member_function_that_is_not_pure_is_refused() {
     assert_eq!(o.status.code(), Some(1), "stdout: {text} stderr: {}", stderr(&o));
     let refusals: Vec<&str> = text.lines().filter(|l| l.starts_with("Not provable: ")).collect();
     for want in [
-        "model-pure-refuse.cpp:13: copy is no pure member function of its struct.",
-        "model-pure-refuse.cpp:18: three is no pure member function of its struct.",
+        "model-pure-refuse.cpp:13: copy is no pure function. A contract calls a function with one return and no write.",
+        "model-pure-refuse.cpp:18: three is no pure function. A contract calls a function with one return and no write.",
         "model-pure-refuse.cpp:26: nosuch in the contract is no parameter.",
-        "model-pure-refuse.cpp:32: refused is no pure member function of its struct.",
+        "model-pure-refuse.cpp:32: refused is no pure function. A contract calls a function with one return and no write.",
     ] {
         assert!(refusals.iter().any(|l| l.ends_with(want)), "{want}: {text}");
     }
@@ -3161,7 +3161,7 @@ fn conditionals_and_functors_with_no_rule_are_refused_at_their_lines() {
     assert_eq!(o.status.code(), Some(1), "stdout: {text} stderr: {}", stderr(&o));
     let refusals: Vec<&str> = text.lines().filter(|l| l.starts_with("Not provable: ")).collect();
     for want in [
-        "model-cond-refuse.cpp:11: operator() is no pure member function of its struct.",
+        "model-cond-refuse.cpp:11: operator() is no pure function. A contract calls a function with one return and no write.",
         "model-cond-refuse.cpp:21: a call out of place. The translator takes a call when C++ runs it once and the statement uses its value. It takes a call that writes a value back or gives no value only alone.",
         "model-cond-refuse.cpp:24: the contract line has a form the translator cannot read.",
     ] {
@@ -5291,7 +5291,7 @@ fn an_override_that_is_no_pure_body_is_refused() {
         [
             "12: the override of Component::cost in Written has no function in the model, so the translator cannot check it.",
             "26: the override of Component::valid in Own has no function in the model, so the translator cannot check it.",
-            "34: valid is no pure member function of its struct.",
+            "34: valid is no pure function. A contract calls a function with one return and no write.",
         ],
         "{text}"
     );
@@ -5434,7 +5434,7 @@ fn a_static_with_no_rule_is_refused() {
     assert_eq!(
         refusals,
         [
-            "19: Tally::bump is no pure member function of its struct.",
+            "19: Tally::bump is no pure function. A contract calls a function with one return and no write.",
             "23: n_ in the contract is no parameter.",
             "31: valid is no function of the companion file.",
         ],
@@ -5499,4 +5499,74 @@ fn types_that_are_an_integer_with_no_rule_are_refused() {
         ],
         "{text}"
     );
+}
+
+/// A free function with one return and no write has a twin, and a contract calls it by its name. The example bit_flags proves,
+/// decision 0176.
+#[test]
+fn a_free_function_twin_proves() {
+    let Some(dafny) = dafny() else { return };
+    if !clang_tidy_available() {
+        return;
+    }
+    for name in ["model-free-twin.cpp", "../../../../examples/bit_flags/example.cpp"] {
+        let o = prove(name, &[], &dafny);
+        let text = stdout(&o);
+        assert_eq!(o.status.code(), Some(0), "{name}: stdout: {text} stderr: {}", stderr(&o));
+        assert_eq!(text.lines().last(), Some("ok: proved"), "{name}: {text}");
+    }
+}
+
+/// A grant that drops the old flags, and a six that is seven, fail at their returns through the twins, decision 0176.
+#[test]
+fn a_free_function_twin_keeps_its_contract() {
+    let Some(dafny) = dafny() else { return };
+    if !clang_tidy_available() {
+        return;
+    }
+    let o = prove("model-free-twin-wrong.cpp", &[], &dafny);
+    let text = stdout(&o);
+    assert_eq!(o.status.code(), Some(1), "stdout: {text} stderr: {}", stderr(&o));
+    let failed: Vec<&str> = text.lines().filter(|l| l.starts_with("Not proved: ")).map(|l| l.rsplit_once(".cpp:").unwrap().1).collect();
+    let want = [13, 24].map(|l| format!("{l}: the ensures line may not hold on this return."));
+    assert_eq!(failed, want, "{text}");
+}
+
+/// A contract that calls a free function with two statements or with a reference parameter is refused with the one sentence,
+/// decision 0176.
+#[test]
+fn a_free_function_with_no_twin_is_refused() {
+    let Some(dafny) = dafny() else { return };
+    if !clang_tidy_available() {
+        return;
+    }
+    let o = prove("model-free-twin-refuse.cpp", &[], &dafny);
+    let text = stdout(&o);
+    assert_eq!(o.status.code(), Some(1), "stdout: {text} stderr: {}", stderr(&o));
+    let mut refusals: Vec<&str> = text.lines().filter(|l| l.starts_with("Not provable: ")).map(|l| l.rsplit_once(".cpp:").unwrap().1).collect();
+    refusals.sort_by_key(|l| l.split(':').next().unwrap().parse::<u32>().unwrap());
+    assert_eq!(
+        refusals,
+        [
+            "12: twice is no pure function. A contract calls a function with one return and no write.",
+            "26: bump is no pure function. A contract calls a function with one return and no write.",
+        ],
+        "{text}"
+    );
+}
+
+/// A name that is a function of the file and of the companion file is refused at the contract line that calls it, decision 0176.
+#[test]
+fn a_name_of_the_file_and_of_the_companion_file_is_refused() {
+    if !clang_tidy_available() {
+        return;
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let (o, _) = model("model-free-twin-clash.cpp", dir.path());
+    let text = stdout(&o);
+    assert_eq!(o.status.code(), Some(1), "stdout: {text} stderr: {}", stderr(&o));
+    let refusals: Vec<&str> = text.lines().filter(|l| l.starts_with("Not provable: ")).collect();
+    let want = "model-free-twin-clash.cpp:10: twice is a function of the file and of the companion file. Rename one.";
+    assert!(refusals.iter().any(|l| l.ends_with(want)), "{want}: {text}");
+    assert_eq!(refusals.len(), 1, "{text}");
 }

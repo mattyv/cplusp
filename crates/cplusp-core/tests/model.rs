@@ -1449,7 +1449,7 @@ fn a_pure_member_function_is_also_a_function_and_its_method_gives_its_value() {
 }
 
 #[test]
-fn a_member_function_that_writes_a_local_is_not_pure_and_a_free_function_never_is() {
+fn a_member_function_that_writes_a_local_is_not_pure_and_a_free_function_is_pure_only_when_the_file_lists_it() {
     // A local alone keeps the body pure, decision 0172. A write to it does not.
     let field = || Expr::Cast(CastKind::Read, b(Expr::Field(b(Expr::Var(THIS, Ty::This(COUNTER))), CN)));
     let write = Box::new(List::Cons(Box::new(Stmt::Assign(A, field(), 11)), Box::new(one(Stmt::Return(read(A, Ty::I32), 12)))));
@@ -1460,6 +1460,11 @@ fn a_member_function_that_writes_a_local_is_not_pure_and_a_free_function_never_i
     let free = Function { name: SAT, line: 3, params: List::Cons((X, Ty::I32), Box::new(List::Nil)), ret: Ty::I32, trusted: false, conds: List::Nil, body: one(Stmt::Return(read(X, Ty::I32), 4)) };
     let Model::Full(m) = translate_function(&free, &List::Nil, &List::Nil) else { panic!("a full model") };
     assert_eq!(m.function, None);
+    // The file lists it, so it has a twin, decision 0176.
+    let listed = List::Cons((SAT, (SATKEY, Some((Ty::I32, List::Cons((X, Ty::I32), Box::new(List::Nil)))))), Box::new(List::Nil));
+    let table: Structs = List::Cons((FILE_ENTRY, (0, List::Nil, listed)), Box::new(List::Nil));
+    let Model::Full(m) = translate_function(&Function { name: SATKEY, ..free }, &List::Nil, &table) else { panic!("a full model") };
+    assert_eq!(m.function, Some(DExpr::Var(X)));
 }
 
 #[test]
@@ -4365,4 +4370,93 @@ fn an_array_result_is_a_fixed_sequence() {
     let len = DExpr::Bin(BinOp::Eq, Box::new(DExpr::Len(Box::new(DExpr::Result))), Box::new(DExpr::Lit(3)));
     assert!(matches!(&m.ensures, List::Cons((d, _), _) if *d == len), "{:?}", m.ensures);
     assert_eq!(refusal_of(&translate_function(&f(&[10, 20]), &List::Nil, &List::Nil)), Refusal::BraceLen(2, 3, 21));
+}
+
+const FILE_ENTRY: u32 = 400;
+const SATKEY: u32 = 401;
+const HAS: u32 = 402;
+const KHAS: u32 = 403;
+const FLAGS: u32 = 404;
+const FLAG: u32 = 405;
+const TWICE: u32 = 406;
+const KTWICE: u32 = 407;
+const FBUMP: u32 = 408;
+const KFBUMP: u32 = 409;
+const GFREE: u32 = 410;
+const KGFREE: u32 = 411;
+
+/// The contract lines hold `d`.
+fn dconds_hold(cs: &DConds, d: &DExpr) -> bool {
+    match cs {
+        List::Nil => false,
+        List::Cons((x, _), rest) => x == d || dconds_hold(rest, d),
+    }
+}
+
+fn two(a: (u32, Ty), c: (u32, Ty)) -> Params {
+    List::Cons(a, Box::new(List::Cons(c, Box::new(List::Nil))))
+}
+
+/// The free functions of a file under the one entry of the file, decision 0176.
+fn file_table(ms: Members) -> Structs {
+    List::Cons((FILE_ENTRY, (0, List::Nil, ms)), Box::new(List::Nil))
+}
+
+fn has_fn() -> Function {
+    let and = Expr::Bits(BinOp::BitAnd, b(read(FLAGS, Ty::U32)), b(read(FLAG, Ty::U32)), Ty::U32);
+    let body = one(Stmt::Return(Expr::Bin(BinOp::Eq, b(and), b(read(FLAG, Ty::U32))), 8));
+    Function { name: KHAS, line: 7, params: two((FLAGS, Ty::U32), (FLAG, Ty::U32)), ret: Ty::Bool, trusted: false, conds: List::Nil, body }
+}
+
+/// A free function with one return and no call has a twin when the file lists it, and a contract calls the twin by its name,
+/// decision 0176.
+#[test]
+fn a_free_function_has_a_twin_when_the_file_lists_it() {
+    let ms = List::Cons(
+        (HAS, (KHAS, Some((Ty::Bool, two((FLAGS, Ty::U32), (FLAG, Ty::U32)))))),
+        Box::new(List::Cons((TWICE, (KTWICE, Some((Ty::I32, List::Cons((X, Ty::I32), Box::new(List::Nil)))))), Box::new(List::Nil))),
+    );
+    let table = file_table(ms);
+    let Model::Full(m) = translate_function(&has_fn(), &List::Nil, &table) else { panic!("a full model") };
+    let and = DExpr::Conv(DTy::UInt32, Box::new(DExpr::BitOp(BinOp::BitAnd, Box::new(DExpr::AsInt(Box::new(DExpr::Var(FLAGS)))), Box::new(DExpr::AsInt(Box::new(DExpr::Var(FLAG)))))));
+    assert_eq!(m.function, Some(DExpr::Bin(BinOp::Eq, Box::new(and), Box::new(DExpr::Var(FLAG)))));
+    let args = List::Cons(DExpr::Var(FLAGS), Box::new(List::Cons(DExpr::Var(FLAG), Box::new(List::Nil))));
+    let link = DExpr::Bin(BinOp::Eq, Box::new(DExpr::Result), Box::new(DExpr::FCall(KHAS, Box::new(args))));
+    assert!(dconds_hold(&m.ensures, &link), "{:?}", m.ensures);
+    // A contract of another function calls the twin with its arguments.
+    let ens = Expr::Apply(HAS, Box::new(List::Cons(b(Expr::Result), Box::new(List::Cons(b(Expr::Name(FLAG)), Box::new(List::Nil))))));
+    let grant = Function { name: 412, line: 24, params: two((FLAGS, Ty::U32), (FLAG, Ty::U32)), ret: Ty::U32, trusted: true, conds: List::Cons((CondKind::Ensures, ens, 23, names(&[FLAGS, FLAG])), Box::new(List::Nil)), body: List::Nil };
+    let Model::Full(m) = translate_function(&grant, &List::Nil, &table) else { panic!("a full model") };
+    // Each argument is an exact integer, converted to the type of its parameter, as decision 0095 has it.
+    let conv = |d: DExpr| DExpr::Conv(DTy::UInt32, Box::new(DExpr::AsInt(Box::new(d))));
+    let args = List::Cons(conv(DExpr::Result), Box::new(List::Cons(conv(DExpr::Var(FLAG)), Box::new(List::Nil))));
+    assert_eq!(strip_conds(m.ensures), List::Cons((DExpr::FCall(KHAS, Box::new(args)), 0), Box::new(List::Nil)));
+    // A literal argument converts to the type of the parameter.
+    let ens = Expr::Bin(BinOp::Eq, b(Expr::Result), b(Expr::Apply(TWICE, Box::new(List::Cons(b(Expr::Int(3)), Box::new(List::Nil))))));
+    let six = Function { name: 413, line: 41, params: List::Nil, ret: Ty::I32, trusted: true, conds: List::Cons((CondKind::Ensures, ens, 40, names(&[])), Box::new(List::Nil)), body: List::Nil };
+    let Model::Full(m) = translate_function(&six, &List::Nil, &table) else { panic!("a full model") };
+    let call = DExpr::FCall(KTWICE, Box::new(List::Cons(DExpr::Conv(DTy::Int32, Box::new(DExpr::Lit(3))), Box::new(List::Nil))));
+    let want = DExpr::Bin(BinOp::Eq, Box::new(DExpr::AsInt(Box::new(DExpr::Result))), Box::new(DExpr::AsInt(Box::new(call))));
+    assert_eq!(strip_conds(m.ensures), List::Cons((want, 0), Box::new(List::Nil)));
+    // A free function that the file does not list has no twin.
+    let Model::Full(m) = translate_function(&has_fn(), &List::Nil, &List::Nil) else { panic!("a full model") };
+    assert_eq!(m.function, None);
+}
+
+/// A contract that calls a free function with no twin is refused, and a body that calls a free function gives no twin,
+/// decision 0176.
+#[test]
+fn a_free_function_with_no_twin_is_refused_in_a_contract() {
+    let table = file_table(List::Cons((FBUMP, (KFBUMP, None)), Box::new(List::Nil)));
+    let ens = Expr::Bin(BinOp::Eq, b(Expr::Result), b(Expr::Apply(FBUMP, Box::new(List::Cons(b(Expr::Name(X)), Box::new(List::Nil))))));
+    let next = Function { name: 414, line: 27, params: List::Cons((X, Ty::I32), Box::new(List::Nil)), ret: Ty::I32, trusted: true, conds: List::Cons((CondKind::Ensures, ens, 26, names(&[X])), Box::new(List::Nil)), body: List::Nil };
+    assert_eq!(refusal_of(&translate_function(&next, &List::Nil, &table)), Refusal::NotPure(FBUMP, 26));
+    // `return g(x)` of a free `g` is a call, so the body gives no twin.
+    let g = Function { name: KGFREE, line: 3, params: List::Cons((X, Ty::I32), Box::new(List::Nil)), ret: Ty::I32, trusted: false, conds: List::Nil, body: one(Stmt::Return(read(X, Ty::I32), 4)) };
+    let call = Expr::Call(KGFREE, GFREE, Box::new(List::Cons(b(read(X, Ty::I32)), Box::new(List::Nil))), 7);
+    let f = Function { name: 415, line: 6, params: List::Cons((X, Ty::I32), Box::new(List::Nil)), ret: Ty::I32, trusted: false, conds: List::Nil, body: one(Stmt::Return(call, 7)) };
+    let ms = List::Cons((GFREE, (KGFREE, Some((Ty::I32, List::Cons((X, Ty::I32), Box::new(List::Nil)))))), Box::new(List::Cons((416, (415, None)), Box::new(List::Nil))));
+    let all = fns(vec![g]);
+    let Model::Full(m) = translate_function(&f, &all, &file_table(ms)) else { panic!("a full model") };
+    assert_eq!(m.function, None);
 }
