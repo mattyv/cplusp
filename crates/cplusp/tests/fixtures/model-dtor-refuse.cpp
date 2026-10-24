@@ -103,3 +103,22 @@ void in_head() {
   for (Guard g; i < 1; ++i) {
   }
 }
+
+// A vector of guards destroys each element, and the model does not see it, decision 0178.
+//@ requires open_handles > 0
+//@ modifies open_handles
+//@ ensures true
+void into_vector() {
+  Guard g;
+  std::vector<Guard> w;
+  w.push_back(g);
+}
+
+// A call of a destructor in code destroys the local a second time, decision 0178.
+//@ requires open_handles > 0
+//@ modifies open_handles
+//@ ensures true
+void twice() {
+  Guard g;
+  g.~Guard();
+}

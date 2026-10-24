@@ -167,6 +167,8 @@ enum JStmt {
     Switch(JExpr, String, Vec<(u32, Vec<JStmt>)>, u32),
     Call(String, String, Vec<JExpr>, u32),
     Exit(u32),
+    /// A bare block `{ ... }`: its statements and its line, decision 0178.
+    Block(Vec<JStmt>, u32),
     /// A `//@ assert` or `//@ apply` line in the body, decision 0099.
     Assert(JCond),
     Apply(JCond),
@@ -535,6 +537,7 @@ fn stmt(s: JStmt, names: &mut Names) -> Stmt {
             Stmt::Call(names.id(&key), names.id(&name), Box::new(args), names.here(line))
         }
         JStmt::Exit(line) => Stmt::Exit(names.here(line)),
+        JStmt::Block(body, line) => Stmt::Block(Box::new(stmts(body, names)), names.here(line)),
         JStmt::Assert(c) => body_line(c, false, names),
         JStmt::Apply(c) => body_line(c, true, names),
         JStmt::While(c, cs, body, line) => Stmt::While(expr(c, names), Box::new(conds(cs, names)), Box::new(stmts(body, names)), names.here(line)),
@@ -940,6 +943,7 @@ fn stmt_conds<'a>(s: &'a JStmt, out: &mut Vec<&'a str>) {
     match s {
         JStmt::Assert(c) | JStmt::Apply(c) => out.push(&c.text),
         JStmt::If(_, t, f, _) => t.iter().chain(f).for_each(|s| stmt_conds(s, out)),
+        JStmt::Block(body, _) => body.iter().for_each(|s| stmt_conds(s, out)),
         JStmt::Switch(_, _, cases, _) => cases.iter().flat_map(|(_, body)| body).for_each(|s| stmt_conds(s, out)),
         JStmt::While(_, cs, body, _) | JStmt::RangeFor(_, _, _, cs, body, _) => {
             out.extend(cs.iter().map(|c| c.text.as_str()));
@@ -997,6 +1001,7 @@ fn stmt_names<'a>(s: &'a JStmt, out: &mut Vec<&'a str>) {
         }
         JStmt::Call(_, _, args, _) => args.iter().for_each(|a| expr_names(a, out)),
         JStmt::Exit(_) | JStmt::Assert(_) | JStmt::Apply(_) => {}
+        JStmt::Block(body, _) => body.iter().for_each(|s| stmt_names(s, out)),
         JStmt::While(c, _, body, _) => {
             expr_names(c, out);
             body.iter().for_each(|s| stmt_names(s, out));
@@ -1054,6 +1059,9 @@ fn operator_word(name: &str) -> Option<&'static str> {
 fn dafny_word(name: &str) -> &str {
     if name == "operator()" {
         "call"
+    } else if name == "~" {
+        // The destructor is the member `~`, and its method is `c_Guard'dtor`, decision 0178.
+        "dtor"
     } else {
         name
     }
@@ -1737,13 +1745,22 @@ impl Printer<'_> {
             }
             // The statements of one lowered `return`, each on the line of the `return`. Their temporaries share one base, decision 0177.
             DStmt::Block(ss) => {
-                let base = self.temps;
+                let base = if self.in_block { names.temp_base.get().unwrap_or(self.temps) } else { self.temps };
                 let outer = names.temp_base.replace(Some(base));
                 let was = std::mem::replace(&mut self.in_block, true);
                 self.stmts(ss, depth);
                 self.in_block = was;
                 names.temp_base.set(outer);
             }
+            // A bare block of the source is a block of the model, decision 0178.
+            DStmt::Scope(ss) => {
+                self.put(depth, "{".to_string(), place);
+                self.stmts(ss, depth + 1);
+                self.put(depth, "}".to_string(), place);
+            }
+            // The destructors of the locals that die, in order. Each keeps its own place.
+            DStmt::Dtors(ss) => self.stmts(ss, depth),
+            DStmt::SetResult(e) => self.put(depth, format!("result := {};", dexpr(e, names)), place),
             DStmt::DeclTemp(t, ty) => {
                 let base = names.temp_base.get().unwrap_or(self.temps);
                 self.put(depth, format!("var v_'t{}: {};", base + t, dty(*ty, names)), place);
@@ -2202,11 +2219,13 @@ fn sentence(r: Refusal, names: &Names) -> (u32, String) {
         Refusal::PassOn(n, line) => (line, format!("{} is a vector by reference. A call that passes it on has no rule yet.", names.text(n))),
         Refusal::ReadsOnly(f, g, line) => (line, format!("{} changes {}. The caller lists {} on its reads line only.", names.text(f), names.text(g), names.text(g))),
         Refusal::GlobalClash(g, line) => (line, format!("{} names a global and a parameter or a local.", names.text(g))),
-        Refusal::MemberGlobal(line) => (line, "a member function that lists a global: the translator has no rule for it yet.".to_string()),
+        Refusal::MemberGlobal(line) => (line, "a const or virtual member function that lists a global: the translator has no rule for it yet.".to_string()),
         Refusal::GlobalType(line) => (line, "a global of this type: the translator has no rule for it yet.".to_string()),
         Refusal::SignedBits(line) => (line, "a bit operator on a signed integer: the translator has no rule for it yet.".to_string()),
         Refusal::ContractCast(line) => (line, "a static_cast in a contract that can change the value: the translator has no rule for it yet.".to_string()),
         Refusal::BraceLen(m, n, line) => (line, format!("a braced list of {m} values for a std::array of {n}: the translator has no rule for it yet.")),
+        Refusal::Copy(line) => (line, "a copy of a struct with a destructor: the translator has no rule for it yet.".to_string()),
+        Refusal::NoDtorContract(line) => (line, "a destructor with no contract: the translator has no rule for it yet.".to_string()),
         Refusal::TwoWrites(line) => (line, "two writes in one expression. C++ does not fix the order.".to_string()),
         Refusal::WriteRead(x, line) => (line, format!("{} has a write and a read in one expression. C++ does not fix the order.", names.text(x))),
         Refusal::LoopWrite(line) => (line, "a write in the condition of a loop: the translator has no rule for it yet.".to_string()),
@@ -2237,8 +2256,8 @@ fn dparams(ps: &DParams) -> Vec<(u32, DTy)> {
 /// line that no function claimed is a refusal too.
 pub fn translate(lines: &str, companion: Option<(&str, &str)>) -> Result<Translation> {
     // The text `operator()` is the first word, so its id is `CALL_OP`, the id that the core uses, decision 0098. The text `value` is the second, so its id is
-    // `VALUE_NAME`, the member that `x.value()` calls on a struct, decision 0169. The text `reads` is the third, so its id is `READS_NAME`, decision 0173. The text `count` is the fourth, so its id is `COUNT_NAME`, decision 0175.
-    let mut names = Names { words: vec!["operator()".to_string(), "value".to_string(), "reads".to_string(), "count".to_string()], ..Default::default() };
+    // `VALUE_NAME`, the member that `x.value()` calls on a struct, decision 0169. The text `reads` is the third, so its id is `READS_NAME`, decision 0173. The text `count` is the fourth, so its id is `COUNT_NAME`, decision 0175. The text `~` is the fifth, so its id is `DTOR_NAME`, decision 0178.
+    let mut names = Names { words: vec!["operator()".to_string(), "value".to_string(), "reads".to_string(), "count".to_string(), "~".to_string()], ..Default::default() };
     let mut refusals = Vec::new();
     let mut funcs = Vec::new();
     let mut structs = Vec::new();

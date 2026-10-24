@@ -51,7 +51,7 @@ Treat SPARK guidance as an engineering method, not an LLM performance measuremen
 
 ## Contract lines that the translator reads
 
-This list is true at decision 0177. Read the later decisions before you rely on it.
+This list is true at decision 0178. Read the later decisions before you rely on it.
 `cplusp prove` translates the C++ and the `//@` lines to Dafny, and runs Dafny. It says `ok: proved`, or `Not proved: FILE:LINE: sentence` for a proof that fails, or `Not provable: FILE:LINE: sentence` for a form that has no rule.
 
 Where each line goes:
@@ -95,6 +95,7 @@ The modifies line:
 - An `enum class` with a value written for an enumerator is its underlying integer, and `Flag::Read` is its value, decision 0175. `a & b` and `a | b` on unsigned integers prove with the laws of the bits. Write parentheses around a bit operator in a contract, because `==` binds tighter. A contract reads `static_cast<T>(e)` of a parameter, a field or `result` only when each value of `e` fits `T`. A free `operator+` is a function. `std::chrono::milliseconds` is its count, so a contract writes `a.count()`. A `std::array` by value or as a result is a sequence of its fixed length, and `return {a, b, c};` gives it. A `const int32_t&` parameter is the value.
 - A contract can call a free function by its name, as `has(result, flag)`, decision 0176. Its body must be one `return` with no call, and it must write nothing. Such a function shows its body to every caller. One that no contract calls stays a wall: its callers prove from its contract alone. In code, put a call of it alone, in the start value of a local or in a `return`. Do not give a function of the file the name of a function of the companion file.
 - `x++` and a call that writes a value back can stand inside an expression, decision 0177. Write one change of state in each expression, and do not read the changed name again in it. A `return` can call a function on the right of `&&` or `||` or in a branch of `?:`. A loop condition cannot hold a write or a call.
+- A struct can have a destructor, decision 0178. Give the destructor a contract with `//@ modifies`, `//@ requires` and `//@ ensures` lines. The destructor runs where its local dies: before a `return`, and at the end of its block. Locals die in the reverse order of their declaration. Build such a local by its constructor, and use it only by its name and its member functions. Do not copy it, return it or keep it in a field. Do not pass it by value. Pass it by a reference that can change it. Do not keep it in a vector, an optional or a `unique_ptr`. Do not declare it in the head of a `for`. Do not call its destructor in code.
 - After a `push_back`, a read of `v.size()` in code needs a requires line or an invariant that bounds the length. Then the size fits `size_t`.
 - An ensures line that reads `v[i]` after the call needs a line before it that gives the length: `ensures v.size() == old(v.size())`, or `+ 1` after one `push_back`, decision 0146. A loop that writes `v` needs the same line as an invariant.
 - The gate also reads `modifies` and `reads` lines for globals, decision 0035.

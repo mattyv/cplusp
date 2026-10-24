@@ -17,9 +17,13 @@ A value of a struct with a destructor stays in its block. These forms have no ru
 - a value of the type that is not a name, such as a call that gives the type or a brace list `Lock{5}`,
 - a sequence, an optional or a `unique_ptr` of the type, at the line of its declaration.
 
+The value of a `return` that is a brace list of the type is the result itself, as in the body of a constructor. It is no temporary, so it has a rule.
+
 The model cannot tell a parameter by value from a parameter by `const` reference, so neither has a rule. No example needs one. Each of these forms gets one sentence. It is "a copy of a struct with a destructor: the translator has no rule for it yet."
 
 A `for` with a local of the type in its head has no rule. The plugin writes it as an unknown statement.
+
+A call of a destructor in code, such as `g.~Guard();`, has no rule. C++ runs the destructor again at the end of the block. Its sentence is "a call of a destructor: the translator has no rule for it yet."
 
 A struct whose destructor has no contract has no rule as a local. Its sentence is "a destructor with no contract: the translator has no rule for it yet."
 

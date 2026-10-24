@@ -2394,22 +2394,21 @@ fn structs_with_no_rule_are_refused_at_their_lines() {
     assert_eq!(refusals.len(), 5, "{text}");
 }
 
-/// A function with no method in the model is refused for what it is, not for its name, decision 0069. The check of names covers only
-/// the names the Dafny text prints.
+/// A destructor and an operator() of a plain struct have models. Their names reach the Dafny text as words, never as the C++
+/// spelling, decisions 0069 and 0178.
 #[test]
-fn a_member_function_is_refused_as_a_member_whatever_its_name() {
+fn a_member_function_reaches_the_dafny_text_as_a_word_whatever_its_name() {
     if !clang_tidy_available() {
         return;
     }
     let dir = tempfile::tempdir().unwrap();
-    let (o, _) = model("model-member-names.cpp", dir.path());
+    let (o, out) = model("model-member-names.cpp", dir.path());
     let text = stdout(&o);
-    let refusals: Vec<&str> = text.lines().filter(|l| l.starts_with("Not provable: ")).collect();
-    for line in [5, 6] {
-        let want = format!("model-member-names.cpp:{line}: CXXMethodDecl: the translator has no rule for it yet.");
-        assert!(refusals.iter().any(|l| l.ends_with(&want)), "{want}: {text}");
-    }
-    assert_eq!(refusals.len(), 2, "{text}");
+    assert_eq!(o.status.code(), Some(0), "stdout: {text} stderr: {}", stderr(&o));
+    assert!(!text.contains("Not provable: "), "{text}");
+    let dafny = std::fs::read_to_string(out).unwrap();
+    assert!(dafny.contains("method c_D'dtor(") && dafny.contains("method c_D'call("), "{dafny}");
+    assert!(!dafny.contains('~'), "{dafny}");
 }
 
 /// An optional scalar is a Dafny Option, decision 0075. Its reads in code and contracts, `std::nullopt`, the construction from a
@@ -5676,5 +5675,7 @@ fn a_struct_with_a_destructor_and_no_rule_is_refused() {
     let mut want: Vec<String> = [28, 32, 36, 69, 76, 80, 86, 94].map(|l| format!("{l}: {copy}")).to_vec();
     want.insert(3, "52: a destructor with no contract: the translator has no rule for it yet.".to_string());
     want.push("103: ForStmt: the translator has no rule for it yet.".to_string());
+    want.push(format!("113: {copy}"));
+    want.push("123: a call of a destructor: the translator has no rule for it yet.".to_string());
     assert_eq!(refusals, want, "{text}");
 }

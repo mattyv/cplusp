@@ -344,7 +344,8 @@ pub type Args = List<Box<Expr>>;
 /// `//@ apply` line that calls a lemma of the companion file by the id of its name, decision 0099. `RangeFor` is a range-for, decision
 /// 0143. `SetIndex` is `v[i] = e` of a vector by reference, decision 0145, and `PushBack` is `v.push_back(e)`, decision 0148.
 /// `Sort` is `std::sort(v.begin(), v.end())`, decision 0161, and `SortBy` is the same with a comparator lambda, by the names and the
-/// type of its two parameters and the expression of its one `return`, decision 0162.
+/// type of its two parameters and the expression of its one `return`, decision 0162. `Block` is a bare block `{ ... }`, a scope of
+/// its own, decision 0178.
 #[derive(PartialEq, Eq, Debug)]
 pub enum Stmt {
     Return(Expr, u32),
@@ -366,6 +367,7 @@ pub enum Stmt {
     PushBack(u32, Expr, u32),
     Sort(u32, u32),
     SortBy(u32, u32, u32, Ty, Expr, u32),
+    Block(Box<Stmts>, u32),
     Unknown(u32, u32),
 }
 
@@ -545,7 +547,9 @@ pub type DArgs = List<DExpr>;
 /// condition, the invariants, the decreases lines and the body. `ReturnUpdate` is `result, o, x := m(o, x, args); return;` of a method that
 /// writes back, decision 0174. `Moved` is a statement, then `x := None;` for each name that it
 /// moves, decision 0171. `Block` is the statements of one `return` that runs a call only where C++ runs it, `DeclTemp` is
-/// `var t: T;` of a temporary and `AssignTemp` is `t := e;`, decision 0177. `For` prints as its start, then a `while` whose body ends with the
+/// `var t: T;` of a temporary and `AssignTemp` is `t := e;`, decision 0177. `Scope` is a bare block `{ ... }`, `Dtors` is the calls
+/// of the destructors of the locals that die at the end of a block, which is no statement of C++, and `SetResult` is
+/// `result := e;` before the destructors run at a return, decision 0178. `For` prints as its start, then a `while` whose body ends with the
 /// step. The start and the step keep their own places, decision 0069. `SetField` is `this' := this'.(f := e);`. `SetOut` is
 /// `x' := e;` and `SetOutField` is `x' := x'.(f := e);` of a reference parameter, decision 0108. `Update` calls a method that writes
 /// back, `o, x := m(o, x, args);`, and `LocalUpdate` also sets a new local to the value it gives, decisions 0096 and 0108. The
@@ -583,6 +587,9 @@ pub enum DStmt {
     Block(Box<DStmts>),
     DeclTemp(u32, DTy),
     AssignTemp(u32, DExpr),
+    Scope(Box<DStmts>),
+    Dtors(Box<DStmts>),
+    SetResult(DExpr),
 }
 
 /// A place that a call writes back: a local by its name, the object of the member function that makes the call, or a reference
@@ -675,7 +682,9 @@ pub type Models = List<Model>;
 /// bit operator on a signed integer, and `ContractCast` is a cast in a contract that can change the value, each by the line.
 /// `BraceLen` is a braced list of `m` values for a std::array of `n`, by `m`, `n` and the line, decision 0175. `TwoWrites` is an
 /// expression with two writes where C++ fixes no order, by the line, `WriteRead` is one that writes a name and reads it elsewhere,
-/// by the id of the name and the line, and `LoopWrite` is a write in the condition of a loop, by the line, decision 0177.
+/// by the id of the name and the line, and `LoopWrite` is a write in the condition of a loop, by the line, decision 0177. `Copy`
+/// is a copy of a struct with a destructor, and `NoDtorContract` is a local of a struct whose destructor has no contract, each by
+/// the line, decision 0178.
 #[derive(Structural, PartialEq, Eq, Clone, Copy, Debug)]
 pub enum Refusal {
     Construct(u32, u32),
@@ -726,6 +735,8 @@ pub enum Refusal {
     TwoWrites(u32),
     WriteRead(u32, u32),
     LoopWrite(u32),
+    Copy(u32),
+    NoDtorContract(u32),
 }
 
 // ------------------------------------------------------------------ the rules
@@ -743,6 +754,10 @@ pub const READS_NAME: u32 = 2;
 
 /// The id of the name `count`. The shell gives this id to that text, so `a.count()` of a duration is its count, decision 0175.
 pub const COUNT_NAME: u32 = 3;
+
+/// The id of the name `~`, under which the table of structs lists the destructor of a struct. The shell gives this id to that text,
+/// decision 0178.
+pub const DTOR_NAME: u32 = 4;
 
 /// The Dafny type of a scalar, decision 0108.
 pub open spec fn spec_scalar_dty(s: Scalar) -> DTy {
@@ -1326,6 +1341,9 @@ pub open spec fn spec_lift(e: Expr, all: Fns, line: u32, sd: Structs, n: u32, op
             Err(Refusal::Place(at))
         } else if !spec_callable(all, k, sd) {
             Err(Refusal::Callee(nm, at))
+        } else if spec_callee_dtor(all, k, sd) {
+            // A temporary of a struct with a destructor has no rule, decision 0178.
+            Err(Refusal::Copy(line))
         } else {
             match spec_lift_args(*args, all, line, sd, n, open) {
                 Err(r) => Err(r),
@@ -1511,6 +1529,8 @@ pub open spec fn spec_lift(e: Expr, all: Fns, line: u32, sd: Structs, n: u32, op
             Err(r) => Err(r),
             Ok((c, d, n1)) => Ok((c, DExpr::Field(Box::new(d), f), n1)),
         },
+        // A brace list of a struct with a destructor is a temporary, decision 0178.
+        Expr::Construct(k, _) if spec_dtor_of(Ty::Struct(k), sd) is Some => Err(Refusal::Copy(line)),
         Expr::Construct(k, args) => match spec_lift_args(*args, all, line, sd, n, open) {
             Err(r) => Err(r),
             Ok((c, da, n1)) => Ok((c, DExpr::Ctor(k, Box::new(da)), n1)),
@@ -2953,7 +2973,8 @@ pub open spec fn spec_params(ps: Params, line: u32, sd: Structs) -> Result<DPara
 {
     match ps {
         List::Nil => Ok(List::Nil),
-        List::Cons((n, t), rest) => match spec_param_ty(t, line, sd) {
+        // A struct with a destructor by value is a copy, decision 0178.
+        List::Cons((n, t), rest) => match (if spec_holds_dtor(t, sd) && !(t is Mut && t->Mut_0 is Struct) { Err(Refusal::Copy(line)) } else { spec_param_ty(t, line, sd) }) {
             Ok(dt) => match spec_params(*rest, line, sd) {
                 Ok(dr) => Ok(List::Cons((n, dt), Box::new(dr))),
                 Err(r) => Err(r),
@@ -3001,6 +3022,7 @@ pub open spec fn spec_place(s: Stmt) -> u32 {
         Stmt::PushBack(_, _, l) => l,
         Stmt::Sort(_, l) => l,
         Stmt::SortBy(_, _, _, _, _, l) => l,
+        Stmt::Block(_, l) => l,
         Stmt::Unknown(_, l) => l,
     }
 }
@@ -3408,7 +3430,10 @@ pub open spec fn spec_call_elem(key: u32, name: u32, args: Args, line: u32, all:
 }
 
 pub open spec fn spec_call_stmt(key: u32, name: u32, args: Args, line: u32, all: Fns, ps: Params, sd: Structs) -> Result<DStmt, Refusal> {
-    if spec_callee_writes(all, key) && spec_call_elem(key, name, args, line, all, ps, sd) is Some {
+    // The value of the call is a temporary of a struct with a destructor, decision 0178.
+    if spec_callee_dtor(all, key, sd) {
+        Err(Refusal::Copy(line))
+    } else if spec_callee_writes(all, key) && spec_call_elem(key, name, args, line, all, ps, sd) is Some {
         spec_call_elem(key, name, args, line, all, ps, sd)->Some_0
     } else if spec_callee_writes(all, key) {
         match spec_callee_writebacks(all, key, args, ps, line) {
@@ -3498,9 +3523,15 @@ pub open spec fn spec_return(e: Expr, l: u32, all: Fns, ps: Params, sd: Structs)
             Ok((c, da, _)) => Ok(spec_pre(c, DStmt::Return(DExpr::SeqLit(Box::new(da))))),
             Err(r) => Err(r),
         },
+        // The value of a return that builds the struct is the result itself, as in the body of a constructor. It is no temporary,
+        // also for a struct with a destructor, decision 0178.
+        Expr::Construct(k, args) => match spec_lift_args(*args, all, l, sd, 0, true) {
+            Ok((c, da, _)) => Ok(spec_pre(c, DStmt::Return(DExpr::Ctor(k, Box::new(da))))),
+            Err(r) => Err(r),
+        },
         // A call or a write that C++ runs only sometimes makes the return statements of an if, decision 0177.
         _ => if spec_cond_calls(e, all, l, sd) {
-            match spec_lower(e, None, all, l, sd, 0) {
+            match spec_lower(e, None, false, all, l, sd, 0) {
                 Ok((ss, _)) => Ok(DStmt::Block(Box::new(ss))),
                 Err(r) => Err(r),
             }
@@ -3615,8 +3646,12 @@ pub fn translate_return(e: &Expr, l: u32, all: &Fns, ps: &Params, sd: &Structs) 
             Ok((c, da, _)) => Ok(pre(c, DStmt::Return(DExpr::SeqLit(Box::new(da))))),
             Err(r) => Err(r),
         },
+        Expr::Construct(k, args) => match lift_args(args, all, l, sd, 0, true) {
+            Ok((c, da, _)) => Ok(pre(c, DStmt::Return(DExpr::Ctor(*k, Box::new(da))))),
+            Err(r) => Err(r),
+        },
         _ => if cond_calls(e, all, l, sd) {
-            match lower(e, None, all, l, sd, 0) {
+            match lower(e, None, false, all, l, sd, 0) {
                 Ok((ss, _)) => Ok(DStmt::Block(Box::new(ss))),
                 Err(r) => Err(r),
             }
@@ -4349,19 +4384,19 @@ pub fn cond_calls(e: &Expr, all: &Fns, line: u32, sd: &Structs) -> (r: bool)
 }
 
 /// The statement that takes the value of a part: the return, or the temporary `t`.
-pub open spec fn spec_sink(sink: Option<u32>, d: DExpr) -> DStmt {
+pub open spec fn spec_sink(sink: Option<u32>, res: bool, d: DExpr) -> DStmt {
     match sink {
-        None => DStmt::Return(d),
+        None => if res { DStmt::SetResult(d) } else { DStmt::Return(d) },
         Some(t) => DStmt::AssignTemp(t, d),
     }
 }
 
-pub fn sink_of(sink: Option<u32>, d: DExpr) -> (r: DStmt)
+pub fn sink_of(sink: Option<u32>, res: bool, d: DExpr) -> (r: DStmt)
     ensures
-        r == spec_sink(sink, d),
+        r == spec_sink(sink, res, d),
 {
     match sink {
-        None => DStmt::Return(d),
+        None => if res { DStmt::SetResult(d) } else { DStmt::Return(d) },
         Some(t) => DStmt::AssignTemp(t, d),
     }
 }
@@ -4370,20 +4405,20 @@ pub fn sink_of(sink: Option<u32>, d: DExpr) -> (r: DStmt)
 /// temporary `t` the value of `a`, then of `b` only when `t` holds. `a || b` runs `b` only when `t` does not hold. `c ? a : b`
 /// gives each branch its own statements. The temporary takes its number before the calls of the left side. Each statement keeps
 /// the place of the `return`.
-pub open spec fn spec_lower(e: Expr, sink: Option<u32>, all: Fns, line: u32, sd: Structs, n: u32) -> Result<(DStmts, u32), Refusal>
+pub open spec fn spec_lower(e: Expr, sink: Option<u32>, res: bool, all: Fns, line: u32, sd: Structs, n: u32) -> Result<(DStmts, u32), Refusal>
     decreases e,
 {
     match e {
-        Expr::Paren(a) => spec_lower(*a, sink, all, line, sd, n),
+        Expr::Paren(a) => spec_lower(*a, sink, res, all, line, sd, n),
         Expr::Bin(op, a, b) => if (op == BinOp::And || op == BinOp::Or) && spec_cond_calls(e, all, line, sd) {
             if n >= 0xFFFF_FFFF {
                 Err(Refusal::Syntax(line))
             } else {
                 let t = match sink { Some(t) => t, None => n };
                 let n0: u32 = if sink is None { (n + 1) as u32 } else { n };
-                match spec_lower(*a, Some(t), all, line, sd, n0) {
+                match spec_lower(*a, Some(t), res, all, line, sd, n0) {
                     Err(r) => Err(r),
-                    Ok((sa, n1)) => match spec_lower(*b, Some(t), all, line, sd, n1) {
+                    Ok((sa, n1)) => match spec_lower(*b, Some(t), res, all, line, sd, n1) {
                         Err(r) => Err(r),
                         Ok((sb, n2)) => {
                             let test = if op == BinOp::And { DExpr::Temp(t) } else { DExpr::Not(Box::new(DExpr::Temp(t))) };
@@ -4391,7 +4426,7 @@ pub open spec fn spec_lower(e: Expr, sink: Option<u32>, all: Fns, line: u32, sd:
                             match sink {
                                 Some(_) => Ok((body, n2)),
                                 None => Ok((
-                                    List::Cons((Box::new(DStmt::DeclTemp(t, DTy::Bool)), line), Box::new(spec_append(body, List::Cons((Box::new(DStmt::Return(DExpr::Temp(t))), line), Box::new(List::Nil))))),
+                                    List::Cons((Box::new(DStmt::DeclTemp(t, DTy::Bool)), line), Box::new(spec_append(body, List::Cons((Box::new(spec_sink(None, res, DExpr::Temp(t))), line), Box::new(List::Nil))))),
                                     n2,
                                 )),
                             }
@@ -4400,60 +4435,60 @@ pub open spec fn spec_lower(e: Expr, sink: Option<u32>, all: Fns, line: u32, sd:
                 }
             }
         } else {
-            spec_lower_leaf(e, sink, all, line, sd, n)
+            spec_lower_leaf(e, sink, res, all, line, sd, n)
         },
         Expr::Cond(c, a, b) => if spec_cond_calls(e, all, line, sd) {
             match spec_lift(*c, all, line, sd, n, true) {
                 Err(r) => Err(r),
-                Ok((cc, dc, n1)) => match spec_lower(*a, sink, all, line, sd, n1) {
+                Ok((cc, dc, n1)) => match spec_lower(*a, sink, res, all, line, sd, n1) {
                     Err(r) => Err(r),
-                    Ok((sa, n2)) => match spec_lower(*b, sink, all, line, sd, n2) {
+                    Ok((sa, n2)) => match spec_lower(*b, sink, res, all, line, sd, n2) {
                         Err(r) => Err(r),
                         Ok((sb, n3)) => Ok((List::Cons((Box::new(spec_pre(cc, DStmt::If(dc, Box::new(sa), Box::new(sb)))), line), Box::new(List::Nil)), n3)),
                     },
                 },
             }
         } else {
-            spec_lower_leaf(e, sink, all, line, sd, n)
+            spec_lower_leaf(e, sink, res, all, line, sd, n)
         },
-        _ => spec_lower_leaf(e, sink, all, line, sd, n),
+        _ => spec_lower_leaf(e, sink, res, all, line, sd, n),
     }
 }
 
 /// A part with no such `&&`, `||` or `?:` at its top: its calls run first, then the sink takes its value.
-pub open spec fn spec_lower_leaf(e: Expr, sink: Option<u32>, all: Fns, line: u32, sd: Structs, n: u32) -> Result<(DStmts, u32), Refusal> {
+pub open spec fn spec_lower_leaf(e: Expr, sink: Option<u32>, res: bool, all: Fns, line: u32, sd: Structs, n: u32) -> Result<(DStmts, u32), Refusal> {
     match spec_lift(e, all, line, sd, n, true) {
         Err(r) => Err(r),
-        Ok((c, d, n1)) => Ok((List::Cons((Box::new(spec_pre(c, spec_sink(sink, d))), line), Box::new(List::Nil)), n1)),
+        Ok((c, d, n1)) => Ok((List::Cons((Box::new(spec_pre(c, spec_sink(sink, res, d))), line), Box::new(List::Nil)), n1)),
     }
 }
 
-pub fn lower_leaf(e: &Expr, sink: Option<u32>, all: &Fns, line: u32, sd: &Structs, n: u32) -> (r: Result<(DStmts, u32), Refusal>)
+pub fn lower_leaf(e: &Expr, sink: Option<u32>, res: bool, all: &Fns, line: u32, sd: &Structs, n: u32) -> (r: Result<(DStmts, u32), Refusal>)
     ensures
-        r == spec_lower_leaf(*e, sink, *all, line, *sd, n),
+        r == spec_lower_leaf(*e, sink, res, *all, line, *sd, n),
 {
     match lift(e, all, line, sd, n, true) {
         Err(r) => Err(r),
-        Ok((c, d, n1)) => Ok((List::Cons((Box::new(pre(c, sink_of(sink, d))), line), Box::new(List::Nil)), n1)),
+        Ok((c, d, n1)) => Ok((List::Cons((Box::new(pre(c, sink_of(sink, res, d))), line), Box::new(List::Nil)), n1)),
     }
 }
 
-pub fn lower(e: &Expr, sink: Option<u32>, all: &Fns, line: u32, sd: &Structs, n: u32) -> (r: Result<(DStmts, u32), Refusal>)
+pub fn lower(e: &Expr, sink: Option<u32>, res: bool, all: &Fns, line: u32, sd: &Structs, n: u32) -> (r: Result<(DStmts, u32), Refusal>)
     ensures
-        r == spec_lower(*e, sink, *all, line, *sd, n),
+        r == spec_lower(*e, sink, res, *all, line, *sd, n),
     decreases e,
 {
     match e {
-        Expr::Paren(a) => lower(a, sink, all, line, sd, n),
+        Expr::Paren(a) => lower(a, sink, res, all, line, sd, n),
         Expr::Bin(op, a, b) => if (*op == BinOp::And || *op == BinOp::Or) && cond_calls(e, all, line, sd) {
             if n >= 0xFFFF_FFFF {
                 Err(Refusal::Syntax(line))
             } else {
                 let t = match sink { Some(t) => t, None => n };
                 let n0: u32 = if sink.is_none() { n + 1 } else { n };
-                match lower(a, Some(t), all, line, sd, n0) {
+                match lower(a, Some(t), res, all, line, sd, n0) {
                     Err(r) => Err(r),
-                    Ok((sa, n1)) => match lower(b, Some(t), all, line, sd, n1) {
+                    Ok((sa, n1)) => match lower(b, Some(t), res, all, line, sd, n1) {
                         Err(r) => Err(r),
                         Ok((sb, n2)) => {
                             let test = if *op == BinOp::And { DExpr::Temp(t) } else { DExpr::Not(Box::new(DExpr::Temp(t))) };
@@ -4461,7 +4496,7 @@ pub fn lower(e: &Expr, sink: Option<u32>, all: &Fns, line: u32, sd: &Structs, n:
                             match sink {
                                 Some(_) => Ok((body, n2)),
                                 None => Ok((
-                                    List::Cons((Box::new(DStmt::DeclTemp(t, DTy::Bool)), line), Box::new(append(body, List::Cons((Box::new(DStmt::Return(DExpr::Temp(t))), line), Box::new(List::Nil))))),
+                                    List::Cons((Box::new(DStmt::DeclTemp(t, DTy::Bool)), line), Box::new(append(body, List::Cons((Box::new(sink_of(None, res, DExpr::Temp(t))), line), Box::new(List::Nil))))),
                                     n2,
                                 )),
                             }
@@ -4470,78 +4505,78 @@ pub fn lower(e: &Expr, sink: Option<u32>, all: &Fns, line: u32, sd: &Structs, n:
                 }
             }
         } else {
-            lower_leaf(e, sink, all, line, sd, n)
+            lower_leaf(e, sink, res, all, line, sd, n)
         },
         Expr::Cond(c, a, b) => if cond_calls(e, all, line, sd) {
             match lift(c, all, line, sd, n, true) {
                 Err(r) => Err(r),
-                Ok((cc, dc, n1)) => match lower(a, sink, all, line, sd, n1) {
+                Ok((cc, dc, n1)) => match lower(a, sink, res, all, line, sd, n1) {
                     Err(r) => Err(r),
-                    Ok((sa, n2)) => match lower(b, sink, all, line, sd, n2) {
+                    Ok((sa, n2)) => match lower(b, sink, res, all, line, sd, n2) {
                         Err(r) => Err(r),
                         Ok((sb, n3)) => Ok((List::Cons((Box::new(pre(cc, DStmt::If(dc, Box::new(sa), Box::new(sb)))), line), Box::new(List::Nil)), n3)),
                     },
                 },
             }
         } else {
-            lower_leaf(e, sink, all, line, sd, n)
+            lower_leaf(e, sink, res, all, line, sd, n)
         },
-        _ => lower_leaf(e, sink, all, line, sd, n),
+        _ => lower_leaf(e, sink, res, all, line, sd, n),
     }
 }
 
 /// Each call of a lowered `return` names a key with a method.
-pub proof fn lemma_lower_resolves(e: Expr, sink: Option<u32>, all: Fns, line: u32, sd: Structs, n: u32)
+pub proof fn lemma_lower_resolves(e: Expr, sink: Option<u32>, res: bool, all: Fns, line: u32, sd: Structs, n: u32)
     requires
-        spec_lower(e, sink, all, line, sd, n).is_ok(),
+        spec_lower(e, sink, res, all, line, sd, n).is_ok(),
     ensures
-        calls_resolve(spec_lower(e, sink, all, line, sd, n).unwrap().0, all, sd),
+        calls_resolve(spec_lower(e, sink, res, all, line, sd, n).unwrap().0, all, sd),
     decreases e,
 {
     reveal_with_fuel(calls_resolve, 3);
     match e {
-        Expr::Paren(a) => lemma_lower_resolves(*a, sink, all, line, sd, n),
+        Expr::Paren(a) => lemma_lower_resolves(*a, sink, res, all, line, sd, n),
         Expr::Bin(op, a, b) => if (op == BinOp::And || op == BinOp::Or) && spec_cond_calls(e, all, line, sd) {
             let t = match sink { Some(t) => t, None => n };
             let n0: u32 = if sink is None { (n + 1) as u32 } else { n };
-            lemma_lower_resolves(*a, Some(t), all, line, sd, n0);
-            let (sa, n1) = spec_lower(*a, Some(t), all, line, sd, n0).unwrap();
-            lemma_lower_resolves(*b, Some(t), all, line, sd, n1);
-            let (sb, _) = spec_lower(*b, Some(t), all, line, sd, n1).unwrap();
+            lemma_lower_resolves(*a, Some(t), res, all, line, sd, n0);
+            let (sa, n1) = spec_lower(*a, Some(t), res, all, line, sd, n0).unwrap();
+            lemma_lower_resolves(*b, Some(t), res, all, line, sd, n1);
+            let (sb, _) = spec_lower(*b, Some(t), res, all, line, sd, n1).unwrap();
             let test = if op == BinOp::And { DExpr::Temp(t) } else { DExpr::Not(Box::new(DExpr::Temp(t))) };
             let tail = List::Cons((Box::new(DStmt::If(test, Box::new(sb), Box::new(List::Nil))), line), Box::new(List::Nil));
             lemma_resolve_append(sa, tail, all, sd);
             let body = spec_append(sa, tail);
-            let ret = List::Cons((Box::new(DStmt::Return(DExpr::Temp(t))), line), Box::new(List::Nil));
+            let ret = List::Cons((Box::new(spec_sink(None, res, DExpr::Temp(t))), line), Box::new(List::Nil));
             lemma_resolve_append(body, ret, all, sd);
         } else {
-            lemma_lower_leaf_resolves(e, sink, all, line, sd, n);
+            lemma_lower_leaf_resolves(e, sink, res, all, line, sd, n);
         },
         Expr::Cond(c, a, b) => if spec_cond_calls(e, all, line, sd) {
             lemma_lift_resolves(*c, all, line, sd, n, true);
             let (cc, dc, n1) = spec_lift(*c, all, line, sd, n, true).unwrap();
-            lemma_lower_resolves(*a, sink, all, line, sd, n1);
-            let (sa, n2) = spec_lower(*a, sink, all, line, sd, n1).unwrap();
-            lemma_lower_resolves(*b, sink, all, line, sd, n2);
-            let (sb, _) = spec_lower(*b, sink, all, line, sd, n2).unwrap();
+            lemma_lower_resolves(*a, sink, res, all, line, sd, n1);
+            let (sa, n2) = spec_lower(*a, sink, res, all, line, sd, n1).unwrap();
+            lemma_lower_resolves(*b, sink, res, all, line, sd, n2);
+            let (sb, _) = spec_lower(*b, sink, res, all, line, sd, n2).unwrap();
             lemma_pre_resolves(cc, DStmt::If(dc, Box::new(sa), Box::new(sb)), all, sd);
         } else {
-            lemma_lower_leaf_resolves(e, sink, all, line, sd, n);
+            lemma_lower_leaf_resolves(e, sink, res, all, line, sd, n);
         },
-        _ => lemma_lower_leaf_resolves(e, sink, all, line, sd, n),
+        _ => lemma_lower_leaf_resolves(e, sink, res, all, line, sd, n),
     }
 }
 
-pub proof fn lemma_lower_leaf_resolves(e: Expr, sink: Option<u32>, all: Fns, line: u32, sd: Structs, n: u32)
+pub proof fn lemma_lower_leaf_resolves(e: Expr, sink: Option<u32>, res: bool, all: Fns, line: u32, sd: Structs, n: u32)
     requires
-        spec_lower_leaf(e, sink, all, line, sd, n).is_ok(),
+        spec_lower_leaf(e, sink, res, all, line, sd, n).is_ok(),
     ensures
-        calls_resolve(spec_lower_leaf(e, sink, all, line, sd, n).unwrap().0, all, sd),
+        calls_resolve(spec_lower_leaf(e, sink, res, all, line, sd, n).unwrap().0, all, sd),
 {
     reveal_with_fuel(calls_resolve, 2);
     lemma_lift_resolves(e, all, line, sd, n, true);
     let (c, d, _) = spec_lift(e, all, line, sd, n, true).unwrap();
-    lemma_pre_resolves(c, spec_sink(sink, d), all, sd);
+    lemma_pre_resolves(c, spec_sink(sink, res, d), all, sd);
 }
 
 /// The calls of two lists of statements resolve when the calls of each do.
@@ -4557,22 +4592,22 @@ pub proof fn lemma_resolve_append(a: DStmts, b: DStmts, all: Fns, sd: Structs)
 }
 
 /// A lowered `return` with a node that has no rule is refused.
-pub proof fn lemma_unknown_lower_is_refused(e: Expr, sink: Option<u32>, all: Fns, line: u32, sd: Structs, n: u32)
+pub proof fn lemma_unknown_lower_is_refused(e: Expr, sink: Option<u32>, res: bool, all: Fns, line: u32, sd: Structs, n: u32)
     requires
         unknown_expr(e),
     ensures
-        spec_lower(e, sink, all, line, sd, n).is_err(),
+        spec_lower(e, sink, res, all, line, sd, n).is_err(),
     decreases e,
 {
     match e {
-        Expr::Paren(a) => lemma_unknown_lower_is_refused(*a, sink, all, line, sd, n),
+        Expr::Paren(a) => lemma_unknown_lower_is_refused(*a, sink, res, all, line, sd, n),
         Expr::Bin(op, a, b) => if (op == BinOp::And || op == BinOp::Or) && spec_cond_calls(e, all, line, sd) && n < 0xFFFF_FFFF {
             let t = match sink { Some(t) => t, None => n };
             let n0: u32 = if sink is None { (n + 1) as u32 } else { n };
             if unknown_expr(*a) {
-                lemma_unknown_lower_is_refused(*a, Some(t), all, line, sd, n0);
-            } else if spec_lower(*a, Some(t), all, line, sd, n0).is_ok() {
-                lemma_unknown_lower_is_refused(*b, Some(t), all, line, sd, spec_lower(*a, Some(t), all, line, sd, n0).unwrap().1);
+                lemma_unknown_lower_is_refused(*a, Some(t), res, all, line, sd, n0);
+            } else if spec_lower(*a, Some(t), res, all, line, sd, n0).is_ok() {
+                lemma_unknown_lower_is_refused(*b, Some(t), res, all, line, sd, spec_lower(*a, Some(t), res, all, line, sd, n0).unwrap().1);
             }
         } else if !((op == BinOp::And || op == BinOp::Or) && spec_cond_calls(e, all, line, sd)) {
             lemma_unknown_lift_is_refused(e, all, line, sd, n, true);
@@ -4583,15 +4618,571 @@ pub proof fn lemma_unknown_lower_is_refused(e: Expr, sink: Option<u32>, all: Fns
             } else if spec_lift(*c, all, line, sd, n, true).is_ok() {
                 let n1 = spec_lift(*c, all, line, sd, n, true).unwrap().2;
                 if unknown_expr(*a) {
-                    lemma_unknown_lower_is_refused(*a, sink, all, line, sd, n1);
-                } else if spec_lower(*a, sink, all, line, sd, n1).is_ok() {
-                    lemma_unknown_lower_is_refused(*b, sink, all, line, sd, spec_lower(*a, sink, all, line, sd, n1).unwrap().1);
+                    lemma_unknown_lower_is_refused(*a, sink, res, all, line, sd, n1);
+                } else if spec_lower(*a, sink, res, all, line, sd, n1).is_ok() {
+                    lemma_unknown_lower_is_refused(*b, sink, res, all, line, sd, spec_lower(*a, sink, res, all, line, sd, n1).unwrap().1);
                 }
             }
         } else {
             lemma_unknown_lift_is_refused(e, all, line, sd, n, true);
         },
         _ => lemma_unknown_lift_is_refused(e, all, line, sd, n, true),
+    }
+}
+
+// ------------------------------------------------------------------ a struct with a destructor, decision 0178
+
+/// The key of the destructor of the struct of a type: a value of a struct of the file whose table lists a destructor.
+pub open spec fn spec_dtor_of(t: Ty, sd: Structs) -> Option<u32> {
+    match t {
+        Ty::Struct(k) => match spec_member(sd, k, DTOR_NAME) {
+            Some((key, _)) => Some(key),
+            None => None,
+        },
+        _ => None,
+    }
+}
+
+pub fn dtor_of(t: Ty, sd: &Structs) -> (r: Option<u32>)
+    ensures
+        r == spec_dtor_of(t, *sd),
+{
+    match t {
+        Ty::Struct(k) => match member(sd, k, DTOR_NAME) {
+            Some((key, _)) => Some(key),
+            None => None,
+        },
+        _ => None,
+    }
+}
+
+/// A type that holds a struct with a destructor: the struct itself, a reference to it, or a sequence, an optional, a pointer or a
+/// unique_ptr of it, decision 0178.
+pub open spec fn spec_holds_dtor(t: Ty, sd: Structs) -> bool {
+    match t {
+        Ty::Struct(k) => spec_dtor_of(Ty::Struct(k), sd) is Some,
+        Ty::Seq(s, _) => spec_scalar_dtor(s, sd),
+        Ty::Vec(s) => spec_scalar_dtor(s, sd),
+        Ty::MutSeq(s) => spec_scalar_dtor(s, sd),
+        Ty::MutSeqAfter(s) => spec_scalar_dtor(s, sd),
+        Ty::Opt(s) => spec_scalar_dtor(s, sd),
+        Ty::Own(s) => spec_scalar_dtor(s, sd),
+        Ty::Ptr(s) => spec_scalar_dtor(s, sd),
+        Ty::Mut(s) => spec_scalar_dtor(s, sd),
+        Ty::MutAfter(s) => spec_scalar_dtor(s, sd),
+        _ => false,
+    }
+}
+
+pub open spec fn spec_scalar_dtor(s: Scalar, sd: Structs) -> bool {
+    match s {
+        Scalar::Struct(k) => spec_dtor_of(Ty::Struct(k), sd) is Some,
+        Scalar::Own(k) => spec_dtor_of(Ty::Struct(k), sd) is Some,
+        _ => false,
+    }
+}
+
+pub fn scalar_dtor(s: Scalar, sd: &Structs) -> (r: bool)
+    ensures
+        r == spec_scalar_dtor(s, *sd),
+{
+    match s {
+        Scalar::Struct(k) => dtor_of(Ty::Struct(k), sd).is_some(),
+        Scalar::Own(k) => dtor_of(Ty::Struct(k), sd).is_some(),
+        _ => false,
+    }
+}
+
+pub fn holds_dtor(t: Ty, sd: &Structs) -> (r: bool)
+    ensures
+        r == spec_holds_dtor(t, *sd),
+{
+    match t {
+        Ty::Struct(k) => dtor_of(Ty::Struct(k), sd).is_some(),
+        Ty::Seq(s, _) => scalar_dtor(s, sd),
+        Ty::Vec(s) => scalar_dtor(s, sd),
+        Ty::MutSeq(s) => scalar_dtor(s, sd),
+        Ty::MutSeqAfter(s) => scalar_dtor(s, sd),
+        Ty::Opt(s) => scalar_dtor(s, sd),
+        Ty::Own(s) => scalar_dtor(s, sd),
+        Ty::Ptr(s) => scalar_dtor(s, sd),
+        Ty::Mut(s) => scalar_dtor(s, sd),
+        Ty::MutAfter(s) => scalar_dtor(s, sd),
+        _ => false,
+    }
+}
+
+/// The locals of a scope whose type has a destructor, the newest first, which is the order in which they die.
+pub open spec fn spec_live(env: Params, sd: Structs) -> Params
+    decreases env,
+{
+    match env {
+        List::Nil => List::Nil,
+        List::Cons((n, t), rest) => if spec_dtor_of(t, sd) is Some {
+            List::Cons((n, t), Box::new(spec_live(*rest, sd)))
+        } else {
+            spec_live(*rest, sd)
+        },
+    }
+}
+
+pub fn live(env: &Params, sd: &Structs) -> (r: Params)
+    ensures
+        r == spec_live(*env, *sd),
+    decreases env,
+{
+    match env {
+        List::Nil => List::Nil,
+        List::Cons((n, t), rest) => if dtor_of(*t, sd).is_some() {
+            List::Cons((*n, *t), Box::new(live(rest, sd)))
+        } else {
+            live(rest, sd)
+        },
+    }
+}
+
+/// The locals that the statements of a block declare at its top, the newest first, after the locals `acc`.
+pub open spec fn spec_block_locals(ss: Stmts, acc: Params) -> Params
+    decreases ss,
+{
+    match ss {
+        List::Nil => acc,
+        List::Cons(s, rest) => spec_block_locals(*rest, spec_scope(*s, acc)),
+    }
+}
+
+pub fn block_locals(ss: &Stmts, acc: Params) -> (r: Params)
+    ensures
+        r == spec_block_locals(*ss, acc),
+    decreases ss,
+{
+    match ss {
+        List::Nil => acc,
+        List::Cons(s, rest) => block_locals(rest, scope(s, &acc)),
+    }
+}
+
+/// The last statement of a block is a return or an exit, so nothing runs at the end of the block.
+pub open spec fn spec_ends_out(ss: Stmts) -> bool
+    decreases ss,
+{
+    match ss {
+        List::Nil => false,
+        List::Cons(s, rest) => if *rest is Nil {
+            *s is Return || *s is Exit
+        } else {
+            spec_ends_out(*rest)
+        },
+    }
+}
+
+pub fn ends_out(ss: &Stmts) -> (r: bool)
+    ensures
+        r == spec_ends_out(*ss),
+    decreases ss,
+{
+    match ss {
+        List::Nil => false,
+        List::Cons(s, rest) => if matches!(**rest, List::Nil) {
+            matches!(**s, Stmt::Return(..) | Stmt::Exit(..))
+        } else {
+            ends_out(rest)
+        },
+    }
+}
+
+/// The place of the last statement of a block.
+pub open spec fn spec_last_place(ss: Stmts) -> u32
+    decreases ss,
+{
+    match ss {
+        List::Nil => 0,
+        List::Cons(s, rest) => if *rest is Nil {
+            spec_place(*s)
+        } else {
+            spec_last_place(*rest)
+        },
+    }
+}
+
+pub fn last_place(ss: &Stmts) -> (r: u32)
+    ensures
+        r == spec_last_place(*ss),
+    decreases ss,
+{
+    match ss {
+        List::Nil => 0,
+        List::Cons(s, rest) => if matches!(**rest, List::Nil) {
+            place(s)
+        } else {
+            last_place(rest)
+        },
+    }
+}
+
+/// The arguments for the globals of a destructor: each is the parameter of the caller with the name of the global. A caller
+/// that does not list the global gives the name, which the translation refuses.
+pub open spec fn spec_dtor_globals(dps: Params, ps: Params) -> Args
+    decreases dps,
+{
+    match dps {
+        List::Nil => List::Nil,
+        List::Cons((g, _), rest) => List::Cons(
+            Box::new(match spec_get(ps, g) {
+                Some(t) => Expr::Var(g, t),
+                None => Expr::Name(g),
+            }),
+            Box::new(spec_dtor_globals(*rest, ps)),
+        ),
+    }
+}
+
+pub fn dtor_globals(dps: &Params, ps: &Params) -> (r: Args)
+    ensures
+        r == spec_dtor_globals(*dps, *ps),
+    decreases dps,
+{
+    match dps {
+        List::Nil => List::Nil,
+        List::Cons((g, _), rest) => List::Cons(
+            Box::new(match get(ps, *g) {
+                Some(t) => Expr::Var(*g, t),
+                None => Expr::Name(*g),
+            }),
+            Box::new(dtor_globals(rest, ps)),
+        ),
+    }
+}
+
+/// The call of the destructor of the local `v` of type `t`, as a call that stands alone: the local as its object, then its
+/// globals.
+pub open spec fn spec_dtor_call(v: u32, t: Ty, all: Fns, ps: Params, sd: Structs, line: u32) -> Result<DStmt, Refusal> {
+    match spec_dtor_of(t, sd) {
+        None => Err(Refusal::Syntax(line)),
+        Some(key) => match spec_find(all, key) {
+            None => Err(Refusal::Syntax(line)),
+            Some(f) => spec_call_stmt(key, DTOR_NAME, List::Cons(Box::new(Expr::Var(v, t)), Box::new(spec_dtor_globals(spec_tail(f.params), ps))), line, all, ps, sd),
+        },
+    }
+}
+
+pub fn dtor_call(v: u32, t: Ty, all: &Fns, ps: &Params, sd: &Structs, line: u32) -> (r: Result<DStmt, Refusal>)
+    ensures
+        r == spec_dtor_call(v, t, *all, *ps, *sd, line),
+{
+    match dtor_of(t, sd) {
+        None => Err(Refusal::Syntax(line)),
+        Some(key) => match find(all, key) {
+            None => Err(Refusal::Syntax(line)),
+            Some(f) => {
+                let args = List::Cons(Box::new(Expr::Var(v, t)), Box::new(dtor_globals(&tail(&f.params), ps)));
+                call_stmt(key, DTOR_NAME, &args, line, all, ps, sd)
+            },
+        },
+    }
+}
+
+/// The calls of the destructors of the locals `ls`, in their order.
+pub open spec fn spec_dtor_calls(ls: Params, all: Fns, ps: Params, sd: Structs, line: u32) -> Result<DStmts, Refusal>
+    decreases ls,
+{
+    match ls {
+        List::Nil => Ok(List::Nil),
+        List::Cons((v, t), rest) => match spec_dtor_call(v, t, all, ps, sd, line) {
+            Err(r) => Err(r),
+            Ok(d) => match spec_dtor_calls(*rest, all, ps, sd, line) {
+                Err(r) => Err(r),
+                Ok(ds) => Ok(List::Cons((Box::new(d), line), Box::new(ds))),
+            },
+        },
+    }
+}
+
+pub fn dtor_calls(ls: &Params, all: &Fns, ps: &Params, sd: &Structs, line: u32) -> (r: Result<DStmts, Refusal>)
+    ensures
+        r == spec_dtor_calls(*ls, *all, *ps, *sd, line),
+    decreases ls,
+{
+    match ls {
+        List::Nil => Ok(List::Nil),
+        List::Cons((v, t), rest) => match dtor_call(*v, *t, all, ps, sd, line) {
+            Err(r) => Err(r),
+            Ok(d) => match dtor_calls(rest, all, ps, sd, line) {
+                Err(r) => Err(r),
+                Ok(ds) => Ok(List::Cons((Box::new(d), line), Box::new(ds))),
+            },
+        },
+    }
+}
+
+/// The destructors that run at the end of a block, for the locals it declares, unless the block ends with a return or an exit.
+pub open spec fn spec_block_end(ss: Stmts, all: Fns, ps: Params, sd: Structs) -> Result<Option<DStmt>, Refusal> {
+    let ls = spec_live(spec_block_locals(ss, List::Nil), sd);
+    if ls is Nil || spec_ends_out(ss) {
+        Ok(None)
+    } else {
+        match spec_dtor_calls(ls, all, ps, sd, spec_last_place(ss)) {
+            Err(r) => Err(r),
+            Ok(ds) => Ok(Some(DStmt::Dtors(Box::new(ds)))),
+        }
+    }
+}
+
+pub fn block_end(ss: &Stmts, all: &Fns, ps: &Params, sd: &Structs) -> (r: Result<Option<DStmt>, Refusal>)
+    ensures
+        r == spec_block_end(*ss, *all, *ps, *sd),
+{
+    let ls = live(&block_locals(ss, List::Nil), sd);
+    if matches!(ls, List::Nil) || ends_out(ss) {
+        Ok(None)
+    } else {
+        match dtor_calls(&ls, all, ps, sd, last_place(ss)) {
+            Err(r) => Err(r),
+            Ok(ds) => Ok(Some(DStmt::Dtors(Box::new(ds)))),
+        }
+    }
+}
+
+/// An expression that copies a value of a struct with a destructor: a name of such a type, or a reference parameter of one.
+pub open spec fn spec_dtor_copy(e: Expr, sd: Structs) -> bool
+    decreases e,
+{
+    match e {
+        Expr::Var(_, t) => spec_dtor_of(t, sd) is Some || match t {
+            Ty::Mut(Scalar::Struct(k)) => spec_dtor_of(Ty::Struct(k), sd) is Some,
+            _ => false,
+        },
+        Expr::Cast(c, a) => (c == CastKind::Read || c == CastKind::NoOp) && spec_dtor_copy(*a, sd),
+        Expr::Paren(a) => spec_dtor_copy(*a, sd),
+        _ => false,
+    }
+}
+
+pub fn dtor_copy(e: &Expr, sd: &Structs) -> (r: bool)
+    ensures
+        r == spec_dtor_copy(*e, *sd),
+    decreases e,
+{
+    match e {
+        Expr::Var(_, t) => dtor_of(*t, sd).is_some() || match t {
+            Ty::Mut(Scalar::Struct(k)) => dtor_of(Ty::Struct(*k), sd).is_some(),
+            _ => false,
+        },
+        Expr::Cast(c, a) => (*c == CastKind::Read || *c == CastKind::NoOp) && dtor_copy(a, sd),
+        Expr::Paren(a) => dtor_copy(a, sd),
+        _ => false,
+    }
+}
+
+/// The callee gives a value of a struct with a destructor: a constructor of one, or a function that gives one.
+pub open spec fn spec_callee_dtor(all: Fns, key: u32, sd: Structs) -> bool {
+    match spec_find(all, key) {
+        Some(f) => match f.ret {
+            Ty::This(k) => spec_dtor_of(Ty::Struct(k), sd) is Some,
+            Ty::Struct(k) => spec_dtor_of(Ty::Struct(k), sd) is Some,
+            _ => false,
+        },
+        None => false,
+    }
+}
+
+pub fn callee_dtor(all: &Fns, key: u32, sd: &Structs) -> (r: bool)
+    ensures
+        r == spec_callee_dtor(*all, key, *sd),
+{
+    match find(all, key) {
+        Some(f) => match f.ret {
+            Ty::This(k) => dtor_of(Ty::Struct(k), sd).is_some(),
+            Ty::Struct(k) => dtor_of(Ty::Struct(k), sd).is_some(),
+            _ => false,
+        },
+        None => false,
+    }
+}
+
+/// The check of a local of a struct with a destructor: its start value is a call of a constructor of the struct, and the
+/// destructor has a contract.
+pub open spec fn spec_dtor_local(t: Ty, e: Expr, all: Fns, sd: Structs, line: u32) -> Option<Refusal> {
+    match t {
+        Ty::Struct(k) => match spec_dtor_of(t, sd) {
+            None => None,
+            Some(key) => if !(match e {
+                Expr::Call(c, _, _, _) => match spec_find(all, c) {
+                    Some(f) => f.ret == Ty::This(k),
+                    None => false,
+                },
+                _ => false,
+            }) {
+                Some(Refusal::Copy(line))
+            } else if match spec_find(all, key) {
+                Some(f) => f.conds is Nil,
+                None => true,
+            } {
+                Some(Refusal::NoDtorContract(line))
+            } else {
+                None
+            },
+        },
+        _ => if spec_holds_dtor(t, sd) { Some(Refusal::Copy(line)) } else { None },
+    }
+}
+
+pub fn dtor_local(t: Ty, e: &Expr, all: &Fns, sd: &Structs, line: u32) -> (r: Option<Refusal>)
+    ensures
+        r == spec_dtor_local(t, *e, *all, *sd, line),
+{
+    match t {
+        Ty::Struct(k) => match dtor_of(t, sd) {
+            None => None,
+            Some(key) => {
+                let made = match e {
+                    Expr::Call(c, _, _, _) => match find(all, *c) {
+                        Some(f) => f.ret == Ty::This(k),
+                        None => false,
+                    },
+                    _ => false,
+                };
+                if !made {
+                    Some(Refusal::Copy(line))
+                } else if match find(all, key) {
+                    Some(f) => matches!(f.conds, List::Nil),
+                    None => true,
+                } {
+                    Some(Refusal::NoDtorContract(line))
+                } else {
+                    None
+                }
+            },
+        },
+        _ => if holds_dtor(t, sd) { Some(Refusal::Copy(line)) } else { None },
+    }
+}
+
+/// A return of a function with locals that have destructors: the value, then each destructor, newest first, then the exit.
+pub open spec fn spec_dying_return(e: Expr, l: u32, all: Fns, env: Params, ps: Params, sd: Structs) -> Result<DStmt, Refusal> {
+    // A value that runs a call only sometimes sets the result in each branch, decision 0177.
+    if !(e is Call) && spec_cond_calls(e, all, l, sd) {
+        match spec_lower(e, None, true, all, l, sd, 0) {
+            Err(r) => Err(r),
+            Ok((ss, _)) => match spec_dtor_calls(spec_live(env, sd), all, ps, sd, l) {
+                Err(r) => Err(r),
+                Ok(ds) => Ok(DStmt::Block(Box::new(spec_append(
+                    ss,
+                    List::Cons((Box::new(DStmt::Dtors(Box::new(ds))), l), Box::new(List::Cons((Box::new(DStmt::Exit), l), Box::new(List::Nil)))),
+                )))),
+            },
+        }
+    } else {
+    match spec_lift(e, all, l, sd, 0, true) {
+        Err(r) => Err(r),
+        Ok((c, d, _)) => match spec_dtor_calls(spec_live(env, sd), all, ps, sd, l) {
+            Err(r) => Err(r),
+            Ok(ds) => Ok(DStmt::Block(Box::new(List::Cons(
+                (Box::new(spec_pre(c, DStmt::SetResult(d))), l),
+                Box::new(List::Cons((Box::new(DStmt::Dtors(Box::new(ds))), l), Box::new(List::Cons((Box::new(DStmt::Exit), l), Box::new(List::Nil))))),
+            )))),
+        },
+    }
+    }
+}
+
+pub fn dying_return(e: &Expr, l: u32, all: &Fns, env: &Params, ps: &Params, sd: &Structs) -> (r: Result<DStmt, Refusal>)
+    ensures
+        r == spec_dying_return(*e, l, *all, *env, *ps, *sd),
+{
+    if !matches!(e, Expr::Call(..)) && cond_calls(e, all, l, sd) {
+        match lower(e, None, true, all, l, sd, 0) {
+            Err(r) => Err(r),
+            Ok((ss, _)) => match dtor_calls(&live(env, sd), all, ps, sd, l) {
+                Err(r) => Err(r),
+                Ok(ds) => Ok(DStmt::Block(Box::new(append(
+                    ss,
+                    List::Cons((Box::new(DStmt::Dtors(Box::new(ds))), l), Box::new(List::Cons((Box::new(DStmt::Exit), l), Box::new(List::Nil)))),
+                )))),
+            },
+        }
+    } else {
+    match lift(e, all, l, sd, 0, true) {
+        Err(r) => Err(r),
+        Ok((c, d, _)) => match dtor_calls(&live(env, sd), all, ps, sd, l) {
+            Err(r) => Err(r),
+            Ok(ds) => Ok(DStmt::Block(Box::new(List::Cons(
+                (Box::new(pre(c, DStmt::SetResult(d))), l),
+                Box::new(List::Cons((Box::new(DStmt::Dtors(Box::new(ds))), l), Box::new(List::Cons((Box::new(DStmt::Exit), l), Box::new(List::Nil))))),
+            )))),
+        },
+    }
+    }
+}
+
+/// An exit of a function with locals that have destructors runs each destructor first.
+pub open spec fn spec_dying_exit(l: u32, all: Fns, env: Params, ps: Params, sd: Structs) -> Result<DStmt, Refusal> {
+    match spec_dtor_calls(spec_live(env, sd), all, ps, sd, l) {
+        Err(r) => Err(r),
+        Ok(ds) => Ok(DStmt::Block(Box::new(List::Cons((Box::new(DStmt::Dtors(Box::new(ds))), l), Box::new(List::Cons((Box::new(DStmt::Exit), l), Box::new(List::Nil))))))),
+    }
+}
+
+pub fn dying_exit(l: u32, all: &Fns, env: &Params, ps: &Params, sd: &Structs) -> (r: Result<DStmt, Refusal>)
+    ensures
+        r == spec_dying_exit(l, *all, *env, *ps, *sd),
+{
+    match dtor_calls(&live(env, sd), all, ps, sd, l) {
+        Err(r) => Err(r),
+        Ok(ds) => Ok(DStmt::Block(Box::new(List::Cons((Box::new(DStmt::Dtors(Box::new(ds))), l), Box::new(List::Cons((Box::new(DStmt::Exit), l), Box::new(List::Nil))))))),
+    }
+}
+
+/// A call that stands alone names a key with a method.
+pub proof fn lemma_call_stmt_resolves(key: u32, name: u32, args: Args, line: u32, all: Fns, ps: Params, sd: Structs)
+    requires
+        spec_call_stmt(key, name, args, line, all, ps, sd).is_ok(),
+    ensures
+        calls_resolve_stmt(spec_call_stmt(key, name, args, line, all, ps, sd).unwrap(), all, sd),
+{
+    reveal_with_fuel(calls_resolve_stmt, 3);
+    if spec_call_lift(key, name, args, line, all, line, sd).is_ok() {
+        lemma_call_lift_resolves(key, name, args, line, all, line, sd);
+    }
+    if let List::Cons(_, rest) = args {
+        if spec_call_lift(key, name, *rest, line, all, line, sd).is_ok() {
+            lemma_call_lift_resolves(key, name, *rest, line, all, line, sd);
+        }
+    }
+}
+
+/// The calls of destructors name keys with methods.
+pub proof fn lemma_dtor_calls_resolve(ls: Params, all: Fns, ps: Params, sd: Structs, line: u32)
+    requires
+        spec_dtor_calls(ls, all, ps, sd, line).is_ok(),
+    ensures
+        calls_resolve(spec_dtor_calls(ls, all, ps, sd, line).unwrap(), all, sd),
+    decreases ls,
+{
+    match ls {
+        List::Nil => {},
+        List::Cons((v, t), rest) => {
+            let key = spec_dtor_of(t, sd).unwrap();
+            let f = spec_find(all, key).unwrap();
+            lemma_call_stmt_resolves(key, DTOR_NAME, List::Cons(Box::new(Expr::Var(v, t)), Box::new(spec_dtor_globals(spec_tail(f.params), ps))), line, all, ps, sd);
+            lemma_dtor_calls_resolve(*rest, all, ps, sd, line);
+        },
+    }
+}
+
+pub proof fn lemma_block_end_resolves(ss: Stmts, all: Fns, ps: Params, sd: Structs)
+    requires
+        spec_block_end(ss, all, ps, sd).is_ok(),
+    ensures
+        match spec_block_end(ss, all, ps, sd).unwrap() {
+            Some(d) => calls_resolve(List::Cons((Box::new(d), spec_last_place(ss)), Box::new(List::Nil)), all, sd),
+            None => true,
+        },
+{
+    reveal_with_fuel(calls_resolve, 2);
+    let ls = spec_live(spec_block_locals(ss, List::Nil), sd);
+    if !(ls is Nil || spec_ends_out(ss)) {
+        lemma_dtor_calls_resolve(ls, all, ps, sd, spec_last_place(ss));
     }
 }
 
@@ -4619,34 +5210,30 @@ pub fn local_value(n: u32, dt: DTy, e: &Expr, l: u32, all: &Fns, ps: &Params, sd
     }
 }
 
-/// A statement of the body, and a list of them. `env` is the variables in scope, and `ps` the parameters. A call runs before its
-/// statement where C++ runs it once, decision 0104, and a call of a function that writes its object or gives no value stands
-/// alone. A write is to a local, never to a parameter, or to a field of the object of a member function that writes it, decision
-/// 0096.
-// ponytail: `x = o.f();` of a function that writes its object is refused as a call out of place. Upgrade: an update to a fresh
-// local, then the write. `return o.f();` writes back and returns, decision 0174.
-pub open spec fn spec_stmt(s: Stmt, all: Fns, env: Params, ps: Params, sd: Structs) -> Result<DStmt, Refusal>
-    decreases s,
-{
-    match s {
-        // A return can move a local or a parameter, decision 0171. Nothing runs after it, so it sets nothing to null.
-        Stmt::Return(e, l) => match spec_move_check(spec_unmove(e).1, spec_var_names(e), ps, true, l) {
-            Some(r) => Err(r),
-            None => spec_return(spec_unmove(e).0, l, all, ps, sd),
+/// A `return`. It is hidden, so a proof about another kind of statement does not unfold it.
+#[verifier::opaque]
+pub open spec fn spec_return_stmt(e: Expr, l: u32, all: Fns, env: Params, ps: Params, sd: Structs) -> Result<DStmt, Refusal> {
+    // A return can move a local or a parameter, decision 0171. Nothing runs after it, so it sets nothing to null.
+    match spec_move_check(spec_unmove(e).1, spec_var_names(e), ps, true, l) {
+        Some(r) => Err(r),
+        // A copy of a struct with a destructor has no rule, and the locals with destructors die after the value, decision 0178.
+        None => if spec_dtor_copy(spec_unmove(e).0, sd) {
+            Err(Refusal::Copy(l))
+        } else if spec_live(env, sd) is Nil {
+            spec_return(spec_unmove(e).0, l, all, ps, sd)
+        } else {
+            spec_dying_return(spec_unmove(e).0, l, all, env, ps, sd)
         },
-        Stmt::If(c, t, f, l) => match spec_lift(c, all, l, sd, 0, true) {
-            Ok((cc, dc, _)) => match spec_stmts(*t, all, env, ps, sd) {
-                Ok(dt) => match spec_stmts(*f, all, env, ps, sd) {
-                    Ok(df) => Ok(spec_pre(cc, DStmt::If(dc, Box::new(dt), Box::new(df)))),
-                    Err(r) => Err(r),
-                },
-                Err(r) => Err(r),
-            },
-            Err(r) => Err(r),
-        },
+    }
+}
+
+/// A local. It is hidden, so a proof about another kind of statement does not unfold it.
+#[verifier::opaque]
+pub open spec fn spec_local_stmt(n: u32, t: Ty, e: Expr, l: u32, all: Fns, env: Params, ps: Params, sd: Structs) -> Result<DStmt, Refusal> {
+    match t {
         // A local vector is a copy of a sequence in scope of the same element, decision 0160, or the vector that a call gives,
-        // decision 0163.
-        Stmt::Local(n, Ty::Vec(s), e, l) => match spec_value_ty(Ty::Vec(s), l, sd) {
+        // decision 0163. A vector of a struct with a destructor is a copy, decision 0178.
+        Ty::Vec(s) => if spec_holds_dtor(Ty::Vec(s), sd) { Err(Refusal::Copy(l)) } else { match spec_value_ty(Ty::Vec(s), l, sd) {
             Err(r) => Err(r),
             Ok(dt) => match e {
                 Expr::Call(k, nm, args, at) => spec_local_call(n, dt, k, nm, *args, at, all, l, ps, sd),
@@ -4666,41 +5253,78 @@ pub open spec fn spec_stmt(s: Stmt, all: Fns, env: Params, ps: Params, sd: Struc
                 Expr::EmptyVec => Ok(DStmt::Local(n, dt, DExpr::EmptySeq)),
                 _ => Err(Refusal::VecLocal(l)),
             },
-        },
+        } },
         // The start value of a local can move a local, decision 0171.
-        Stmt::Local(n, t, e, l) => match spec_value_ty(t, l, sd) {
+        _ => match spec_value_ty(t, l, sd) {
             Err(r) => Err(r),
-            Ok(dt) => match spec_move_check(spec_unmove(e).1, spec_var_names(e), ps, false, l) {
+            Ok(dt) => match spec_dtor_local(t, e, all, sd, l) {
                 Some(r) => Err(r),
-                None => match spec_local_value(n, dt, spec_unmove(e).0, l, all, ps, sd) {
-                    Ok(d) => Ok(spec_moved(d, spec_unmove(e).1)),
-                    Err(r) => Err(r),
+                None => match spec_move_check(spec_unmove(e).1, spec_var_names(e), ps, false, l) {
+                    Some(r) => Err(r),
+                    None => match spec_local_value(n, dt, spec_unmove(e).0, l, all, ps, sd) {
+                        Ok(d) => Ok(spec_moved(d, spec_unmove(e).1)),
+                        Err(r) => Err(r),
+                    },
                 },
             },
         },
-        Stmt::Assign(n, e, l) => if spec_is_mut(ps, n) {
-            match spec_lift(e, all, l, sd, 0, true) {
-                Ok((c, d, _)) => Ok(spec_pre(c, DStmt::SetOut(n, d))),
+    }
+}
+
+/// An assignment. It is hidden, so a proof about another kind of statement does not unfold it.
+#[verifier::opaque]
+pub open spec fn spec_assign_stmt(n: u32, e: Expr, l: u32, all: Fns, ps: Params, sd: Structs) -> Result<DStmt, Refusal> {
+    if spec_is_mut(ps, n) {
+        match spec_lift(e, all, l, sd, 0, true) {
+            Ok((c, d, _)) => Ok(spec_pre(c, DStmt::SetOut(n, d))),
+            Err(r) => Err(r),
+        }
+    } else if (spec_get(ps, n) is Some) {
+        Err(Refusal::WriteParam(n, l))
+    } else {
+        match e {
+            // The value of a call that gives a struct with a destructor is a temporary, decision 0178.
+            Expr::Call(k, nm, args, at) => if spec_callee_dtor(all, k, sd) {
+                Err(Refusal::Copy(l))
+            } else if spec_callee_writes(all, k) {
+                Err(Refusal::Place(at))
+            } else {
+                match spec_call_lift(k, nm, *args, at, all, l, sd) {
+                    Ok((c, da)) => Ok(spec_pre(c, DStmt::AssignCall(n, k, da))),
+                    Err(r) => Err(r),
+                }
+            },
+            _ => match spec_lift(e, all, l, sd, 0, true) {
+                Ok((c, d, _)) => Ok(spec_pre(c, DStmt::Assign(n, d))),
                 Err(r) => Err(r),
-            }
-        } else if (spec_get(ps, n) is Some) {
-            Err(Refusal::WriteParam(n, l))
-        } else {
-            match e {
-                Expr::Call(k, nm, args, at) => if spec_callee_writes(all, k) {
-                    Err(Refusal::Place(at))
-                } else {
-                    match spec_call_lift(k, nm, *args, at, all, l, sd) {
-                        Ok((c, da)) => Ok(spec_pre(c, DStmt::AssignCall(n, k, da))),
-                        Err(r) => Err(r),
-                    }
-                },
-                _ => match spec_lift(e, all, l, sd, 0, true) {
-                    Ok((c, d, _)) => Ok(spec_pre(c, DStmt::Assign(n, d))),
+            },
+        }
+    }
+}
+
+/// A statement of the body, and a list of them. `env` is the variables in scope, and `ps` the parameters. A call runs before its
+/// statement where C++ runs it once, decision 0104, and a call of a function that writes its object or gives no value stands
+/// alone. A write is to a local, never to a parameter, or to a field of the object of a member function that writes it, decision
+/// 0096.
+// ponytail: `x = o.f();` of a function that writes its object is refused as a call out of place. Upgrade: an update to a fresh
+// local, then the write. `return o.f();` writes back and returns, decision 0174.
+pub open spec fn spec_stmt(s: Stmt, all: Fns, env: Params, ps: Params, sd: Structs) -> Result<DStmt, Refusal>
+    decreases s, 0nat,
+{
+    match s {
+        Stmt::Return(e, l) => spec_return_stmt(e, l, all, env, ps, sd),
+        Stmt::If(c, t, f, l) => match spec_lift(c, all, l, sd, 0, true) {
+            Ok((cc, dc, _)) => match spec_stmts(*t, all, env, ps, sd) {
+                Ok(dt) => match spec_stmts(*f, all, env, ps, sd) {
+                    Ok(df) => Ok(spec_pre(cc, DStmt::If(dc, Box::new(dt), Box::new(df)))),
                     Err(r) => Err(r),
                 },
-            }
+                Err(r) => Err(r),
+            },
+            Err(r) => Err(r),
         },
+        Stmt::Local(n, t, e, l) => spec_local_stmt(n, t, e, l, all, env, ps, sd),
+        Stmt::Assign(n, e, l) => spec_assign_stmt(n, e, l, all, ps, sd),
         // `++` and `--` on a double round, decision 0150.
         Stmt::Step(n, t, up, l) => if t == Ty::F64 {
             Err(Refusal::Rounds(l))
@@ -4842,7 +5466,15 @@ pub open spec fn spec_stmt(s: Stmt, all: Fns, env: Params, ps: Params, sd: Struc
                 Err(r) => Err(r),
             },
         },
-        Stmt::Exit(_) => Ok(DStmt::Exit),
+        Stmt::Exit(l) => if spec_live(env, sd) is Nil {
+            Ok(DStmt::Exit)
+        } else {
+            spec_dying_exit(l, all, env, ps, sd)
+        },
+        Stmt::Block(b, _) => match spec_stmts(*b, all, env, ps, sd) {
+            Ok(db) => Ok(DStmt::Scope(Box::new(db))),
+            Err(r) => Err(r),
+        },
         Stmt::Assert(e, l) => match spec_contract(e, spec_keys(env), spec_after(env), None, List::Nil, l, sd) {
             Ok(d) => Ok(DStmt::Assert(d)),
             Err(r) => Err(r),
@@ -4916,7 +5548,7 @@ pub open spec fn spec_stmt(s: Stmt, all: Fns, env: Params, ps: Params, sd: Struc
 
 /// The cases of a switch, each body over the variables in scope at the switch, decision 0109.
 pub open spec fn spec_cases(cs: Cases, all: Fns, env: Params, ps: Params, sd: Structs) -> Result<DCases, Refusal>
-    decreases cs,
+    decreases cs, 0nat,
 {
     match cs {
         List::Nil => Ok(List::Nil),
@@ -4930,8 +5562,64 @@ pub open spec fn spec_cases(cs: Cases, all: Fns, env: Params, ps: Params, sd: St
     }
 }
 
+/// The statements of a block, then the destructors of the locals that the block declares, decision 0178.
 pub open spec fn spec_stmts(ss: Stmts, all: Fns, env: Params, ps: Params, sd: Structs) -> Result<DStmts, Refusal>
-    decreases ss,
+    decreases ss, 1nat,
+{
+    match spec_stmts_seq(ss, all, env, ps, sd) {
+        Err(r) => Err(r),
+        Ok(ds) => spec_with_end(ds, spec_block_end(ss, all, ps, sd), spec_last_place(ss)),
+    }
+}
+
+/// The statements `ds` of a block, then what runs at its end.
+pub open spec fn spec_with_end(ds: DStmts, end: Result<Option<DStmt>, Refusal>, place: u32) -> Result<DStmts, Refusal> {
+    match end {
+        Err(r) => Err(r),
+        Ok(None) => Ok(ds),
+        Ok(Some(d)) => Ok(spec_append(ds, List::Cons((Box::new(d), place), Box::new(List::Nil)))),
+    }
+}
+
+/// What runs at the end of a block is the destructors, which are no statement of C++.
+pub proof fn lemma_block_end_dtors(ss: Stmts, all: Fns, ps: Params, sd: Structs)
+    ensures
+        spec_block_end(ss, all, ps, sd) matches Ok(Some(d)) ==> d is Dtors,
+{
+}
+
+pub proof fn lemma_with_end_count(ds: DStmts, end: Result<Option<DStmt>, Refusal>, place: u32)
+    requires
+        end is Ok,
+        end matches Ok(Some(d)) ==> d is Dtors,
+    ensures
+        count_dstmts(spec_with_end(ds, end, place).unwrap()) == count_dstmts(ds),
+{
+    if let Ok(Some(d)) = end {
+        let tail: DStmts = List::Cons((Box::new(d), place), Box::new(List::Nil));
+        lemma_count_append(ds, tail);
+        assert(d is Dtors);
+        assert(count_dstmt(d) == 0);
+        reveal_with_fuel(count_dstmts, 2);
+        assert(count_dstmts(tail) == 0);
+    }
+}
+
+pub proof fn lemma_with_end_resolves(ds: DStmts, end: Result<Option<DStmt>, Refusal>, place: u32, all: Fns, sd: Structs)
+    requires
+        end is Ok,
+        calls_resolve(ds, all, sd),
+        end matches Ok(Some(d)) ==> calls_resolve(List::Cons((Box::new(d), place), Box::new(List::Nil)), all, sd),
+    ensures
+        calls_resolve(spec_with_end(ds, end, place).unwrap(), all, sd),
+{
+    if let Ok(Some(d)) = end {
+        lemma_resolve_append(ds, List::Cons((Box::new(d), place), Box::new(List::Nil)), all, sd);
+    }
+}
+
+pub open spec fn spec_stmts_seq(ss: Stmts, all: Fns, env: Params, ps: Params, sd: Structs) -> Result<DStmts, Refusal>
+    decreases ss, 0nat,
 {
     match ss {
         List::Nil => Ok(List::Nil),
@@ -4939,7 +5627,7 @@ pub open spec fn spec_stmts(ss: Stmts, all: Fns, env: Params, ps: Params, sd: St
         List::Cons(s, rest) => match spec_write_check(*s, all, ps, sd) {
             Some(r) => Err(r),
             None => match spec_stmt(*s, all, env, ps, sd) {
-                Ok(d) => match spec_stmts(*rest, all, spec_scope(*s, env), ps, sd) {
+                Ok(d) => match spec_stmts_seq(*rest, all, spec_scope(*s, env), ps, sd) {
                     Ok(dr) => Ok(List::Cons((Box::new(d), spec_place(*s)), Box::new(dr))),
                     Err(r) => Err(r),
                 },
@@ -5055,6 +5743,7 @@ pub open spec fn spec_twice_stmt(seen: Seq<u32>, s: Stmt) -> (Option<(u32, u32)>
             }
         },
         Stmt::While(_, _, body, _) => spec_twice_stmts(seen, *body),
+        Stmt::Block(b, _) => spec_twice_stmts(seen, *b),
         Stmt::Switch(_, _, cs, _) => spec_twice_cases(seen, *cs),
         Stmt::For(init, _, step, _, body, _) => {
             let (r, after) = spec_twice_stmt(seen, *init);
@@ -6243,17 +6932,48 @@ pub open spec fn spec_fields(ps: Params, line: u32) -> Result<DParams, Refusal>
     }
 }
 
-pub open spec fn spec_structs(sd: Structs) -> StructModels
+pub open spec fn spec_structs(sd: Structs) -> StructModels {
+    spec_structs_in(sd, sd)
+}
+
+/// A field that holds a struct with a destructor.
+pub open spec fn spec_dtor_field(fields: Params, sd: Structs) -> bool
+    decreases fields,
+{
+    match fields {
+        List::Nil => false,
+        List::Cons((_, t), rest) => spec_holds_dtor(t, sd) || spec_dtor_field(*rest, sd),
+    }
+}
+
+pub fn dtor_field(fields: &Params, sd: &Structs) -> (r: bool)
+    ensures
+        r == spec_dtor_field(*fields, *sd),
+    decreases fields,
+{
+    match fields {
+        List::Nil => false,
+        List::Cons((_, t), rest) => holds_dtor(*t, sd) || dtor_field(rest, sd),
+    }
+}
+
+/// The models of the structs `sd` among the structs `all` of the file. A field of a struct with a destructor is a copy, at the
+/// line of the struct, decision 0178.
+pub open spec fn spec_structs_in(sd: Structs, all: Structs) -> StructModels
     decreases sd,
 {
     match sd {
         List::Nil => List::Nil,
         List::Cons((k, (l, fields, _)), rest) => List::Cons(
-            match spec_fields(fields, l) {
-                Ok(df) => Ok((k, df)),
-                Err(r) => Err(r),
+            if spec_dtor_field(fields, all) {
+                Err(Refusal::Copy(l))
+            } else {
+                match spec_fields(fields, l) {
+                    Ok(df) => Ok((k, df)),
+                    Err(r) => Err(r),
+                }
             },
-            Box::new(spec_structs(*rest))),
+            Box::new(spec_structs_in(*rest, all))),
     }
 }
 
@@ -6347,6 +7067,7 @@ pub open spec fn unknown_stmt(s: Stmt) -> bool
         Stmt::Exit(_) => false,
         Stmt::Assert(_, _) => false,
         Stmt::Apply(_, _, _) => false,
+        Stmt::Block(b, _) => unknown_stmts(*b),
     }
 }
 
@@ -6474,8 +7195,10 @@ pub proof fn lemma_unknown_return_is_refused(e: Expr, l: u32, all: Fns, ps: Para
 {
     if e is List {
         lemma_unknown_lift_args_is_refused(*e->List_0, all, l, sd, 0, true);
+    } else if e is Construct {
+        lemma_unknown_lift_args_is_refused(*e->Construct_1, all, l, sd, 0, true);
     } else if !(e is Call) && spec_cond_calls(e, all, l, sd) {
-        lemma_unknown_lower_is_refused(e, None, all, l, sd, 0);
+        lemma_unknown_lower_is_refused(e, None, false, all, l, sd, 0);
     } else {
         lemma_unknown_value_is_refused(e, all, l, sd);
     }
@@ -6487,13 +7210,17 @@ pub proof fn lemma_unknown_stmt_is_refused(s: Stmt, all: Fns, env: Params, ps: P
         unknown_stmt(s),
     ensures
         spec_stmt(s, all, env, ps, sd).is_err(),
-    decreases s,
+    decreases s, 0nat,
 {
     match s {
         Stmt::Return(e, l) => {
+            reveal(spec_return_stmt);
             lemma_unmove_unknown(e);
             lemma_unknown_return_is_refused(spec_unmove(e).0, l, all, ps, sd);
+            lemma_unknown_lift_is_refused(spec_unmove(e).0, all, l, sd, 0, true);
+            lemma_unknown_lower_is_refused(spec_unmove(e).0, None, true, all, l, sd, 0);
         },
+        Stmt::Block(b, _) => lemma_unknown_stmts_is_refused(*b, all, env, ps, sd),
         Stmt::If(c, t, f, l) => {
             if unknown_expr(c) {
                 lemma_unknown_lift_is_refused(c, all, l, sd, 0, true);
@@ -6504,6 +7231,7 @@ pub proof fn lemma_unknown_stmt_is_refused(s: Stmt, all: Fns, env: Params, ps: P
             }
         },
         Stmt::Local(n, t, e, l) => {
+            reveal(spec_local_stmt);
             if e is Call {
                 if let Ok(dt) = spec_value_ty(t, l, sd) {
                     lemma_unknown_local_call_is_refused(n, dt, e->Call_0, e->Call_1, *e->Call_2, e->Call_3, all, l, ps, sd);
@@ -6549,7 +7277,10 @@ pub proof fn lemma_unknown_stmt_is_refused(s: Stmt, all: Fns, env: Params, ps: P
             lemma_unmove_args_unknown(*args);
             lemma_unknown_call_stmt_is_refused(k, nm, spec_unmove_args(*args).0, l, all, ps, sd);
         },
-        Stmt::Assign(_, e, l) => lemma_unknown_value_is_refused(e, all, l, sd),
+        Stmt::Assign(_, e, l) => {
+            reveal(spec_assign_stmt);
+            lemma_unknown_value_is_refused(e, all, l, sd);
+        },
         Stmt::While(c, _, body, l) => {
             if unknown_expr(c) {
                 lemma_unknown_lift_is_refused(c, all, l, sd, 0, false);
@@ -6585,7 +7316,7 @@ pub proof fn lemma_unknown_cases_is_refused(cs: Cases, all: Fns, env: Params, ps
         unknown_cases(cs),
     ensures
         spec_cases(cs, all, env, ps, sd).is_err(),
-    decreases cs,
+    decreases cs, 0nat,
 {
     match cs {
         List::Cons((_, body), rest) => {
@@ -6604,14 +7335,24 @@ pub proof fn lemma_unknown_stmts_is_refused(ss: Stmts, all: Fns, env: Params, ps
         unknown_stmts(ss),
     ensures
         spec_stmts(ss, all, env, ps, sd).is_err(),
-    decreases ss,
+    decreases ss, 1nat,
+{
+    lemma_unknown_stmts_is_refused_seq(ss, all, env, ps, sd);
+}
+
+pub proof fn lemma_unknown_stmts_is_refused_seq(ss: Stmts, all: Fns, env: Params, ps: Params, sd: Structs)
+    requires
+        unknown_stmts(ss),
+    ensures
+        spec_stmts_seq(ss, all, env, ps, sd).is_err(),
+    decreases ss, 0nat,
 {
     match ss {
         List::Cons(s, rest) => {
             if unknown_stmt(*s) {
                 lemma_unknown_stmt_is_refused(*s, all, env, ps, sd);
             } else {
-                lemma_unknown_stmts_is_refused(*rest, all, spec_scope(*s, env), ps, sd);
+                lemma_unknown_stmts_is_refused_seq(*rest, all, spec_scope(*s, env), ps, sd);
             }
         },
         List::Nil => {},
@@ -6645,6 +7386,7 @@ pub open spec fn count_stmt(s: Stmt) -> nat
     match s {
         Stmt::If(_, t, f, _) => 1 + count_stmts(*t) + count_stmts(*f),
         Stmt::While(_, _, body, _) => 1 + count_stmts(*body),
+        Stmt::Block(b, _) => 1 + count_stmts(*b),
         Stmt::Switch(_, _, cs, _) => 1 + count_cases(*cs),
         Stmt::For(init, _, step, _, body, _) => 1 + count_stmt(*init) + count_stmt(*step) + count_stmts(*body),
         // The loop, the start of its index, its step and the element that starts each turn, decision 0143.
@@ -6690,6 +7432,9 @@ pub open spec fn count_dstmt(s: DStmt) -> nat
         DStmt::For(init, _, _, _, _, body, step, _) => 1 + count_dstmt(*init) + count_dstmt(*step) + count_dstmts(*body),
         DStmt::Pre(_, s) => count_dstmt(*s),
         DStmt::Moved(s, _) => count_dstmt(*s),
+        // A bare block is a statement with its statements, and the destructors that run at the end of a block are none, decision 0178.
+        DStmt::Scope(b) => 1 + count_dstmts(*b),
+        DStmt::Dtors(_) => 0,
         _ => 1,
     }
 }
@@ -6709,6 +7454,7 @@ pub proof fn lemma_kept_return(s: Stmt, all: Fns, env: Params, ps: Params, sd: S
     ensures
         count_dstmt(spec_stmt(s, all, env, ps, sd).unwrap()) == 1,
 {
+    reveal(spec_return_stmt);
     reveal_with_fuel(count_dstmt, 2);
 }
 
@@ -6745,6 +7491,7 @@ pub proof fn lemma_kept_local(s: Stmt, all: Fns, env: Params, ps: Params, sd: St
     ensures
         count_dstmt(spec_stmt(s, all, env, ps, sd).unwrap()) == 1,
 {
+    reveal(spec_local_stmt);
     if s->Local_1 is Vec {
         reveal_with_fuel(count_dstmt, 2);
     } else {
@@ -6763,6 +7510,7 @@ pub proof fn lemma_kept_assign(s: Stmt, all: Fns, env: Params, ps: Params, sd: S
     ensures
         count_dstmt(spec_stmt(s, all, env, ps, sd).unwrap()) == 1,
 {
+    reveal(spec_assign_stmt);
     reveal_with_fuel(count_dstmt, 2);
 }
 
@@ -6923,10 +7671,11 @@ pub proof fn lemma_stmt_kept(s: Stmt, all: Fns, env: Params, ps: Params, sd: Str
         spec_stmt(s, all, env, ps, sd).is_ok(),
     ensures
         count_dstmt(spec_stmt(s, all, env, ps, sd).unwrap()) == count_stmt(s),
-    decreases s,
+    decreases s, 0nat,
 {
     match s {
         Stmt::Return(_, _) => lemma_kept_return(s, all, env, ps, sd),
+        Stmt::Block(b, _) => lemma_statements_kept(*b, all, env, ps, sd),
         Stmt::Local(_, _, _, _) => lemma_kept_local(s, all, env, ps, sd),
         Stmt::Assign(_, _, _) => lemma_kept_assign(s, all, env, ps, sd),
         Stmt::SetField(_, _, _) => lemma_kept_set_field(s, all, env, ps, sd),
@@ -6969,7 +7718,7 @@ pub proof fn lemma_cases_kept(cs: Cases, all: Fns, env: Params, ps: Params, sd: 
         spec_cases(cs, all, env, ps, sd).is_ok(),
     ensures
         count_dcases(spec_cases(cs, all, env, ps, sd).unwrap()) == count_cases(cs),
-    decreases cs,
+    decreases cs, 0nat,
 {
     match cs {
         List::Cons((_, body), rest) => {
@@ -6985,14 +7734,39 @@ pub proof fn lemma_statements_kept(ss: Stmts, all: Fns, env: Params, ps: Params,
         spec_stmts(ss, all, env, ps, sd).is_ok(),
     ensures
         count_dstmts(spec_stmts(ss, all, env, ps, sd).unwrap()) == count_stmts(ss),
-    decreases ss,
+    decreases ss, 1nat,
+{
+    lemma_statements_kept_seq(ss, all, env, ps, sd);
+    // The destructors at the end of a block are no statement of C++, decision 0178.
+    lemma_block_end_dtors(ss, all, ps, sd);
+    lemma_with_end_count(spec_stmts_seq(ss, all, env, ps, sd).unwrap(), spec_block_end(ss, all, ps, sd), spec_last_place(ss));
+}
+
+pub proof fn lemma_statements_kept_seq(ss: Stmts, all: Fns, env: Params, ps: Params, sd: Structs)
+    requires
+        spec_stmts_seq(ss, all, env, ps, sd).is_ok(),
+    ensures
+        count_dstmts(spec_stmts_seq(ss, all, env, ps, sd).unwrap()) == count_stmts(ss),
+    decreases ss, 0nat,
 {
     match ss {
         List::Cons(s, rest) => {
             lemma_stmt_kept(*s, all, env, ps, sd);
-            lemma_statements_kept(*rest, all, spec_scope(*s, env), ps, sd);
+            lemma_statements_kept_seq(*rest, all, spec_scope(*s, env), ps, sd);
         },
         List::Nil => {},
+    }
+}
+
+/// The count of two lists of statements is the sum of their counts.
+pub proof fn lemma_count_append(a: DStmts, b: DStmts)
+    ensures
+        count_dstmts(spec_append(a, b)) == count_dstmts(a) + count_dstmts(b),
+    decreases a,
+{
+    match a {
+        List::Nil => {},
+        List::Cons(_, rest) => lemma_count_append(*rest, b),
     }
 }
 
@@ -7046,6 +7820,8 @@ pub open spec fn calls_resolve_stmt(s: DStmt, all: Fns, sd: Structs) -> bool
         DStmt::Pre(c, s) => calls_resolve_calls(c, all, sd) && calls_resolve_stmt(*s, all, sd),
         DStmt::Moved(s, _) => calls_resolve_stmt(*s, all, sd),
         DStmt::Block(b) => calls_resolve(*b, all, sd),
+        DStmt::Scope(b) => calls_resolve(*b, all, sd),
+        DStmt::Dtors(b) => calls_resolve(*b, all, sd),
         DStmt::While(_, _, _, body) => calls_resolve(*body, all, sd),
         DStmt::For(init, _, _, _, _, body, step, _) => calls_resolve_stmt(*init, all, sd) && calls_resolve(*body, all, sd) && calls_resolve_stmt(*step, all, sd),
         _ => true,
@@ -7410,6 +8186,7 @@ pub proof fn lemma_value_resolves(e: Expr, all: Fns, line: u32, sd: Structs)
     }
 }
 
+/// A `return`: the value, and with live locals the destructors, decision 0178.
 pub proof fn lemma_resolves_return(s: Stmt, all: Fns, env: Params, ps: Params, sd: Structs)
     requires
         spec_stmt(s, all, env, ps, sd).is_ok(),
@@ -7417,17 +8194,73 @@ pub proof fn lemma_resolves_return(s: Stmt, all: Fns, env: Params, ps: Params, s
     ensures
         calls_resolve_stmt(spec_stmt(s, all, env, ps, sd).unwrap(), all, sd),
 {
-    reveal_with_fuel(calls_resolve_stmt, 2);
+    reveal(spec_return_stmt);
     let e = spec_unmove(s->Return_0).0;
     let l = s->Return_1;
+    if !(spec_live(env, sd) is Nil) {
+        lemma_resolves_dying_return(e, l, all, env, ps, sd);
+    } else {
+        lemma_resolves_value_return(e, l, all, ps, sd);
+    }
+}
+
+/// A `return` with no live local.
+pub proof fn lemma_resolves_value_return(e: Expr, l: u32, all: Fns, ps: Params, sd: Structs)
+    requires
+        spec_return(e, l, all, ps, sd).is_ok(),
+    ensures
+        calls_resolve_stmt(spec_return(e, l, all, ps, sd).unwrap(), all, sd),
+{
+    reveal_with_fuel(calls_resolve_stmt, 2);
     if e is List {
         lemma_lift_args_resolves(*e->List_0, all, l, sd, 0, true);
         let (c, da, _) = spec_lift_args(*e->List_0, all, l, sd, 0, true).unwrap();
         lemma_pre_resolves(c, DStmt::Return(DExpr::SeqLit(Box::new(da))), all, sd);
+    } else if e is Construct {
+        lemma_lift_args_resolves(*e->Construct_1, all, l, sd, 0, true);
+        let (c, da, _) = spec_lift_args(*e->Construct_1, all, l, sd, 0, true).unwrap();
+        lemma_pre_resolves(c, DStmt::Return(DExpr::Ctor(e->Construct_0, Box::new(da))), all, sd);
     } else if !(e is Call) && spec_cond_calls(e, all, l, sd) {
-        lemma_lower_resolves(e, None, all, l, sd, 0);
+        lemma_lower_resolves(e, None, false, all, l, sd, 0);
     } else {
         lemma_value_resolves(e, all, l, sd);
+    }
+}
+
+/// The end of a block that the destructors leave: each destructor, then the exit. Each destructor names a method.
+pub proof fn lemma_resolves_dtors_exit(ds: DStmts, l: u32, all: Fns, sd: Structs)
+    requires
+        calls_resolve(ds, all, sd),
+    ensures
+        calls_resolve(List::Cons((Box::new(DStmt::Dtors(Box::new(ds))), l), Box::new(List::Cons((Box::new(DStmt::Exit), l), Box::new(List::Nil)))), all, sd),
+{
+    reveal_with_fuel(calls_resolve, 3);
+    let ex: DStmts = List::Cons((Box::new(DStmt::Exit), l), Box::new(List::Nil));
+    assert(calls_resolve(ex, all, sd));
+    assert(calls_resolve_stmt(DStmt::Dtors(Box::new(ds)), all, sd));
+}
+
+/// A `return` with live locals: the value lifts or lowers, then the destructors run, decision 0178.
+pub proof fn lemma_resolves_dying_return(e: Expr, l: u32, all: Fns, env: Params, ps: Params, sd: Structs)
+    requires
+        spec_dying_return(e, l, all, env, ps, sd).is_ok(),
+    ensures
+        calls_resolve_stmt(spec_dying_return(e, l, all, env, ps, sd).unwrap(), all, sd),
+{
+    lemma_dtor_calls_resolve(spec_live(env, sd), all, ps, sd, l);
+    let ds = spec_dtor_calls(spec_live(env, sd), all, ps, sd, l).unwrap();
+    lemma_resolves_dtors_exit(ds, l, all, sd);
+    let tail: DStmts = List::Cons((Box::new(DStmt::Dtors(Box::new(ds))), l), Box::new(List::Cons((Box::new(DStmt::Exit), l), Box::new(List::Nil))));
+    if !(e is Call) && spec_cond_calls(e, all, l, sd) {
+        lemma_lower_resolves(e, None, true, all, l, sd, 0);
+        let (ss, _) = spec_lower(e, None, true, all, l, sd, 0).unwrap();
+        lemma_resolve_append(ss, tail, all, sd);
+    } else {
+        lemma_lift_resolves(e, all, l, sd, 0, true);
+        let (c, d, _) = spec_lift(e, all, l, sd, 0, true).unwrap();
+        lemma_pre_resolves(c, DStmt::SetResult(d), all, sd);
+        let b: DStmts = List::Cons((Box::new(spec_pre(c, DStmt::SetResult(d))), l), Box::new(tail));
+        assert(calls_resolve(b, all, sd));
     }
 }
 
@@ -7438,6 +8271,7 @@ pub proof fn lemma_resolves_assign(s: Stmt, all: Fns, env: Params, ps: Params, s
     ensures
         calls_resolve_stmt(spec_stmt(s, all, env, ps, sd).unwrap(), all, sd),
 {
+    reveal(spec_assign_stmt);
     reveal_with_fuel(calls_resolve_stmt, 2);
     let e = s->Assign_1;
     let l = s->Assign_2;
@@ -7505,13 +8339,30 @@ pub proof fn lemma_resolves_set_ref_field(s: Stmt, all: Fns, env: Params, ps: Pa
 }
 
 /// A statement that holds no call gives a Dafny statement that holds none.
+#[verifier::rlimit(60)]
 pub proof fn lemma_resolves_plain(s: Stmt, all: Fns, env: Params, ps: Params, sd: Structs)
     requires
         spec_stmt(s, all, env, ps, sd).is_ok(),
-        s is Step || s is Exit || s is Assert || s is Apply || s is Unknown || s is SetIndex || s is Sort || s is SortBy,
+        s is Step || s is Assert || s is Apply || s is Unknown || s is SetIndex || s is Sort || s is SortBy,
     ensures
         calls_resolve_stmt(spec_stmt(s, all, env, ps, sd).unwrap(), all, sd),
 {
+}
+
+/// An exit with live locals runs each destructor first, decision 0178. Each destructor names a method.
+pub proof fn lemma_resolves_exit(s: Stmt, all: Fns, env: Params, ps: Params, sd: Structs)
+    requires
+        spec_stmt(s, all, env, ps, sd).is_ok(),
+        s is Exit,
+    ensures
+        calls_resolve_stmt(spec_stmt(s, all, env, ps, sd).unwrap(), all, sd),
+{
+    if !(spec_live(env, sd) is Nil) {
+        let l = s->Exit_0;
+        lemma_dtor_calls_resolve(spec_live(env, sd), all, ps, sd, l);
+        lemma_resolves_dtors_exit(spec_dtor_calls(spec_live(env, sd), all, ps, sd, l).unwrap(), l, all, sd);
+        assert(spec_stmt(s, all, env, ps, sd) == spec_dying_exit(l, all, env, ps, sd));
+    }
 }
 
 pub proof fn lemma_resolves_local(s: Stmt, all: Fns, env: Params, ps: Params, sd: Structs)
@@ -7521,6 +8372,7 @@ pub proof fn lemma_resolves_local(s: Stmt, all: Fns, env: Params, ps: Params, sd
     ensures
         calls_resolve_stmt(spec_stmt(s, all, env, ps, sd).unwrap(), all, sd),
 {
+    reveal(spec_local_stmt);
     reveal_with_fuel(calls_resolve_stmt, 3);
     let l = s->Local_3;
     // The vector arm reads the start value as it is, and the other arm with its moves taken out, decision 0171.
@@ -7566,12 +8418,13 @@ pub proof fn lemma_resolves_call(s: Stmt, all: Fns, env: Params, ps: Params, sd:
     }
 }
 
+#[verifier::rlimit(60)]
 pub proof fn lemma_stmt_calls_resolve(s: Stmt, all: Fns, env: Params, ps: Params, sd: Structs)
     requires
         spec_stmt(s, all, env, ps, sd).is_ok(),
     ensures
         calls_resolve_stmt(spec_stmt(s, all, env, ps, sd).unwrap(), all, sd),
-    decreases s,
+    decreases s, 0nat,
 {
     match s {
         Stmt::Return(_, _) => lemma_resolves_return(s, all, env, ps, sd),
@@ -7587,7 +8440,8 @@ pub proof fn lemma_stmt_calls_resolve(s: Stmt, all: Fns, env: Params, ps: Params
         Stmt::Local(_, _, _, _) => lemma_resolves_local(s, all, env, ps, sd),
         Stmt::Call(_, _, _, _) => lemma_resolves_call(s, all, env, ps, sd),
         Stmt::Step(_, _, _, _) => lemma_resolves_plain(s, all, env, ps, sd),
-        Stmt::Exit(_) => lemma_resolves_plain(s, all, env, ps, sd),
+        Stmt::Exit(_) => lemma_resolves_exit(s, all, env, ps, sd),
+        Stmt::Block(b, _) => lemma_stmts_calls_resolve(*b, all, env, ps, sd),
         Stmt::Assert(_, _) => lemma_resolves_plain(s, all, env, ps, sd),
         Stmt::Apply(_, _, _) => lemma_resolves_plain(s, all, env, ps, sd),
         Stmt::Unknown(_, _) => lemma_resolves_plain(s, all, env, ps, sd),
@@ -7625,7 +8479,7 @@ pub proof fn lemma_cases_calls_resolve(cs: Cases, all: Fns, env: Params, ps: Par
         spec_cases(cs, all, env, ps, sd).is_ok(),
     ensures
         calls_resolve_cases(spec_cases(cs, all, env, ps, sd).unwrap(), all, sd),
-    decreases cs,
+    decreases cs, 0nat,
 {
     match cs {
         List::Cons((_, body), rest) => {
@@ -7641,12 +8495,24 @@ pub proof fn lemma_stmts_calls_resolve(ss: Stmts, all: Fns, env: Params, ps: Par
         spec_stmts(ss, all, env, ps, sd).is_ok(),
     ensures
         calls_resolve(spec_stmts(ss, all, env, ps, sd).unwrap(), all, sd),
-    decreases ss,
+    decreases ss, 1nat,
+{
+    lemma_stmts_calls_resolve_seq(ss, all, env, ps, sd);
+    lemma_block_end_resolves(ss, all, ps, sd);
+    lemma_with_end_resolves(spec_stmts_seq(ss, all, env, ps, sd).unwrap(), spec_block_end(ss, all, ps, sd), spec_last_place(ss), all, sd);
+}
+
+pub proof fn lemma_stmts_calls_resolve_seq(ss: Stmts, all: Fns, env: Params, ps: Params, sd: Structs)
+    requires
+        spec_stmts_seq(ss, all, env, ps, sd).is_ok(),
+    ensures
+        calls_resolve(spec_stmts_seq(ss, all, env, ps, sd).unwrap(), all, sd),
+    decreases ss, 0nat,
 {
     match ss {
         List::Cons(s, rest) => {
             lemma_stmt_calls_resolve(*s, all, env, ps, sd);
-            lemma_stmts_calls_resolve(*rest, all, spec_scope(*s, env), ps, sd);
+            lemma_stmts_calls_resolve_seq(*rest, all, spec_scope(*s, env), ps, sd);
         },
         List::Nil => {},
     }
@@ -7989,6 +8855,8 @@ pub fn lift(e: &Expr, all: &Fns, line: u32, sd: &Structs, n: u32, open: bool) ->
             Err(Refusal::Place(*at))
         } else if !callable(all, *k, sd) {
             Err(Refusal::Callee(*nm, *at))
+        } else if callee_dtor(all, *k, sd) {
+            Err(Refusal::Copy(line))
         } else {
             match lift_args(args, all, line, sd, n, open) {
                 Err(r) => Err(r),
@@ -8165,6 +9033,7 @@ pub fn lift(e: &Expr, all: &Fns, line: u32, sd: &Structs, n: u32, open: bool) ->
             Err(r) => Err(r),
             Ok((c, d, n1)) => Ok((c, DExpr::Field(Box::new(d), *f), n1)),
         },
+        Expr::Construct(k, _) if dtor_of(Ty::Struct(*k), sd).is_some() => Err(Refusal::Copy(line)),
         Expr::Construct(k, args) => match lift_args(args, all, line, sd, n, open) {
             Err(r) => Err(r),
             Ok((c, da, n1)) => Ok((c, DExpr::Ctor(*k, Box::new(da)), n1)),
@@ -9262,12 +10131,15 @@ pub fn translate_params(ps: &Params, line: u32, sd: &Structs) -> (r: Result<DPar
 {
     match ps {
         List::Nil => Ok(List::Nil),
-        List::Cons((n, t), rest) => match param_ty(*t, line, sd) {
+        List::Cons((n, t), rest) => {
+            let pt = if holds_dtor(*t, sd) && !matches!(t, Ty::Mut(Scalar::Struct(_))) { Err(Refusal::Copy(line)) } else { param_ty(*t, line, sd) };
+            match pt {
             Ok(dt) => match translate_params(rest, line, sd) {
                 Ok(dr) => Ok(List::Cons((*n, dt), Box::new(dr))),
                 Err(r) => Err(r),
             },
             Err(r) => Err(r),
+            }
         },
     }
 }
@@ -9314,6 +10186,7 @@ pub fn place(s: &Stmt) -> (r: u32)
         Stmt::PushBack(_, _, l) => *l,
         Stmt::Sort(_, l) => *l,
         Stmt::SortBy(_, _, _, _, _, l) => *l,
+        Stmt::Block(_, l) => *l,
         Stmt::Unknown(_, l) => *l,
     }
 }
@@ -9688,6 +10561,9 @@ pub fn call_stmt(key: u32, name: u32, args: &Args, line: u32, all: &Fns, ps: &Pa
     ensures
         r == spec_call_stmt(key, name, *args, line, *all, *ps, *sd),
 {
+    if callee_dtor(all, key, sd) {
+        return Err(Refusal::Copy(line));
+    }
     let elem = if callee_writes(all, key) {
         call_elem(key, name, args, line, all, ps, sd)
     } else {
@@ -9758,14 +10634,25 @@ pub fn step(n: u32, dt: DTy, up: bool, out: bool) -> (r: DStmt)
 pub fn translate_stmt(s: &Stmt, all: &Fns, env: &Params, ps: &Params, sd: &Structs) -> (r: Result<DStmt, Refusal>)
     ensures
         r == spec_stmt(*s, *all, *env, *ps, *sd),
-    decreases s,
+    decreases s, 0nat,
 {
+    proof {
+        reveal(spec_return_stmt);
+        reveal(spec_local_stmt);
+        reveal(spec_assign_stmt);
+    }
     match s {
         Stmt::Return(e, l) => {
             let (e2, ns) = unmove(e);
             match move_check(&ns, &var_names(e), ps, true, *l) {
                 Some(r) => Err(r),
-                None => translate_return(&e2, *l, all, ps, sd),
+                None => if dtor_copy(&e2, sd) {
+                    Err(Refusal::Copy(*l))
+                } else if matches!(live(env, sd), List::Nil) {
+                    translate_return(&e2, *l, all, ps, sd)
+                } else {
+                    dying_return(&e2, *l, all, env, ps, sd)
+                },
             }
         },
         Stmt::If(c, t, f, l) => match lift(c, all, *l, sd, 0, true) {
@@ -9778,7 +10665,7 @@ pub fn translate_stmt(s: &Stmt, all: &Fns, env: &Params, ps: &Params, sd: &Struc
             },
             Err(r) => Err(r),
         },
-        Stmt::Local(n, Ty::Vec(s), e, l) => match translate_value_ty(Ty::Vec(*s), *l, sd) {
+        Stmt::Local(n, Ty::Vec(s), e, l) => if holds_dtor(Ty::Vec(*s), sd) { Err(Refusal::Copy(*l)) } else { match translate_value_ty(Ty::Vec(*s), *l, sd) {
             Err(r) => Err(r),
             Ok(dt) => match e {
                 Expr::Call(k, nm, args, at) => local_call(*n, dt, *k, *nm, args, *at, all, *l, ps, sd),
@@ -9796,18 +10683,21 @@ pub fn translate_stmt(s: &Stmt, all: &Fns, env: &Params, ps: &Params, sd: &Struc
                 Expr::EmptyVec => Ok(DStmt::Local(*n, dt, DExpr::EmptySeq)),
                 _ => Err(Refusal::VecLocal(*l)),
             },
-        },
+        } },
         Stmt::Local(n, t, e, l) => match translate_value_ty(*t, *l, sd) {
             Err(r) => Err(r),
-            Ok(dt) => {
-                let (e2, ns) = unmove(e);
-                match move_check(&ns, &var_names(e), ps, false, *l) {
-                    Some(r) => Err(r),
-                    None => match local_value(*n, dt, &e2, *l, all, ps, sd) {
-                        Ok(d) => Ok(moved(d, ns)),
-                        Err(r) => Err(r),
-                    },
-                }
+            Ok(dt) => match dtor_local(*t, e, all, sd, *l) {
+                Some(r) => Err(r),
+                None => {
+                    let (e2, ns) = unmove(e);
+                    match move_check(&ns, &var_names(e), ps, false, *l) {
+                        Some(r) => Err(r),
+                        None => match local_value(*n, dt, &e2, *l, all, ps, sd) {
+                            Ok(d) => Ok(moved(d, ns)),
+                            Err(r) => Err(r),
+                        },
+                    }
+                },
             },
         },
         Stmt::Assign(n, e, l) => if is_mut(ps, *n) {
@@ -9819,7 +10709,9 @@ pub fn translate_stmt(s: &Stmt, all: &Fns, env: &Params, ps: &Params, sd: &Struc
             Err(Refusal::WriteParam(*n, *l))
         } else {
             match e {
-                Expr::Call(k, nm, args, at) => if callee_writes(all, *k) {
+                Expr::Call(k, nm, args, at) => if callee_dtor(all, *k, sd) {
+                    Err(Refusal::Copy(*l))
+                } else if callee_writes(all, *k) {
                     Err(Refusal::Place(*at))
                 } else {
                     match call_lift(*k, *nm, args, *at, all, *l, sd) {
@@ -9981,7 +10873,15 @@ pub fn translate_stmt(s: &Stmt, all: &Fns, env: &Params, ps: &Params, sd: &Struc
                 },
             }
         },
-        Stmt::Exit(_) => Ok(DStmt::Exit),
+        Stmt::Exit(l) => if matches!(live(env, sd), List::Nil) {
+            Ok(DStmt::Exit)
+        } else {
+            dying_exit(*l, all, env, ps, sd)
+        },
+        Stmt::Block(b, _) => match translate_stmts(b, all, env, ps, sd) {
+            Ok(db) => Ok(DStmt::Scope(Box::new(db))),
+            Err(r) => Err(r),
+        },
         Stmt::Assert(e, l) => match translate_contract(e, &keys(env), &after(env), None, &List::Nil, *l, sd) {
             Ok(d) => Ok(DStmt::Assert(d)),
             Err(r) => Err(r),
@@ -10047,7 +10947,7 @@ pub fn translate_stmt(s: &Stmt, all: &Fns, env: &Params, ps: &Params, sd: &Struc
 pub fn translate_cases(cs: &Cases, all: &Fns, env: &Params, ps: &Params, sd: &Structs) -> (r: Result<DCases, Refusal>)
     ensures
         r == spec_cases(*cs, *all, *env, *ps, *sd),
-    decreases cs,
+    decreases cs, 0nat,
 {
     match cs {
         List::Nil => Ok(List::Nil),
@@ -10064,14 +10964,36 @@ pub fn translate_cases(cs: &Cases, all: &Fns, env: &Params, ps: &Params, sd: &St
 pub fn translate_stmts(ss: &Stmts, all: &Fns, env: &Params, ps: &Params, sd: &Structs) -> (r: Result<DStmts, Refusal>)
     ensures
         r == spec_stmts(*ss, *all, *env, *ps, *sd),
-    decreases ss,
+    decreases ss, 1nat,
+{
+    match translate_stmts_seq(ss, all, env, ps, sd) {
+        Err(r) => Err(r),
+        Ok(ds) => with_end(ds, block_end(ss, all, ps, sd), last_place(ss)),
+    }
+}
+
+pub fn with_end(ds: DStmts, end: Result<Option<DStmt>, Refusal>, place: u32) -> (r: Result<DStmts, Refusal>)
+    ensures
+        r == spec_with_end(ds, end, place),
+{
+    match end {
+        Err(r) => Err(r),
+        Ok(None) => Ok(ds),
+        Ok(Some(d)) => Ok(append(ds, List::Cons((Box::new(d), place), Box::new(List::Nil)))),
+    }
+}
+
+pub fn translate_stmts_seq(ss: &Stmts, all: &Fns, env: &Params, ps: &Params, sd: &Structs) -> (r: Result<DStmts, Refusal>)
+    ensures
+        r == spec_stmts_seq(*ss, *all, *env, *ps, *sd),
+    decreases ss, 0nat,
 {
     match ss {
         List::Nil => Ok(List::Nil),
         List::Cons(s, rest) => match write_check(s, all, ps, sd) {
             Some(r) => Err(r),
             None => match translate_stmt(s, all, env, ps, sd) {
-                Ok(d) => match translate_stmts(rest, all, &scope(s, env), ps, sd) {
+                Ok(d) => match translate_stmts_seq(rest, all, &scope(s, env), ps, sd) {
                     Ok(dr) => Ok(List::Cons((Box::new(d), place(s)), Box::new(dr))),
                     Err(r) => Err(r),
                 },
@@ -10215,6 +11137,7 @@ pub fn twice_stmt(seen: &mut Vec<u32>, s: &Stmt) -> (r: Option<(u32, u32)>)
             }
         },
         Stmt::While(_, _, body, _) => twice_stmts(seen, body),
+        Stmt::Block(b, _) => twice_stmts(seen, b),
         Stmt::Switch(_, _, cs, _) => twice_cases(seen, cs),
         Stmt::For(init, _, step, _, body, _) => {
             let r = twice_stmt(seen, init);
@@ -10947,16 +11870,27 @@ fn translate_fields(ps: &Params, line: u32) -> (r: Result<DParams, Refusal>)
 pub fn translate_structs(sd: &Structs) -> (r: StructModels)
     ensures
         r == spec_structs(*sd),
+{
+    translate_structs_in(sd, sd)
+}
+
+pub fn translate_structs_in(sd: &Structs, all: &Structs) -> (r: StructModels)
+    ensures
+        r == spec_structs_in(*sd, *all),
     decreases sd,
 {
     match sd {
         List::Nil => List::Nil,
         List::Cons((k, (l, fields, _)), rest) => {
-            let m = match translate_fields(fields, *l) {
-                Ok(df) => Ok((*k, df)),
-                Err(r) => Err(r),
+            let m = if dtor_field(fields, all) {
+                Err(Refusal::Copy(*l))
+            } else {
+                match translate_fields(fields, *l) {
+                    Ok(df) => Ok((*k, df)),
+                    Err(r) => Err(r),
+                }
             };
-            List::Cons(m, Box::new(translate_structs(rest)))
+            List::Cons(m, Box::new(translate_structs_in(rest, all)))
         },
     }
 }
@@ -12377,6 +13311,7 @@ pub open spec fn spec_gstmt(s: Stmt, gs: Params, gps: Params, hide: Names, fs: F
     match s {
         Stmt::Return(e, l) => Stmt::Return(spec_gexpr(e, gs, gps, hide, fs), l),
         Stmt::If(c, t, f, l) => Stmt::If(spec_gexpr(c, gs, gps, hide, fs), Box::new(spec_gstmts(*t, gs, gps, hide, fs)), Box::new(spec_gstmts(*f, gs, gps, hide, fs)), l),
+        Stmt::Block(b, l) => Stmt::Block(Box::new(spec_gstmts(*b, gs, gps, hide, fs)), l),
         Stmt::Local(n, t, e, l) => Stmt::Local(n, t, spec_gexpr(e, gs, gps, hide, fs), l),
         Stmt::Assign(n, e, l) => if spec_gwrite_bad(n, gs, gps, hide) {
             Stmt::Assign(n, Expr::Name(n), l)
@@ -12447,6 +13382,7 @@ pub fn copy_stmt(s: &Stmt) -> (r: Stmt)
     match s {
         Stmt::Return(e, l) => Stmt::Return(copy_expr(e), *l),
         Stmt::If(c, t, f, l) => Stmt::If(copy_expr(c), Box::new(copy_stmts(t)), Box::new(copy_stmts(f)), *l),
+        Stmt::Block(b, l) => Stmt::Block(Box::new(copy_stmts(b)), *l),
         Stmt::Local(n, t, e, l) => Stmt::Local(*n, *t, copy_expr(e), *l),
         Stmt::Assign(n, e, l) => Stmt::Assign(*n, copy_expr(e), *l),
         Stmt::Step(n, t, up, l) => Stmt::Step(*n, *t, *up, *l),
@@ -12505,6 +13441,7 @@ pub fn gstmt(s: &Stmt, gs: &Params, gps: &Params, hide: &Names, fs: &Fns) -> (r:
     match s {
         Stmt::Return(e, l) => Stmt::Return(gexpr(e, gs, gps, hide, fs), *l),
         Stmt::If(c, t, f, l) => Stmt::If(gexpr(c, gs, gps, hide, fs), Box::new(gstmts(t, gs, gps, hide, fs)), Box::new(gstmts(f, gs, gps, hide, fs)), *l),
+        Stmt::Block(b, l) => Stmt::Block(Box::new(gstmts(b, gs, gps, hide, fs)), *l),
         Stmt::Local(n, t, e, l) => Stmt::Local(*n, *t, gexpr(e, gs, gps, hide, fs), *l),
         Stmt::Assign(n, e, l) => if gwrite_bad(*n, gs, gps, hide) {
             Stmt::Assign(*n, Expr::Name(*n), *l)
@@ -12778,9 +13715,11 @@ pub fn glisted(cs: &Conds, todo: &Params) -> (r: Option<u32>)
 }
 
 /// A member function: its first parameter is an object, or it is a constructor.
+/// A member that cannot list a global yet: a `const` member function, whose function twin would take no global, or a virtual
+/// function. A member that writes its object, a constructor and a destructor can list one, decision 0178.
 pub open spec fn spec_gmember(f: Function) -> bool {
-    f.ret is This || match spec_head_ty(f.params) {
-        Some(t) => t is This || t is ThisMut || t is Iface || t is IfaceMut,
+    match spec_head_ty(f.params) {
+        Some(t) => t is This || t is Iface || t is IfaceMut,
         None => false,
     }
 }
@@ -12789,8 +13728,8 @@ pub fn gmember(f: &Function) -> (r: bool)
     ensures
         r == spec_gmember(*f),
 {
-    matches!(f.ret, Ty::This(_)) || match &f.params {
-        List::Cons((_, t), _) => matches!(t, Ty::This(_) | Ty::ThisMut(_) | Ty::Iface(_) | Ty::IfaceMut(_)),
+    match &f.params {
+        List::Cons((_, t), _) => matches!(t, Ty::This(_) | Ty::Iface(_) | Ty::IfaceMut(_)),
         List::Nil => false,
     }
 }

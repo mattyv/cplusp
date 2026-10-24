@@ -4217,7 +4217,8 @@ public:
                                 {"hidden", std::move(Hidden)},
                                 {"conds", std::move(Conds)},
                                 {"body", Trusted ? llvm::json::Array{} : constructorBody(Constructor)}};
-    llvm::json::Object Out{{"name", Static ? name(FD) : FD->getNameAsString()},
+    // The destructor is the member `~`, decision 0178.
+    llvm::json::Object Out{{"name", Static ? name(FD) : isa<CXXDestructorDecl>(FD) ? std::string("~") : FD->getNameAsString()},
                               {"key", key(FD)},
                               {"file", file(FD->getLocation())},
                               {"line", number(line(FD->getLocation()))},
@@ -4667,7 +4668,7 @@ private:
       return nullptr;
     RD = RD->getDefinition();
     if (RD->isUnion() || RD->isLambda() || !RD->getIdentifier() || RD->isDependentContext() || isa<ClassTemplateSpecializationDecl>(RD) ||
-        ((RD->getNumBases() || RD->isPolymorphic()) && !finalOverInterface(RD)) || RD->hasUserDeclaredDestructor())
+        ((RD->getNumBases() || RD->isPolymorphic()) && !finalOverInterface(RD)))
       return nullptr;
     // A member function, a static member and a private field do not change the value of the struct, decision 0089. A member template still has no rule, decision 0089.
     for (const Decl *D : RD->decls())
@@ -4853,6 +4854,17 @@ public:
                                              {"fields", llvm::json::Array{}}, {"members", llvm::json::Array{}}, {"bases", std::move(Bases)}, {"final", false}};
   }
 
+  // A struct with a field of a struct with a destructor is written, also when no type names it, so the core refuses the field at its line, decision 0178.
+  void holderEntry(const CXXRecordDecl *RD) const {
+    if (!plainStruct(Context.getRecordType(RD)))
+      return;
+    for (const FieldDecl *F : RD->fields())
+      if (const CXXRecordDecl *Held = plainStruct(F->getType()); Held && Held->hasUserDeclaredDestructor()) {
+        type(Context.getRecordType(RD));
+        return;
+      }
+  }
+
   // The struct of a class with a static member function that has a contract is written, also when no type names it, decision 0174.
   void staticEntry(const CXXRecordDecl *RD) const {
     if (!plainStruct(Context.getRecordType(RD)))
@@ -4888,7 +4900,7 @@ private:
     if (M && ifaceMethod(M))
       return M;
     if (!M || M->isStatic() || (M->isVirtual() && !finalOverInterface(M->getParent())) || M->isVolatile() || M->isExplicitObjectMemberFunction() || M->getRefQualifier() != RQ_None || (M->isOverloadedOperator() && M->getOverloadedOperator() != OO_Call) ||
-        isa<CXXConversionDecl>(M) || isa<CXXConstructorDecl>(M) || isa<CXXDestructorDecl>(M) || M->isTemplated() || M->getDescribedFunctionTemplate())
+        isa<CXXConversionDecl>(M) || isa<CXXConstructorDecl>(M) || (isa<CXXDestructorDecl>(M) && (M->isDefaulted() || M->isDeleted() || M->isImplicit())) || M->isTemplated() || M->getDescribedFunctionTemplate())
       return nullptr;
     return plainStruct(Context.getRecordType(M->getParent())) ? M : nullptr;
   }
@@ -5190,8 +5202,8 @@ private:
         std::map<std::string, std::vector<std::string>> Named;
         for (const Decl *D : RD->decls())
           // An override that writes its object is a member too, so the check finds it. A contract cannot call it, decision 0169.
-          if (const auto *M = dyn_cast<CXXMethodDecl>(D); M && (constMember(M) || (M->isVirtual() && member(M))))
-            Named[M->getNameAsString()].push_back(key(M));
+          if (const auto *M = dyn_cast<CXXMethodDecl>(D); M && (constMember(M) || (M->isVirtual() && member(M)) || (isa<CXXDestructorDecl>(M) && member(M))))
+            Named[isa<CXXDestructorDecl>(M) ? "~" : M->getNameAsString()].push_back(key(M));
         // The static member functions with a contract, under their qualified names, decision 0174.
         for (const Decl *D : RD->decls())
           if (const auto *M = dyn_cast<CXXMethodDecl>(D); M && listedStatic(M))
@@ -5293,6 +5305,10 @@ private:
     const Stmt *Inner = S;
     if (const auto *Cleanups = dyn_cast<ExprWithCleanups>(Inner))
       Inner = Cleanups->getSubExpr();
+    // A call that gives a struct with a destructor is bound as a temporary. The bind is not the call, decision 0178.
+    if (const auto *Bound = dyn_cast<CXXBindTemporaryExpr>(Inner))
+      if (const CXXRecordDecl *RD = plainStruct(Bound->getType()); RD && RD->hasUserDeclaredDestructor())
+        Inner = Bound->getSubExpr();
     // `v.push_back(e)` where `v` is a vector by reference, decision 0148. The other member calls of a vector have no rule.
     if (const auto *Push = dyn_cast<CXXMemberCallExpr>(Inner); Push && Push->getNumArgs() == 1 && Push->getMethodDecl() && Push->getMethodDecl()->getDeclName().isIdentifier() &&
                                                            Push->getMethodDecl()->getName() == "push_back" && Push->getImplicitObjectArgument() &&
@@ -5344,6 +5360,9 @@ private:
           }
       return unknown(S, "std::sort of another form", line(S->getBeginLoc()));
     }
+    // A call of a destructor in code destroys the object a second time at the end of its block, decision 0178.
+    if (const auto *Member = dyn_cast<CXXMemberCallExpr>(Inner); Member && Member->getMethodDecl() && isa<CXXDestructorDecl>(Member->getMethodDecl()))
+      return unknown(S, "a call of a destructor", line(S->getBeginLoc()));
     if (const auto *Call = dyn_cast<CallExpr>(Inner)) {
       if (llvm::json::Value Written = expr(Call, line(S->getBeginLoc())); Written.getAsObject() && Written.getAsObject()->get("Call"))
         return Written;
@@ -5352,6 +5371,9 @@ private:
                Why && !Why->empty() && (*Why)[0].getAsString() == StringRef("a class as a reference to its interface"))
         return Written;
     }
+    // A bare block `{ ... }` is a block of the model, decision 0178.
+    if (const auto *Bare = dyn_cast<CompoundStmt>(S))
+      return tag("Block", llvm::json::Array{stmts(Bare), number(line(S->getBeginLoc()))});
     if (const auto *Step = dyn_cast<UnaryOperator>(S); Step && Step->isIncrementDecrementOp())
       if (const auto *Target = dyn_cast<DeclRefExpr>(Step->getSubExpr()); Target && isTarget(Target->getDecl()))
         return tag("Step", llvm::json::Array{nameOf(Target->getDecl()), varType(Target->getDecl()), Step->isIncrementOp(),
@@ -5382,6 +5404,13 @@ private:
           return tag("RangeFor", llvm::json::Array{Range->getLoopVariable()->getNameAsString(), type(Element), expr(Ref, line(S->getBeginLoc())), loopConds(S),
                                                    stmts(Range->getBody()), number(line(S->getBeginLoc()))});
       }
+    // A local of a struct with a destructor in the head of a `for` has no rule, decision 0178.
+    if (const auto *For = dyn_cast<ForStmt>(S))
+      if (const auto *Init = dyn_cast_or_null<DeclStmt>(For->getInit()))
+        for (const Decl *D : Init->decls())
+          if (const auto *Var = dyn_cast<VarDecl>(D))
+            if (const CXXRecordDecl *RD = plainStruct(Var->getType()); RD && RD->hasUserDeclaredDestructor())
+              return unknown(S, describe(S), line(S->getBeginLoc()));
     if (const auto *For = dyn_cast<ForStmt>(S); For && For->getCond() && For->getInc() && !For->getConditionVariable())
       if (const auto *Init = dyn_cast_or_null<DeclStmt>(For->getInit()); Init && Init->isSingleDecl())
         if (const auto *Var = dyn_cast<VarDecl>(Init->getSingleDecl()); Var && Var->hasLocalStorage() && Var->getInit())
@@ -5799,6 +5828,10 @@ private:
     // A temporary that needs a cleanup, such as an optional made from `x + 1`, wraps the expression. The wrapper is not the construct.
     if (const auto *Cleanups = dyn_cast<ExprWithCleanups>(E))
       return expr(Cleanups->getSubExpr(), Near);
+    // A temporary of a struct with a destructor is bound for its destructor. The bind is not the value, decision 0178.
+    if (const auto *Bound = dyn_cast<CXXBindTemporaryExpr>(E))
+      if (const CXXRecordDecl *RD = plainStruct(Bound->getType()); RD && RD->hasUserDeclaredDestructor())
+        return expr(Bound->getSubExpr(), Near);
     // A std::array that a call gives is held in a temporary, which is not the value, decision 0175.
     if (const auto *Held = dyn_cast<MaterializeTemporaryExpr>(E); Held && isStdArray(Held->getType()) && isSeq(Held->getType()))
       return expr(Held->getSubExpr(), Near);
@@ -6115,6 +6148,10 @@ private:
       if (RD && RD->field_empty() && !RD->hasUserDeclaredConstructor())
         return tag("Construct", llvm::json::Array{structKey(RD), llvm::json::Array{}});
     }
+    // A copy of a struct with a destructor is the name, so the core refuses it as a copy, decision 0178.
+    if (const auto *Construct = dyn_cast<CXXConstructExpr>(E); Construct && Construct->getNumArgs() == 1 && plainStruct(Construct->getType()) &&
+                                                               plainStruct(Construct->getArg(0)->getType()) && plainStruct(Construct->getType())->hasUserDeclaredDestructor())
+      return expr(Construct->getArg(0), Near);
     // A sequence made from one sequence, decision 0070, or a struct made from one struct, decision 0073. The core judges the two types.
     if (const auto *Construct = dyn_cast<CXXConstructExpr>(E);
         Construct && Construct->getNumArgs() == 1 &&
@@ -6317,10 +6354,12 @@ public:
     if (const auto *RD = Result.Nodes.getNodeAs<CXXRecordDecl>("class")) {
       TreeWriter(*Context, Claimed, Structs).classEntry(RD);
       TreeWriter(*Context, Claimed, Structs).staticEntry(RD);
+      TreeWriter(*Context, Claimed, Structs).holderEntry(RD);
       return;
     }
     const auto *FD = Result.Nodes.getNodeAs<FunctionDecl>("fn");
-    if (!FD || FD->isDeleted())
+    // A defaulted destructor has no contract and no body, so it is no member of the model, decision 0178.
+    if (!FD || FD->isDeleted() || (isa<CXXDestructorDecl>(FD) && FD->isDefaulted()))
       return;
     // The call operator of a lambda is no function of its own, decision 0149. The call that takes the lambda reads its body, or is refused.
     if (const auto *Method = dyn_cast<CXXMethodDecl>(FD); Method && Method->getParent()->isLambda())

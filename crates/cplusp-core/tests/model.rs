@@ -4798,3 +4798,35 @@ fn a_lowered_return_sets_the_result_before_the_locals_die() {
     let want = stmts(vec![made(GG), block(vec![DStmt::If(DExpr::Var(GTAKE), Box::new(then), Box::new(other)), DStmt::Dtors(Box::new(stmts(vec![dies(GG)]))), DStmt::Exit])]);
     assert_eq!(strip(m.body), want);
 }
+
+/// The body of a constructor of a struct with a destructor builds the struct, and that is the result, no temporary, decision
+/// 0178.
+#[test]
+fn a_constructor_of_a_struct_with_a_destructor_builds_its_result() {
+    let built = Expr::Construct(GUARD, Box::new(List::Cons(b(Expr::Lit(0, Ty::I32)), Box::new(List::Nil))));
+    let ctor = Function { name: 447, line: 10, params: List::Nil, ret: Ty::This(GUARD), trusted: false, conds: List::Nil, body: one(Stmt::Return(built, 10)) };
+    let Model::Full(m) = translate_function(&ctor, &guard_fns(), &guard_table()) else { panic!("a full model") };
+    let want = DStmt::Return(DExpr::Ctor(GUARD, Box::new(List::Cons(lit32(0), Box::new(List::Nil)))));
+    assert_eq!(strip(m.body), stmts(vec![want]));
+}
+
+/// A local vector of a struct with a destructor is a copy, also when it starts empty, decision 0178.
+#[test]
+fn a_local_vector_of_a_struct_with_a_destructor_is_refused() {
+    let body = List::Cons(Box::new(Stmt::Local(GB, Ty::Vec(Scalar::Struct(GUARD)), Expr::EmptyVec, 50)), Box::new(one(Stmt::Return(Expr::Lit(0, Ty::I32), 51))));
+    let f = Function { name: 448, line: 49, params: List::Nil, ret: Ty::I32, trusted: false, conds: List::Nil, body };
+    assert_eq!(refusal_of(&translate_function(&f, &guard_fns(), &guard_table())), Refusal::Copy(50));
+}
+
+/// An assignment from a call that gives a struct with a destructor assigns a temporary, which dies at once, decision 0178.
+#[test]
+fn an_assignment_of_a_temporary_with_a_destructor_is_refused() {
+    let body = List::Cons(
+        Box::new(guard_local(GG, 45)),
+        Box::new(List::Cons(Box::new(Stmt::Assign(GG, call(450, vec![], 46), 46)), Box::new(one(Stmt::Return(Expr::Lit(0, Ty::I32), 47))))),
+    );
+    // `make()` writes nothing, so no other rule refuses the assignment first.
+    let make = Function { name: 450, line: 40, params: List::Nil, ret: Ty::Struct(GUARD), trusted: true, conds: List::Nil, body: List::Nil };
+    let all = List::Cons(Box::new(make), Box::new(guard_fns()));
+    assert_eq!(refusal_of(&translate_function(&guard_user(body), &all, &guard_table())), Refusal::Copy(46));
+}
