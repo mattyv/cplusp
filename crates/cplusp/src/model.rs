@@ -1032,7 +1032,8 @@ fn unreadable_name(f: &JFunction) -> Option<&str> {
     names.extend(f.params.iter().map(|(n, _)| n.as_str()));
     f.body.iter().for_each(|s| stmt_names(s, &mut names));
     // A static data member or a static member function has `::` in its name, and the mangling makes it `'`, decisions 0173 and 0174.
-    names.into_iter().find(|n| !readable(&n.replace("::", "_")))
+    // The fresh local of a constructor with a body is `'init'` and its field, decision 0179. C++ cannot write `'`, so it clashes with no name.
+    names.into_iter().find(|n| !readable(&n.strip_prefix("'init'").unwrap_or(n).replace("::", "_")))
 }
 
 /// `operator()` is a name of C++ that the Dafny text prints as `call`, decision 0098. Every other name stays as it is.

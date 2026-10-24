@@ -12,7 +12,7 @@ A constructor can have a body. The init list runs first. Then the body runs. The
 
 A move constructor `T(T&& other)` is such a constructor. It lists `other` on its `modifies` line, as each reference parameter does, decision 0108. Its init list reads `other`, and its body writes `other`.
 
-A move constructor needs a destructor in its struct. Then the rules of 0178 keep each value of the struct in its block. So C++ calls the move constructor only at the start of a local. Without a destructor, C++ also calls the move constructor at `return x;`, for a parameter by value, for a field and in a vector. The model has no call there. A compiler can also skip the call at `return x;`, so the model cannot know if it runs.
+A move constructor needs a destructor in its struct. A destructor `= default` is no destructor of the model. Then the rules of 0178 keep each value of the struct in its block. So C++ calls the move constructor only at the start of a local. Without a destructor, C++ also calls the move constructor at `return x;`, for a parameter by value, for a field and in a vector. The model has no call there. A compiler can also skip the call at `return x;`, so the model cannot know if it runs.
 
 `std::move(x)` of a struct in any other place keeps the refusal of 0171.
 
@@ -21,6 +21,7 @@ These forms have no rule:
 - a field or `this` in the body of a constructor, at the line of the statement. The sentence is "a field in the body of a constructor: the translator has no rule for it yet."
 - a `T&&` parameter of a type that is not a struct, at the line of the function.
 - a move constructor in a struct with no destructor, at the line of the move constructor. The sentence is "a move constructor in a struct with no destructor: the translator has no rule for it yet."
+- a copy or a move by a constructor that the model cannot call, at the line of the statement. An example is a constructor that the file only declares. The sentence is "a copy or a move by a constructor that the model cannot call: the translator has no rule for it yet."
 - a `return` in the body of a constructor, at the line of the `return`. It keeps the sentence of a node with no rule.
 
 ## Why
@@ -31,4 +32,4 @@ C++ runs the init list before the body. A move constructor reads the source in i
 
 ## What changes
 
-The plugin writes a `T&&` parameter of a struct as a reference parameter that the function can write. It writes `std::move(x)` of a struct, as the argument of such a parameter, as `x`. It writes a constructor with a body as the fresh locals, the statements of the body, and a `return` of the struct. It refuses a move constructor in a struct with no destructor. The core needs no change. Each move constructor lists `other` on its `modifies` line, also in `raii_handle`. The example `raii_handle` lists `h` on the `modifies` line of `consume`, because the function writes it through the move. Three fixtures follow the form of 0178. The example `raii_handle` proves.
+The plugin writes a `T&&` parameter of a struct as a reference parameter that the function can write. It writes `std::move(x)` of a struct, as the argument of such a parameter, as `x`. It writes a constructor with a body as the fresh locals, the statements of the body, and a `return` of the struct. It refuses a move constructor in a struct with no destructor. It refuses a copy or a move by a constructor of the file that it cannot write as a call. The core needs no change. Each move constructor lists `other` on its `modifies` line, also in `raii_handle`. The example `raii_handle` lists `h` on the `modifies` line of `consume`, because the function writes it through the move. Three fixtures follow the form of 0178. The example `raii_handle` proves.

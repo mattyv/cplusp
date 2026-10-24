@@ -4183,6 +4183,7 @@ public:
     const char *Opaque = PureBody                                  ? "a body of a pure virtual function"
                          : NoValue                                   ? "a pure virtual function that gives no value"
                          : FD->isTemplated()                         ? "FunctionTemplateDecl"
+                         : !Constructor && noDestructorMove(FD)       ? "a move constructor in a struct with no destructor"
                          : isa<CXXConstructorDecl>(FD) && !Constructor ? "CXXConstructorDecl"
                          : isa<CXXMethodDecl>(FD) && !Member && !Static && !Constructor ? "CXXMethodDecl"
                          : !FD->getBody() && !Trusted && !Interface ? "FunctionDecl without body"
@@ -4392,6 +4393,7 @@ private:
   std::set<std::pair<unsigned, unsigned>> &Claimed;
   std::map<std::string, llvm::json::Value> &Structs;
   mutable std::set<const CXXRecordDecl *> Visiting;  // the structs whose fields `plainStruct` is reading
+  mutable bool InConstructorBody = false;  // `constructorBody` is writing the statements of a body, where a field and `this` have no rule, decision 0179
   mutable const FunctionDecl *Enclosing = nullptr;  // the function that `function` is writing, the floor of a loop's walk upward
 
   // The contract lines as data. A line of a loop has no parameters.
@@ -4702,19 +4704,33 @@ private:
     return false;
   }
 
-  // A constructor that is written as a function, decision 0094: a constructor of a plain struct that is no copy or move constructor,
-  // delegates to none, has an empty body, and gives each field exactly one value in its member init list. A field that the list leaves out
+  // A move constructor that the file defines, in a plain struct with no destructor of its own, decision 0179. C++ also runs it at `return x;`, for a parameter
+  // by value and in a vector, where the model has no call, so it has no rule.
+  bool noDestructorMove(const FunctionDecl *FD) const {
+    const FunctionDecl *Def = nullptr;
+    if (!isa<CXXConstructorDecl>(FD) || !FD->hasBody(Def))
+      return false;
+    const auto *C = cast<CXXConstructorDecl>(Def);
+    // The struct table lists a destructor only when `member` holds, so a destructor `= default` is none.
+    const CXXDestructorDecl *D = C->getParent()->getDestructor();
+    return C->isMoveConstructor() && !C->isTemplated() && !C->isDeleted() && !C->isDefaulted() && !(D && member(D)) &&
+           plainStruct(Context.getRecordType(C->getParent()));
+  }
+
+  // A constructor that is written as a function, decision 0094: a constructor of a plain struct that is no copy constructor,
+  // delegates to none, and gives each field exactly one value in its member init list. It can have a body and be a move constructor, decision 0179. A field that the list leaves out
   // would take its default, which has no rule. Null for any other function. A constructor that is only declared is looked up by its definition.
   const CXXConstructorDecl *valueConstructor(const FunctionDecl *FD) const {
     const FunctionDecl *Def = nullptr;
     if (!isa<CXXConstructorDecl>(FD) || !FD->hasBody(Def))
       return nullptr;
     const auto *C = cast<CXXConstructorDecl>(Def);
-    if (C->isTemplated() || C->getDescribedFunctionTemplate() || C->isDeleted() || C->isDefaulted() || C->isCopyOrMoveConstructor() ||
+    if (noDestructorMove(C))
+      return nullptr;
+    if (C->isTemplated() || C->getDescribedFunctionTemplate() || C->isDeleted() || C->isDefaulted() || C->isCopyConstructor() ||
         C->isDelegatingConstructor() || !plainStruct(Context.getRecordType(C->getParent())))
       return nullptr;
-    const auto *Body = dyn_cast<CompoundStmt>(C->getBody());
-    if (!Body || !Body->body_empty())
+    if (!isa<CompoundStmt>(C->getBody()))
       return nullptr;
     std::set<const FieldDecl *> Given;
     for (const CXXCtorInitializer *Init : C->inits()) {
@@ -4728,14 +4744,31 @@ private:
   }
 
   // The body of a value constructor: it returns the struct, built from the values of its init list in the order of the fields.
+  // A constructor with a body first computes each value of the init list into a fresh local, as C++ runs the list first. Then come the statements of the
+  // body, and the struct is built from the fresh locals, decision 0179. The name of a fresh local has a `'`, which no C++ name has.
   llvm::json::Array constructorBody(const CXXConstructorDecl *C) const {
     const unsigned At = line(C->getLocation());
-    llvm::json::Array Args;
+    const auto *Body = cast<CompoundStmt>(C->getBody());
+    llvm::json::Array Out, Args;
     for (const FieldDecl *F : C->getParent()->fields())
       for (const CXXCtorInitializer *Init : C->inits())
-        if (Init->getMember() == F)
-          Args.push_back(expr(Init->getInit(), At));
-    return llvm::json::Array{tag("Return", llvm::json::Array{tag("Construct", llvm::json::Array{structKey(C->getParent()), std::move(Args)}), number(At)})};
+        if (Init->getMember() == F) {
+          if (Body->body_empty()) {
+            Args.push_back(expr(Init->getInit(), At));
+            continue;
+          }
+          const std::string Fresh = "'init'" + F->getNameAsString();
+          Out.push_back(tag("Local", llvm::json::Array{Fresh, type(F->getType(), true), expr(Init->getInit(), At), number(At)}));
+          Args.push_back(tag("Var", llvm::json::Array{Fresh, type(F->getType(), true)}));
+        }
+    if (!Body->body_empty()) {
+      InConstructorBody = true;
+      for (llvm::json::Value &One : stmts(Body))
+        Out.push_back(std::move(One));
+      InConstructorBody = false;
+    }
+    Out.push_back(tag("Return", llvm::json::Array{tag("Construct", llvm::json::Array{structKey(C->getParent()), std::move(Args)}), number(At)}));
+    return Out;
   }
 
 public:
@@ -5030,12 +5063,15 @@ private:
 
   // A parameter of type `T&` for a scalar or a struct of the file is `Mut(T)`, decision 0108, else null. A const reference is a value, and any other
   // reference stays `Other`.
+  // A parameter `T&&` of a plain struct is the same, decision 0179. A `T&&` of anything else stays `Other`.
   llvm::json::Value mutRef(QualType T) const {
-    if (!T->isLValueReferenceType())
+    if (!T->isReferenceType())
       return nullptr;
     const QualType Pointee = T->getPointeeType();
     if (Pointee.getCanonicalType().hasQualifiers())
       return nullptr;
+    if (!T->isLValueReferenceType())
+      return plainStruct(Pointee) ? tag("Mut", type(Pointee)) : llvm::json::Value(nullptr);
     if (const char *S = scalar(Pointee))
       return tag("Mut", S);
     if (plainStruct(Pointee))
@@ -5250,6 +5286,14 @@ private:
   }
 
   llvm::json::Value stmt(const Stmt *S) const {
+    // The body of a constructor cannot read or write a field, or use `this`, and it cannot return early, decision 0179. A control statement holds its
+    // expressions and its statements, which come here or to `expr` themselves.
+    if (InConstructorBody && !isa<IfStmt, WhileStmt, ForStmt, CXXForRangeStmt, SwitchStmt, CompoundStmt, DoStmt>(S)) {
+      if (readsObject(S))
+        return unknown(S, "a field in the body of a constructor", line(S->getBeginLoc()));
+      if (isa<ReturnStmt>(S))
+        return unknown(S, describe(S), line(S->getBeginLoc()));
+    }
     if (const auto *If = dyn_cast<IfStmt>(S); If && !If->getInit() && !If->getConditionVariable() && !If->isConsteval())
       return tag("If", llvm::json::Array{expr(If->getCond(), line(S->getBeginLoc())), stmts(If->getThen()), If->getElse() ? stmts(If->getElse()) : llvm::json::Array{},
                                          number(line(S->getBeginLoc()))});
@@ -5824,7 +5868,22 @@ private:
                                             Parameter->getNameAsString(), type(Element), expr(Return->getRetValue(), Near)});
   }
 
+  // The argument `std::move(x)` of a local or a parameter `x` of a plain struct, at a parameter `T&&` of a plain struct, is `x`: the callee writes it back,
+  // decision 0179. Any other argument is its expression.
+  llvm::json::Value callArg(const FunctionDecl *Callee, unsigned I, const Expr *Arg, unsigned Near) const {
+    if (Callee && I < Callee->getNumParams() && Callee->getParamDecl(I)->getType()->isRValueReferenceType() && !mutRef(Callee->getParamDecl(I)->getType()).getAsNull())
+      if (const auto *Move = dyn_cast<CallExpr>(Arg->IgnoreParenImpCasts()); Move && Move->getNumArgs() == 1 && Move->getDirectCallee() &&
+                                                                              Move->getDirectCallee()->isInStdNamespace() && Move->getDirectCallee()->getDeclName().isIdentifier() &&
+                                                                              Move->getDirectCallee()->getName() == "move")
+        if (const auto *Ref = dyn_cast<DeclRefExpr>(Move->getArg(0)->IgnoreParenImpCasts());
+            Ref && (isa<ParmVarDecl>(Ref->getDecl()) || (isa<VarDecl>(Ref->getDecl()) && cast<VarDecl>(Ref->getDecl())->hasLocalStorage())) && plainStruct(Ref->getType()))
+          return expr(Ref, Near);
+    return expr(Arg, Near);
+  }
+
   llvm::json::Value expr(const Expr *E, unsigned Near) const {
+    if (InConstructorBody && readsObject(E))
+      return unknown(E, "a field in the body of a constructor", Near);
     // A temporary that needs a cleanup, such as an optional made from `x + 1`, wraps the expression. The wrapper is not the construct.
     if (const auto *Cleanups = dyn_cast<ExprWithCleanups>(E))
       return expr(Cleanups->getSubExpr(), Near);
@@ -6094,8 +6153,8 @@ private:
         Built = Cast->getSubExpr()->IgnoreParens();
       if (const auto *Construct = dyn_cast<CXXConstructExpr>(Built); Construct && valueConstructor(Construct->getConstructor())) {
         llvm::json::Array Args;
-        for (const Expr *Arg : Construct->arguments())
-          Args.push_back(expr(Arg, line(E->getBeginLoc())));
+        for (unsigned I = 0; I < Construct->getNumArgs(); ++I)
+          Args.push_back(callArg(Construct->getConstructor(), I, Construct->getArg(I), line(E->getBeginLoc())));
         return tag("Call", llvm::json::Array{key(Construct->getConstructor()), name(Construct->getConstructor()), std::move(Args), number(line(E->getBeginLoc()))});
       }
     }
@@ -6152,6 +6211,10 @@ private:
     if (const auto *Construct = dyn_cast<CXXConstructExpr>(E); Construct && Construct->getNumArgs() == 1 && plainStruct(Construct->getType()) &&
                                                                plainStruct(Construct->getArg(0)->getType()) && plainStruct(Construct->getType())->hasUserDeclaredDestructor())
       return expr(Construct->getArg(0), Near);
+    // A copy or a move by a constructor that the file writes runs code that the model cannot see, decision 0179. One that the model can call was a call above.
+    if (const auto *Construct = dyn_cast<CXXConstructExpr>(E); Construct && Construct->getNumArgs() == 1 && plainStruct(Construct->getType()) &&
+                                                               Construct->getConstructor()->isCopyOrMoveConstructor() && Construct->getConstructor()->isUserProvided())
+      return unknown(E, "a copy or a move by a constructor that the model cannot call", Near);
     // A sequence made from one sequence, decision 0070, or a struct made from one struct, decision 0073. The core judges the two types.
     if (const auto *Construct = dyn_cast<CXXConstructExpr>(E);
         Construct && Construct->getNumArgs() == 1 &&
@@ -6273,8 +6336,8 @@ private:
         return unknown(E, "a qualified call of a virtual function", Near);
       if (Callee && (!Callee->isArrow() || isa<CXXThisExpr>(Object))) {
         llvm::json::Array Args{expr(Object, line(E->getBeginLoc()))};
-        for (const Expr *Arg : Call->arguments())
-          Args.push_back(expr(Arg, line(E->getBeginLoc())));
+        for (unsigned I = 0; I < Call->getNumArgs(); ++I)
+          Args.push_back(callArg(Call->getDirectCallee(), I, Call->getArg(I), line(E->getBeginLoc())));
         return tag("Call", llvm::json::Array{key(Call->getDirectCallee()), name(Call->getDirectCallee()), std::move(Args), number(line(E->getBeginLoc()))});
       }
     }
@@ -6298,12 +6361,13 @@ private:
     if (E->getStmtClass() == Stmt::CallExprClass)
       if (const FunctionDecl *Callee = cast<CallExpr>(E)->getDirectCallee()) {
         llvm::json::Array Args;
-        for (const Expr *Arg : cast<CallExpr>(E)->arguments()) {
+        for (unsigned I = 0; I < cast<CallExpr>(E)->getNumArgs(); ++I) {
+          const Expr *Arg = cast<CallExpr>(E)->getArg(I);
           // A class at a reference of its interface that is not const stands for the whole call, because the core would refuse the write-back first, decision 0169.
           if (const auto *Up = dyn_cast<ImplicitCastExpr>(Arg->IgnoreParens()); Up && Up->getCastKind() == CK_DerivedToBase && !Up->getType().isConstQualified() &&
                                                                               Up->getValueKind() == VK_LValue && !upcastKind(Up).getAsNull())
             return unknown(E, "a class as a reference to its interface", Near);
-          Args.push_back(expr(Arg, line(E->getBeginLoc())));
+          Args.push_back(callArg(Callee, I, Arg, line(E->getBeginLoc())));
         }
         return tag("Call", llvm::json::Array{key(Callee), name(Callee), std::move(Args), number(line(E->getBeginLoc()))});
       }
