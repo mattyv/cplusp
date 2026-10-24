@@ -5227,9 +5227,10 @@ fn a_call_through_a_unique_ptr_field_keeps_its_contract() {
     assert!(under(&text, "model-unique-field-wrong.cpp:47: a requires line of the callee may not hold.").iter().any(|l| l.ends_with("model-unique-field-wrong.cpp:16: requires inner != nullptr && inner->valid()")), "{text}");
 }
 
-/// Two moves of one local in one statement, a move and a read of one local in one call, a move of a parameter in a call, a move in a
-/// condition, a move of an element of a vector, a move into std::make_unique at a parameter by const reference, and a call that
-/// writes through a field have no rule, so no two names share one object and no read sees a moved local, decision 0171.
+/// Two moves of one local in one statement, a move and a read of one local in one call, a move in a condition, a move of an element
+/// of a vector, a move into std::make_unique at a parameter by const reference, and a call that writes through a field have no
+/// rule, so no two names share one object and no read sees a moved local, decision 0171. A move of a parameter in a call has a rule
+/// since decision 0186.
 #[test]
 fn a_moved_unique_ptr_has_one_owner() {
     let Some(dafny) = dafny() else { return };
@@ -5246,8 +5247,7 @@ fn a_moved_unique_ptr_has_one_owner() {
         [
             "37: a moves and is read in one statement. C++ does not fix the order.",
             "43: a moves and is read in one statement. C++ does not fix the order.",
-            "48: p is a parameter. The translator writes only a local or a reference parameter.",
-            "54: a std::move of a std::unique_ptr has a rule only in a call that stands alone, the start value of a local or a return.",
+            "54: a std::move of a std::unique_ptr has no rule here. It has a rule only in a call that stands alone, the start value of a local, a return or a field write.",
             "62: a call to std::move<std::unique_ptr<Component> &>, which has no model in view.",
             "67: the call writes a value back, and the translator writes back only to a local or a reference parameter.",
             "87: a call to std::move<std::unique_ptr<Component> &>, which has no model in view.",
@@ -5845,6 +5845,77 @@ fn a_vector_that_the_code_gives_up_with_no_rule_is_refused() {
         "36: CXXConstructExpr: the translator has no rule for it yet.".to_string(),
         "44: CXXOperatorCallExpr: the translator has no rule for it yet.".to_string(),
         "50: CXXTemporaryObjectExpr: the translator has no rule for it yet.".to_string(),
+    ];
+    assert_eq!(refused, want, "{text}");
+}
+
+/// A node that the code makes with std::make_unique, writes through its pointer and moves into a field proves. So does a moved
+/// parameter, which is null after its move, decision 0186.
+#[test]
+fn a_tree_that_the_code_builds_proves() {
+    let Some(dafny) = dafny() else { return };
+    if !clang_tidy_available() {
+        return;
+    }
+    for name in ["model-tree.cpp", "../../../../examples/tree_unique_ptr/example.cpp"] {
+        let o = prove(name, &[], &dafny);
+        let text = stdout(&o);
+        assert_eq!(o.status.code(), Some(0), "{name}: stdout: {text} stderr: {}", stderr(&o));
+        assert_eq!(text.lines().last(), Some("ok: proved"), "{name}: {text}");
+    }
+}
+
+/// A new node holds the start value of each field, a write keeps the other fields, a moved pointer is in the field and not in the
+/// parameter, a parameter moved in a branch can be null after it, and a write through a pointer that can be null fails, decision
+/// 0186.
+#[test]
+fn a_tree_that_the_code_builds_keeps_what_it_wrote() {
+    let Some(dafny) = dafny() else { return };
+    if !clang_tidy_available() {
+        return;
+    }
+    let o = prove("model-tree-wrong.cpp", &[], &dafny);
+    let text = stdout(&o);
+    assert_eq!(o.status.code(), Some(1), "stdout: {text} stderr: {}", stderr(&o));
+    let failed: Vec<&str> = text.lines().filter(|l| l.starts_with("Not proved: ") || l.starts_with("Not provable: ")).map(|l| l.rsplit_once(".cpp:").unwrap().1).collect();
+    let ensures = "the ensures line may not hold on this return.";
+    let want = [
+        format!("16: {ensures}"),
+        format!("24: {ensures}"),
+        format!("33: {ensures}"),
+        "40: the optional may be empty or the pointer may be null here.".to_string(),
+        format!("49: {ensures}"),
+        format!("59: {ensures}"),
+    ];
+    assert_eq!(failed, want, "{text}");
+}
+
+/// A write through a parameter that the body does not move, a compound write, a write to a field of a field, std::make_unique of a
+/// struct with an enum field, a field that starts from a call, an overflow or a write, or a field with no initializer, an
+/// assignment of one unique_ptr to another, a return of nullptr, and a write through a parameter that moves only in a return are
+/// refused, decision 0186.
+#[test]
+fn a_tree_that_the_code_builds_with_no_rule_is_refused() {
+    let Some(dafny) = dafny() else { return };
+    if !clang_tidy_available() {
+        return;
+    }
+    let o = prove("model-tree-refuse.cpp", &[], &dafny);
+    let text = stdout(&o);
+    assert_eq!(o.status.code(), Some(1), "stdout: {text} stderr: {}", stderr(&o));
+    let refused: Vec<&str> = text.lines().filter(|l| l.starts_with("Not proved: ") || l.starts_with("Not provable: ")).map(|l| l.rsplit_once(".cpp:").unwrap().1).collect();
+    let want = [
+        "27: p is a parameter. The translator writes only a local or a reference parameter.",
+        "34: BinaryOperator +=: the translator has no rule for it yet.",
+        "42: BinaryOperator =: the translator has no rule for it yet.",
+        "48: a call to std::make_unique<Tagged>, which has no model in view.",
+        "54: a call to std::make_unique<Seeded>, which has no model in view.",
+        "62: CXXOperatorCallExpr: the translator has no rule for it yet.",
+        "68: CXXConstructExpr: the translator has no rule for it yet.",
+        "78: a call to std::make_unique<Over>, which has no model in view.",
+        "92: a call to std::make_unique<Side>, which has no model in view.",
+        "103: a call to std::make_unique<Bare>, which has no model in view.",
+        "110: p is a parameter. The translator writes only a local or a reference parameter.",
     ];
     assert_eq!(refused, want, "{text}");
 }

@@ -3899,8 +3899,8 @@ fn a_constructor_moves_its_parameter_into_a_field() {
     assert_eq!(strip(m.body), List::Cons((Box::new(DStmt::Return(want)), 0), Box::new(List::Nil)));
 }
 
-/// Two moves of one local in one statement, a move and a read of one local in one call, a move of a parameter in a call, and a move
-/// in a condition have no rule, decision 0171.
+/// Two moves of one local in one statement, a move and a read of one local in one call, and a move in a condition have no rule,
+/// decision 0171. A move of a parameter in a call has one since decision 0186.
 #[test]
 fn a_move_has_one_owner_and_a_place() {
     let own = Ty::Own(Scalar::Struct(SHAPE));
@@ -3923,10 +3923,9 @@ fn a_move_has_one_owner_and_a_place() {
     let List::Cons(_, rest) = translate_unit(&all, &shape_of(&[(CORNERS, BKEY)])) else { panic!("two models") };
     let List::Cons(Model::Bare(_, _, _, r), _) = *rest else { panic!("a refused body") };
     assert_eq!(r, Refusal::MoveRead(MA, 46));
-    // A move of a parameter in a call writes the parameter.
+    // A move of a parameter in a call is a move of the local of the parameter, decision 0186.
     let param = Stmt::Call(MTAKE, MTAKE, Box::new(arg(MP)), 46);
-    let Model::Bare(_, _, _, r) = moved_model(List::Cons(Box::new(param), end())) else { panic!("a refused body") };
-    assert_eq!(r, Refusal::WriteParam(MP, 46));
+    assert!(matches!(moved_model(List::Cons(Box::new(param), end())), Model::Full(_)));
     // A move in the condition of an if has no place.
     let test = Function { ret: Ty::Bool, ..take_owned() };
     let cond = Stmt::If(Expr::Call(MTAKE, MTAKE, Box::new(arg(MA)), 46), Box::new(List::Nil), Box::new(List::Nil), 46);
@@ -3934,6 +3933,92 @@ fn a_move_has_one_owner_and_a_place() {
     let List::Cons(_, rest) = translate_unit(&all, &shape_of(&[(CORNERS, BKEY)])) else { panic!("two models") };
     let List::Cons(Model::Bare(_, _, _, r), _) = *rest else { panic!("a refused body") };
     assert_eq!(r, Refusal::MovePlace(46));
+}
+
+const CELL: u32 = 470;
+const TCV: u32 = 471;
+const TCN: u32 = 472;
+
+/// `struct Cell { int32_t value = 7; std::unique_ptr<Cell> next; }` as the table of the file.
+fn cell_table() -> Structs {
+    let fields = List::Cons((TCV, Ty::I32), Box::new(List::Cons((TCN, Ty::Own(Scalar::Struct(CELL))), Box::new(List::Nil))));
+    List::Cons((CELL, (6, fields, List::Nil)), Box::new(List::Nil))
+}
+
+/// `std::make_unique<Cell>()`, decision 0186.
+fn made_cell() -> Expr {
+    Expr::Wrap(b(Expr::Construct(CELL, Box::new(List::Cons(b(Expr::Lit(7, Ty::I32)), Box::new(List::Cons(b(Expr::Nullopt), Box::new(List::Nil))))))))
+}
+
+/// `n->f = e` through a local unique_ptr writes the value that it owns. A move into the field leaves the source null after the
+/// statement, decision 0186.
+#[test]
+fn a_field_write_through_a_local_unique_ptr_writes_the_value_it_owns() {
+    let own = Ty::Own(Scalar::Struct(CELL));
+    let body = List::Cons(
+        Box::new(Stmt::Local(MA, own, made_cell(), 45)),
+        Box::new(List::Cons(
+            Box::new(Stmt::SetOwnField(MA, TCV, Expr::Lit(1, Ty::I32), 46)),
+            Box::new(List::Cons(
+                Box::new(Stmt::Local(MB, own, made_cell(), 47)),
+                Box::new(List::Cons(Box::new(Stmt::SetOwnField(MA, TCN, Expr::Move(MB, own), 48)), Box::new(one(Stmt::Return(Expr::Lit(0, Ty::I32), 49))))),
+            )),
+        )),
+    );
+    let f = Function { name: 473, line: 44, params: List::Nil, ret: Ty::I32, trusted: false, conds: List::Nil, body };
+    let Model::Full(m) = translate_function(&f, &List::Nil, &cell_table()) else { panic!("a full model") };
+    let List::Cons(_, rest) = strip(m.body) else { panic!("the first local") };
+    let List::Cons((write, _), rest) = *rest else { panic!("the write") };
+    assert!(matches!(&*write, DStmt::SetOwnField(n, f, _) if *n == MA && *f == TCV), "{write:?}");
+    let List::Cons(_, rest) = *rest else { panic!("the second local") };
+    let List::Cons((moved, _), _) = *rest else { panic!("the move") };
+    assert_eq!(*moved, DStmt::Moved(Box::new(DStmt::SetOwnField(MA, TCN, DExpr::Var(MB))), names(&[MB])));
+}
+
+/// A write through a parameter that the body does not move, a write that moves its own target, and a write to no field are
+/// refused, decision 0186.
+#[test]
+fn a_field_write_through_a_unique_ptr_has_one_owner() {
+    let own = Ty::Own(Scalar::Struct(CELL));
+    let end = || Box::new(one(Stmt::Return(Expr::Lit(0, Ty::I32), 49)));
+    let with = |params: Params, body: Stmts| Function { name: 474, line: 44, params, ret: Ty::I32, trusted: false, conds: List::Nil, body };
+    let p = List::Cons((MP, own), Box::new(List::Nil));
+    let write = Stmt::SetOwnField(MP, TCV, Expr::Lit(1, Ty::I32), 46);
+    assert_eq!(bare_refusal(translate_function(&with(p, List::Cons(Box::new(write), end())), &List::Nil, &cell_table())), Refusal::WriteParam(MP, 46));
+    let start = || Box::new(Stmt::Local(MA, own, made_cell(), 45));
+    let itself = Stmt::SetOwnField(MA, TCN, Expr::Move(MA, own), 46);
+    let body = List::Cons(start(), Box::new(List::Cons(Box::new(itself), end())));
+    assert_eq!(bare_refusal(translate_function(&with(List::Nil, body), &List::Nil, &cell_table())), Refusal::MoveRead(MA, 46));
+    let nowhere = Stmt::SetOwnField(MA, 475, Expr::Lit(1, Ty::I32), 46);
+    let body = List::Cons(start(), Box::new(List::Cons(Box::new(nowhere), end())));
+    assert_eq!(bare_refusal(translate_function(&with(List::Nil, body), &List::Nil, &cell_table())), Refusal::NoField(475, 46));
+}
+
+/// A parameter by value that the body moves before its return is a local of the body. The body is a block that starts with the
+/// local, so the contract still reads the parameter. A parameter that moves only in a return needs no local, decision 0186.
+#[test]
+fn a_parameter_that_moves_is_a_local_of_the_body() {
+    let own = Ty::Own(Scalar::Struct(SHAPE));
+    let arg = List::Cons(b(Expr::Move(MP, own)), Box::new(List::Nil));
+    let body = List::Cons(Box::new(Stmt::Call(MTAKE, MTAKE, Box::new(arg), 46)), Box::new(one(Stmt::Return(Expr::Lit(0, Ty::I32), 48))));
+    let Model::Full(m) = moved_model(body) else { panic!("a full model") };
+    let List::Cons((block, _), rest) = strip(m.body) else { panic!("a body") };
+    assert_eq!(*rest, List::Nil);
+    let DStmt::Scope(inner) = *block else { panic!("a block: {block:?}") };
+    let List::Cons((local, _), rest) = *inner else { panic!("the local of the parameter") };
+    assert_eq!(*local, DStmt::Local(MP, DTy::Opt(Scalar::Struct(SHAPE)), DExpr::Var(MP)));
+    let List::Cons((call, _), _) = *rest else { panic!("the call") };
+    assert!(matches!(&*call, DStmt::Moved(c, ns) if matches!(&**c, DStmt::CallStmt(k, _) if *k == MTAKE) && *ns == names(&[MP])), "{call:?}");
+    // A move in a branch is a move of the body too.
+    let arg = List::Cons(b(Expr::Move(MP, own)), Box::new(List::Nil));
+    let branch = Stmt::If(Expr::Bool(true), Box::new(one(Stmt::Call(MTAKE, MTAKE, Box::new(arg), 46))), Box::new(List::Nil), 46);
+    let Model::Full(m) = moved_model(List::Cons(Box::new(branch), Box::new(one(Stmt::Return(Expr::Lit(0, Ty::I32), 48))))) else { panic!("a full model of a branch") };
+    let List::Cons((block, _), _) = strip(m.body) else { panic!("a body") };
+    assert!(matches!(&*block, DStmt::Scope(_)), "{block:?}");
+    // A parameter that moves only in a return needs no local.
+    let f = Function { ret: own, ..mover(one(Stmt::Return(Expr::Move(MP, own), 45))) };
+    let Model::Full(m) = translate_function(&f, &List::Nil, &shape_of(&[(CORNERS, BKEY)])) else { panic!("a full model of a return") };
+    assert_eq!(strip(m.body), List::Cons((Box::new(DStmt::Return(DExpr::Var(MP))), 0), Box::new(List::Nil)));
 }
 
 /// A unique_ptr of a struct or an interface is a field, as an optional of it. A unique_ptr of a scalar is no field yet, decision 0171.

@@ -3,10 +3,11 @@
 #include <utility>
 
 // A binary tree whose nodes own their children through unique_ptr. A null pointer is an empty tree. Size, Sum and Within are the
-// specification functions, and example.dfy defines them over the tree: the number of nodes, the sum of the values, and the test that
+// specification functions, and example.spec.dfy defines them over the tree: the number of nodes, the sum of the values, and the test that
 // every value is at most a bound in magnitude. The recursion needs a decreases clause, and the size of the tree is the measure,
 // because each child is smaller than its parent. The stack is finite, so the contract bounds the size, and that bounds the depth.
-// The bound on the values and the bound on the size together keep every partial sum inside int32_t. A const handle gives const
+// The bound on the values and the bound on the size together keep every partial sum inside int32_t. The lemma SumBound says so,
+// and sum applies it to each child, decision 0167. A const handle gives const
 // access through it, decision 0030, and sum only reads, so it takes the tree by const reference.
 // ponytail: the bound is on the size of the tree, which bounds the depth. A degenerate tree of 1000 nodes is 1000 calls deep. The upgrade
 // is a bound on the depth, and a bound on the size that follows from it.
@@ -25,6 +26,8 @@ int32_t sum(const std::unique_ptr<Node>& root) {
   }
   int32_t from_left = sum(root->left);
   int32_t from_right = sum(root->right);
+  //@ apply SumBound(root->left)
+  //@ apply SumBound(root->right)
   return root->value + from_left + from_right;
 }
 

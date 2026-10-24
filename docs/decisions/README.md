@@ -190,3 +190,4 @@ Status is `decided`, `proposed` (the default until someone objects or the thin s
 | [0183](0183-a-member-function-that-returns-its-object.md) | A member function that returns its object | decided |
 | [0184](0184-a-local-array-from-a-brace-list.md) | A local array from a brace list | decided |
 | [0185](0185-a-vector-that-the-code-gives-up.md) | A vector that the code gives up | decided |
+| [0186](0186-a-tree-that-the-code-builds.md) | A tree that the code builds | decided |
