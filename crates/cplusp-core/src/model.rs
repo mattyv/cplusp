@@ -342,7 +342,8 @@ pub type Args = List<Box<Expr>>;
 /// enum, by the key of the enum, with its cases, decision 0109. `Call` is a call that stands alone as a statement, by the key of its callee, the id of its
 /// name and its arguments. `Exit` is `return;`, decision 0096. `Assert` is a `//@ assert` line in the body, and `Apply` is a
 /// `//@ apply` line that calls a lemma of the companion file by the id of its name, decision 0099. `RangeFor` is a range-for, decision
-/// 0143. `SetIndex` is `v[i] = e` of a vector by reference, decision 0145, and `PushBack` is `v.push_back(e)`, decision 0148.
+/// 0143. `SetIndex` is `v[i] = e` of a vector by reference, decision 0145, of a local vector, decision 0160, or of a local
+/// std::array, decision 0184. `PushBack` is `v.push_back(e)`, decision 0148.
 /// `Sort` is `std::sort(v.begin(), v.end())`, decision 0161, and `SortBy` is the same with a comparator lambda, by the names and the
 /// type of its two parameters and the expression of its one `return`, decision 0162. `Block` is a bare block `{ ... }`, a scope of
 /// its own, decision 0178.
@@ -5255,6 +5256,21 @@ pub open spec fn spec_local_stmt(n: u32, t: Ty, e: Expr, l: u32, all: Fns, env: 
                 _ => Err(Refusal::VecLocal(l)),
             },
         } },
+        // A local std::array from a brace list of its length is the sequence of the values, decision 0184.
+        Ty::Seq(_, Extent::Fixed(k)) => if spec_holds_dtor(t, sd) { Err(Refusal::Copy(l)) } else { match e {
+            Expr::List(args) => if spec_count_args(*args) as u64 != k {
+                Err(Refusal::BraceLen(spec_count_args(*args), spec_extent32(k), l))
+            } else {
+                match spec_ty(t, l) {
+                    Err(r) => Err(r),
+                    Ok(dt) => match spec_lift_args(*args, all, l, sd, 0, true) {
+                        Ok((c, da, _)) => Ok(spec_pre(c, DStmt::Local(n, dt, DExpr::SeqLit(Box::new(da))))),
+                        Err(r) => Err(r),
+                    },
+                }
+            },
+            _ => Err(Refusal::SeqParam(l)),
+        } },
         // The start value of a local can move a local, decision 0171.
         _ => match spec_value_ty(t, l, sd) {
             Err(r) => Err(r),
@@ -5496,9 +5512,17 @@ pub open spec fn spec_stmt(s: Stmt, all: Fns, env: Params, ps: Params, sd: Struc
                 Err(r) => Err(r),
             },
             Some(_) => Err(Refusal::WriteParam(v, l)),
-            // A write to a local vector is a new value of the local, decision 0160.
+            // A write to a local vector is a new value of the local, decision 0160, and so is a write to a local std::array,
+            // decision 0184.
             None => match spec_get(env, v) {
                 Some(Ty::Vec(_)) => match spec_code(i, l) {
+                    Ok(di) => match spec_code(e, l) {
+                        Ok(de) => Ok(DStmt::Assign(v, DExpr::SetAt(Box::new(DExpr::Var(v)), Box::new(di), Box::new(de)))),
+                        Err(r) => Err(r),
+                    },
+                    Err(r) => Err(r),
+                },
+                Some(Ty::Seq(_, Extent::Fixed(_))) => match spec_code(i, l) {
                     Ok(di) => match spec_code(e, l) {
                         Ok(de) => Ok(DStmt::Assign(v, DExpr::SetAt(Box::new(DExpr::Var(v)), Box::new(di), Box::new(de)))),
                         Err(r) => Err(r),
@@ -7205,6 +7229,20 @@ pub proof fn lemma_unknown_return_is_refused(e: Expr, l: u32, all: Fns, ps: Para
     }
 }
 
+/// A local std::array from a brace list that holds a node with no rule is refused, decision 0184.
+pub proof fn lemma_unknown_array_local_is_refused(n: u32, t: Ty, e: Expr, l: u32, all: Fns, env: Params, ps: Params, sd: Structs)
+    requires
+        t is Seq && t->Seq_1 is Fixed,
+        unknown_expr(e),
+    ensures
+        spec_local_stmt(n, t, e, l, all, env, ps, sd).is_err(),
+{
+    reveal(spec_local_stmt);
+    if let Expr::List(args) = e {
+        lemma_unknown_lift_args_is_refused(*args, all, l, sd, 0, true);
+    }
+}
+
 #[verifier::rlimit(40)]
 pub proof fn lemma_unknown_stmt_is_refused(s: Stmt, all: Fns, env: Params, ps: Params, sd: Structs)
     requires
@@ -7231,7 +7269,9 @@ pub proof fn lemma_unknown_stmt_is_refused(s: Stmt, all: Fns, env: Params, ps: P
                 lemma_unknown_stmts_is_refused(*f, all, env, ps, sd);
             }
         },
-        Stmt::Local(n, t, e, l) => {
+        Stmt::Local(n, t, e, l) => if t is Seq && t->Seq_1 is Fixed {
+            lemma_unknown_array_local_is_refused(n, t, e, l, all, env, ps, sd);
+        } else {
             reveal(spec_local_stmt);
             if e is Call {
                 if let Ok(dt) = spec_value_ty(t, l, sd) {
@@ -7493,7 +7533,7 @@ pub proof fn lemma_kept_local(s: Stmt, all: Fns, env: Params, ps: Params, sd: St
         count_dstmt(spec_stmt(s, all, env, ps, sd).unwrap()) == 1,
 {
     reveal(spec_local_stmt);
-    if s->Local_1 is Vec {
+    if s->Local_1 is Vec || (s->Local_1 is Seq && s->Local_1->Seq_1 is Fixed) {
         reveal_with_fuel(count_dstmt, 2);
     } else {
         let (n, t, e, l) = (s->Local_0, s->Local_1, s->Local_2, s->Local_3);
@@ -8379,6 +8419,12 @@ pub proof fn lemma_resolves_local(s: Stmt, all: Fns, env: Params, ps: Params, sd
     // The vector arm reads the start value as it is, and the other arm with its moves taken out, decision 0171.
     let e1 = s->Local_2;
     let e2 = spec_unmove(s->Local_2).0;
+    // A local std::array from a brace list lifts each value, decision 0184.
+    if let Expr::List(args) = e1 {
+        if spec_lift_args(*args, all, l, sd, 0, true).is_ok() {
+            lemma_lift_args_resolves(*args, all, l, sd, 0, true);
+        }
+    }
     lemma_value_resolves(e1, all, l, sd);
     lemma_value_resolves(e2, all, l, sd);
     if let Expr::Call(k, nm, args, at) = e1 {
@@ -10685,6 +10731,20 @@ pub fn translate_stmt(s: &Stmt, all: &Fns, env: &Params, ps: &Params, sd: &Struc
                 _ => Err(Refusal::VecLocal(*l)),
             },
         } },
+        Stmt::Local(n, Ty::Seq(s, Extent::Fixed(k)), e, l) => if holds_dtor(Ty::Seq(*s, Extent::Fixed(*k)), sd) { Err(Refusal::Copy(*l)) } else { match e {
+            Expr::List(args) => if count_args(args) as u64 != *k {
+                Err(Refusal::BraceLen(count_args(args), extent32(*k), *l))
+            } else {
+                match translate_ty(Ty::Seq(*s, Extent::Fixed(*k)), *l) {
+                    Err(r) => Err(r),
+                    Ok(dt) => match lift_args(args, all, *l, sd, 0, true) {
+                        Ok((c, da, _)) => Ok(pre(c, DStmt::Local(*n, dt, DExpr::SeqLit(Box::new(da))))),
+                        Err(r) => Err(r),
+                    },
+                }
+            },
+            _ => Err(Refusal::SeqParam(*l)),
+        } },
         Stmt::Local(n, t, e, l) => match translate_value_ty(*t, *l, sd) {
             Err(r) => Err(r),
             Ok(dt) => match dtor_local(*t, e, all, sd, *l) {
@@ -10902,6 +10962,13 @@ pub fn translate_stmt(s: &Stmt, all: &Fns, env: &Params, ps: &Params, sd: &Struc
             Some(_) => Err(Refusal::WriteParam(*v, *l)),
             None => match get(env, *v) {
                 Some(Ty::Vec(_)) => match translate_code(i, *l) {
+                    Ok(di) => match translate_code(e, *l) {
+                        Ok(de) => Ok(DStmt::Assign(*v, DExpr::SetAt(Box::new(DExpr::Var(*v)), Box::new(di), Box::new(de)))),
+                        Err(r) => Err(r),
+                    },
+                    Err(r) => Err(r),
+                },
+                Some(Ty::Seq(_, Extent::Fixed(_))) => match translate_code(i, *l) {
                     Ok(di) => match translate_code(e, *l) {
                         Ok(de) => Ok(DStmt::Assign(*v, DExpr::SetAt(Box::new(DExpr::Var(*v)), Box::new(di), Box::new(de)))),
                         Err(r) => Err(r),

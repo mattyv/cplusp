@@ -5224,6 +5224,16 @@ private:
       return QualType();
     return vectorElement(Spec->getTemplateArgs()[0].getAsType(), Owns);
   }
+  // The element of a local `std::array<T, N>` by value, decision 0184, or null: no reference, and an element as for a local vector.
+  QualType localArray(QualType T) const {
+    if (T->isReferenceType())
+      return QualType();
+    const auto *Spec = dyn_cast_or_null<ClassTemplateSpecializationDecl>(T.getUnqualifiedType()->getAsCXXRecordDecl());
+    if (T.isVolatileQualified() || !Spec || !Spec->isInStdNamespace() || Spec->getName() != "array" || Spec->getTemplateArgs().size() == 0 ||
+        Spec->getTemplateArgs()[0].getKind() != TemplateArgument::Type)
+      return QualType();
+    return vectorElement(Spec->getTemplateArgs()[0].getAsType());
+  }
   // Whether an expression names a vector that the function writes: a vector by reference, decision 0145, or a local vector, decision 0160.
   bool isMutSeq(const Expr *E) const {
     const auto *Ref = dyn_cast<DeclRefExpr>(E->IgnoreParenImpCasts());
@@ -5232,7 +5242,7 @@ private:
     if (isa<ParmVarDecl>(Ref->getDecl()))
       return !mutSeq(Ref->getDecl()->getType()).isNull();
     const auto *Var = dyn_cast<VarDecl>(Ref->getDecl());
-    return Var && Var->hasLocalStorage() && !localVec(Var->getType()).isNull();
+    return Var && Var->hasLocalStorage() && (!localVec(Var->getType()).isNull() || !localArray(Var->getType()).isNull());
   }
   // The type of a parameter, or of a name that reads one. A pointer to const is a `Ptr` of what it points to, decisions 0140 and 0141.
   llvm::json::Value paramType(QualType T) const {
