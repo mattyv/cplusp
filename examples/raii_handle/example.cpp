@@ -24,6 +24,7 @@ class Handle {
   Handle& operator=(Handle&&) = delete;
 
   //@ requires other.valid()
+  //@ modifies other
   //@ ensures valid() && !other.valid()
   Handle(Handle&& other) noexcept : open_(other.open_) { other.open_ = false; }
 
@@ -59,7 +60,7 @@ int32_t count_inside_block() {
 // A function that takes the handle by rvalue reference owns it. The handle it moves into a local dies at the end of the function.
 // The caller's handle is closed after the call, and its destructor releases nothing.
 //@ requires h.valid() && 0 < open_count <= 1000
-//@ modifies open_count
+//@ modifies open_count, h
 //@ ensures open_count == old(open_count) - 1 && !h.valid()
 void consume(Handle&& h) {
   Handle owned = std::move(h);

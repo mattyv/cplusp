@@ -1,6 +1,6 @@
 #include <cstdint>
 
-// Constructors with no rule yet are refused at their lines, decision 0094.
+// Constructors with no rule yet are refused at their lines, decisions 0094 and 0179. A field in the body is refused at its statement.
 struct Pair {
   int32_t a_;
   int32_t b_;

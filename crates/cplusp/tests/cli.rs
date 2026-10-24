@@ -3027,8 +3027,8 @@ fn a_constructor_gives_the_value_it_builds() {
     assert_eq!(text.lines().last(), Some("ok: proved"), "{text}");
 }
 
-/// A constructor with a body, one that leaves a field out, a delegating constructor, and one whose init list reads a field are
-/// refused at their lines, decision 0094.
+/// A constructor whose body writes a field, one that leaves a field out, a delegating constructor, and one whose init list reads a
+/// field are refused at their lines, decisions 0094 and 0179.
 #[test]
 fn constructors_with_no_rule_are_refused_at_their_lines() {
     if !clang_tidy_available() {
@@ -3039,7 +3039,9 @@ fn constructors_with_no_rule_are_refused_at_their_lines() {
     let text = stdout(&o);
     assert_eq!(o.status.code(), Some(1), "stdout: {text} stderr: {}", stderr(&o));
     let refusals: Vec<&str> = text.lines().filter(|l| l.starts_with("Not provable: ")).collect();
-    for line in [8, 12, 14, 22] {
+    let field = "model-ctor-refuse.cpp:9: a field in the body of a constructor: the translator has no rule for it yet.";
+    assert!(refusals.iter().any(|l| l.ends_with(field)), "{field}: {text}");
+    for line in [12, 14, 22] {
         let want = format!("model-ctor-refuse.cpp:{line}: CXXConstructorDecl: the translator has no rule for it yet.");
         assert!(refusals.iter().any(|l| l.ends_with(&want)), "{want}: {text}");
     }
@@ -5677,5 +5679,63 @@ fn a_struct_with_a_destructor_and_no_rule_is_refused() {
     want.push("103: ForStmt: the translator has no rule for it yet.".to_string());
     want.push(format!("113: {copy}"));
     want.push("123: a call of a destructor: the translator has no rule for it yet.".to_string());
+    assert_eq!(refusals, want, "{text}");
+}
+
+/// A constructor with a body, a move constructor, a `T&&` parameter of a struct and `std::move` of a struct prove, decision 0179.
+/// The moved-from handle stays alive and releases nothing when it dies. A moved-from twin that stays open releases at the end of
+/// its own block.
+#[test]
+fn a_move_of_a_struct_proves() {
+    let Some(dafny) = dafny() else { return };
+    if !clang_tidy_available() {
+        return;
+    }
+    for name in ["model-move.cpp", "../../../../examples/raii_handle/example.cpp"] {
+        let o = prove(name, &[], &dafny);
+        let text = stdout(&o);
+        assert_eq!(o.status.code(), Some(0), "{name}: stdout: {text} stderr: {}", stderr(&o));
+        assert_eq!(text.lines().last(), Some("ok: proved"), "{name}: {text}");
+    }
+}
+
+/// A move constructor that leaves its source open fails its ensures line. The init list reads the source before the body writes
+/// it, so a claim that the new cell holds the written value fails. A caller that forgets the release fails at its return, decision
+/// 0179.
+#[test]
+fn a_move_of_a_struct_keeps_its_contract() {
+    let Some(dafny) = dafny() else { return };
+    if !clang_tidy_available() {
+        return;
+    }
+    let o = prove("model-move-wrong.cpp", &[], &dafny);
+    let text = stdout(&o);
+    assert_eq!(o.status.code(), Some(1), "stdout: {text} stderr: {}", stderr(&o));
+    let failed: Vec<&str> = text.lines().filter(|l| l.starts_with("Not proved: ")).map(|l| l.rsplit_once(".cpp:").unwrap().1).collect();
+    let want = ["23: the ensures line may not hold on this return.", "57: the ensures line may not hold on this return.", "75: the ensures line may not hold on this return."];
+    assert_eq!(failed, want, "{text}");
+}
+
+/// A field or `this` in the body of a constructor, a `T&&` parameter of a scalar, a move constructor in a struct with no destructor
+/// or with a destructor `= default`, and a return that runs a copy or move constructor that the file only declares are refused,
+/// decision 0179.
+#[test]
+fn a_move_with_no_rule_is_refused() {
+    let Some(dafny) = dafny() else { return };
+    if !clang_tidy_available() {
+        return;
+    }
+    let o = prove("model-move-refuse.cpp", &[], &dafny);
+    let text = stdout(&o);
+    assert_eq!(o.status.code(), Some(1), "stdout: {text} stderr: {}", stderr(&o));
+    let mut refusals: Vec<&str> = text.lines().filter(|l| l.starts_with("Not provable: ")).map(|l| l.rsplit_once(".cpp:").unwrap().1).collect();
+    refusals.sort_by_key(|l| l.split(':').next().unwrap().parse::<u32>().unwrap());
+    let field = "a field in the body of a constructor: the translator has no rule for it yet.";
+    let mut want: Vec<String> = [9, 13, 18].map(|l| format!("{l}: {field}")).to_vec();
+    want.push("31: int32_t &&: the translator has no rule for it yet.".to_string());
+    want.push("42: a move constructor in a struct with no destructor: the translator has no rule for it yet.".to_string());
+    want.push("56: a move constructor in a struct with no destructor: the translator has no rule for it yet.".to_string());
+    want.push("82: a copy or a move by a constructor that the model cannot call: the translator has no rule for it yet.".to_string());
+    want.push("103: a copy or a move by a constructor that the model cannot call: the translator has no rule for it yet.".to_string());
     assert_eq!(refusals, want, "{text}");
 }
