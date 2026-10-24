@@ -274,7 +274,8 @@ pub enum CastKind {
 /// `DblMax` are the words `eps`, `eta` and `DBL_MAX` of a contract, decision 0154. `Move` is `std::move(x)` of a local or a
 /// parameter `x` of type `std::unique_ptr`, where C++ makes a new `std::unique_ptr` from it, by the name and the type of `x`,
 /// decision 0171. `Bits` is `a & b` or `a | b` in code, with the type of its result, `StaticCast` is `static_cast<T>(e)` in a
-/// contract, and `List` is a braced list `{a, b, c}` in code, decision 0175. `Unknown` is a construct with no rule, by the id of
+/// contract, and `List` is a braced list `{a, b, c}` in code, decision 0175. `Step` is `x++`, `x--`, `++x` or `--x` inside an
+/// expression, by the name and type of `x`, whether it adds one, and whether it is a prefix, decision 0177. `Unknown` is a construct with no rule, by the id of
 /// its kind and its line.
 #[derive(PartialEq, Eq, Debug)]
 pub enum Expr {
@@ -326,6 +327,7 @@ pub enum Expr {
     EmptyVec,
     Move(u32, Ty),
     Bits(BinOp, Box<Expr>, Box<Expr>, Ty),
+    Step(u32, Ty, bool, bool),
     StaticCast(Ty, Box<Expr>),
     List(Box<Args>),
     Unknown(u32, u32),
@@ -522,9 +524,19 @@ pub enum DExpr {
     DblMax,
 }
 
-/// The calls that run before a statement, in the order that they run: each sets a temporary of the statement by its number, of a
-/// type, to the value of a method by its key with its arguments, decision 0104.
-pub type DCalls = List<(u32, DTy, u32, DArgs)>;
+/// One step that runs before a statement, and sets a temporary of the statement by its number, of a type. `Call` sets it to the
+/// value of a method by its key with its arguments, decision 0104. `Update` calls a method that writes back, and also writes the
+/// places, decision 0177. `Step` writes `x += 1` or `x -= 1` of a name, `out` when it is a reference parameter, and sets the
+/// temporary to the value before the write, or after it for a prefix, decision 0177.
+#[derive(PartialEq, Eq, Debug)]
+pub enum DPre {
+    Call(u32, DTy, u32, DArgs),
+    Update(u32, DTy, Objs, u32, DArgs),
+    Step(u32, DTy, u32, bool, bool, bool),
+}
+
+/// The steps that run before a statement, in the order that they run, decisions 0104 and 0177.
+pub type DCalls = List<DPre>;
 
 pub type DArgs = List<DExpr>;
 
@@ -532,7 +544,8 @@ pub type DArgs = List<DExpr>;
 /// return;`, since Dafny takes no call in a `return`. `Assign` is `x := e;` and `AssignCall` is `x := m(args);`. `While` is the
 /// condition, the invariants, the decreases lines and the body. `ReturnUpdate` is `result, o, x := m(o, x, args); return;` of a method that
 /// writes back, decision 0174. `Moved` is a statement, then `x := None;` for each name that it
-/// moves, decision 0171. `For` prints as its start, then a `while` whose body ends with the
+/// moves, decision 0171. `Block` is the statements of one `return` that runs a call only where C++ runs it, `DeclTemp` is
+/// `var t: T;` of a temporary and `AssignTemp` is `t := e;`, decision 0177. `For` prints as its start, then a `while` whose body ends with the
 /// step. The start and the step keep their own places, decision 0069. `SetField` is `this' := this'.(f := e);`. `SetOut` is
 /// `x' := e;` and `SetOutField` is `x' := x'.(f := e);` of a reference parameter, decision 0108. `Update` calls a method that writes
 /// back, `o, x := m(o, x, args);`, and `LocalUpdate` also sets a new local to the value it gives, decisions 0096 and 0108. The
@@ -567,6 +580,9 @@ pub enum DStmt {
     Sort(Box<DExpr>, DTy),
     SortBy(Box<DExpr>, u32, u32, DTy, Box<DExpr>),
     Moved(Box<DStmt>, Names),
+    Block(Box<DStmts>),
+    DeclTemp(u32, DTy),
+    AssignTemp(u32, DExpr),
 }
 
 /// A place that a call writes back: a local by its name, the object of the member function that makes the call, or a reference
@@ -657,7 +673,9 @@ pub type Models = List<Model>;
 /// lists with the name of a parameter or a local, by its id and the line. `MemberGlobal` is a member function that lists a global,
 /// and `GlobalType` is a listed global of a type with no rule, each by the line that lists it, decision 0173. `SignedBits` is a
 /// bit operator on a signed integer, and `ContractCast` is a cast in a contract that can change the value, each by the line.
-/// `BraceLen` is a braced list of `m` values for a std::array of `n`, by `m`, `n` and the line, decision 0175.
+/// `BraceLen` is a braced list of `m` values for a std::array of `n`, by `m`, `n` and the line, decision 0175. `TwoWrites` is an
+/// expression with two writes where C++ fixes no order, by the line, `WriteRead` is one that writes a name and reads it elsewhere,
+/// by the id of the name and the line, and `LoopWrite` is a write in the condition of a loop, by the line, decision 0177.
 #[derive(Structural, PartialEq, Eq, Clone, Copy, Debug)]
 pub enum Refusal {
     Construct(u32, u32),
@@ -705,6 +723,9 @@ pub enum Refusal {
     SignedBits(u32),
     ContractCast(u32),
     BraceLen(u32, u32, u32),
+    TwoWrites(u32),
+    WriteRead(u32, u32),
+    LoopWrite(u32),
 }
 
 // ------------------------------------------------------------------ the rules
@@ -1301,7 +1322,7 @@ pub open spec fn spec_lift(e: Expr, all: Fns, line: u32, sd: Structs, n: u32, op
                 Err(r) => Err(r),
                 Ok((ca, da, n1)) => Ok((ca, DExpr::FCall(k, Box::new(da)), n1)),
             }
-        } else if !open || spec_callee_writes(all, k) {
+        } else if !open {
             Err(Refusal::Place(at))
         } else if !spec_callable(all, k, sd) {
             Err(Refusal::Callee(nm, at))
@@ -1310,11 +1331,35 @@ pub open spec fn spec_lift(e: Expr, all: Fns, line: u32, sd: Structs, n: u32, op
                 Err(r) => Err(r),
                 Ok((ca, da, n1)) => match spec_callee_ty(all, k, line, sd) {
                     Err(r) => Err(r),
-                    Ok(dt) => if n1 < 0xFFFF_FFFF {
-                        Ok((spec_append(ca, List::Cons((n1, dt, k, da), Box::new(List::Nil))), DExpr::Temp(n1), (n1 + 1) as u32))
-                    } else {
+                    Ok(dt) => if n1 >= 0xFFFF_FFFF {
                         Err(Refusal::Syntax(line))
+                    } else if spec_callee_writes(all, k) {
+                        // A call that writes a value back runs first into a temporary, and writes its places, decision 0177. A
+                        // call that gives no value stays alone.
+                        if dt == DTy::Void {
+                            Err(Refusal::Place(at))
+                        } else {
+                            match spec_free_callee_writebacks(all, k, *args, line) {
+                                Err(r) => Err(r),
+                                Ok(os) => Ok((spec_append(ca, List::Cons(DPre::Update(n1, dt, os, k, da), Box::new(List::Nil))), DExpr::Temp(n1), (n1 + 1) as u32)),
+                            }
+                        }
+                    } else {
+                        Ok((spec_append(ca, List::Cons(DPre::Call(n1, dt, k, da), Box::new(List::Nil))), DExpr::Temp(n1), (n1 + 1) as u32))
                     },
+                },
+            }
+        },
+        // `x++` inside an expression writes first into a temporary, decision 0177. Where C++ may not run it, it has no place.
+        Expr::Step(v, t, up, prefix) => if !open {
+            Err(Refusal::Place(line))
+        } else {
+            match spec_step_ty(t) {
+                None => Err(Refusal::Syntax(line)),
+                Some(dt) => if n < 0xFFFF_FFFF {
+                    Ok((List::Cons(DPre::Step(n, dt, v, up, prefix, t is Mut), Box::new(List::Nil)), DExpr::Temp(n), (n + 1) as u32))
+                } else {
+                    Err(Refusal::Syntax(line))
                 },
             }
         },
@@ -1614,6 +1659,7 @@ pub fn copy_expr(e: &Expr) -> (r: Expr)
         Expr::Bits(f0, f1, f2, f3) => Expr::Bits(*f0, Box::new(copy_expr(f1)), Box::new(copy_expr(f2)), *f3),
         Expr::StaticCast(f0, f1) => Expr::StaticCast(*f0, Box::new(copy_expr(f1))),
         Expr::List(f0) => Expr::List(Box::new(copy_args(f0))),
+        Expr::Step(f0, f1, f2, f3) => Expr::Step(*f0, *f1, *f2, *f3),
     }
 }
 
@@ -1718,6 +1764,7 @@ pub open spec fn spec_var_names(e: Expr) -> Names
         Expr::Bits(_, f1, f2, _) => spec_append(spec_var_names(*f1), spec_var_names(*f2)),
         Expr::StaticCast(_, f1) => spec_var_names(*f1),
         Expr::List(f0) => spec_var_names_args(*f0),
+        Expr::Step(f0, _, _, _) => List::Cons(f0, Box::new(List::Nil)),
         Expr::Enumerator(_, _) => List::Nil,
         Expr::CountIf(f0, _, _, f3) => spec_append(spec_var_names(*f0), spec_var_names(*f3)),
         Expr::RealLit(_, _) => List::Nil,
@@ -1787,6 +1834,7 @@ pub fn var_names(e: &Expr) -> (r: Names)
         Expr::Bits(_, f1, f2, _) => append(var_names(f1), var_names(f2)),
         Expr::StaticCast(_, f1) => var_names(f1),
         Expr::List(f0) => var_names_args(f0),
+        Expr::Step(f0, _, _, _) => List::Cons(*f0, Box::new(List::Nil)),
         Expr::Enumerator(_, _) => List::Nil,
         Expr::CountIf(f0, _, _, f3) => append(var_names(f0), var_names(f3)),
         Expr::RealLit(_, _) => List::Nil,
@@ -3162,6 +3210,77 @@ pub open spec fn spec_callee_writebacks(all: Fns, key: u32, args: Args, ps: Para
     }
 }
 
+/// The place that an argument names, read from its type alone, for a call inside an expression, decision 0177. The check of the
+/// statement, `spec_write_check`, has already found each place with the parameters, `spec_callee_writebacks`, so both agree.
+pub open spec fn spec_free_target(o: Expr, line: u32) -> Result<Obj, Refusal>
+    decreases o,
+{
+    match o {
+        Expr::Var(v, t) => match t {
+            Ty::ThisMut(_) => Ok(Obj::Object),
+            Ty::Mut(_) => Ok(Obj::Out(v)),
+            Ty::MutSeq(_) => Err(Refusal::PassOn(v, line)),
+            _ => Ok(Obj::Local(v)),
+        },
+        Expr::Cast(c, a) => if c == CastKind::Read || c == CastKind::NoOp {
+            spec_free_target(*a, line)
+        } else {
+            Err(Refusal::NoTarget(line))
+        },
+        Expr::Paren(a) => spec_free_target(*a, line),
+        _ => Err(Refusal::NoTarget(line)),
+    }
+}
+
+pub open spec fn spec_free_writebacks(args: Args, cps: Params, line: u32) -> Result<Objs, Refusal>
+    decreases args,
+{
+    match args {
+        List::Nil => Ok(List::Nil),
+        List::Cons(a, rest) => match cps {
+            List::Nil => Err(Refusal::Syntax(line)),
+            List::Cons((_, t), crest) => if spec_written(t) {
+                match (if t is IfaceMut {
+                    match spec_owned(*a) {
+                        Some(v) => Ok(Obj::Owned(v)),
+                        None => spec_free_target(*a, line),
+                    }
+                } else {
+                    spec_free_target(*a, line)
+                }) {
+                    Err(r) => Err(r),
+                    Ok(o) => match spec_free_writebacks(*rest, *crest, line) {
+                        Err(r) => Err(r),
+                        Ok(os) => Ok(List::Cons(o, Box::new(os))),
+                    },
+                }
+            } else {
+                spec_free_writebacks(*rest, *crest, line)
+            },
+        },
+    }
+}
+
+pub open spec fn spec_free_callee_writebacks(all: Fns, key: u32, args: Args, line: u32) -> Result<Objs, Refusal> {
+    match spec_find(all, key) {
+        Some(f) => spec_free_writebacks(args, f.params, line),
+        None => Err(Refusal::Syntax(line)),
+    }
+}
+
+/// The Dafny type of a name that a write inside an expression writes: an integer, or a reference parameter of one, decision 0177.
+pub open spec fn spec_step_ty(t: Ty) -> Option<DTy> {
+    match t {
+        Ty::Mut(s) => match s {
+            Scalar::Bool => None,
+            Scalar::Struct(_) => None,
+            Scalar::Own(_) => None,
+            _ => Some(spec_scalar_dty(s)),
+        },
+        _ => spec_int_dty(t),
+    }
+}
+
 /// A call that stands alone as a statement, decision 0096. A call of a function that gives back a value of a parameter writes each
 /// such argument back, decision 0108. A call of any other function must give no value.
 /// The element of a vector of unique_ptr that is the object of a call: `v[i]->f(a)`, by the name and type of the vector and the
@@ -3379,10 +3498,97 @@ pub open spec fn spec_return(e: Expr, l: u32, all: Fns, ps: Params, sd: Structs)
             Ok((c, da, _)) => Ok(spec_pre(c, DStmt::Return(DExpr::SeqLit(Box::new(da))))),
             Err(r) => Err(r),
         },
-        _ => match spec_lift(e, all, l, sd, 0, true) {
-            Ok((c, d, _)) => Ok(spec_pre(c, DStmt::Return(d))),
-            Err(r) => Err(r),
+        // A call or a write that C++ runs only sometimes makes the return statements of an if, decision 0177.
+        _ => if spec_cond_calls(e, all, l, sd) {
+            match spec_lower(e, None, all, l, sd, 0) {
+                Ok((ss, _)) => Ok(DStmt::Block(Box::new(ss))),
+                Err(r) => Err(r),
+            }
+        } else {
+            match spec_lift(e, all, l, sd, 0, true) {
+                Ok((c, d, _)) => Ok(spec_pre(c, DStmt::Return(d))),
+                Err(r) => Err(r),
+            }
         },
+    }
+}
+
+pub fn free_target(o: &Expr, line: u32) -> (r: Result<Obj, Refusal>)
+    ensures
+        r == spec_free_target(*o, line),
+    decreases o,
+{
+    match o {
+        Expr::Var(v, t) => match t {
+            Ty::ThisMut(_) => Ok(Obj::Object),
+            Ty::Mut(_) => Ok(Obj::Out(*v)),
+            Ty::MutSeq(_) => Err(Refusal::PassOn(*v, line)),
+            _ => Ok(Obj::Local(*v)),
+        },
+        Expr::Cast(c, a) => if *c == CastKind::Read || *c == CastKind::NoOp {
+            free_target(a, line)
+        } else {
+            Err(Refusal::NoTarget(line))
+        },
+        Expr::Paren(a) => free_target(a, line),
+        _ => Err(Refusal::NoTarget(line)),
+    }
+}
+
+pub fn free_writebacks(args: &Args, cps: &Params, line: u32) -> (r: Result<Objs, Refusal>)
+    ensures
+        r == spec_free_writebacks(*args, *cps, line),
+    decreases args,
+{
+    match args {
+        List::Nil => Ok(List::Nil),
+        List::Cons(a, rest) => match cps {
+            List::Nil => Err(Refusal::Syntax(line)),
+            List::Cons((_, t), crest) => if written(*t) {
+                let o = if matches!(t, Ty::IfaceMut(_)) {
+                    match owned(a) {
+                        Some(v) => Ok(Obj::Owned(v)),
+                        None => free_target(a, line),
+                    }
+                } else {
+                    free_target(a, line)
+                };
+                match o {
+                    Err(r) => Err(r),
+                    Ok(o) => match free_writebacks(rest, crest, line) {
+                        Err(r) => Err(r),
+                        Ok(os) => Ok(List::Cons(o, Box::new(os))),
+                    },
+                }
+            } else {
+                free_writebacks(rest, crest, line)
+            },
+        },
+    }
+}
+
+pub fn free_callee_writebacks(all: &Fns, key: u32, args: &Args, line: u32) -> (r: Result<Objs, Refusal>)
+    ensures
+        r == spec_free_callee_writebacks(*all, key, *args, line),
+{
+    match find(all, key) {
+        Some(f) => free_writebacks(args, &f.params, line),
+        None => Err(Refusal::Syntax(line)),
+    }
+}
+
+pub fn step_ty(t: Ty) -> (r: Option<DTy>)
+    ensures
+        r == spec_step_ty(t),
+{
+    match t {
+        Ty::Mut(s) => match s {
+            Scalar::Bool => None,
+            Scalar::Struct(_) => None,
+            Scalar::Own(_) => None,
+            _ => Some(scalar_dty(s)),
+        },
+        _ => int_dty(t),
     }
 }
 
@@ -3409,9 +3615,16 @@ pub fn translate_return(e: &Expr, l: u32, all: &Fns, ps: &Params, sd: &Structs) 
             Ok((c, da, _)) => Ok(pre(c, DStmt::Return(DExpr::SeqLit(Box::new(da))))),
             Err(r) => Err(r),
         },
-        _ => match lift(e, all, l, sd, 0, true) {
-            Ok((c, d, _)) => Ok(pre(c, DStmt::Return(d))),
-            Err(r) => Err(r),
+        _ => if cond_calls(e, all, l, sd) {
+            match lower(e, None, all, l, sd, 0) {
+                Ok((ss, _)) => Ok(DStmt::Block(Box::new(ss))),
+                Err(r) => Err(r),
+            }
+        } else {
+            match lift(e, all, l, sd, 0, true) {
+                Ok((c, d, _)) => Ok(pre(c, DStmt::Return(d))),
+                Err(r) => Err(r),
+            }
         },
     }
 }
@@ -3592,6 +3805,793 @@ pub fn ret_len(t: Ty, line: u32, ens: DConds) -> (r: DConds)
     match t {
         Ty::Seq(_, Extent::Fixed(k)) => List::Cons((DExpr::Bin(BinOp::Eq, Box::new(DExpr::Len(Box::new(DExpr::Result))), Box::new(DExpr::Lit(k))), line), Box::new(ens)),
         _ => ens,
+    }
+}
+
+// ------------------------------------------------------------------ a write inside an expression, decision 0177
+
+/// A step before a statement that writes: an update or a step of a name.
+pub open spec fn spec_pre_writes(p: DPre) -> bool {
+    p is Update || p is Step
+}
+
+pub fn pre_writes(p: &DPre) -> (r: bool)
+    ensures
+        r == spec_pre_writes(*p),
+{
+    matches!(p, DPre::Update(..) | DPre::Step(..))
+}
+
+/// The count of the steps that write.
+pub open spec fn spec_count_writes(c: DCalls) -> nat
+    decreases c,
+{
+    match c {
+        List::Nil => 0,
+        List::Cons(p, rest) => (if spec_pre_writes(p) { 1nat } else { 0nat }) + spec_count_writes(*rest),
+    }
+}
+
+/// More than one step writes.
+pub open spec fn spec_writes_twice(c: DCalls) -> bool
+    decreases c,
+{
+    match c {
+        List::Nil => false,
+        List::Cons(p, rest) => if spec_pre_writes(p) {
+            spec_any_write(*rest)
+        } else {
+            spec_writes_twice(*rest)
+        },
+    }
+}
+
+pub open spec fn spec_any_write(c: DCalls) -> bool
+    decreases c,
+{
+    match c {
+        List::Nil => false,
+        List::Cons(p, rest) => spec_pre_writes(p) || spec_any_write(*rest),
+    }
+}
+
+pub fn writes_twice(c: &DCalls) -> (r: bool)
+    ensures
+        r == spec_writes_twice(*c),
+    decreases c,
+{
+    match c {
+        List::Nil => false,
+        List::Cons(p, rest) => if pre_writes(p) {
+            any_write(rest)
+        } else {
+            writes_twice(rest)
+        },
+    }
+}
+
+pub fn any_write(c: &DCalls) -> (r: bool)
+    ensures
+        r == spec_any_write(*c),
+    decreases c,
+{
+    match c {
+        List::Nil => false,
+        List::Cons(p, rest) => pre_writes(p) || any_write(rest),
+    }
+}
+
+/// Any step that writes a name with `x++`.
+pub open spec fn spec_any_step(c: DCalls) -> bool
+    decreases c,
+{
+    match c {
+        List::Nil => false,
+        List::Cons(p, rest) => p is Step || spec_any_step(*rest),
+    }
+}
+
+pub fn any_step(c: &DCalls) -> (r: bool)
+    ensures
+        r == spec_any_step(*c),
+    decreases c,
+{
+    match c {
+        List::Nil => false,
+        List::Cons(p, rest) => matches!(p, DPre::Step(..)) || any_step(rest),
+    }
+}
+
+/// The names of the places that the steps write.
+pub open spec fn spec_obj_names(os: Objs) -> Names
+    decreases os,
+{
+    match os {
+        List::Nil => List::Nil,
+        List::Cons(o, rest) => match o {
+            Obj::Local(v) => List::Cons(v, Box::new(spec_obj_names(*rest))),
+            Obj::Out(v) => List::Cons(v, Box::new(spec_obj_names(*rest))),
+            Obj::Owned(v) => List::Cons(v, Box::new(spec_obj_names(*rest))),
+            Obj::Object => spec_obj_names(*rest),
+        },
+    }
+}
+
+pub fn obj_names(os: &Objs) -> (r: Names)
+    ensures
+        r == spec_obj_names(*os),
+    decreases os,
+{
+    match os {
+        List::Nil => List::Nil,
+        List::Cons(o, rest) => match o {
+            Obj::Local(v) => List::Cons(*v, Box::new(obj_names(rest))),
+            Obj::Out(v) => List::Cons(*v, Box::new(obj_names(rest))),
+            Obj::Owned(v) => List::Cons(*v, Box::new(obj_names(rest))),
+            Obj::Object => obj_names(rest),
+        },
+    }
+}
+
+pub open spec fn spec_written_names(c: DCalls) -> Names
+    decreases c,
+{
+    match c {
+        List::Nil => List::Nil,
+        List::Cons(p, rest) => match p {
+            DPre::Update(_, _, os, _, _) => spec_append(spec_obj_names(os), spec_written_names(*rest)),
+            DPre::Step(_, _, v, _, _, _) => List::Cons(v, Box::new(spec_written_names(*rest))),
+            DPre::Call(_, _, _, _) => spec_written_names(*rest),
+        },
+    }
+}
+
+pub fn written_names(c: &DCalls) -> (r: Names)
+    ensures
+        r == spec_written_names(*c),
+    decreases c,
+{
+    match c {
+        List::Nil => List::Nil,
+        List::Cons(p, rest) => match p {
+            DPre::Update(_, _, os, _, _) => append(obj_names(os), written_names(rest)),
+            DPre::Step(_, _, v, _, _, _) => List::Cons(*v, Box::new(written_names(rest))),
+            DPre::Call(_, _, _, _) => written_names(rest),
+        },
+    }
+}
+
+/// The name stands at least twice in the list.
+pub open spec fn spec_has_twice(l: Names, x: u32) -> bool
+    decreases l,
+{
+    match l {
+        List::Nil => false,
+        List::Cons(h, t) => if h == x {
+            spec_has(*t, x)
+        } else {
+            spec_has_twice(*t, x)
+        },
+    }
+}
+
+pub fn has_twice(l: &Names, x: u32) -> (r: bool)
+    ensures
+        r == spec_has_twice(*l, x),
+    decreases l,
+{
+    match l {
+        List::Nil => false,
+        List::Cons(h, t) => if *h == x {
+            has(t, x)
+        } else {
+            has_twice(t, x)
+        },
+    }
+}
+
+/// The first written name that the region also reads elsewhere.
+pub open spec fn spec_read_too(ws: Names, reads: Names, line: u32) -> Option<Refusal>
+    decreases ws,
+{
+    match ws {
+        List::Nil => None,
+        List::Cons(x, rest) => if spec_has_twice(reads, x) {
+            Some(Refusal::WriteRead(x, line))
+        } else {
+            spec_read_too(*rest, reads, line)
+        },
+    }
+}
+
+pub fn read_too(ws: &Names, reads: &Names, line: u32) -> (r: Option<Refusal>)
+    ensures
+        r == spec_read_too(*ws, *reads, line),
+    decreases ws,
+{
+    match ws {
+        List::Nil => None,
+        List::Cons(x, rest) => if has_twice(reads, *x) {
+            Some(Refusal::WriteRead(*x, line))
+        } else {
+            read_too(rest, reads, line)
+        },
+    }
+}
+
+/// A place that a step writes and that the function cannot write: a reference parameter that is none, or a parameter by value.
+pub open spec fn spec_bad_obj(o: Obj, ps: Params, line: u32) -> Option<Refusal> {
+    match o {
+        Obj::Out(v) => if spec_is_mut(ps, v) { None } else { Some(Refusal::Syntax(line)) },
+        Obj::Local(v) => if spec_get(ps, v) is Some { Some(Refusal::WriteParam(v, line)) } else { None },
+        Obj::Object => if spec_writes(ps) { None } else { Some(Refusal::Syntax(line)) },
+        Obj::Owned(v) => if spec_get(ps, v) is Some { Some(Refusal::NoTarget(line)) } else { None },
+    }
+}
+
+pub fn bad_obj(o: Obj, ps: &Params, line: u32) -> (r: Option<Refusal>)
+    ensures
+        r == spec_bad_obj(o, *ps, line),
+{
+    match o {
+        Obj::Out(v) => if is_mut(ps, v) { None } else { Some(Refusal::Syntax(line)) },
+        Obj::Local(v) => if get(ps, v).is_some() { Some(Refusal::WriteParam(v, line)) } else { None },
+        Obj::Object => if writes(ps) { None } else { Some(Refusal::Syntax(line)) },
+        Obj::Owned(v) => if get(ps, v).is_some() { Some(Refusal::NoTarget(line)) } else { None },
+    }
+}
+
+pub open spec fn spec_bad_objs(os: Objs, ps: Params, line: u32) -> Option<Refusal>
+    decreases os,
+{
+    match os {
+        List::Nil => None,
+        List::Cons(o, rest) => match spec_bad_obj(o, ps, line) {
+            Some(r) => Some(r),
+            None => spec_bad_objs(*rest, ps, line),
+        },
+    }
+}
+
+pub fn bad_objs(os: &Objs, ps: &Params, line: u32) -> (r: Option<Refusal>)
+    ensures
+        r == spec_bad_objs(*os, *ps, line),
+    decreases os,
+{
+    match os {
+        List::Nil => None,
+        List::Cons(o, rest) => match bad_obj(*o, ps, line) {
+            Some(r) => Some(r),
+            None => bad_objs(rest, ps, line),
+        },
+    }
+}
+
+/// The first step that writes a place the function cannot write. The steps read each place from the type of the argument alone,
+/// `spec_free_target`, so the parameters decide here.
+pub open spec fn spec_bad_pres(c: DCalls, ps: Params, line: u32) -> Option<Refusal>
+    decreases c,
+{
+    match c {
+        List::Nil => None,
+        List::Cons(p, rest) => match (match p {
+            DPre::Update(_, _, os, _, _) => spec_bad_objs(os, ps, line),
+            DPre::Step(_, _, v, _, _, out) => spec_bad_obj(if out { Obj::Out(v) } else { Obj::Local(v) }, ps, line),
+            DPre::Call(_, _, _, _) => None,
+        }) {
+            Some(r) => Some(r),
+            None => spec_bad_pres(*rest, ps, line),
+        },
+    }
+}
+
+pub fn bad_pres(c: &DCalls, ps: &Params, line: u32) -> (r: Option<Refusal>)
+    ensures
+        r == spec_bad_pres(*c, *ps, line),
+    decreases c,
+{
+    match c {
+        List::Nil => None,
+        List::Cons(p, rest) => {
+            let b = match p {
+                DPre::Update(_, _, os, _, _) => bad_objs(os, ps, line),
+                DPre::Step(_, _, v, _, _, out) => bad_obj(if *out { Obj::Out(*v) } else { Obj::Local(*v) }, ps, line),
+                DPre::Call(_, _, _, _) => None,
+            };
+            match b {
+                Some(r) => Some(r),
+                None => bad_pres(rest, ps, line),
+            }
+        },
+    }
+}
+
+/// The check of one region, where C++ fixes no order: each write goes to a place the function can write, at most one write
+/// runs, and the name it writes is read nowhere else in the region. The region is lifted as the translation lifts it. A region
+/// that does not lift has no check, because its translation refuses it.
+pub open spec fn spec_check_region(e: Expr, all: Fns, ps: Params, sd: Structs, line: u32) -> Option<Refusal> {
+    match spec_lift(e, all, line, sd, 0, true) {
+        Err(_) => None,
+        Ok((c, _, _)) => match spec_bad_pres(c, ps, line) {
+            Some(r) => Some(r),
+            None => if spec_writes_twice(c) {
+                Some(Refusal::TwoWrites(line))
+            } else {
+                spec_read_too(spec_written_names(c), spec_var_names(e), line)
+            },
+        },
+    }
+}
+
+pub fn check_region(e: &Expr, all: &Fns, ps: &Params, sd: &Structs, line: u32) -> (r: Option<Refusal>)
+    ensures
+        r == spec_check_region(*e, *all, *ps, *sd, line),
+{
+    match lift(e, all, line, sd, 0, true) {
+        Err(_) => None,
+        Ok((c, _, _)) => match bad_pres(&c, ps, line) {
+            Some(r) => Some(r),
+            None => if writes_twice(&c) {
+                Some(Refusal::TwoWrites(line))
+            } else {
+                read_too(&written_names(&c), &var_names(e), line)
+            },
+        },
+    }
+}
+
+/// The check of an expression: the sides of `&&` and `||`, and the condition and the branches of `?:`, are regions of their own,
+/// because C++ runs them in order.
+pub open spec fn spec_check_expr(e: Expr, all: Fns, ps: Params, sd: Structs, line: u32) -> Option<Refusal>
+    decreases e,
+{
+    match e {
+        Expr::Bin(op, a, b) => if op == BinOp::And || op == BinOp::Or {
+            match spec_check_expr(*a, all, ps, sd, line) {
+                Some(r) => Some(r),
+                None => spec_check_expr(*b, all, ps, sd, line),
+            }
+        } else {
+            spec_check_region(e, all, ps, sd, line)
+        },
+        Expr::Cond(c, a, b) => match spec_check_expr(*c, all, ps, sd, line) {
+            Some(r) => Some(r),
+            None => match spec_check_expr(*a, all, ps, sd, line) {
+                Some(r) => Some(r),
+                None => spec_check_expr(*b, all, ps, sd, line),
+            },
+        },
+        Expr::Paren(a) => spec_check_expr(*a, all, ps, sd, line),
+        _ => spec_check_region(e, all, ps, sd, line),
+    }
+}
+
+pub fn check_expr(e: &Expr, all: &Fns, ps: &Params, sd: &Structs, line: u32) -> (r: Option<Refusal>)
+    ensures
+        r == spec_check_expr(*e, *all, *ps, *sd, line),
+    decreases e,
+{
+    match e {
+        Expr::Bin(op, a, b) => if *op == BinOp::And || *op == BinOp::Or {
+            match check_expr(a, all, ps, sd, line) {
+                Some(r) => Some(r),
+                None => check_expr(b, all, ps, sd, line),
+            }
+        } else {
+            check_region(e, all, ps, sd, line)
+        },
+        Expr::Cond(c, a, b) => match check_expr(c, all, ps, sd, line) {
+            Some(r) => Some(r),
+            None => match check_expr(a, all, ps, sd, line) {
+                Some(r) => Some(r),
+                None => check_expr(b, all, ps, sd, line),
+            },
+        },
+        Expr::Paren(a) => check_expr(a, all, ps, sd, line),
+        _ => check_region(e, all, ps, sd, line),
+    }
+}
+
+/// A write in the condition of a loop, which runs at each turn, has no rule.
+pub open spec fn spec_loop_write(c: Expr, all: Fns, sd: Structs, line: u32) -> Option<Refusal> {
+    match spec_lift(c, all, line, sd, 0, true) {
+        Ok((cs, _, _)) => if spec_any_step(cs) { Some(Refusal::LoopWrite(line)) } else { None },
+        Err(_) => None,
+    }
+}
+
+pub fn loop_write(c: &Expr, all: &Fns, sd: &Structs, line: u32) -> (r: Option<Refusal>)
+    ensures
+        r == spec_loop_write(*c, *all, *sd, line),
+{
+    match lift(c, all, line, sd, 0, true) {
+        Ok((cs, _, _)) => if any_step(&cs) { Some(Refusal::LoopWrite(line)) } else { None },
+        Err(_) => None,
+    }
+}
+
+/// The check of the writes of a statement before it translates, decision 0177. A call that stands alone writes in its own body,
+/// so only its arguments are a region. A statement with no expression of code has no check.
+pub open spec fn spec_write_check(s: Stmt, all: Fns, ps: Params, sd: Structs) -> Option<Refusal>
+    decreases s,
+{
+    match s {
+        Stmt::Return(e, l) => spec_check_expr(e, all, ps, sd, l),
+        Stmt::Local(_, _, e, l) => spec_check_expr(e, all, ps, sd, l),
+        Stmt::Assign(_, e, l) => spec_check_expr(e, all, ps, sd, l),
+        Stmt::SetField(_, e, l) => spec_check_expr(e, all, ps, sd, l),
+        Stmt::SetRefField(_, _, e, l) => spec_check_expr(e, all, ps, sd, l),
+        Stmt::PushBack(_, e, l) => spec_check_expr(e, all, ps, sd, l),
+        Stmt::If(c, _, _, l) => spec_check_expr(c, all, ps, sd, l),
+        Stmt::Switch(e, _, _, l) => spec_check_expr(e, all, ps, sd, l),
+        Stmt::SetIndex(_, i, e, l) => match spec_check_expr(i, all, ps, sd, l) {
+            Some(r) => Some(r),
+            None => spec_check_expr(e, all, ps, sd, l),
+        },
+        Stmt::Call(_, _, args, l) => spec_check_args(*args, all, ps, sd, l),
+        Stmt::While(c, _, _, l) => spec_loop_write(c, all, sd, l),
+        Stmt::For(init, c, step, _, _, l) => match spec_write_check(*init, all, ps, sd) {
+            Some(r) => Some(r),
+            None => match spec_loop_write(c, all, sd, l) {
+                Some(r) => Some(r),
+                None => spec_write_check(*step, all, ps, sd),
+            },
+        },
+        _ => None,
+    }
+}
+
+/// The arguments of a call that stands alone, one region.
+pub open spec fn spec_check_args(args: Args, all: Fns, ps: Params, sd: Structs, line: u32) -> Option<Refusal> {
+    match spec_lift_args(args, all, line, sd, 0, true) {
+        Err(_) => None,
+        Ok((c, _, _)) => match spec_bad_pres(c, ps, line) {
+            Some(r) => Some(r),
+            None => if spec_writes_twice(c) {
+                Some(Refusal::TwoWrites(line))
+            } else {
+                spec_read_too(spec_written_names(c), spec_var_names_args(args), line)
+            },
+        },
+    }
+}
+
+pub fn check_args(args: &Args, all: &Fns, ps: &Params, sd: &Structs, line: u32) -> (r: Option<Refusal>)
+    ensures
+        r == spec_check_args(*args, *all, *ps, *sd, line),
+{
+    match lift_args(args, all, line, sd, 0, true) {
+        Err(_) => None,
+        Ok((c, _, _)) => match bad_pres(&c, ps, line) {
+            Some(r) => Some(r),
+            None => if writes_twice(&c) {
+                Some(Refusal::TwoWrites(line))
+            } else {
+                read_too(&written_names(&c), &var_names_args(args), line)
+            },
+        },
+    }
+}
+
+pub fn write_check(s: &Stmt, all: &Fns, ps: &Params, sd: &Structs) -> (r: Option<Refusal>)
+    ensures
+        r == spec_write_check(*s, *all, *ps, *sd),
+    decreases s,
+{
+    match s {
+        Stmt::Return(e, l) => check_expr(e, all, ps, sd, *l),
+        Stmt::Local(_, _, e, l) => check_expr(e, all, ps, sd, *l),
+        Stmt::Assign(_, e, l) => check_expr(e, all, ps, sd, *l),
+        Stmt::SetField(_, e, l) => check_expr(e, all, ps, sd, *l),
+        Stmt::SetRefField(_, _, e, l) => check_expr(e, all, ps, sd, *l),
+        Stmt::PushBack(_, e, l) => check_expr(e, all, ps, sd, *l),
+        Stmt::If(c, _, _, l) => check_expr(c, all, ps, sd, *l),
+        Stmt::Switch(e, _, _, l) => check_expr(e, all, ps, sd, *l),
+        Stmt::SetIndex(_, i, e, l) => match check_expr(i, all, ps, sd, *l) {
+            Some(r) => Some(r),
+            None => check_expr(e, all, ps, sd, *l),
+        },
+        Stmt::Call(_, _, args, l) => check_args(args, all, ps, sd, *l),
+        Stmt::While(c, _, _, l) => loop_write(c, all, sd, *l),
+        Stmt::For(init, c, step, _, _, l) => match write_check(init, all, ps, sd) {
+            Some(r) => Some(r),
+            None => match loop_write(c, all, sd, *l) {
+                Some(r) => Some(r),
+                None => write_check(step, all, ps, sd),
+            },
+        },
+        _ => None,
+    }
+}
+
+/// A part of an expression that runs a call or a write, or that the lift refuses as a call out of place.
+pub open spec fn spec_needs_if(e: Expr, all: Fns, line: u32, sd: Structs) -> bool {
+    match spec_lift(e, all, line, sd, 0, true) {
+        Ok((c, _, _)) => !(c is Nil),
+        Err(r) => r is Place,
+    }
+}
+
+pub fn needs_if(e: &Expr, all: &Fns, line: u32, sd: &Structs) -> (r: bool)
+    ensures
+        r == spec_needs_if(*e, *all, line, *sd),
+{
+    match lift(e, all, line, sd, 0, true) {
+        Ok((c, _, _)) => !matches!(c, List::Nil),
+        Err(r) => matches!(r, Refusal::Place(_)),
+    }
+}
+
+/// An expression whose `&&` or `||` has a call or a write on its right side, or whose `?:` has one in a branch, at the top of the
+/// expression. C++ runs such a part only sometimes.
+pub open spec fn spec_cond_calls(e: Expr, all: Fns, line: u32, sd: Structs) -> bool
+    decreases e,
+{
+    match e {
+        Expr::Bin(op, a, b) => (op == BinOp::And || op == BinOp::Or) && (spec_needs_if(*b, all, line, sd) || spec_cond_calls(*a, all, line, sd)),
+        Expr::Cond(_, a, b) => spec_needs_if(*a, all, line, sd) || spec_needs_if(*b, all, line, sd),
+        Expr::Paren(a) => spec_cond_calls(*a, all, line, sd),
+        _ => false,
+    }
+}
+
+pub fn cond_calls(e: &Expr, all: &Fns, line: u32, sd: &Structs) -> (r: bool)
+    ensures
+        r == spec_cond_calls(*e, *all, line, *sd),
+    decreases e,
+{
+    match e {
+        Expr::Bin(op, a, b) => (*op == BinOp::And || *op == BinOp::Or) && (needs_if(b, all, line, sd) || cond_calls(a, all, line, sd)),
+        Expr::Cond(_, a, b) => needs_if(a, all, line, sd) || needs_if(b, all, line, sd),
+        Expr::Paren(a) => cond_calls(a, all, line, sd),
+        _ => false,
+    }
+}
+
+/// The statement that takes the value of a part: the return, or the temporary `t`.
+pub open spec fn spec_sink(sink: Option<u32>, d: DExpr) -> DStmt {
+    match sink {
+        None => DStmt::Return(d),
+        Some(t) => DStmt::AssignTemp(t, d),
+    }
+}
+
+pub fn sink_of(sink: Option<u32>, d: DExpr) -> (r: DStmt)
+    ensures
+        r == spec_sink(sink, d),
+{
+    match sink {
+        None => DStmt::Return(d),
+        Some(t) => DStmt::AssignTemp(t, d),
+    }
+}
+
+/// A `return` whose `&&`, `||` or `?:` runs a call or a write only sometimes, as statements, decision 0177. `a && b` gives the
+/// temporary `t` the value of `a`, then of `b` only when `t` holds. `a || b` runs `b` only when `t` does not hold. `c ? a : b`
+/// gives each branch its own statements. The temporary takes its number before the calls of the left side. Each statement keeps
+/// the place of the `return`.
+pub open spec fn spec_lower(e: Expr, sink: Option<u32>, all: Fns, line: u32, sd: Structs, n: u32) -> Result<(DStmts, u32), Refusal>
+    decreases e,
+{
+    match e {
+        Expr::Paren(a) => spec_lower(*a, sink, all, line, sd, n),
+        Expr::Bin(op, a, b) => if (op == BinOp::And || op == BinOp::Or) && spec_cond_calls(e, all, line, sd) {
+            if n >= 0xFFFF_FFFF {
+                Err(Refusal::Syntax(line))
+            } else {
+                let t = match sink { Some(t) => t, None => n };
+                let n0: u32 = if sink is None { (n + 1) as u32 } else { n };
+                match spec_lower(*a, Some(t), all, line, sd, n0) {
+                    Err(r) => Err(r),
+                    Ok((sa, n1)) => match spec_lower(*b, Some(t), all, line, sd, n1) {
+                        Err(r) => Err(r),
+                        Ok((sb, n2)) => {
+                            let test = if op == BinOp::And { DExpr::Temp(t) } else { DExpr::Not(Box::new(DExpr::Temp(t))) };
+                            let body = spec_append(sa, List::Cons((Box::new(DStmt::If(test, Box::new(sb), Box::new(List::Nil))), line), Box::new(List::Nil)));
+                            match sink {
+                                Some(_) => Ok((body, n2)),
+                                None => Ok((
+                                    List::Cons((Box::new(DStmt::DeclTemp(t, DTy::Bool)), line), Box::new(spec_append(body, List::Cons((Box::new(DStmt::Return(DExpr::Temp(t))), line), Box::new(List::Nil))))),
+                                    n2,
+                                )),
+                            }
+                        },
+                    },
+                }
+            }
+        } else {
+            spec_lower_leaf(e, sink, all, line, sd, n)
+        },
+        Expr::Cond(c, a, b) => if spec_cond_calls(e, all, line, sd) {
+            match spec_lift(*c, all, line, sd, n, true) {
+                Err(r) => Err(r),
+                Ok((cc, dc, n1)) => match spec_lower(*a, sink, all, line, sd, n1) {
+                    Err(r) => Err(r),
+                    Ok((sa, n2)) => match spec_lower(*b, sink, all, line, sd, n2) {
+                        Err(r) => Err(r),
+                        Ok((sb, n3)) => Ok((List::Cons((Box::new(spec_pre(cc, DStmt::If(dc, Box::new(sa), Box::new(sb)))), line), Box::new(List::Nil)), n3)),
+                    },
+                },
+            }
+        } else {
+            spec_lower_leaf(e, sink, all, line, sd, n)
+        },
+        _ => spec_lower_leaf(e, sink, all, line, sd, n),
+    }
+}
+
+/// A part with no such `&&`, `||` or `?:` at its top: its calls run first, then the sink takes its value.
+pub open spec fn spec_lower_leaf(e: Expr, sink: Option<u32>, all: Fns, line: u32, sd: Structs, n: u32) -> Result<(DStmts, u32), Refusal> {
+    match spec_lift(e, all, line, sd, n, true) {
+        Err(r) => Err(r),
+        Ok((c, d, n1)) => Ok((List::Cons((Box::new(spec_pre(c, spec_sink(sink, d))), line), Box::new(List::Nil)), n1)),
+    }
+}
+
+pub fn lower_leaf(e: &Expr, sink: Option<u32>, all: &Fns, line: u32, sd: &Structs, n: u32) -> (r: Result<(DStmts, u32), Refusal>)
+    ensures
+        r == spec_lower_leaf(*e, sink, *all, line, *sd, n),
+{
+    match lift(e, all, line, sd, n, true) {
+        Err(r) => Err(r),
+        Ok((c, d, n1)) => Ok((List::Cons((Box::new(pre(c, sink_of(sink, d))), line), Box::new(List::Nil)), n1)),
+    }
+}
+
+pub fn lower(e: &Expr, sink: Option<u32>, all: &Fns, line: u32, sd: &Structs, n: u32) -> (r: Result<(DStmts, u32), Refusal>)
+    ensures
+        r == spec_lower(*e, sink, *all, line, *sd, n),
+    decreases e,
+{
+    match e {
+        Expr::Paren(a) => lower(a, sink, all, line, sd, n),
+        Expr::Bin(op, a, b) => if (*op == BinOp::And || *op == BinOp::Or) && cond_calls(e, all, line, sd) {
+            if n >= 0xFFFF_FFFF {
+                Err(Refusal::Syntax(line))
+            } else {
+                let t = match sink { Some(t) => t, None => n };
+                let n0: u32 = if sink.is_none() { n + 1 } else { n };
+                match lower(a, Some(t), all, line, sd, n0) {
+                    Err(r) => Err(r),
+                    Ok((sa, n1)) => match lower(b, Some(t), all, line, sd, n1) {
+                        Err(r) => Err(r),
+                        Ok((sb, n2)) => {
+                            let test = if *op == BinOp::And { DExpr::Temp(t) } else { DExpr::Not(Box::new(DExpr::Temp(t))) };
+                            let body = append(sa, List::Cons((Box::new(DStmt::If(test, Box::new(sb), Box::new(List::Nil))), line), Box::new(List::Nil)));
+                            match sink {
+                                Some(_) => Ok((body, n2)),
+                                None => Ok((
+                                    List::Cons((Box::new(DStmt::DeclTemp(t, DTy::Bool)), line), Box::new(append(body, List::Cons((Box::new(DStmt::Return(DExpr::Temp(t))), line), Box::new(List::Nil))))),
+                                    n2,
+                                )),
+                            }
+                        },
+                    },
+                }
+            }
+        } else {
+            lower_leaf(e, sink, all, line, sd, n)
+        },
+        Expr::Cond(c, a, b) => if cond_calls(e, all, line, sd) {
+            match lift(c, all, line, sd, n, true) {
+                Err(r) => Err(r),
+                Ok((cc, dc, n1)) => match lower(a, sink, all, line, sd, n1) {
+                    Err(r) => Err(r),
+                    Ok((sa, n2)) => match lower(b, sink, all, line, sd, n2) {
+                        Err(r) => Err(r),
+                        Ok((sb, n3)) => Ok((List::Cons((Box::new(pre(cc, DStmt::If(dc, Box::new(sa), Box::new(sb)))), line), Box::new(List::Nil)), n3)),
+                    },
+                },
+            }
+        } else {
+            lower_leaf(e, sink, all, line, sd, n)
+        },
+        _ => lower_leaf(e, sink, all, line, sd, n),
+    }
+}
+
+/// Each call of a lowered `return` names a key with a method.
+pub proof fn lemma_lower_resolves(e: Expr, sink: Option<u32>, all: Fns, line: u32, sd: Structs, n: u32)
+    requires
+        spec_lower(e, sink, all, line, sd, n).is_ok(),
+    ensures
+        calls_resolve(spec_lower(e, sink, all, line, sd, n).unwrap().0, all, sd),
+    decreases e,
+{
+    reveal_with_fuel(calls_resolve, 3);
+    match e {
+        Expr::Paren(a) => lemma_lower_resolves(*a, sink, all, line, sd, n),
+        Expr::Bin(op, a, b) => if (op == BinOp::And || op == BinOp::Or) && spec_cond_calls(e, all, line, sd) {
+            let t = match sink { Some(t) => t, None => n };
+            let n0: u32 = if sink is None { (n + 1) as u32 } else { n };
+            lemma_lower_resolves(*a, Some(t), all, line, sd, n0);
+            let (sa, n1) = spec_lower(*a, Some(t), all, line, sd, n0).unwrap();
+            lemma_lower_resolves(*b, Some(t), all, line, sd, n1);
+            let (sb, _) = spec_lower(*b, Some(t), all, line, sd, n1).unwrap();
+            let test = if op == BinOp::And { DExpr::Temp(t) } else { DExpr::Not(Box::new(DExpr::Temp(t))) };
+            let tail = List::Cons((Box::new(DStmt::If(test, Box::new(sb), Box::new(List::Nil))), line), Box::new(List::Nil));
+            lemma_resolve_append(sa, tail, all, sd);
+            let body = spec_append(sa, tail);
+            let ret = List::Cons((Box::new(DStmt::Return(DExpr::Temp(t))), line), Box::new(List::Nil));
+            lemma_resolve_append(body, ret, all, sd);
+        } else {
+            lemma_lower_leaf_resolves(e, sink, all, line, sd, n);
+        },
+        Expr::Cond(c, a, b) => if spec_cond_calls(e, all, line, sd) {
+            lemma_lift_resolves(*c, all, line, sd, n, true);
+            let (cc, dc, n1) = spec_lift(*c, all, line, sd, n, true).unwrap();
+            lemma_lower_resolves(*a, sink, all, line, sd, n1);
+            let (sa, n2) = spec_lower(*a, sink, all, line, sd, n1).unwrap();
+            lemma_lower_resolves(*b, sink, all, line, sd, n2);
+            let (sb, _) = spec_lower(*b, sink, all, line, sd, n2).unwrap();
+            lemma_pre_resolves(cc, DStmt::If(dc, Box::new(sa), Box::new(sb)), all, sd);
+        } else {
+            lemma_lower_leaf_resolves(e, sink, all, line, sd, n);
+        },
+        _ => lemma_lower_leaf_resolves(e, sink, all, line, sd, n),
+    }
+}
+
+pub proof fn lemma_lower_leaf_resolves(e: Expr, sink: Option<u32>, all: Fns, line: u32, sd: Structs, n: u32)
+    requires
+        spec_lower_leaf(e, sink, all, line, sd, n).is_ok(),
+    ensures
+        calls_resolve(spec_lower_leaf(e, sink, all, line, sd, n).unwrap().0, all, sd),
+{
+    reveal_with_fuel(calls_resolve, 2);
+    lemma_lift_resolves(e, all, line, sd, n, true);
+    let (c, d, _) = spec_lift(e, all, line, sd, n, true).unwrap();
+    lemma_pre_resolves(c, spec_sink(sink, d), all, sd);
+}
+
+/// The calls of two lists of statements resolve when the calls of each do.
+pub proof fn lemma_resolve_append(a: DStmts, b: DStmts, all: Fns, sd: Structs)
+    ensures
+        calls_resolve(spec_append(a, b), all, sd) == (calls_resolve(a, all, sd) && calls_resolve(b, all, sd)),
+    decreases a,
+{
+    match a {
+        List::Nil => {},
+        List::Cons(_, rest) => lemma_resolve_append(*rest, b, all, sd),
+    }
+}
+
+/// A lowered `return` with a node that has no rule is refused.
+pub proof fn lemma_unknown_lower_is_refused(e: Expr, sink: Option<u32>, all: Fns, line: u32, sd: Structs, n: u32)
+    requires
+        unknown_expr(e),
+    ensures
+        spec_lower(e, sink, all, line, sd, n).is_err(),
+    decreases e,
+{
+    match e {
+        Expr::Paren(a) => lemma_unknown_lower_is_refused(*a, sink, all, line, sd, n),
+        Expr::Bin(op, a, b) => if (op == BinOp::And || op == BinOp::Or) && spec_cond_calls(e, all, line, sd) && n < 0xFFFF_FFFF {
+            let t = match sink { Some(t) => t, None => n };
+            let n0: u32 = if sink is None { (n + 1) as u32 } else { n };
+            if unknown_expr(*a) {
+                lemma_unknown_lower_is_refused(*a, Some(t), all, line, sd, n0);
+            } else if spec_lower(*a, Some(t), all, line, sd, n0).is_ok() {
+                lemma_unknown_lower_is_refused(*b, Some(t), all, line, sd, spec_lower(*a, Some(t), all, line, sd, n0).unwrap().1);
+            }
+        } else if !((op == BinOp::And || op == BinOp::Or) && spec_cond_calls(e, all, line, sd)) {
+            lemma_unknown_lift_is_refused(e, all, line, sd, n, true);
+        },
+        Expr::Cond(c, a, b) => if spec_cond_calls(e, all, line, sd) {
+            if unknown_expr(*c) {
+                lemma_unknown_lift_is_refused(*c, all, line, sd, n, true);
+            } else if spec_lift(*c, all, line, sd, n, true).is_ok() {
+                let n1 = spec_lift(*c, all, line, sd, n, true).unwrap().2;
+                if unknown_expr(*a) {
+                    lemma_unknown_lower_is_refused(*a, sink, all, line, sd, n1);
+                } else if spec_lower(*a, sink, all, line, sd, n1).is_ok() {
+                    lemma_unknown_lower_is_refused(*b, sink, all, line, sd, spec_lower(*a, sink, all, line, sd, n1).unwrap().1);
+                }
+            }
+        } else {
+            lemma_unknown_lift_is_refused(e, all, line, sd, n, true);
+        },
+        _ => lemma_unknown_lift_is_refused(e, all, line, sd, n, true),
     }
 }
 
@@ -3935,12 +4935,16 @@ pub open spec fn spec_stmts(ss: Stmts, all: Fns, env: Params, ps: Params, sd: St
 {
     match ss {
         List::Nil => Ok(List::Nil),
-        List::Cons(s, rest) => match spec_stmt(*s, all, env, ps, sd) {
-            Ok(d) => match spec_stmts(*rest, all, spec_scope(*s, env), ps, sd) {
-                Ok(dr) => Ok(List::Cons((Box::new(d), spec_place(*s)), Box::new(dr))),
+        // The writes of each statement are checked first, decision 0177.
+        List::Cons(s, rest) => match spec_write_check(*s, all, ps, sd) {
+            Some(r) => Err(r),
+            None => match spec_stmt(*s, all, env, ps, sd) {
+                Ok(d) => match spec_stmts(*rest, all, spec_scope(*s, env), ps, sd) {
+                    Ok(dr) => Ok(List::Cons((Box::new(d), spec_place(*s)), Box::new(dr))),
+                    Err(r) => Err(r),
+                },
                 Err(r) => Err(r),
             },
-            Err(r) => Err(r),
         },
     }
 }
@@ -5303,6 +6307,7 @@ pub open spec fn unknown_expr(e: Expr) -> bool
         Expr::Bits(_, a, b, _) => unknown_expr(*a) || unknown_expr(*b),
         Expr::StaticCast(_, a) => unknown_expr(*a),
         Expr::List(args) => unknown_args(*args),
+        Expr::Step(_, _, _, _) => false,
         Expr::Old(a) => unknown_expr(*a),
         Expr::Cond(c, a, b) => unknown_expr(*c) || unknown_expr(*a) || unknown_expr(*b),
         _ => false,
@@ -5469,6 +6474,8 @@ pub proof fn lemma_unknown_return_is_refused(e: Expr, l: u32, all: Fns, ps: Para
 {
     if e is List {
         lemma_unknown_lift_args_is_refused(*e->List_0, all, l, sd, 0, true);
+    } else if !(e is Call) && spec_cond_calls(e, all, l, sd) {
+        lemma_unknown_lower_is_refused(e, None, all, l, sd, 0);
     } else {
         lemma_unknown_value_is_refused(e, all, l, sd);
     }
@@ -6038,6 +7045,7 @@ pub open spec fn calls_resolve_stmt(s: DStmt, all: Fns, sd: Structs) -> bool
         DStmt::CallStmt(k, _) => spec_callable(all, k, sd),
         DStmt::Pre(c, s) => calls_resolve_calls(c, all, sd) && calls_resolve_stmt(*s, all, sd),
         DStmt::Moved(s, _) => calls_resolve_stmt(*s, all, sd),
+        DStmt::Block(b) => calls_resolve(*b, all, sd),
         DStmt::While(_, _, _, body) => calls_resolve(*body, all, sd),
         DStmt::For(init, _, _, _, _, body, step, _) => calls_resolve_stmt(*init, all, sd) && calls_resolve(*body, all, sd) && calls_resolve_stmt(*step, all, sd),
         _ => true,
@@ -6050,7 +7058,11 @@ pub open spec fn calls_resolve_calls(c: DCalls, all: Fns, sd: Structs) -> bool
 {
     match c {
         List::Nil => true,
-        List::Cons((_, _, k, _), rest) => spec_callable(all, k, sd) && calls_resolve_calls(*rest, all, sd),
+        List::Cons(p, rest) => (match p {
+            DPre::Call(_, _, k, _) => spec_callable(all, k, sd),
+            DPre::Update(_, _, _, k, _) => spec_callable(all, k, sd),
+            DPre::Step(_, _, _, _, _, _) => true,
+        }) && calls_resolve_calls(*rest, all, sd),
     }
 }
 
@@ -6060,7 +7072,7 @@ pub proof fn lemma_append_resolves(a: DCalls, b: DCalls, all: Fns, sd: Structs)
     decreases a,
 {
     match a {
-        List::Cons((_, _, _, _), rest) => lemma_append_resolves(*rest, b, all, sd),
+        List::Cons(_, rest) => lemma_append_resolves(*rest, b, all, sd),
         List::Nil => {},
     }
 }
@@ -6078,11 +7090,22 @@ pub proof fn lemma_lift_resolves(e: Expr, all: Fns, line: u32, sd: Structs, n: u
         Expr::Call(k, _, args, _) => {
             lemma_lift_args_resolves(*args, all, line, sd, n, open);
             let (ca, da, n1) = spec_lift_args(*args, all, line, sd, n, open).unwrap();
-            let dt = spec_callee_ty(all, k, line, sd).unwrap();
             assert(spec_callable(all, k, sd));
+            if !(spec_inline(all, k) && spec_callable(all, k, sd)) {
+                let dt = spec_callee_ty(all, k, line, sd).unwrap();
+                // A call that writes back runs as an update, decision 0177, and any other as a call. Each names a callable key.
+                let p = if spec_callee_writes(all, k) {
+                    DPre::Update(n1, dt, spec_free_callee_writebacks(all, k, *args, line).unwrap(), k, da)
+                } else {
+                    DPre::Call(n1, dt, k, da)
+                };
+                assert(calls_resolve_calls(List::Nil, all, sd));
+                assert(calls_resolve_calls(List::Cons(p, Box::new(List::Nil)), all, sd));
+                lemma_append_resolves(ca, List::Cons(p, Box::new(List::Nil)), all, sd);
+            }
+        },
+        Expr::Step(_, _, _, _) => {
             assert(calls_resolve_calls(List::Nil, all, sd));
-            assert(calls_resolve_calls(List::Cons((n1, dt, k, da), Box::new(List::Nil)), all, sd));
-            lemma_append_resolves(ca, List::Cons((n1, dt, k, da), Box::new(List::Nil)), all, sd);
         },
         Expr::Bin(op, a, b) => {
             lemma_lift_resolves(*a, all, line, sd, n, open);
@@ -6401,6 +7424,8 @@ pub proof fn lemma_resolves_return(s: Stmt, all: Fns, env: Params, ps: Params, s
         lemma_lift_args_resolves(*e->List_0, all, l, sd, 0, true);
         let (c, da, _) = spec_lift_args(*e->List_0, all, l, sd, 0, true).unwrap();
         lemma_pre_resolves(c, DStmt::Return(DExpr::SeqLit(Box::new(da))), all, sd);
+    } else if !(e is Call) && spec_cond_calls(e, all, l, sd) {
+        lemma_lower_resolves(e, None, all, l, sd, 0);
     } else {
         lemma_value_resolves(e, all, l, sd);
     }
@@ -6960,7 +7985,7 @@ pub fn lift(e: &Expr, all: &Fns, line: u32, sd: &Structs, n: u32, open: bool) ->
                 Err(r) => Err(r),
                 Ok((ca, da, n1)) => Ok((ca, DExpr::FCall(*k, Box::new(da)), n1)),
             }
-        } else if !open || callee_writes(all, *k) {
+        } else if !open {
             Err(Refusal::Place(*at))
         } else if !callable(all, *k, sd) {
             Err(Refusal::Callee(*nm, *at))
@@ -6969,11 +7994,32 @@ pub fn lift(e: &Expr, all: &Fns, line: u32, sd: &Structs, n: u32, open: bool) ->
                 Err(r) => Err(r),
                 Ok((ca, da, n1)) => match callee_ty(all, *k, line, sd) {
                     Err(r) => Err(r),
-                    Ok(dt) => if n1 < 0xFFFF_FFFF {
-                        Ok((append(ca, List::Cons((n1, dt, *k, da), Box::new(List::Nil))), DExpr::Temp(n1), n1 + 1))
-                    } else {
+                    Ok(dt) => if n1 >= 0xFFFF_FFFF {
                         Err(Refusal::Syntax(line))
+                    } else if callee_writes(all, *k) {
+                        if dt == DTy::Void {
+                            Err(Refusal::Place(*at))
+                        } else {
+                            match free_callee_writebacks(all, *k, args, line) {
+                                Err(r) => Err(r),
+                                Ok(os) => Ok((append(ca, List::Cons(DPre::Update(n1, dt, os, *k, da), Box::new(List::Nil))), DExpr::Temp(n1), n1 + 1)),
+                            }
+                        }
+                    } else {
+                        Ok((append(ca, List::Cons(DPre::Call(n1, dt, *k, da), Box::new(List::Nil))), DExpr::Temp(n1), n1 + 1))
                     },
+                },
+            }
+        },
+        Expr::Step(v, t, up, prefix) => if !open {
+            Err(Refusal::Place(line))
+        } else {
+            match step_ty(*t) {
+                None => Err(Refusal::Syntax(line)),
+                Some(dt) => if n < 0xFFFF_FFFF {
+                    Ok((List::Cons(DPre::Step(n, dt, *v, *up, *prefix, matches!(t, Ty::Mut(_))), Box::new(List::Nil)), DExpr::Temp(n), n + 1))
+                } else {
+                    Err(Refusal::Syntax(line))
                 },
             }
         },
@@ -9022,12 +10068,15 @@ pub fn translate_stmts(ss: &Stmts, all: &Fns, env: &Params, ps: &Params, sd: &St
 {
     match ss {
         List::Nil => Ok(List::Nil),
-        List::Cons(s, rest) => match translate_stmt(s, all, env, ps, sd) {
-            Ok(d) => match translate_stmts(rest, all, &scope(s, env), ps, sd) {
-                Ok(dr) => Ok(List::Cons((Box::new(d), place(s)), Box::new(dr))),
+        List::Cons(s, rest) => match write_check(s, all, ps, sd) {
+            Some(r) => Err(r),
+            None => match translate_stmt(s, all, env, ps, sd) {
+                Ok(d) => match translate_stmts(rest, all, &scope(s, env), ps, sd) {
+                    Ok(dr) => Ok(List::Cons((Box::new(d), place(s)), Box::new(dr))),
+                    Err(r) => Err(r),
+                },
                 Err(r) => Err(r),
             },
-            Err(r) => Err(r),
         },
     }
 }
@@ -11062,6 +12111,11 @@ pub open spec fn spec_gexpr(e: Expr, gs: Params, gps: Params, hide: Names, fs: F
         Expr::Bits(f0, f1, f2, f3) => Expr::Bits(f0, Box::new(spec_gexpr(*f1, gs, gps, hide, fs)), Box::new(spec_gexpr(*f2, gs, gps, hide, fs)), f3),
         Expr::StaticCast(f0, f1) => Expr::StaticCast(f0, Box::new(spec_gexpr(*f1, gs, gps, hide, fs))),
         Expr::List(f0) => Expr::List(Box::new(spec_gargs(*f0, gs, gps, hide, fs))),
+        // A write of a global writes the parameter that it becomes, decision 0177.
+        Expr::Step(f0, f1, f2, f3) => match spec_gvar(f0, f1, gs, gps, hide) {
+            Expr::Var(v, t) => Expr::Step(v, t, f2, f3),
+            other => other,
+        },
         Expr::Enumerator(f0, f1) => Expr::Enumerator(f0, f1),
         // The parameter of the lambda hides a global of its name in the body, as in C++.
         Expr::CountIf(f0, f1, f2, f3) => Expr::CountIf(Box::new(spec_gexpr(*f0, gs, gps, hide, fs)), f1, f2, Box::new(spec_gexpr(*f3, gs, gps, List::Cons(f1, Box::new(hide)), fs))),
@@ -11132,6 +12186,10 @@ pub fn gexpr(e: &Expr, gs: &Params, gps: &Params, hide: &Names, fs: &Fns) -> (r:
         Expr::Bits(f0, f1, f2, f3) => Expr::Bits(*f0, Box::new(gexpr(f1, gs, gps, hide, fs)), Box::new(gexpr(f2, gs, gps, hide, fs)), *f3),
         Expr::StaticCast(f0, f1) => Expr::StaticCast(*f0, Box::new(gexpr(f1, gs, gps, hide, fs))),
         Expr::List(f0) => Expr::List(Box::new(gargs(f0, gs, gps, hide, fs))),
+        Expr::Step(f0, f1, f2, f3) => match gvar(*f0, *f1, gs, gps, hide) {
+            Expr::Var(v, t) => Expr::Step(v, t, *f2, *f3),
+            other => other,
+        },
         Expr::Enumerator(f0, f1) => Expr::Enumerator(*f0, *f1),
         Expr::CountIf(f0, f1, f2, f3) => Expr::CountIf(Box::new(gexpr(f0, gs, gps, hide, fs)), *f1, *f2, Box::new(gexpr(f3, gs, gps, &List::Cons(*f1, Box::new(copy(hide))), fs))),
         Expr::RealLit(f0, f1) => Expr::RealLit(*f0, *f1),
@@ -11202,6 +12260,7 @@ pub open spec fn spec_gcalls(e: Expr) -> List<(u32, u32, u32)>
         Expr::Bits(_, f1, f2, _) => spec_append(spec_gcalls(*f1), spec_gcalls(*f2)),
         Expr::StaticCast(_, f1) => spec_gcalls(*f1),
         Expr::List(f0) => spec_gcalls_args(*f0),
+        Expr::Step(_, _, _, _) => List::Nil,
         Expr::Enumerator(_, _) => List::Nil,
         Expr::CountIf(f0, _, _, f3) => spec_append(spec_gcalls(*f0), spec_gcalls(*f3)),
         Expr::RealLit(_, _) => List::Nil,
@@ -11271,6 +12330,7 @@ pub fn gcalls(e: &Expr) -> (r: List<(u32, u32, u32)>)
         Expr::Bits(_, f1, f2, _) => append(gcalls(f1), gcalls(f2)),
         Expr::StaticCast(_, f1) => gcalls(f1),
         Expr::List(f0) => gcalls_args(f0),
+        Expr::Step(_, _, _, _) => List::Nil,
         Expr::Enumerator(_, _) => List::Nil,
         Expr::CountIf(f0, _, _, f3) => append(gcalls(f0), gcalls(f3)),
         Expr::RealLit(_, _) => List::Nil,

@@ -247,6 +247,7 @@ fn a_call_inside_an_expression_runs_before_its_statement() {
 #[test]
 fn a_call_that_cpp_may_not_evaluate_once_is_refused_at_its_line() {
     let all = fns(vec![sat(one(Stmt::Return(Expr::Lit(0, Ty::I32), 15)))]);
+    let args = || List::Cons(lit32(1), Box::new(List::Cons(lit32(2), Box::new(List::Nil))));
     let c = |l: u32| call(SAT, vec![Expr::Lit(1, Ty::I32), Expr::Lit(2, Ty::I32)], l);
     let positive = |l: u32| Expr::Bin(BinOp::Gt, b(c(l)), b(Expr::Lit(0, Ty::I32)));
     let with = |s: Stmt| Function { body: List::Cons(Box::new(s), Box::new(one(Stmt::Return(Expr::Lit(0, Ty::I32), 50)))), ..succ(Expr::Lit(0, Ty::I32)) };
@@ -254,9 +255,13 @@ fn a_call_that_cpp_may_not_evaluate_once_is_refused_at_its_line() {
     let and = Expr::Bin(BinOp::And, b(Expr::Bool(true)), b(positive(42)));
     let f = with(Stmt::If(and, Box::new(List::Nil), Box::new(List::Nil), 42));
     assert_eq!(bare_refusal(translate_function(&f, &all, &List::Nil)), Refusal::Place(42));
-    // return true ? sat(1, 2) : 0; a branch may not run.
+    // return true ? sat(1, 2) : 0; a branch may not run, so each branch returns its own value, decision 0177.
     let branch = Expr::Cond(b(Expr::Bool(true)), b(c(44)), b(Expr::Lit(0, Ty::I32)));
-    assert_eq!(bare_refusal(translate_function(&succ(branch), &all, &List::Nil)), Refusal::Place(44));
+    let Model::Full(m) = translate_function(&succ(branch), &all, &List::Nil) else { panic!("a full model") };
+    let List::Cons((s, _), _) = strip(m.body) else { panic!("a body") };
+    let then = List::Cons((Box::new(DStmt::Pre(List::Cons(DPre::Call(0, DTy::Int32, SAT, args()), Box::new(List::Nil)), Box::new(DStmt::Return(DExpr::Temp(0))))), 0), Box::new(List::Nil));
+    let other = List::Cons((Box::new(DStmt::Return(lit32(0))), 0), Box::new(List::Nil));
+    assert_eq!(*s, DStmt::Block(Box::new(List::Cons((Box::new(DStmt::If(DExpr::Bool(true), Box::new(then), Box::new(other))), 0), Box::new(List::Nil)))));
     // while (sat(1, 2) > 0) {}: a loop condition runs again at each turn.
     let f = with(Stmt::While(positive(46), Box::new(List::Nil), Box::new(List::Nil), 46));
     assert_eq!(bare_refusal(translate_function(&f, &all, &List::Nil)), Refusal::Place(46));
@@ -4559,8 +4564,8 @@ fn a_call_on_the_right_of_and_becomes_an_if() {
     assert!(matches!(&*cond, DStmt::If(DExpr::Not(t), _, _) if **t == DExpr::Temp(0)), "{cond:?}");
     // return take ? next(x) : 0; each branch returns its value.
     let pick = Expr::Cond(b(Expr::Var(WTAKE, Ty::Bool)), b(call(NEXT, vec![Expr::Var(X, mut32())], 11)), b(Expr::Lit(0, Ty::I32)));
-    let f = writer(one(Stmt::Return(pick, 11)));
-    let f = Function { params: List::Cons((WTAKE, Ty::Bool), Box::new(f.params)), ..f };
+    let ps = List::Cons((WTAKE, Ty::Bool), Box::new(List::Cons((X, mut32()), Box::new(List::Nil))));
+    let f = Function { name: 426, line: 10, params: ps, ret: Ty::I32, trusted: false, conds: modifies(&[X], &[WTAKE, X], List::Nil), body: one(Stmt::Return(pick, 11)) };
     let got = the_body(translate_function(&f, &all, &List::Nil));
     let then = List::Cons((Box::new(DStmt::Pre(pres(vec![upd(0, X)]), Box::new(DStmt::Return(DExpr::Temp(0))))), 0), Box::new(List::Nil));
     let other = List::Cons((Box::new(DStmt::Return(lit32(0))), 0), Box::new(List::Nil));

@@ -9,7 +9,7 @@ use anyhow::{Context, Result};
 use cplusp_core::companion::CompanionRefusal;
 use cplusp_core::contract::{LexKind, NumberFault};
 use cplusp_core::model::{
-    globalize, parse_contract, translate_overrides, translate_structs, translate_unit, Args, BinOp, CastKind, CondKind, Conds, DArgs, DConds, DExpr, DOverride, DParams, DStmt, DStmts, DTy, DUpcast, Expr, Extent, Fns,
+    globalize, parse_contract, translate_overrides, translate_structs, translate_unit, Args, BinOp, CastKind, CondKind, Conds, DArgs, DConds, DExpr, DOverride, DParams, DPre, DStmt, DStmts, DTy, DUpcast, Expr, Extent, Fns,
     Function, List, Members, Method, Model, Names as CNames, Obj, Objs, Params, Refusal, Scalar, Stmt, Stmts, Structs, Tok, Ty,
 };
 use serde::Deserialize;
@@ -108,6 +108,8 @@ enum JExpr {
     Bin(JOp, Box<JExpr>, Box<JExpr>),
     Divide(JOp, Box<JExpr>, Box<JExpr>, JTy),
     Shr(Box<JExpr>, Box<JExpr>, JTy),
+    /// `x++`, `x--`, `++x` or `--x` inside an expression: the name, its type, whether it adds, and whether it is a prefix, decision 0177.
+    Step(String, JTy, bool, bool),
     /// `a & b` or `a | b` of unsigned operands, by the type of the result, decision 0175.
     Bits(JOp, Box<JExpr>, Box<JExpr>, JTy),
     /// `return {a, b, c};` of a std::array result, decision 0175.
@@ -456,6 +458,7 @@ fn expr(e: JExpr, names: &mut Names) -> Expr {
         JExpr::Bin(o, a, b) => Expr::Bin(op(o), Box::new(expr(*a, names)), Box::new(expr(*b, names))),
         JExpr::Divide(o, a, b, t) => Expr::Divide(op(o), Box::new(expr(*a, names)), Box::new(expr(*b, names)), ty(t, names)),
         JExpr::Shr(a, b, t) => Expr::Shr(Box::new(expr(*a, names)), Box::new(expr(*b, names)), ty(t, names)),
+        JExpr::Step(v, t, up, prefix) => Expr::Step(names.id(&v), ty(t, names), up, prefix),
         JExpr::Bits(o, a, b, t) => Expr::Bits(op(o), Box::new(expr(*a, names)), Box::new(expr(*b, names)), ty(t, names)),
         JExpr::List(args) => {
             let args: Vec<Expr> = args.into_iter().map(|a| expr(a, names)).collect();
@@ -911,7 +914,7 @@ fn scan_companion(text: &str) -> (Vec<(u32, String)>, Vec<Declared>) {
 /// Every name in an expression that the Dafny text will print.
 fn expr_names<'a>(e: &'a JExpr, out: &mut Vec<&'a str>) {
     match e {
-        JExpr::Var(v, _) | JExpr::Move(v, _) => out.push(v),
+        JExpr::Var(v, _) | JExpr::Move(v, _) | JExpr::Step(v, ..) => out.push(v),
         JExpr::Bin(_, a, b) | JExpr::Divide(_, a, b, _) | JExpr::Shr(a, b, _) | JExpr::Bits(_, a, b, _) | JExpr::Index(a, b) | JExpr::Subspan(a, b) => {
             expr_names(a, out);
             expr_names(b, out);
@@ -1510,6 +1513,8 @@ struct Printer<'a> {
     fresh: u32,
     /// The count of the temporaries of the method so far, `v_'tN`, decision 0104.
     temps: u32,
+    /// The printer is inside a `Block`, so a `Pre` takes the base of the block, decision 0177.
+    in_block: bool,
     /// The file has a bit operator, so each method with a body calls `Laws()` first, decision 0175.
     laws: bool,
 }
@@ -1691,17 +1696,62 @@ impl Printer<'_> {
             // The calls run in order on the line of the statement. Each sets a temporary that the later calls and the statement read.
             // ponytail: each call is placed on the line of its statement. Upgrade: carry the line of each call in `DCalls::Cons`.
             DStmt::Pre(calls, inner) => {
-                let base = self.temps;
+                // Inside a `Block` the temporaries of the whole block share one base, decision 0177.
+                let base = if self.in_block { names.temp_base.get().unwrap_or(self.temps) } else { self.temps };
                 let outer = names.temp_base.replace(Some(base));
                 let mut rest = calls;
-                while let List::Cons((t, ty, m, args), next) = rest {
-                    let call = self.call(*m, args);
-                    self.put(depth, format!("var v_'t{}: {} := {call};", base + t, dty(*ty, names)), place);
-                    self.temps = self.temps.max(base + t + 1);
+                while let List::Cons(pre, next) = rest {
+                    match pre {
+                        DPre::Call(t, ty, m, args) => {
+                            let call = self.call(*m, args);
+                            self.put(depth, format!("var v_'t{}: {} := {call};", base + t, dty(*ty, names)), place);
+                            self.temps = self.temps.max(base + t + 1);
+                        }
+                        // A call that writes back: its value goes to the temporary and the places take the rest, decision 0177.
+                        DPre::Update(t, ty, objs, m, args) => {
+                            let (places, call, before, after) = self.update(objs, *m, args);
+                            let temp = format!("v_'t{}", base + t);
+                            let gives = if places.is_empty() { temp.clone() } else { format!("{temp}, {places}") };
+                            self.put(depth, format!("{before}var {temp}: {}; {gives} := {call};{after}", dty(*ty, names)), place);
+                            self.temps = self.temps.max(base + t + 1);
+                        }
+                        // `x++` and `++x` inside an expression, decision 0177. The write has the check of an assignment: the sum is converted back.
+                        DPre::Step(t, ty, x, up, prefix, out) => {
+                            let x = if *out { format!("{}'", mangle(names.text(*x))) } else { mangle(names.text(*x)) };
+                            let (temp, ty) = (format!("v_'t{}", base + t), dty(*ty, names));
+                            let write = format!("{x} := (({x} as int) {} 1) as {ty};", if *up { "+" } else { "-" });
+                            if *prefix {
+                                self.put(depth, write, place);
+                                self.put(depth, format!("var {temp}: {ty} := {x};"), place);
+                            } else {
+                                self.put(depth, format!("var {temp}: {ty} := {x};"), place);
+                                self.put(depth, write, place);
+                            }
+                            self.temps = self.temps.max(base + t + 1);
+                        }
+                    }
                     rest = next;
                 }
                 self.stmt(inner, place, depth);
                 names.temp_base.set(outer);
+            }
+            // The statements of one lowered `return`, each on the line of the `return`. Their temporaries share one base, decision 0177.
+            DStmt::Block(ss) => {
+                let base = self.temps;
+                let outer = names.temp_base.replace(Some(base));
+                let was = std::mem::replace(&mut self.in_block, true);
+                self.stmts(ss, depth);
+                self.in_block = was;
+                names.temp_base.set(outer);
+            }
+            DStmt::DeclTemp(t, ty) => {
+                let base = names.temp_base.get().unwrap_or(self.temps);
+                self.put(depth, format!("var v_'t{}: {};", base + t, dty(*ty, names)), place);
+                self.temps = self.temps.max(base + t + 1);
+            }
+            DStmt::AssignTemp(t, e) => {
+                let base = names.temp_base.get().unwrap_or(self.temps);
+                self.put(depth, format!("v_'t{} := {};", base + t, dexpr(e, names)), place);
             }
             DStmt::Assert(e) => self.put(depth, format!("assert {};", dexpr(e, names)), place),
             // The statement, then each name that it moved is null, decision 0171.
@@ -2106,7 +2156,7 @@ fn sentence(r: Refusal, names: &Names) -> (u32, String) {
         Refusal::Callee(n, line) => (line, format!("a call to {}, which has no model in view.", names.text(n))),
         Refusal::Place(line) => (
             line,
-            "a call out of place. The translator takes a call when C++ runs it once and the statement uses its value. It takes a call that writes a value back or gives no value only alone.".to_string(),
+            "a call out of place. The translator takes a call when C++ runs it once and the statement uses its value. It takes a call that gives no value only alone.".to_string(),
         ),
         Refusal::Twice(n, line) => (line, format!("{} is declared twice in the function.", names.text(n))),
         Refusal::Convert(line) => (line, "a conversion between bool and a number.".to_string()),
@@ -2157,6 +2207,9 @@ fn sentence(r: Refusal, names: &Names) -> (u32, String) {
         Refusal::SignedBits(line) => (line, "a bit operator on a signed integer: the translator has no rule for it yet.".to_string()),
         Refusal::ContractCast(line) => (line, "a static_cast in a contract that can change the value: the translator has no rule for it yet.".to_string()),
         Refusal::BraceLen(m, n, line) => (line, format!("a braced list of {m} values for a std::array of {n}: the translator has no rule for it yet.")),
+        Refusal::TwoWrites(line) => (line, "two writes in one expression. C++ does not fix the order.".to_string()),
+        Refusal::WriteRead(x, line) => (line, format!("{} has a write and a read in one expression. C++ does not fix the order.", names.text(x))),
+        Refusal::LoopWrite(line) => (line, "a write in the condition of a loop: the translator has no rule for it yet.".to_string()),
         Refusal::Misplaced(line) => (
             line,
             "a contract line in the wrong place. A requires, an ensures, a modifies or a decreases line goes above a function. An invariant or a decreases line goes above a loop, and an index line above a range-for."
@@ -2431,7 +2484,7 @@ pub fn translate(lines: &str, companion: Option<(&str, &str)>) -> Result<Transla
         };
         seen = next;
     }
-    let mut p = Printer { copies: Vec::new(), pending: Vec::new(), method_lines: HashMap::new(), calls: HashMap::new(), owned: HashMap::new(), writing: writing_virtual, refs: refs.clone(), names: &names, methods: &methods, rets: &rets, out: PRELUDE.to_string(), lines: Vec::new(), scope: Vec::new(), own: Vec::new(), writes: false, fresh: 0, temps: 0, laws: format!("{models:?}").contains("BitOp(") };
+    let mut p = Printer { copies: Vec::new(), pending: Vec::new(), method_lines: HashMap::new(), calls: HashMap::new(), owned: HashMap::new(), writing: writing_virtual, refs: refs.clone(), names: &names, methods: &methods, rets: &rets, out: PRELUDE.to_string(), lines: Vec::new(), scope: Vec::new(), own: Vec::new(), writes: false, fresh: 0, temps: 0, in_block: false, laws: format!("{models:?}").contains("BitOp(") };
     p.lines.extend(PRELUDE.lines().map(|_| None));
     let mut refused_at = Vec::new();
     for (en, (place, key)) in enums.iter().zip(enum_places) {

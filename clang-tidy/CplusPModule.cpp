@@ -5990,6 +5990,10 @@ private:
       return tag("Bin", llvm::json::Array{Op, expr(Binary->getLHS(), Near), expr(Binary->getRHS(), Near)});
     }
     if (const auto *Unary = dyn_cast<UnaryOperator>(E)) {
+      // `x++`, `x--`, `++x` and `--x` inside an expression, on a target of a write, decision 0177: the name, its type, the direction and the prefix.
+      if (Unary->isIncrementDecrementOp())
+        if (const auto *Target = dyn_cast<DeclRefExpr>(Unary->getSubExpr()); Target && isTarget(Target->getDecl()))
+          return tag("Step", llvm::json::Array{nameOf(Target->getDecl()), varType(Target->getDecl()), Unary->isIncrementOp(), Unary->isPrefix()});
       // `*p` of a pointer to const reads the value behind the pointer, and `&x` of a variable of a scalar or a plain struct is that value as an optional,
       // decision 0140.
       if (Unary->getOpcode() == UO_Deref)
