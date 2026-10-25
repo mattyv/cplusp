@@ -5290,8 +5290,8 @@ fn a_pure_override_keeps_the_checks_of_its_calls() {
     assert!(under(&text, "model-pure-calls-wrong.cpp:70: a requires line of the callee may not hold.").iter().any(|l| l.ends_with("model-pure-calls-wrong.cpp:10: requires valid() && 0 <= x <= 1000")), "{text}");
 }
 
-/// An override whose body writes a local, or calls a member function of its own class, has no function in the model, so its class
-/// is refused, decision 0172.
+/// An override whose body writes a local, or calls a member function of its own class that is no plain member function, has no
+/// function in the model, so its class is refused, decisions 0172 and 0189.
 #[test]
 fn an_override_that_is_no_pure_body_is_refused() {
     let Some(dafny) = dafny() else { return };
@@ -5988,6 +5988,58 @@ fn a_class_template_with_no_rule_is_refused() {
         "172: a call to Probe::valid, which has no model in view.".to_string(),
     ];
     assert_eq!(refused, want, "{text}");
+}
+
+/// A call of a plain member function is its function in place, of a field, of its own class, and on the right of && and in a
+/// branch of ?:. A member function that calls only plain member functions is pure, and a contract can call it, decision 0189.
+#[test]
+fn a_call_of_a_plain_member_function_proves() {
+    let Some(dafny) = dafny() else { return };
+    if !clang_tidy_available() {
+        return;
+    }
+    for name in ["model-plain-member.cpp", "../../../../examples/crtp/example.cpp"] {
+        let o = prove(name, &[], &dafny);
+        let text = stdout(&o);
+        assert_eq!(o.status.code(), Some(0), "{name}: stdout: {text} stderr: {}", stderr(&o));
+        assert_eq!(text.lines().last(), Some("ok: proved"), "{name}: {text}");
+    }
+}
+
+/// A claim through a plain member function that does not hold fails, and Dafny checks the requires line of the function at each
+/// call in code, decision 0189.
+#[test]
+fn a_call_of_a_plain_member_function_keeps_its_contract() {
+    let Some(dafny) = dafny() else { return };
+    if !clang_tidy_available() {
+        return;
+    }
+    let o = prove("model-plain-member-wrong.cpp", &[], &dafny);
+    let text = stdout(&o);
+    assert_eq!(o.status.code(), Some(1), "stdout: {text} stderr: {}", stderr(&o));
+    let failed: Vec<&str> = text.lines().filter(|l| l.starts_with("Not proved: ") || l.starts_with("Not provable: ")).map(|l| l.rsplit_once(".cpp:").unwrap().1).collect();
+    assert_eq!(failed, ["15: the ensures line may not hold on this return.", "24: a requires line of the callee may not hold."], "{text}");
+}
+
+/// A member function whose body holds a call is no plain member function, so a member that calls it is no pure function. A plain
+/// member function whose contract has no model stays a method, decision 0189.
+#[test]
+fn a_call_of_a_member_function_that_is_not_plain_keeps_its_rules() {
+    let Some(dafny) = dafny() else { return };
+    if !clang_tidy_available() {
+        return;
+    }
+    let o = prove("model-plain-member-refuse.cpp", &[], &dafny);
+    let text = stdout(&o);
+    assert_eq!(o.status.code(), Some(1), "stdout: {text} stderr: {}", stderr(&o));
+    let failed: Vec<&str> = text.lines().filter(|l| l.starts_with("Not proved: ") || l.starts_with("Not provable: ")).map(|l| l.rsplit_once(".cpp:").unwrap().1).collect();
+    let want = [
+        "21: top is no pure function. A contract calls a function with one return and no write.",
+        "31: the contract line has a form the translator cannot read.",
+        "37: the ensures line may not hold on this return.",
+    ];
+    assert_eq!(failed, want, "{text}");
+    assert!(!text.contains("Dafny says"), "{text}");
 }
 
 /// A node that the code makes with std::make_unique, writes through its pointer and moves into a field proves. So does a moved

@@ -52,6 +52,10 @@ class Twice {
   Step step_;
 };
 
+// An explicit instantiation makes the body of each member function of an instance, decision 0188.
+template class Twice<Negate>;
+template class Twice<Cap>;
+
 // Negating twice gives the number back.
 //@ requires -1000000 <= x <= 1000000
 //@ ensures result == x

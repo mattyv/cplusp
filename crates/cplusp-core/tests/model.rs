@@ -1526,6 +1526,34 @@ fn a_contract_calls_a_pure_member_function_on_this_or_on_a_path() {
     assert_eq!(strip_conds(m.ensures), List::Cons((want, 0), Box::new(List::Nil)));
 }
 
+/// A call of a plain member function, one return of an expression with no call, is its function in place. A call of a member
+/// function with more than one statement runs before its statement, decision 0189.
+#[test]
+fn a_call_of_a_plain_member_function_is_its_function_in_place() {
+    let read_n = || Expr::Cast(CastKind::Read, b(Expr::Field(b(Expr::Var(THIS, Ty::This(COUNTER))), CN)));
+    let caller = || Function {
+        name: SAT,
+        line: 20,
+        params: List::Cons((A, Ty::Struct(COUNTER)), Box::new(List::Nil)),
+        ret: Ty::I32,
+        trusted: false,
+        conds: List::Nil,
+        body: one(Stmt::Return(Expr::Bin(BinOp::Add, b(call(NKEY, vec![read(A, Ty::Struct(COUNTER))], 21)), b(Expr::Lit(1, Ty::I32))), 21)),
+    };
+    let plain = value_fn(one(Stmt::Return(read_n(), 10)));
+    let List::Cons(_, rest) = translate_unit(&fns(vec![plain, caller()]), &members_table(None, None)) else { panic!("models") };
+    let List::Cons(Model::Full(m), _) = *rest else { panic!("a full model of the caller") };
+    let List::Cons((s, _), rest) = strip(m.body) else { panic!("a body") };
+    assert_eq!(*rest, List::Nil);
+    assert!(matches!(&*s, DStmt::Return(_)), "{s:?}");
+    // Two statements: the call runs before its statement.
+    let two = value_fn(List::Cons(Box::new(Stmt::Local(B, Ty::I32, read_n(), 10)), Box::new(one(Stmt::Return(read(B, Ty::I32), 11)))));
+    let List::Cons(_, rest) = translate_unit(&fns(vec![two, caller()]), &members_table(None, None)) else { panic!("models") };
+    let List::Cons(Model::Full(m), _) = *rest else { panic!("a full model of the caller") };
+    let List::Cons((s, _), _) = strip(m.body) else { panic!("a body") };
+    assert!(matches!(&*s, DStmt::Pre(_, _)), "{s:?}");
+}
+
 #[test]
 fn a_contract_that_calls_a_member_function_that_is_not_pure_is_refused() {
     // value is a member that is not pure, and three is no member.

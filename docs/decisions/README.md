@@ -193,3 +193,4 @@ Status is `decided`, `proposed` (the default until someone objects or the thin s
 | [0186](0186-a-tree-that-the-code-builds.md) | A tree that the code builds | decided |
 | [0187](0187-a-class-that-holds-a-vector.md) | A class that holds a vector | decided |
 | [0188](0188-a-class-template.md) | A class template | decided |
+| [0189](0189-a-call-of-a-plain-member-function.md) | A call of a plain member function | decided |

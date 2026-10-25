@@ -1,6 +1,6 @@
 #include <cstdint>
 
-// Overrides whose body is no pure body: a write to a local, and a call of a member function of its own class, decision 0172.
+// Overrides whose body is no pure body: a write to a local, and a call of an own member function that is not plain, decisions 0172, 0189.
 struct Component {
   virtual ~Component() = default;
   virtual bool valid() const = 0;
@@ -26,7 +26,7 @@ class Written final : public Component {
 class Own final : public Component {
  public:
   //@ ensures result == true
-  bool ok() const { return true; }
+  bool ok() const { return cost(0) == 0; }
 
   //@ ensures result == true
   bool valid() const override { return ok(); }
