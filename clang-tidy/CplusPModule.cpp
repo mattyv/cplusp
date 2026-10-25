@@ -4660,6 +4660,11 @@ private:
     return QualType();
   }
   bool isSeq(QualType T) const { return !seqElement(T).isNull(); }
+  // A vector field of the object that a member function writes: a read of it is a read of the sequence, as in a const member, decision 0187.
+  bool isFieldVec(const Expr *E) const {
+    const FieldDecl *Field = objectField(E->IgnoreParenImpCasts());
+    return Field && !localVec(Field->getType()).isNull();
+  }
 
   // The fixed extent of a read-only sequence, decisions 0070 and 0132, or null: a vector, and a span of `std::dynamic_extent`. A std::array has its length.
   llvm::json::Value seqExtent(QualType T) const {
@@ -4805,8 +4810,8 @@ private:
   }
 
   // A constructor that is written as a function, decision 0094: a constructor of a plain struct that is no copy constructor,
-  // delegates to none, and gives each field exactly one value in its member init list. It can have a body and be a move constructor, decision 0179. A field that the list leaves out
-  // would take its default, which has no rule. Null for any other function. A constructor that is only declared is looked up by its definition.
+  // delegates to none, and gives each field exactly one value in its member init list. It can have a body and be a move constructor, decision 0179. A vector field that the
+  // list leaves out, with no default member initializer, starts empty, decision 0187. Any other field that the list leaves out has no rule. Null for any other function. A constructor that is only declared is looked up by its definition.
   const CXXConstructorDecl *valueConstructor(const FunctionDecl *FD) const {
     const FunctionDecl *Def = nullptr;
     if (!isa<CXXConstructorDecl>(FD) || !FD->hasBody(Def))
@@ -4824,10 +4829,16 @@ private:
       // The interface bases of a final class over interfaces are built by the compiler, decision 0166.
       if (Init->isBaseInitializer() && !Init->isWritten())
         continue;
+      // A vector field that the list does not name starts empty, decision 0187. Clang may list it as an implicit initializer.
+      if (!Init->isWritten() && Init->isMemberInitializer() && !Init->getMember()->hasInClassInitializer() && !localVec(Init->getMember()->getType()).isNull())
+        continue;
       if (!Init->isWritten() || !Init->isMemberInitializer() || !Given.insert(Init->getMember()).second || readsObject(Init->getInit()))
         return nullptr;
     }
-    return Given.size() == static_cast<size_t>(std::distance(C->getParent()->field_begin(), C->getParent()->field_end())) ? C : nullptr;
+    for (const FieldDecl *F : C->getParent()->fields())
+      if (!Given.count(F) && (F->hasInClassInitializer() || localVec(F->getType()).isNull()))
+        return nullptr;
+    return C;
   }
 
   // The body of a value constructor: it returns the struct, built from the values of its init list in the order of the fields.
@@ -4837,17 +4848,42 @@ private:
     const unsigned At = line(C->getLocation());
     const auto *Body = cast<CompoundStmt>(C->getBody());
     llvm::json::Array Out, Args;
-    for (const FieldDecl *F : C->getParent()->fields())
+    // The list runs in the order of the fields. So when one field goes through a fresh local, every field does, decision 0187.
+    std::vector<llvm::json::Value> Values;
+    bool Locals = !Body->body_empty();
+    for (const FieldDecl *F : C->getParent()->fields()) {
+      // `f(n, x)` of a vector field is a vector of copies, and a vector field that the list does not name is empty, decision 0187.
+      llvm::json::Value Value = nullptr;
+      bool Seq = false;
       for (const CXXCtorInitializer *Init : C->inits())
-        if (Init->getMember() == F) {
-          if (Body->body_empty()) {
-            Args.push_back(expr(Init->getInit(), At));
-            continue;
-          }
-          const std::string Fresh = "'init'" + F->getNameAsString();
-          Out.push_back(tag("Local", llvm::json::Array{Fresh, type(F->getType(), true), expr(Init->getInit(), At), number(At)}));
-          Args.push_back(tag("Var", llvm::json::Array{Fresh, type(F->getType(), true)}));
+        if (Init->getMember() == F && Init->isWritten()) {
+          Value = vecFill(Init->getInit(), At);
+          Seq = !Value.getAsNull();
+          if (!Seq)
+            Value = expr(Init->getInit(), At);
         }
+      if (Value.getAsNull()) {
+        Value = "EmptyVec";
+        Seq = true;
+      }
+      // The core reads `Fill` and `EmptyVec` as the start of a local only.
+      Locals = Locals || Seq;
+      Values.push_back(std::move(Value));
+    }
+    size_t Next = 0;
+    for (const FieldDecl *F : C->getParent()->fields()) {
+      llvm::json::Value Value = std::move(Values[Next++]);
+      if (!Locals) {
+        Args.push_back(std::move(Value));
+        continue;
+      }
+      const std::string Fresh = "'init'" + F->getNameAsString();
+      // A local vector is a `Vec`, as in `varType`.
+      const QualType Element = localVec(F->getType());
+      llvm::json::Value Kind = Element.isNull() ? type(F->getType(), true) : tag("Vec", elementType(Element));
+      Out.push_back(tag("Local", llvm::json::Array{Fresh, Kind, std::move(Value), number(At)}));
+      Args.push_back(tag("Var", llvm::json::Array{Fresh, std::move(Kind)}));
+    }
     if (!Body->body_empty()) {
       InConstructorBody = true;
       for (llvm::json::Value &One : stmts(Body))
@@ -5617,6 +5653,11 @@ private:
       // A write of a field of a reference parameter, decision 0108.
       if (const auto [Param, Field] = refField(Assign->getLHS()); Param)
         return tag("SetRefField", llvm::json::Array{Param->getNameAsString(), Field->getNameAsString(), expr(Assign->getRHS(), line(S->getBeginLoc())), number(line(S->getBeginLoc()))});
+      // `f[i] = e` where `f` is a vector field of the object, decision 0187. A plain struct has no `std::array` field.
+      if (const auto *Subscript = dyn_cast<CXXOperatorCallExpr>(Assign->getLHS()->IgnoreParens()); Subscript && Subscript->getOperator() == OO_Subscript && Subscript->getNumArgs() == 2)
+        if (const FieldDecl *Field = objectField(Subscript->getArg(0)->IgnoreParenImpCasts()); Field && !localVec(Field->getType()).isNull())
+          return tag("SetFieldAt", llvm::json::Array{Field->getNameAsString(), expr(Subscript->getArg(1), line(S->getBeginLoc())), expr(Assign->getRHS(), line(S->getBeginLoc())),
+                                                     number(line(S->getBeginLoc()))});
       // A write of a field of the object, decision 0096.
       if (const FieldDecl *Field = objectField(Assign->getLHS()))
         return tag("SetField", llvm::json::Array{Field->getNameAsString(), expr(Assign->getRHS(), line(S->getBeginLoc())), number(line(S->getBeginLoc()))});
@@ -6697,7 +6738,7 @@ private:
         return tag("Field", llvm::json::Array{expr(Member->getBase()->IgnoreParenImpCasts(), Near), Field->getNameAsString()});
     // `v.size()` and `v[i]` of a read-only sequence.
     if (const auto *Member = dyn_cast<CXXMemberCallExpr>(E); Member && Member->getNumArgs() == 0 && Member->getMethodDecl() && Member->getMethodDecl()->getNameAsString() == "size")
-      if (const Expr *Object = Member->getImplicitObjectArgument(); Object && (isSeq(Object->getType()) || isMutSeq(Object)))
+      if (const Expr *Object = Member->getImplicitObjectArgument(); Object && (isSeq(Object->getType()) || isMutSeq(Object) || isFieldVec(Object)))
         return tag("Size", expr(Object, Near));
     // `v.empty()`, and `s.subspan(k)` with no explicit second argument, decision 0078. `subspan(k, n)` and `first(n)` stay unknown.
     if (const auto *Member = dyn_cast<CXXMemberCallExpr>(E); Member && Member->getNumArgs() == 0 && Member->getMethodDecl() && Member->getMethodDecl()->getNameAsString() == "empty")
@@ -6708,11 +6749,11 @@ private:
       if (const Expr *Object = Member->getImplicitObjectArgument(); Object && isSeq(Object->getType()))
         return tag("Subspan", llvm::json::Array{expr(Object, Near), expr(Member->getArg(0), Near)});
     if (const auto *Operator = dyn_cast<CXXOperatorCallExpr>(E); Operator && Operator->getOperator() == OO_Subscript && Operator->getNumArgs() == 2 &&
-                                                                  (isSeq(Operator->getArg(0)->getType()) || isMutSeq(Operator->getArg(0))))
+                                                                  (isSeq(Operator->getArg(0)->getType()) || isMutSeq(Operator->getArg(0)) || isFieldVec(Operator->getArg(0))))
       return tag("Index", llvm::json::Array{expr(Operator->getArg(0), Near), expr(Operator->getArg(1), Near)});
     // `v.at(i)` of a read-only sequence is `v[i]`, decision 0139. The prover proves the index in range, so `at` never throws.
     if (const auto *Member = dyn_cast<CXXMemberCallExpr>(E); Member && Member->getNumArgs() == 1 && Member->getMethodDecl() && Member->getMethodDecl()->getNameAsString() == "at")
-      if (const Expr *Object = Member->getImplicitObjectArgument(); Object && isSeq(Object->getType()))
+      if (const Expr *Object = Member->getImplicitObjectArgument(); Object && (isSeq(Object->getType()) || isFieldVec(Object)))
         return tag("Index", llvm::json::Array{expr(Object, Near), expr(Member->getArg(0), Near)});
     // `p->f(a)` on a unique_ptr of an interface is a call of the function of the interface on the value of `p`, decision 0168.
     if (const auto *Call = dyn_cast<CXXMemberCallExpr>(E); Call && Call->getDirectCallee() && ifaceMethod(Call->getDirectCallee()))

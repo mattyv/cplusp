@@ -348,7 +348,8 @@ pub type Args = List<Box<Expr>>;
 /// std::array, decision 0184. `PushBack` is `v.push_back(e)`, decision 0148.
 /// `Sort` is `std::sort(v.begin(), v.end())`, decision 0161, and `SortBy` is the same with a comparator lambda, by the names and the
 /// type of its two parameters and the expression of its one `return`, decision 0162. `Block` is a bare block `{ ... }`, a scope of
-/// its own, decision 0178. `SetOwnField` is `n->f = e` of a local `std::unique_ptr` of a plain struct, decision 0186.
+/// its own, decision 0178. `SetOwnField` is `n->f = e` of a local `std::unique_ptr` of a plain struct, decision 0186. `SetFieldAt` is
+/// `f[i] = e` of a sequence field in a member function that writes its object, decision 0187.
 #[derive(PartialEq, Eq, Debug)]
 pub enum Stmt {
     Return(Expr, u32),
@@ -368,6 +369,7 @@ pub enum Stmt {
     Apply(u32, Box<Args>, u32),
     RangeFor(u32, u32, Ty, Expr, Box<Conds>, Box<Stmts>, u32),
     SetIndex(u32, Expr, Expr, u32),
+    SetFieldAt(u32, Expr, Expr, u32),
     PushBack(u32, Expr, u32),
     Sort(u32, u32),
     SortBy(u32, u32, u32, Ty, Expr, u32),
@@ -906,12 +908,7 @@ pub open spec fn spec_value_ty(t: Ty, line: u32, sd: Structs) -> Result<DTy, Ref
             Ty::Iface(_) => Err(Refusal::Syntax(line)),
             Ty::IfaceRef(_) => Err(Refusal::Syntax(line)),
             Ty::IfaceMut(_) => Err(Refusal::Syntax(line)),
-            Ty::Struct(k) => if spec_holds(sd, k) {
-                Err(Refusal::HoldsSeq(line))
-            } else {
-                Ok(dt)
-            },
-            // An optional of a struct that holds a sequence stays out, decision 0137.
+            // A struct that holds a sequence is a value, decision 0187. An optional of it stays out, decision 0137.
             Ty::Opt(Scalar::Struct(k)) => if spec_holds(sd, k) {
                 Err(Refusal::HoldsSeq(line))
             } else {
@@ -2919,15 +2916,11 @@ pub open spec fn spec_this_field(ps: Params, ret: Option<Ty>, n: u32, sd: Struct
     }
 }
 
-/// The type of the result of a function: a value type, `This` of a constructor, which must not hold a sequence, decision 0094, or
+/// The type of the result of a function: a value type, `This` of a constructor, which can hold a sequence, decision 0187, or
 /// `void`, decision 0096.
 pub open spec fn spec_ret_ty(t: Ty, line: u32, sd: Structs) -> Result<DTy, Refusal> {
     match t {
-        Ty::This(k) => if spec_holds(sd, k) {
-            Err(Refusal::HoldsSeq(line))
-        } else {
-            Ok(DTy::Struct(k))
-        },
+        Ty::This(k) => Ok(DTy::Struct(k)),
         Ty::Void => Ok(DTy::Void),
         // A std::array as a result is a sequence of its fixed extent, decision 0175.
         Ty::Seq(_, Extent::Fixed(_)) => spec_ty(t, line),
@@ -3034,6 +3027,7 @@ pub open spec fn spec_place(s: Stmt) -> u32 {
         Stmt::Assert(_, l) => l,
         Stmt::Apply(_, _, l) => l,
         Stmt::SetIndex(_, _, _, l) => l,
+        Stmt::SetFieldAt(_, _, _, l) => l,
         Stmt::PushBack(_, _, l) => l,
         Stmt::Sort(_, l) => l,
         Stmt::SortBy(_, _, _, _, _, l) => l,
@@ -4320,6 +4314,10 @@ pub open spec fn spec_write_check(s: Stmt, all: Fns, ps: Params, sd: Structs) ->
             Some(r) => Some(r),
             None => spec_check_expr(e, all, ps, sd, l),
         },
+        Stmt::SetFieldAt(_, i, e, l) => match spec_check_expr(i, all, ps, sd, l) {
+            Some(r) => Some(r),
+            None => spec_check_expr(e, all, ps, sd, l),
+        },
         Stmt::Call(_, _, args, l) => spec_check_args(*args, all, ps, sd, l),
         Stmt::While(c, _, _, l) => spec_loop_write(c, all, sd, l),
         Stmt::For(init, c, step, _, _, l) => match spec_write_check(*init, all, ps, sd) {
@@ -4381,6 +4379,10 @@ pub fn write_check(s: &Stmt, all: &Fns, ps: &Params, sd: &Structs) -> (r: Option
         Stmt::If(c, _, _, l) => check_expr(c, all, ps, sd, *l),
         Stmt::Switch(e, _, _, l) => check_expr(e, all, ps, sd, *l),
         Stmt::SetIndex(_, i, e, l) => match check_expr(i, all, ps, sd, *l) {
+            Some(r) => Some(r),
+            None => check_expr(e, all, ps, sd, *l),
+        },
+        Stmt::SetFieldAt(_, i, e, l) => match check_expr(i, all, ps, sd, *l) {
             Some(r) => Some(r),
             None => check_expr(e, all, ps, sd, *l),
         },
@@ -5632,6 +5634,24 @@ pub open spec fn spec_stmt(s: Stmt, all: Fns, env: Params, ps: Params, sd: Struc
                 },
                 _ => Err(Refusal::Syntax(l)),
             },
+        },
+        // `f[i] = e` of a sequence field in a member function that writes its object is a new value of the field, decision 0187.
+        Stmt::SetFieldAt(f, i, e, l) => match spec_self(ps) {
+            Some((p, t)) => match t {
+                Ty::ThisMut(k) => match spec_field_ty(sd, k, f) {
+                    Some(Ty::Seq(_, _)) => match spec_code(i, l) {
+                        Ok(di) => match spec_code(e, l) {
+                            Ok(de) => Ok(DStmt::SetField(f, DExpr::SetAt(Box::new(DExpr::Field(Box::new(DExpr::After), f)), Box::new(di), Box::new(de)))),
+                            Err(r) => Err(r),
+                        },
+                        Err(r) => Err(r),
+                    },
+                    Some(_) => Err(Refusal::Syntax(l)),
+                    None => Err(Refusal::NoField(f, l)),
+                },
+                _ => Err(Refusal::WriteParam(p, l)),
+            },
+            None => Err(Refusal::Syntax(l)),
         },
         // `v.push_back(e)` appends one element, decision 0148. A failed push_back throws and never returns to verified code.
         // ponytail: a call in the value is refused as out of place, as for SetIndex. Upgrade: lift the calls, decision 0104.
@@ -7275,6 +7295,7 @@ pub open spec fn unknown_stmt(s: Stmt) -> bool
         Stmt::SetRefField(_, _, e, _) => unknown_expr(e),
         Stmt::SetOwnField(_, _, e, _) => unknown_expr(e),
         Stmt::SetIndex(_, i, e, _) => unknown_expr(i) || unknown_expr(e),
+        Stmt::SetFieldAt(_, i, e, _) => unknown_expr(i) || unknown_expr(e),
         Stmt::PushBack(_, e, _) => unknown_expr(e),
         Stmt::Sort(_, _) => false,
         Stmt::SortBy(_, _, _, _, e, _) => unknown_expr(e),
@@ -7512,6 +7533,13 @@ pub proof fn lemma_unknown_stmt_is_refused(s: Stmt, all: Fns, env: Params, ps: P
             lemma_unknown_lift_is_refused(spec_unmove(e).0, all, l, sd, 0, true);
         },
         Stmt::SetIndex(_, i, e, l) => {
+            if unknown_expr(i) {
+                lemma_unknown_code_is_refused(i, l);
+            } else {
+                lemma_unknown_code_is_refused(e, l);
+            }
+        },
+        Stmt::SetFieldAt(_, i, e, l) => {
             if unknown_expr(i) {
                 lemma_unknown_code_is_refused(i, l);
             } else {
@@ -8636,7 +8664,7 @@ pub proof fn lemma_resolves_set_own_field(s: Stmt, all: Fns, env: Params, ps: Pa
 pub proof fn lemma_resolves_plain(s: Stmt, all: Fns, env: Params, ps: Params, sd: Structs)
     requires
         spec_stmt(s, all, env, ps, sd).is_ok(),
-        s is Step || s is Assert || s is Apply || s is Unknown || s is SetIndex || s is Sort || s is SortBy,
+        s is Step || s is Assert || s is Apply || s is Unknown || s is SetIndex || s is SetFieldAt || s is Sort || s is SortBy,
     ensures
         calls_resolve_stmt(spec_stmt(s, all, env, ps, sd).unwrap(), all, sd),
 {
@@ -8757,6 +8785,7 @@ pub proof fn lemma_stmt_calls_resolve(s: Stmt, all: Fns, env: Params, ps: Params
         Stmt::Apply(_, _, _) => lemma_resolves_plain(s, all, env, ps, sd),
         Stmt::Unknown(_, _) => lemma_resolves_plain(s, all, env, ps, sd),
         Stmt::SetIndex(_, _, _, _) => lemma_resolves_plain(s, all, env, ps, sd),
+        Stmt::SetFieldAt(_, _, _, _) => lemma_resolves_plain(s, all, env, ps, sd),
         Stmt::PushBack(_, _, _) => lemma_resolves_push(s, all, env, ps, sd),
         Stmt::Sort(_, _) => lemma_resolves_plain(s, all, env, ps, sd),
         Stmt::SortBy(_, _, _, _, _, _) => lemma_resolves_plain(s, all, env, ps, sd),
@@ -8983,11 +9012,6 @@ pub fn translate_value_ty(t: Ty, line: u32, sd: &Structs) -> (r: Result<DTy, Ref
             Ty::Iface(_) => Err(Refusal::Syntax(line)),
             Ty::IfaceRef(_) => Err(Refusal::Syntax(line)),
             Ty::IfaceMut(_) => Err(Refusal::Syntax(line)),
-            Ty::Struct(k) => if holds_seq(sd, k) {
-                Err(Refusal::HoldsSeq(line))
-            } else {
-                Ok(dt)
-            },
             Ty::Opt(Scalar::Struct(k)) => if holds_seq(sd, k) {
                 Err(Refusal::HoldsSeq(line))
             } else {
@@ -10407,11 +10431,7 @@ pub fn ret_ty(t: Ty, line: u32, sd: &Structs) -> (r: Result<DTy, Refusal>)
         r == spec_ret_ty(t, line, *sd),
 {
     match t {
-        Ty::This(k) => if holds_seq(sd, k) {
-            Err(Refusal::HoldsSeq(line))
-        } else {
-            Ok(DTy::Struct(k))
-        },
+        Ty::This(k) => Ok(DTy::Struct(k)),
         Ty::Void => Ok(DTy::Void),
         Ty::Seq(_, Extent::Fixed(_)) => translate_ty(t, line),
         _ => translate_value_ty(t, line, sd),
@@ -10525,6 +10545,7 @@ pub fn place(s: &Stmt) -> (r: u32)
         Stmt::Assert(_, l) => *l,
         Stmt::Apply(_, _, l) => *l,
         Stmt::SetIndex(_, _, _, l) => *l,
+        Stmt::SetFieldAt(_, _, _, l) => *l,
         Stmt::PushBack(_, _, l) => *l,
         Stmt::Sort(_, l) => *l,
         Stmt::SortBy(_, _, _, _, _, l) => *l,
@@ -11316,6 +11337,23 @@ pub fn translate_stmt(s: &Stmt, all: &Fns, env: &Params, ps: &Params, sd: &Struc
                 },
                 _ => Err(Refusal::Syntax(*l)),
             },
+        },
+        Stmt::SetFieldAt(f, i, e, l) => match self_param(ps) {
+            Some((p, t)) => match t {
+                Ty::ThisMut(k) => match field_ty(sd, k, *f) {
+                    Some(Ty::Seq(_, _)) => match translate_code(i, *l) {
+                        Ok(di) => match translate_code(e, *l) {
+                            Ok(de) => Ok(DStmt::SetField(*f, DExpr::SetAt(Box::new(DExpr::Field(Box::new(DExpr::After), *f)), Box::new(di), Box::new(de)))),
+                            Err(r) => Err(r),
+                        },
+                        Err(r) => Err(r),
+                    },
+                    Some(_) => Err(Refusal::Syntax(*l)),
+                    None => Err(Refusal::NoField(*f, *l)),
+                },
+                _ => Err(Refusal::WriteParam(p, *l)),
+            },
+            None => Err(Refusal::Syntax(*l)),
         },
         Stmt::PushBack(v, e, l) => match get(ps, *v) {
             Some(Ty::MutSeq(_)) => match push_value(e, all, *l, sd) {
@@ -13849,6 +13887,7 @@ pub open spec fn spec_gstmt(s: Stmt, gs: Params, gps: Params, hide: Names, fs: F
         Stmt::Call(k, nm, args, l) => Stmt::Call(k, nm, Box::new(spec_append(spec_gargs(*args, gs, gps, hide, fs), spec_gextra(k, gs, gps, fs))), l),
         Stmt::RangeFor(fr, x, xt, sq, lc, body, l) => Stmt::RangeFor(fr, x, xt, spec_gexpr(sq, gs, gps, hide, fs), lc, Box::new(spec_gstmts(*body, gs, gps, hide, fs)), l),
         Stmt::SetIndex(v, i, e, l) => Stmt::SetIndex(v, spec_gexpr(i, gs, gps, hide, fs), spec_gexpr(e, gs, gps, hide, fs), l),
+        Stmt::SetFieldAt(f, i, e, l) => Stmt::SetFieldAt(f, spec_gexpr(i, gs, gps, hide, fs), spec_gexpr(e, gs, gps, hide, fs), l),
         Stmt::PushBack(v, e, l) => Stmt::PushBack(v, spec_gexpr(e, gs, gps, hide, fs), l),
         // The comparator reads a listed global as the function does. Its two parameters hide globals of their names.
         Stmt::SortBy(v, a, b, t, e, l) => Stmt::SortBy(v, a, b, t, spec_gexpr(e, gs, gps, List::Cons(a, Box::new(List::Cons(b, Box::new(hide)))), fs), l),
@@ -13916,6 +13955,7 @@ pub fn copy_stmt(s: &Stmt) -> (r: Stmt)
         Stmt::Apply(k, args, l) => Stmt::Apply(*k, Box::new(copy_args(args)), *l),
         Stmt::RangeFor(fr, x, xt, sq, lc, body, l) => Stmt::RangeFor(*fr, *x, *xt, copy_expr(sq), Box::new(copy_conds(lc)), Box::new(copy_stmts(body)), *l),
         Stmt::SetIndex(v, i, e, l) => Stmt::SetIndex(*v, copy_expr(i), copy_expr(e), *l),
+        Stmt::SetFieldAt(f, i, e, l) => Stmt::SetFieldAt(*f, copy_expr(i), copy_expr(e), *l),
         Stmt::PushBack(v, e, l) => Stmt::PushBack(*v, copy_expr(e), *l),
         Stmt::Sort(v, l) => Stmt::Sort(*v, *l),
         Stmt::SortBy(v, a, b, t, e, l) => Stmt::SortBy(*v, *a, *b, *t, copy_expr(e), *l),
@@ -13981,6 +14021,7 @@ pub fn gstmt(s: &Stmt, gs: &Params, gps: &Params, hide: &Names, fs: &Fns) -> (r:
         Stmt::Call(k, nm, args, l) => Stmt::Call(*k, *nm, Box::new(append(gargs(args, gs, gps, hide, fs), gextra(*k, gs, gps, fs))), *l),
         Stmt::RangeFor(fr, x, xt, sq, lc, body, l) => Stmt::RangeFor(*fr, *x, *xt, gexpr(sq, gs, gps, hide, fs), Box::new(copy_conds(lc)), Box::new(gstmts(body, gs, gps, hide, fs)), *l),
         Stmt::SetIndex(v, i, e, l) => Stmt::SetIndex(*v, gexpr(i, gs, gps, hide, fs), gexpr(e, gs, gps, hide, fs), *l),
+        Stmt::SetFieldAt(f, i, e, l) => Stmt::SetFieldAt(*f, gexpr(i, gs, gps, hide, fs), gexpr(e, gs, gps, hide, fs), *l),
         Stmt::PushBack(v, e, l) => Stmt::PushBack(*v, gexpr(e, gs, gps, hide, fs), *l),
         Stmt::SortBy(v, a, b, t, e, l) => Stmt::SortBy(*v, *a, *b, *t, gexpr(e, gs, gps, &List::Cons(*a, Box::new(List::Cons(*b, Box::new(copy(hide))))), fs), *l),
         _ => copy_stmt(s),
@@ -14107,6 +14148,7 @@ pub open spec fn spec_gcalls_stmt(s: Stmt) -> List<(u32, u32, u32)>
         Stmt::Call(k, nm, args, l) => List::Cons((k, nm, l), Box::new(spec_gcalls_args(*args))),
         Stmt::RangeFor(_, _, _, sq, _, body, _) => spec_append(spec_gcalls(sq), spec_gcalls_stmts(*body)),
         Stmt::SetIndex(_, i, e, _) => spec_append(spec_gcalls(i), spec_gcalls(e)),
+        Stmt::SetFieldAt(_, i, e, _) => spec_append(spec_gcalls(i), spec_gcalls(e)),
         Stmt::PushBack(_, e, _) => spec_gcalls(e),
         _ => List::Nil,
     }
@@ -14151,6 +14193,7 @@ pub fn gcalls_stmt(s: &Stmt) -> (r: List<(u32, u32, u32)>)
         Stmt::Call(k, nm, args, l) => List::Cons((*k, *nm, *l), Box::new(gcalls_args(args))),
         Stmt::RangeFor(_, _, _, sq, _, body, _) => append(gcalls(sq), gcalls_stmts(body)),
         Stmt::SetIndex(_, i, e, _) => append(gcalls(i), gcalls(e)),
+        Stmt::SetFieldAt(_, i, e, _) => append(gcalls(i), gcalls(e)),
         Stmt::PushBack(_, e, _) => gcalls(e),
         _ => List::Nil,
     }

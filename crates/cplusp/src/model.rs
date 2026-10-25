@@ -157,6 +157,8 @@ enum JStmt {
     SetField(String, JExpr, u32),
     /// `v[i] = e` where `v` is a vector by reference, decision 0145.
     SetIndex(String, JExpr, JExpr, u32),
+    /// `f[i] = e` where `f` is a vector or array field of the object, decision 0187.
+    SetFieldAt(String, JExpr, JExpr, u32),
     /// `v.push_back(e)` where `v` is a vector by reference, decision 0148.
     PushBack(String, JExpr, u32),
     /// `std::sort(v.begin(), v.end())`, decision 0161.
@@ -526,6 +528,7 @@ fn stmt(s: JStmt, names: &mut Names) -> Stmt {
         JStmt::Step(n, t, up, line) => Stmt::Step(names.id(&n), ty(t, names), up, names.here(line)),
         JStmt::SetField(f, e, line) => Stmt::SetField(names.id(&f), expr(e, names), names.here(line)),
         JStmt::SetIndex(v, i, e, line) => Stmt::SetIndex(names.id(&v), expr(i, names), expr(e, names), names.here(line)),
+        JStmt::SetFieldAt(f, i, e, line) => Stmt::SetFieldAt(names.id(&f), expr(i, names), expr(e, names), names.here(line)),
         JStmt::PushBack(v, e, line) => Stmt::PushBack(names.id(&v), expr(e, names), names.here(line)),
         JStmt::Sort(v, line) => Stmt::Sort(names.id(&v), names.here(line)),
         JStmt::SortBy(v, a, b, t, e, line) => {
@@ -995,7 +998,7 @@ fn stmt_names<'a>(s: &'a JStmt, out: &mut Vec<&'a str>) {
             out.push(v);
             expr_names(e, out);
         }
-        JStmt::SetIndex(v, i, e, _) => {
+        JStmt::SetIndex(v, i, e, _) | JStmt::SetFieldAt(v, i, e, _) => {
             out.push(v);
             expr_names(i, out);
             expr_names(e, out);
@@ -2207,7 +2210,7 @@ fn sentence(r: Refusal, names: &Names) -> (u32, String) {
         Refusal::Unlisted(n, line) => (line, format!("{} is a reference parameter that the modifies line does not name.", names.text(n))),
         Refusal::NoVar(n, line) => (line, format!("{} in the {} line is no variable.", names.text(n), names.contracts.get(&line).map_or("contract", |c| c.0.as_str()))),
         Refusal::SeqParam(line) => (line, "a sequence is in the subset only as a parameter.".to_string()),
-        Refusal::HoldsSeq(line) => (line, "a struct that holds a sequence is in the subset only as a parameter that the function does not write.".to_string()),
+        Refusal::HoldsSeq(line) => (line, "a struct that holds a sequence has no rule yet in an optional, a pointer, a unique_ptr, or a vector that the code makes or writes.".to_string()),
         Refusal::Element(line) => (line, "an optional of a struct or a sequence of bool has no rule yet.".to_string()),
         Refusal::Extent(line) => (line, "a sequence or an optional made from one of another type or length.".to_string()),
         Refusal::MoveRead(n, line) => (line, format!("{} moves and is read in one statement. C++ does not fix the order.", names.text(n))),
