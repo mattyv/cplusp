@@ -1,0 +1,41 @@
+//! The translator from the C++ subset to Dafny, decisions 0056, 0057 and 0058.
+//!
+//! The shell hands this module the compiler's tree of the functions of one file as plain data, and gets a model of each back. Each
+//! rule of the translation is a spec function here, and each exec function is proved to compute exactly its spec. The proofs say:
+//!
+//! - `translate_unit` and `translate_function`: the result is the spec model, `spec_unit` and `spec_function`.
+//! - a node that the translator does not know is refused, never skipped: `lemma_unknown_is_refused`.
+//! - a translated body has one Dafny statement for each C++ statement: `lemma_statements_kept`.
+//! - each call in a method names a function that has a method in the model: `lemma_calls_resolve`.
+//! - `parse_contract`: it ends, it reads every token or refuses the line, and an expression it gives holds no unknown node.
+//!
+//! A Dafny expression has no call, so a call in a method stands alone by the shape of the types.
+//! The lists are cons lists, so that each rule and each proof is one structural recursion.
+//! Names, keys of functions, kinds of construct and lines are numbers. The shell keeps the table of names and prints the text.
+
+mod lists;
+mod cpp_side;
+mod dafny_side;
+mod rules;
+mod writes;
+mod dtor;
+mod virtuals;
+mod properties;
+mod code;
+mod parser;
+mod globals;
+mod statics;
+
+pub use lists::*;
+pub use cpp_side::*;
+pub use dafny_side::*;
+pub use rules::*;
+pub use writes::*;
+pub use dtor::*;
+pub use virtuals::*;
+#[allow(unused_imports)]
+pub use properties::*;
+pub use code::*;
+pub use parser::*;
+pub use globals::*;
+pub use statics::*;

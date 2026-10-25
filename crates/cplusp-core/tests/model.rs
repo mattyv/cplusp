@@ -1,4 +1,4 @@
-//! The translator core on the shapes of `examples/saturating_add`, decisions 0056 and 0058. The proofs in src/model.rs say that each
+//! The translator core on the shapes of `examples/saturating_add`, decisions 0056 and 0058. The proofs in src/model/ say that each
 //! function computes its rule. These tests pin what the rules give for real functions, and for each refusal.
 
 use cplusp_core::model::*;

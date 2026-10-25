@@ -476,6 +476,7 @@ pub open spec fn covers(t: Seq<u8>, toks: Seq<Lexeme>, from: int) -> bool
     }
 }
 
+#[verifier::rlimit(20)]
 proof fn lemma_covers(t: Seq<u8>, i: int)
     requires
         0 <= i <= t.len(),
