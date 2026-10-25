@@ -263,6 +263,12 @@ struct JStruct {
     /// The name of the class in C++ with its namespaces, for the Axiom line of an interface, decision 0166.
     #[serde(default)]
     qualified: String,
+    /// The type arguments of an instance of a class template, decision 0188.
+    #[serde(default)]
+    of: Vec<JTy>,
+    /// The Dafny name without `S_`: the name, and for an instance `'of'` and the Dafny type of each argument. Set after the lines are read, decision 0188.
+    #[serde(skip)]
+    full: String,
 }
 
 #[derive(Deserialize)]
@@ -1083,6 +1089,61 @@ fn dafny_word(name: &str) -> &str {
 
 fn readable(name: &str) -> bool {
     name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
+}
+
+/// The Dafny word for a type argument: `int32` for `int32_t`, `S_Box'of'int32` for a struct, decision 0180. A type with no word is `other`.
+fn type_word(t: &JTy, struct_name: &dyn Fn(&str) -> String, enum_name: &dyn Fn(&str) -> String) -> String {
+    match t {
+        JTy::I8 => "int8".to_string(),
+        JTy::I16 => "int16".to_string(),
+        JTy::I32 => "int32".to_string(),
+        JTy::I64 => "int64".to_string(),
+        JTy::U8 => "uint8".to_string(),
+        JTy::U16 => "uint16".to_string(),
+        JTy::U32 => "uint32".to_string(),
+        JTy::U64 => "uint64".to_string(),
+        JTy::F64 => "real".to_string(),
+        JTy::Struct(k) => format!("S_{}", struct_name(k)),
+        JTy::Enum(k) => format!("E_{}", enum_name(k)),
+        JTy::Bool => "bool".to_string(),
+        _ => "other".to_string(),
+    }
+}
+
+/// Whether a type argument has a word in the model, decision 0180. ponytail: a scalar, a struct or an enum. Upgrade: a word for a sequence, an optional.
+fn has_word(t: &JTy) -> bool {
+    matches!(t, JTy::I8 | JTy::I16 | JTy::I32 | JTy::I64 | JTy::U8 | JTy::U16 | JTy::U32 | JTy::U64 | JTy::Bool | JTy::F64 | JTy::Struct(_) | JTy::Enum(_))
+}
+
+/// Whether an instance of a class template has a type argument with no Dafny name, decision 0188.
+fn unnamed_arguments(st: &JStruct) -> bool {
+    st.of.iter().any(|t| !has_word(t))
+}
+
+/// Sets `full` of each struct: its name, then for an instance of a class template `'of'` and the word of each argument joined by `'`, decision 0188.
+fn set_full_names(items: &mut [(Item, &str)]) {
+    let enums: Vec<(String, String)> = items
+        .iter()
+        .filter_map(|(i, _)| match i {
+            Item::Enum(en) => Some((en.key.clone(), en.name.clone())),
+            _ => None,
+        })
+        .collect();
+    // An argument is a struct that comes earlier or later in the lines, so each name is built from the arguments, which are smaller types.
+    fn full(st: &JStruct, items: &[(Item, &str)], enums: &[(String, String)]) -> String {
+        if st.of.is_empty() {
+            return st.name.clone();
+        }
+        let struct_name = |k: &str| items.iter().find_map(|(i, _)| match i { Item::Struct(g) if g.key == k => Some(full(g, items, enums)), _ => None }).unwrap_or_default();
+        let enum_name = |k: &str| enums.iter().find(|(key, _)| key == k).map(|(_, n)| n.clone()).unwrap_or_default();
+        format!("{}'of'{}", st.name, st.of.iter().map(|t| type_word(t, &struct_name, &enum_name)).collect::<Vec<_>>().join("'"))
+    }
+    let fulls: Vec<(String, String)> = items.iter().filter_map(|(i, _)| match i { Item::Struct(st) => Some((st.key.clone(), full(st, items, &enums))), _ => None }).collect();
+    for (item, _) in items.iter_mut() {
+        if let Item::Struct(st) = item {
+            st.full = fulls.iter().find(|(k, _)| *k == st.key).map(|(_, f)| f.clone()).unwrap_or_default();
+        }
+    }
 }
 
 /// The first name of the struct, its own or a field's, with a character that Dafny cannot read.
@@ -2307,11 +2368,13 @@ pub fn translate(lines: &str, companion: Option<(&str, &str)>) -> Result<Transla
     for l in lines.lines().filter(|l| !l.trim().is_empty()) {
         items.push((serde_json::from_str(l).with_context(|| format!("cannot read a line of the tree: {l}"))?, l));
     }
+    // The Dafny name of each struct, and of an instance of a class template with its arguments, decision 0188.
+    set_full_names(&mut items);
     // A function that names a struct or an enum refused for its name has no method, with no refusal of its own.
     let mut unreadable_keys: Vec<String> = items
         .iter()
         .filter_map(|(i, _)| match i {
-            Item::Struct(st) => unreadable_struct_name(st).map(|_| &st.key),
+            Item::Struct(st) => unreadable_struct_name(st).or_else(|| unnamed_arguments(st).then_some("")).map(|_| &st.key),
             Item::Enum(en) => unreadable_enum_name(en).map(|_| &en.key),
             _ => None,
         })
@@ -2359,6 +2422,10 @@ pub fn translate(lines: &str, companion: Option<(&str, &str)>) -> Result<Transla
                 Some(n) => refusals.push((en.file.clone(), en.line, format!("{n}: a name with a character Dafny cannot read."))),
                 None => enums.push(en),
             },
+            // An instance of a class template with a type argument that has no Dafny name, decision 0188.
+            Item::Struct(st) if unnamed_arguments(&st) => {
+                refusals.push((st.file.clone(), st.line, "a type argument with no Dafny name: the translator has no rule for it yet.".to_string()))
+            }
             Item::Struct(st) if dropped.contains(&st.key) => {
                 first_dropped.get_or_insert((st.file.clone(), st.line));
             }
@@ -2368,7 +2435,7 @@ pub fn translate(lines: &str, companion: Option<(&str, &str)>) -> Result<Transla
             }
             // A type argument with no word has no name in the model, decision 0180. ponytail: a scalar, a struct or an enum. Upgrade: a word for a sequence, an optional.
             // A signature the core refuses is reported by its own type first.
-            Item::Function(f) if !matches!(f.ret, JTy::Other(_)) && !f.params.iter().any(|(_, t)| matches!(t, JTy::Other(_))) && f.of.iter().any(|t| !matches!(t, JTy::I8 | JTy::I16 | JTy::I32 | JTy::I64 | JTy::U8 | JTy::U16 | JTy::U32 | JTy::U64 | JTy::Bool | JTy::F64 | JTy::Struct(_) | JTy::Enum(_))) => {
+            Item::Function(f) if !matches!(f.ret, JTy::Other(_)) && !f.params.iter().any(|(_, t)| matches!(t, JTy::Other(_))) && f.of.iter().any(|t| !has_word(t)) => {
                 refusals.push((f.file.clone(), f.line, "a type argument with no Dafny name: the translator has no rule for it yet.".to_string()))
             }
             Item::Function(f) => match unreadable_name(&f) {
@@ -2393,26 +2460,12 @@ pub fn translate(lines: &str, companion: Option<(&str, &str)>) -> Result<Transla
     // 0094. C++ cannot write `'`, so it clashes with no name.
     let plain = |f: &JFunction| match (f.params.first(), &f.ret) {
         // `this` of a virtual function of an interface names it too, decision 0165.
-        (Some((_, JTy::This(k) | JTy::ThisMut(k) | JTy::Iface(k) | JTy::IfaceMut(k))), _) | (_, JTy::This(k)) => format!("{}'{}", structs.iter().find(|s| s.key == *k).map_or("", |s| s.name.as_str()), dafny_word(&f.name)),
+        (Some((_, JTy::This(k) | JTy::ThisMut(k) | JTy::Iface(k) | JTy::IfaceMut(k))), _) | (_, JTy::This(k)) => format!("{}'{}", structs.iter().find(|s| s.key == *k).map_or("", |s| s.full.as_str()), dafny_word(&f.name)),
         // A static member function has the name of its class, `Tally::bump` is `Tally'bump`, decision 0174.
         // An instance of a function template is the template, `'of'`, and the Dafny type of each argument, joined by `'`, decision 0180. A `'` never clashes.
         _ => {
             let base = operator_word(&f.name).map_or_else(|| f.name.replace("::", "'"), str::to_string);
-            let word = |t: &JTy| match t {
-                JTy::I8 => "int8".to_string(),
-                JTy::I16 => "int16".to_string(),
-                JTy::I32 => "int32".to_string(),
-                JTy::I64 => "int64".to_string(),
-                JTy::U8 => "uint8".to_string(),
-                JTy::U16 => "uint16".to_string(),
-                JTy::U32 => "uint32".to_string(),
-                JTy::U64 => "uint64".to_string(),
-                JTy::F64 => "real".to_string(),
-                JTy::Struct(k) => format!("S_{}", structs.iter().find(|s| s.key == *k).map_or("", |s| s.name.as_str())),
-                JTy::Enum(k) => format!("E_{}", enums.iter().find(|e| e.key == *k).map_or("", |e| e.name.as_str())),
-                JTy::Bool => "bool".to_string(),
-                _ => "other".to_string(),
-            };
+            let word = |t: &JTy| type_word(t, &|k| structs.iter().find(|s| s.key == *k).map_or("", |s| s.full.as_str()).to_string(), &|k| enums.iter().find(|e| e.key == *k).map_or("", |e| e.name.as_str()).to_string());
             if f.of.is_empty() { base } else { format!("{base}'of'{}", f.of.iter().map(word).collect::<Vec<_>>().join("'")) }
         }
     };
@@ -2452,10 +2505,10 @@ pub fn translate(lines: &str, companion: Option<(&str, &str)>) -> Result<Transla
     // The Dafny name of each struct: `S_{plain}`, or `S_{plain}'{k}` when two structs share a plain name.
     let mut table = Structs::Nil;
     for (i, st) in structs.iter().enumerate() {
-        let same = structs.iter().filter(|g| g.name == st.name).count();
-        let k = structs[..=i].iter().filter(|g| g.name == st.name).count();
+        let same = structs.iter().filter(|g| g.full == st.full).count();
+        let k = structs[..=i].iter().filter(|g| g.full == st.full).count();
         let key = names.id(&st.key);
-        names.datatypes.insert(key, if same == 1 { format!("S_{}", st.name) } else { format!("S_{}'{k}", st.name) });
+        names.datatypes.insert(key, if same == 1 { format!("S_{}", st.full) } else { format!("S_{}'{k}", st.full) });
         names.class_names.insert(key, st.name.clone());
         names.members.insert(st.key.clone(), st.members.iter().map(|(n, _)| n.clone()).collect());
         names.struct_fields.insert(st.key.clone(), st.fields.iter().filter(|(_, t)| matches!(t, JTy::Struct(_))).map(|(n, _)| n.clone()).collect());

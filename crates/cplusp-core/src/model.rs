@@ -2323,6 +2323,7 @@ pub open spec fn spec_contract(e: Expr, decl: Names, ps: Params, ret: Option<Ty>
             // `o.value()` of an object of a struct calls its member `value`, decision 0169.
             Ok((d, t)) => match spec_struct_key(t) {
                 Some(k) => match spec_member(sd, k, VALUE_NAME) {
+                    Some((key, Some((Ty::Other(_), _)))) => Err(Refusal::Callee(key, line)),
                     Some((key, Some((rt, _)))) => spec_leaf(DExpr::FCall(key, Box::new(List::Cons(d, Box::new(List::Nil)))), rt, line),
                     _ => Err(Refusal::NotPure(VALUE_NAME, line)),
                 },
@@ -2336,6 +2337,7 @@ pub open spec fn spec_contract(e: Expr, decl: Names, ps: Params, ret: Option<Ty>
         } else {
             match spec_functor(f, decl, ps, ret, bound, sd) {
             Some((d, k)) => match spec_member(sd, k, CALL_OP) {
+                Some((key, Some((Ty::Other(_), _)))) => Err(Refusal::Callee(key, line)),
                 Some((key, Some((rt, mps)))) => match spec_contract_args(*args, decl, ps, ret, bound, line, sd) {
                     Ok(da) => spec_leaf(DExpr::FCall(key, Box::new(List::Cons(d, Box::new(spec_convert(da, spec_tail(mps)))))), rt, line),
                     Err(r) => Err(r),
@@ -2344,6 +2346,8 @@ pub open spec fn spec_contract(e: Expr, decl: Names, ps: Params, ret: Option<Ty>
             },
             None => match spec_object(ps, ret) {
             Some((o, k)) => match spec_member(sd, k, f) {
+                // A member with no function of the file, decision 0188.
+                Some((key, Some((Ty::Other(_), _)))) => Err(Refusal::Callee(key, line)),
                 Some((key, Some((t, mps)))) => match spec_contract_args(*args, decl, ps, ret, bound, line, sd) {
                     Ok(da) => spec_leaf(DExpr::FCall(key, Box::new(List::Cons(o, Box::new(spec_convert(da, spec_tail(mps)))))), t, line),
                     Err(r) => Err(r),
@@ -2384,6 +2388,7 @@ pub open spec fn spec_contract(e: Expr, decl: Names, ps: Params, ret: Option<Ty>
         Expr::MApply(o, f, args) => match spec_path(*o, decl, ps, ret, bound, line, sd) {
             Ok((d, t)) => match spec_struct_key(t) {
                 Some(k) => match spec_member(sd, k, f) {
+                    Some((key, Some((Ty::Other(_), _)))) => Err(Refusal::Callee(key, line)),
                     Some((key, Some((rt, mps)))) => match spec_contract_args(*args, decl, ps, ret, bound, line, sd) {
                         Ok(da) => spec_leaf(DExpr::FCall(key, Box::new(List::Cons(d, Box::new(spec_convert(da, spec_tail(mps)))))), rt, line),
                         Err(r) => Err(r),
@@ -6552,7 +6557,17 @@ pub open spec fn spec_mark_members(ms: Members, all: Fns, sd: Structs, strict: b
 {
     match ms {
         List::Nil => List::Nil,
-        List::Cons((n, (key, _)), rest) => List::Cons((n, (key, spec_pure_ret(all, key, sd, strict))), Box::new(spec_mark_members(*rest, all, sd, strict))),
+        List::Cons((n, (key, _)), rest) => List::Cons((n, (key, spec_member_mark(all, key, sd, strict))), Box::new(spec_mark_members(*rest, all, sd, strict))),
+    }
+}
+
+/// The mark of the member with the key `key`: its type and parameters when it is pure. A member with no function of the file, as a
+/// member of a class template that no instance makes, has the type `Other` of its key, which no pure member has, decision 0188.
+pub open spec fn spec_member_mark(all: Fns, key: u32, sd: Structs, strict: bool) -> Option<(Ty, Params)> {
+    if spec_find(all, key) is None {
+        Some((Ty::Other(key), List::Nil))
+    } else {
+        spec_pure_ret(all, key, sd, strict)
     }
 }
 
@@ -7804,7 +7819,7 @@ pub proof fn lemma_kept_assign(s: Stmt, all: Fns, env: Params, ps: Params, sd: S
 pub proof fn lemma_kept_set_field(s: Stmt, all: Fns, env: Params, ps: Params, sd: Structs)
     requires
         spec_stmt(s, all, env, ps, sd).is_ok(),
-        s is SetField || s is SetRefField || s is PushBack,
+        s is SetField || s is SetRefField || s is SetFieldAt || s is PushBack,
     ensures
         count_dstmt(spec_stmt(s, all, env, ps, sd).unwrap()) == 1,
 {
@@ -7984,6 +7999,7 @@ pub proof fn lemma_stmt_kept(s: Stmt, all: Fns, env: Params, ps: Params, sd: Str
         Stmt::SetRefField(_, _, _, _) => lemma_kept_set_field(s, all, env, ps, sd),
         Stmt::SetOwnField(_, _, _, _) => lemma_kept_set_own_field(s, all, env, ps, sd),
         Stmt::PushBack(_, _, _) => lemma_kept_set_field(s, all, env, ps, sd),
+        Stmt::SetFieldAt(_, _, _, _) => lemma_kept_set_field(s, all, env, ps, sd),
         Stmt::Switch(e, k, cs, l) => {
             lemma_cases_kept(*cs, all, env, ps, sd);
             let ce = spec_lift(e, all, l, sd, 0, true).unwrap();
@@ -9803,6 +9819,7 @@ pub fn translate_contract(e: &Expr, decl: &Names, ps: &Params, ret: Option<Ty>, 
             Ok((d, Ty::Own(s))) => translate_leaf(DExpr::Get(Box::new(d)), elem(s), line),
             Ok((d, t)) => match struct_key(t) {
                 Some(k) => match member(sd, k, VALUE_NAME) {
+                    Some((key, Some((Ty::Other(_), _)))) => Err(Refusal::Callee(key, line)),
                     Some((key, Some((rt, _)))) => translate_leaf(DExpr::FCall(key, Box::new(List::Cons(d, Box::new(List::Nil)))), rt, line),
                     _ => Err(Refusal::NotPure(VALUE_NAME, line)),
                 },
@@ -9815,6 +9832,7 @@ pub fn translate_contract(e: &Expr, decl: &Names, ps: &Params, ret: Option<Ty>, 
         } else {
             match functor(*f, decl, ps, ret, bound, sd) {
             Some((d, k)) => match member(sd, k, CALL_OP) {
+                Some((key, Some((Ty::Other(_), _)))) => Err(Refusal::Callee(key, line)),
                 Some((key, Some((rt, mps)))) => match translate_contract_args(args, decl, ps, ret, bound, line, sd) {
                     Ok(da) => translate_leaf(DExpr::FCall(key, Box::new(List::Cons(d, Box::new(convert(da, &tail(&mps)))))), rt, line),
                     Err(r) => Err(r),
@@ -9823,6 +9841,7 @@ pub fn translate_contract(e: &Expr, decl: &Names, ps: &Params, ret: Option<Ty>, 
             },
             None => match object(ps, ret) {
             Some((o, k)) => match member(sd, k, *f) {
+                Some((key, Some((Ty::Other(_), _)))) => Err(Refusal::Callee(key, line)),
                 Some((key, Some((t, mps)))) => match translate_contract_args(args, decl, ps, ret, bound, line, sd) {
                     Ok(da) => translate_leaf(DExpr::FCall(key, Box::new(List::Cons(o, Box::new(convert(da, &tail(&mps)))))), t, line),
                     Err(r) => Err(r),
@@ -9862,6 +9881,7 @@ pub fn translate_contract(e: &Expr, decl: &Names, ps: &Params, ret: Option<Ty>, 
         Expr::MApply(o, f, args) => match path(o, decl, ps, ret, bound, line, sd) {
             Ok((d, t)) => match struct_key(t) {
                 Some(k) => match member(sd, k, *f) {
+                    Some((key, Some((Ty::Other(_), _)))) => Err(Refusal::Callee(key, line)),
                     Some((key, Some((rt, mps)))) => match translate_contract_args(args, decl, ps, ret, bound, line, sd) {
                         Ok(da) => translate_leaf(DExpr::FCall(key, Box::new(List::Cons(d, Box::new(convert(da, &tail(&mps)))))), rt, line),
                         Err(r) => Err(r),
@@ -12274,6 +12294,17 @@ pub fn pure_ret(all: &Fns, key: u32, sd: &Structs, strict: bool) -> (r: Option<(
     }
 }
 
+pub fn member_mark(all: &Fns, key: u32, sd: &Structs, strict: bool) -> (r: Option<(Ty, Params)>)
+    ensures
+        r == spec_member_mark(*all, key, *sd, strict),
+{
+    if find(all, key).is_none() {
+        Some((Ty::Other(key), List::Nil))
+    } else {
+        pure_ret(all, key, sd, strict)
+    }
+}
+
 pub fn mark_members(ms: &Members, all: &Fns, sd: &Structs, strict: bool) -> (r: Members)
     ensures
         r == spec_mark_members(*ms, *all, *sd, strict),
@@ -12281,7 +12312,7 @@ pub fn mark_members(ms: &Members, all: &Fns, sd: &Structs, strict: bool) -> (r: 
 {
     match ms {
         List::Nil => List::Nil,
-        List::Cons((n, (key, _)), rest) => List::Cons((*n, (*key, pure_ret(all, *key, sd, strict))), Box::new(mark_members(rest, all, sd, strict))),
+        List::Cons((n, (key, _)), rest) => List::Cons((*n, (*key, member_mark(all, *key, sd, strict))), Box::new(mark_members(rest, all, sd, strict))),
     }
 }
 

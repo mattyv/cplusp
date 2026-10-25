@@ -4761,12 +4761,13 @@ private:
     if (!RD || !RD->hasDefinition())
       return nullptr;
     RD = RD->getDefinition();
-    if (RD->isUnion() || RD->isLambda() || !RD->getIdentifier() || RD->isDependentContext() || isa<ClassTemplateSpecializationDecl>(RD) ||
+    if (RD->isUnion() || RD->isLambda() || !RD->getIdentifier() || RD->isDependentContext() || (isa<ClassTemplateSpecializationDecl>(RD) && !namedInstance(RD)) ||
         ((RD->getNumBases() || RD->isPolymorphic()) && !finalOverInterface(RD)))
       return nullptr;
     // A member function, a static member and a private field do not change the value of the struct, decision 0089. A member template still has no rule, decision 0089.
+    // An instance of a class template keeps its member template, which is refused at the template, decision 0188.
     for (const Decl *D : RD->decls())
-      if (isa<FunctionTemplateDecl>(D))
+      if (isa<FunctionTemplateDecl>(D) && !isa<ClassTemplateSpecializationDecl>(RD))
         return nullptr;
     // A struct that holds a sequence of itself is in its own fields: assume it is plain there, decision 0076.
     if (!Visiting.insert(RD).second)
@@ -4895,6 +4896,110 @@ private:
   }
 
 public:
+  // A class template with type parameters only has instances that are structs of the model, decision 0188. Any other class template is refused.
+  static bool typeOnlyClass(const ClassTemplateDecl *T) {
+    if (!T)
+      return false;
+    for (const NamedDecl *P : *T->getTemplateParameters())
+      if (!isa<TemplateTypeParmDecl>(P) || cast<TemplateTypeParmDecl>(P)->isParameterPack())
+        return false;
+    return true;
+  }
+  // An instance of a class template of the main file with type parameters only, as the compiler makes it, or null, decision 0188. An explicit
+  // or a partial specialization is a class of its own, and the gate refuses it.
+  const ClassTemplateSpecializationDecl *classInstance(const CXXRecordDecl *RD) const {
+    const auto *Spec = dyn_cast_or_null<ClassTemplateSpecializationDecl>(RD);
+    if (!Spec || Spec->isDependentContext() || Spec->getSpecializationKind() == TSK_ExplicitSpecialization ||
+        !Spec->getSpecializedTemplateOrPartial().is<ClassTemplateDecl *>())
+      return nullptr;
+    const ClassTemplateDecl *T = Spec->getSpecializedTemplate();
+    return typeOnlyClass(T) && SM.isInMainFile(T->getLocation()) ? Spec : nullptr;
+  }
+  // A class template of the main file with type parameters only, and no instance, decision 0188. An instance has a definition, or it is refused
+  // for its type arguments. A specialization that the file writes, and one that only a declaration names, are no instance.
+  bool noInstanceClass(const CXXRecordDecl *RD) const {
+    const ClassTemplateDecl *T = RD->getDescribedClassTemplate();
+    if (!T || !typeOnlyClass(T) || !SM.isInMainFile(T->getLocation()))
+      return false;
+    for (const ClassTemplateSpecializationDecl *Spec : const_cast<ClassTemplateDecl *>(T)->specializations())
+      if (Spec->getSpecializationKind() != TSK_ExplicitSpecialization && (Spec->hasDefinition() || !namedInstance(Spec)))
+        return false;
+    return true;
+  }
+  // An instance with no definition and a type argument that has no Dafny name is refused at its class, decision 0188.
+  void refuseUnnamedInstances(const CXXRecordDecl *RD) const {
+    const ClassTemplateDecl *T = RD->getDescribedClassTemplate();
+    if (!T || !typeOnlyClass(T) || !SM.isInMainFile(T->getLocation()))
+      return;
+    for (const ClassTemplateSpecializationDecl *Spec : const_cast<ClassTemplateDecl *>(T)->specializations())
+      if (Spec->getSpecializationKind() != TSK_ExplicitSpecialization && !namedInstance(Spec))
+        unnamedEntry(Spec);
+  }
+  // Whether an instance of the class template made the member function of the pattern `FD`, decision 0188.
+  bool memberHasInstance(const FunctionDecl *FD) const {
+    const FunctionDecl *Pattern = FD->getCanonicalDecl();
+    const ClassTemplateDecl *T = cast<CXXMethodDecl>(FD)->getParent()->getDescribedClassTemplate();
+    for (const ClassTemplateSpecializationDecl *Spec : const_cast<ClassTemplateDecl *>(T)->specializations())
+      for (const Decl *D : Spec->decls())
+        if (const auto *M = dyn_cast<CXXMethodDecl>(D); M && M->isDefined())
+          if (const FunctionDecl *From = M->getInstantiatedFromMemberFunction(); From && From->getCanonicalDecl() == Pattern)
+            return true;
+    return false;
+  }
+  // The member function of a class template that the model reads at each instance, not at the template, decision 0188.
+  bool inClassTemplate(const FunctionDecl *FD) const {
+    const auto *M = dyn_cast<CXXMethodDecl>(FD);
+    if (!M || !M->isTemplated() || FD->getDescribedFunctionTemplate())
+      return false;
+    const ClassTemplateDecl *T = M->getParent()->getDescribedClassTemplate();
+    return T && typeOnlyClass(T) && SM.isInMainFile(T->getLocation());
+  }
+  // A member function of an instance that the compiler made: not a member template, and one of a class that the model can read, decision 0188.
+  bool instanceMember(const FunctionDecl *FD) const {
+    const auto *M = dyn_cast<CXXMethodDecl>(FD);
+    return M && FD->isTemplateInstantiation() && !FD->getPrimaryTemplate() && classInstance(M->getParent());
+  }
+  // The place of a struct for the shell: an instance sits at the class template, decision 0188.
+  SourceLocation structLoc(const CXXRecordDecl *RD) const {
+    const ClassTemplateSpecializationDecl *Spec = classInstance(RD);
+    return SM.getFileLoc(Spec ? Spec->getSpecializedTemplate()->getTemplatedDecl()->getLocation() : RD->getLocation());
+  }
+  // The refusal of a form with no instance: a function with no signature, whose result type is `Other` of the sentence, decision 0188.
+  llvm::json::Value noInstanceEntry(StringRef Name, const std::string &Key, SourceLocation At, const char *Sentence) const {
+    const SourceLocation Loc = SM.getFileLoc(At);
+    return llvm::json::Object{{"name", Name}, {"key", Key}, {"file", file(Loc)}, {"line", number(line(Loc))},
+                              {"params", llvm::json::Array{}}, {"ret", tag("Other", Sentence)}, {"trusted", nullptr},
+                              {"interface", false}, {"hidden", llvm::json::Array{}}, {"conds", llvm::json::Array{}},
+                              {"body", llvm::json::Array{tag("Unknown", llvm::json::Array{Sentence, number(line(Loc))})}}};
+  }
+  // An instance of a class template is a struct of the model when its type arguments are scalars, structs or enums, which have a Dafny name, decision 0188.
+  bool namedInstance(const CXXRecordDecl *RD) const {
+    const ClassTemplateSpecializationDecl *Spec = classInstance(RD);
+    if (!Spec)
+      return false;
+    for (const TemplateArgument &A : Spec->getTemplateArgs().asArray()) {
+      if (A.getKind() != TemplateArgument::Type)
+        return false;
+      const llvm::json::Value V = type(A.getAsType());
+      const llvm::json::Object *O = V.getAsObject();
+      if (!V.getAsString() && !(O && (O->get("Struct") || O->get("Enum"))))
+        return false;
+    }
+    return true;
+  }
+  // The struct of an instance whose type arguments have no Dafny name is written with no field. The shell refuses it at the class, decision 0188.
+  void unnamedEntry(const ClassTemplateSpecializationDecl *Spec) const {
+    const std::string Key = structKey(Spec);
+    if (Structs.count(Key))
+      return;
+    llvm::json::Array Of;
+    for (const TemplateArgument &A : Spec->getTemplateArgs().asArray())
+      Of.push_back(type(A.getAsType()));
+    const SourceLocation Loc = structLoc(Spec);
+    Structs.emplace(Key, llvm::json::Object{{"struct", Key}, {"name", Spec->getNameAsString()}, {"file", file(Loc)}, {"line", number(line(Loc))},
+                                            {"fields", llvm::json::Array{}}, {"members", llvm::json::Array{}}, {"of", std::move(Of)}});
+  }
+
   // An interface, decision 0165: a class in the file with no field and no base, whose members are pure virtual `const` functions and a destructor that is
   // defaulted.
   bool isInterface(const CXXRecordDecl *RD) const {
@@ -5078,11 +5183,20 @@ private:
   }
 
   // The key of a struct, as the key of a function that has no mangled name: the qualified name, `@` and the place of the definition.
+public:
+  // An instance of a class template has its type arguments in the name and the place of its class template, decision 0188.
   std::string structKey(const CXXRecordDecl *RD) const {
-    const SourceLocation Loc = SM.getFileLoc(RD->getLocation());
-    return RD->getQualifiedNameAsString() + "@" + file(Loc) + ":" + std::to_string(line(Loc)) + ":" + std::to_string(SM.getExpansionColumnNumber(Loc));
+    const SourceLocation Loc = structLoc(RD);
+    std::string Name = RD->getQualifiedNameAsString();
+    if (classInstance(RD)) {
+      Name.clear();
+      llvm::raw_string_ostream OS(Name);
+      RD->getNameForDiagnostic(OS, Context.getPrintingPolicy(), true);
+    }
+    return Name + "@" + file(Loc) + ":" + std::to_string(line(Loc)) + ":" + std::to_string(SM.getExpansionColumnNumber(Loc));
   }
 
+private:
   // The enum class of the file that a type is, decision 0109, or null: a definition in a user file, scoped, with an enumerator and no value
   // written for any. A qualified type is none, as for `scalar`.
   const EnumDecl *plainEnum(QualType T) const {
@@ -5384,6 +5498,7 @@ private:
     return isa<ParmVarDecl>(D) ? paramType(D->getType()) : type(D->getType());
   }
 
+public:
   llvm::json::Value type(QualType T, bool Field = false) const {
     if (const char *S = scalar(T))
       return S;
@@ -5414,7 +5529,10 @@ private:
         for (const Decl *D : RD->decls())
           // An override that writes its object is a member too, so the check finds it. A contract cannot call it, decision 0169.
           if (const auto *M = dyn_cast<CXXMethodDecl>(D); M && (constMember(M) || (M->isVirtual() && member(M)) || (isa<CXXDestructorDecl>(M) && member(M))))
-            Named[isa<CXXDestructorDecl>(M) ? "~" : M->getNameAsString()].push_back(key(M));
+            // A const member function that has no body here has no function of the model. Its key is its display name, which the core
+            // prints in the sentence of a contract that calls it, decision 0188.
+            Named[isa<CXXDestructorDecl>(M) ? "~" : M->getNameAsString()].push_back(
+                constMember(M) && !M->isDefined() && !trustedReason(M) ? name(M) : key(M));
         // The static member functions with a contract, under their qualified names, decision 0174.
         for (const Decl *D : RD->decls())
           if (const auto *M = dyn_cast<CXXMethodDecl>(D); M && listedStatic(M))
@@ -5423,9 +5541,16 @@ private:
         for (const auto &[Name, Keys] : Named)
           if (Keys.size() == 1)
             Members.push_back(llvm::json::Array{Name, Keys.front()});
-        const SourceLocation Loc = SM.getFileLoc(RD->getLocation());
+        const SourceLocation Loc = structLoc(RD);
         llvm::json::Object Entry{{"struct", Key}, {"name", RD->getNameAsString()}, {"file", file(Loc)}, {"line", number(line(Loc))},
                                  {"fields", std::move(Fields)}, {"members", std::move(Members)}};
+        // An instance of a class template names its type arguments, and the shell makes `Box'of'int32` of them, decision 0188.
+        if (const ClassTemplateSpecializationDecl *Spec = classInstance(RD)) {
+          llvm::json::Array Of;
+          for (const TemplateArgument &A : Spec->getTemplateArgs().asArray())
+            Of.push_back(type(A.getAsType()));
+          Entry["of"] = std::move(Of);
+        }
         // A final class over interfaces names them, decision 0165.
         if (finalOverInterface(RD)) {
           Entry["bases"] = baseKeys(RD);
@@ -5442,9 +5567,13 @@ private:
     // A field holds a unique_ptr of a struct or an interface, decision 0171.
     if (const QualType E = Field ? (ownVecElement(T).isNull() ? QualType() : ownElement(T)) : ownElement(T); !E.isNull())
       return tag("Own", ownScalar(E));
+    // An instance of a class template with a type argument that has no Dafny name is refused at its class, decision 0188.
+    if (const ClassTemplateSpecializationDecl *Spec = classInstance(T.getNonReferenceType()->getAsCXXRecordDecl()); Spec && !namedInstance(Spec))
+      unnamedEntry(Spec);
     return tag("Other", T.getAsString(Context.getPrintingPolicy()));
   }
 
+private:
   // The statements of a branch or of the body: a compound statement is its list, and any other statement is a list of one.
   llvm::json::Array stmts(const Stmt *S) const {
     llvm::json::Array Out;
@@ -6863,6 +6992,13 @@ public:
     }
     // A class over interfaces is written in the table of structs for its line, decision 0165.
     if (const auto *RD = Result.Nodes.getNodeAs<CXXRecordDecl>("class")) {
+      TreeWriter Writer(*Context, Claimed, Structs);
+      // A class template with no instance is refused at its class. An instance of one is a struct of the model, whether or not a type names it, decision 0188.
+      Writer.refuseUnnamedInstances(RD);
+      if (Writer.noInstanceClass(RD))
+        append(Writer.noInstanceEntry(RD->getName(), Writer.structKey(RD), RD->getLocation(), "a class template with no instance"));
+      else if (Writer.classInstance(RD))
+        (void)Writer.type(Context->getRecordType(RD));
       TreeWriter(*Context, Claimed, Structs).classEntry(RD);
       TreeWriter(*Context, Claimed, Structs).staticEntry(RD);
       TreeWriter(*Context, Claimed, Structs).holderEntry(RD);
@@ -6875,12 +7011,28 @@ public:
     // The call operator of a lambda is no function of its own, decision 0149. The call that takes the lambda reads its body, or is refused.
     if (const auto *Method = dyn_cast<CXXMethodDecl>(FD); Method && Method->getParent()->isLambda())
       return;
-    // An instance of a function template is a function of the model, decision 0180. Any other instance is the template, which is refused once.
-    if (FD->isTemplateInstantiation() && !(FD->getPrimaryTemplate() && TreeWriter::typeOnlyTemplate(FD->getPrimaryTemplate()) && FD->isThisDeclarationADefinition()))
+    const TreeWriter Reader(*Context, Claimed, Structs);
+    // An instance of a function template is a function of the model, decision 0180. So is a member function of an instance of a class template, decision 0188.
+    // Any other instance is the template, which is refused once.
+    if (FD->isTemplateInstantiation() && !Reader.instanceMember(FD) &&
+        !(FD->getPrimaryTemplate() && TreeWriter::typeOnlyTemplate(FD->getPrimaryTemplate()) && FD->isThisDeclarationADefinition()))
       return;
     const Contract C = contractOf(Context->getSourceManager(), FD);
     for (const Contract::Line &L : C.Lines)
       Claimed.insert({L.File, L.Number});
+    // The member function of a class template is written for each instance and not alone, decision 0188. The class is refused where it has no instance.
+    if (Reader.inClassTemplate(FD)) {
+      if (FD->getBody())
+        TreeWriter(*Context, Claimed, Structs).claimBody(FD);
+      // A member function with a contract that no instance makes is refused at its line. A class with no instance is refused at its class.
+      const CXXRecordDecl *Parent = cast<CXXMethodDecl>(FD)->getParent();
+      if (FD->isThisDeclarationADefinition() && !C.Lines.empty() && !Reader.noInstanceClass(Parent) && !Reader.memberHasInstance(FD))
+        append(Reader.noInstanceEntry(FD->getNameAsString(), Reader.key(FD), FD->getLocation(), "a member function with no instance"));
+      return;
+    }
+    // A member function of an instance that has no body here has no model. A contract that calls it is refused, decision 0188.
+    if (Reader.instanceMember(FD) && !FD->isThisDeclarationADefinition())
+      return;
     // The template itself is written for each instance and not alone. One with no instance has no model, decision 0180.
     if (TreeWriter::typeOnlyTemplate(FD->getDescribedFunctionTemplate())) {
       if (FD->getBody())
