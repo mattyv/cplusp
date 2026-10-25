@@ -270,6 +270,9 @@ pub fn run(t: &Translation, limit: u32, refused: bool, source: &str, shown: &dyn
         // A call of trunc_div or trunc_rem whose `requires b != 0` of the prelude fails is a divisor that may be zero, decision 0088.
         let zero = message == "function precondition could not be proved"
             && e.related.iter().any(|r| PRELUDE.lines().nth(r.wrapping_sub(1)) == Some("  requires b != 0"));
+        // A call of Back or PopBack whose `requires |s| > 0` of the prelude fails is a vector that may be empty, decision 0191.
+        let empty = message == "function precondition could not be proved"
+            && e.related.iter().any(|r| PRELUDE.lines().nth(r.wrapping_sub(1)) == Some("  requires |s| > 0"));
         // The only Dafny functions besides the prelude are the member functions, so a related requires line of the contract is one of theirs, decision 0095.
         let member = message == "function precondition could not be proved"
             && e.related.iter().filter_map(|r| here(*r)).any(|l| map.contracts.get(&l.place).is_some_and(|(word, _)| word == "requires"));
@@ -297,6 +300,8 @@ pub fn run(t: &Translation, limit: u32, refused: bool, source: &str, shown: &dyn
             "the divisor may be zero.".to_string()
         } else if shift {
             "the shift amount may be negative or not below the width of the type.".to_string()
+        } else if empty {
+            "a requires line of the callee may not hold.".to_string()
         } else if member && map.contracts.contains_key(place) {
             "a requires line of the member function may not hold here.".to_string()
         } else if member {

@@ -4,7 +4,7 @@
 #include <optional>
 #include <vector>
 
-// The forms of a class that holds a vector that have no rule yet, decision 0187.
+// The forms of a class that holds a vector that have no rule yet, decision 0187. grow() proves since decision 0191.
 class Bins {
  public:
   //@ requires 0 < n && n <= 1000

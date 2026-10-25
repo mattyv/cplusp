@@ -327,6 +327,7 @@ pub enum Expr {
     DblMax,
     EmptyVec,
     Fill(Box<Expr>, Box<Expr>),
+    Back(Box<Expr>),
     Move(u32, Ty),
     Bits(BinOp, Box<Expr>, Box<Expr>, Ty),
     Step(u32, Ty, bool, bool),
@@ -371,6 +372,8 @@ pub enum Stmt {
     SetIndex(u32, Expr, Expr, u32),
     SetFieldAt(u32, Expr, Expr, u32),
     PushBack(u32, Expr, u32),
+    PushField(u32, Expr, u32),
+    PopField(u32, u32),
     Sort(u32, u32),
     SortBy(u32, u32, u32, Ty, Expr, u32),
     Block(Box<Stmts>, u32),
@@ -527,6 +530,8 @@ pub enum DExpr {
     BitOp(BinOp, Box<DExpr>, Box<DExpr>),
     SeqLit(Box<DArgs>),
     SeqFill(Box<DExpr>, Box<DExpr>),
+    Back(Box<DExpr>),
+    PopBack(Box<DExpr>),
     EmptySeq,
     Abs(Box<DExpr>),
     Eps,
@@ -1576,6 +1581,11 @@ pub open spec fn spec_lift(e: Expr, all: Fns, line: u32, sd: Structs, n: u32, op
             Err(r) => Err(r),
             Ok((c, d, n1)) => Ok((c, DExpr::Conv(DTy::UInt64, Box::new(DExpr::Len(Box::new(d)))), n1)),
         },
+        // `v.back()` is Back of the prelude, whose requires line Dafny checks, decision 0191.
+        Expr::Back(o) => match spec_lift(*o, all, line, sd, n, open) {
+            Err(r) => Err(r),
+            Ok((c, d, n1)) => Ok((c, DExpr::Back(Box::new(d)), n1)),
+        },
         // `std::count_if(v.begin(), v.end(), f)` is CountIf of the prelude, as the int64 that C++ gives, decision 0149. `v` is a
         // sequence parameter, the parameter of the lambda has the element type, and its test holds no call.
         Expr::CountIf(o, x, xt, t) => match *o {
@@ -1724,6 +1734,7 @@ pub fn copy_expr(e: &Expr) -> (r: Expr)
         Expr::Brace(f0) => Expr::Brace(Box::new(copy_expr(f0))),
         Expr::Call(f0, f1, f2, f3) => Expr::Call(*f0, *f1, Box::new(copy_args(f2)), *f3),
         Expr::Size(f0) => Expr::Size(Box::new(copy_expr(f0))),
+        Expr::Back(f0) => Expr::Back(Box::new(copy_expr(f0))),
         Expr::Index(f0, f1) => Expr::Index(Box::new(copy_expr(f0)), Box::new(copy_expr(f1))),
         Expr::Copy(f0, f1, f2) => Expr::Copy(Box::new(copy_expr(f0)), *f1, *f2),
         Expr::Field(f0, f1) => Expr::Field(Box::new(copy_expr(f0)), *f1),
@@ -1842,6 +1853,7 @@ pub open spec fn spec_var_names(e: Expr) -> Names
         Expr::Brace(f0) => spec_var_names(*f0),
         Expr::Call(_, _, f2, _) => spec_var_names_args(*f2),
         Expr::Size(f0) => spec_var_names(*f0),
+        Expr::Back(f0) => spec_var_names(*f0),
         Expr::Index(f0, f1) => spec_append(spec_var_names(*f0), spec_var_names(*f1)),
         Expr::Copy(f0, _, _) => spec_var_names(*f0),
         Expr::Field(f0, _) => spec_var_names(*f0),
@@ -1913,6 +1925,7 @@ pub fn var_names(e: &Expr) -> (r: Names)
         Expr::Brace(f0) => var_names(f0),
         Expr::Call(_, _, f2, _) => var_names_args(f2),
         Expr::Size(f0) => var_names(f0),
+        Expr::Back(f0) => var_names(f0),
         Expr::Index(f0, f1) => append(var_names(f0), var_names(f1)),
         Expr::Copy(f0, _, _) => var_names(f0),
         Expr::Field(f0, _) => var_names(f0),
@@ -2358,6 +2371,10 @@ pub open spec fn spec_contract(e: Expr, decl: Names, ps: Params, ret: Option<Ty>
             Ok(_) => Err(Refusal::Syntax(line)),
             Err(r) => Err(r),
         },
+        Expr::Back(o) => match spec_path(Expr::Back(o), decl, ps, ret, bound, line, sd) {
+            Ok((d, t)) => spec_leaf(d, t, line),
+            Err(r) => Err(r),
+        },
         Expr::Index(o, i) => match spec_path(Expr::Index(o, i), decl, ps, ret, bound, line, sd) {
             Ok((d, t)) => spec_leaf(d, t, line),
             Err(r) => Err(r),
@@ -2671,6 +2688,12 @@ pub open spec fn spec_path(e: Expr, decl: Names, ps: Params, ret: Option<Ty>, bo
                 },
                 None => Err(Refusal::Syntax(line)),
             },
+            Err(r) => Err(r),
+        },
+        // `v.back()` is the last element, decision 0191.
+        Expr::Back(o) => match spec_path(*o, decl, ps, ret, bound, line, sd) {
+            Ok((d, Ty::Seq(s, _))) => Ok((DExpr::Back(Box::new(d)), spec_elem(s))),
+            Ok(_) => Err(Refusal::Syntax(line)),
             Err(r) => Err(r),
         },
         Expr::Index(o, i) => match spec_path(*o, decl, ps, ret, bound, line, sd) {
@@ -3108,6 +3131,8 @@ pub open spec fn spec_place(s: Stmt) -> u32 {
         Stmt::Apply(_, _, l) => l,
         Stmt::SetIndex(_, _, _, l) => l,
         Stmt::SetFieldAt(_, _, _, l) => l,
+        Stmt::PushField(_, _, l) => l,
+        Stmt::PopField(_, l) => l,
         Stmt::PushBack(_, _, l) => l,
         Stmt::Sort(_, l) => l,
         Stmt::SortBy(_, _, _, _, _, l) => l,
@@ -4398,6 +4423,7 @@ pub open spec fn spec_write_check(s: Stmt, all: Fns, ps: Params, sd: Structs) ->
             Some(r) => Some(r),
             None => spec_check_expr(e, all, ps, sd, l),
         },
+        Stmt::PushField(_, e, l) => spec_check_expr(e, all, ps, sd, l),
         Stmt::Call(_, _, args, l) => spec_check_args(*args, all, ps, sd, l),
         Stmt::While(c, _, _, l) => spec_loop_write(c, all, sd, l),
         Stmt::For(init, c, step, _, _, l) => match spec_write_check(*init, all, ps, sd) {
@@ -4466,6 +4492,7 @@ pub fn write_check(s: &Stmt, all: &Fns, ps: &Params, sd: &Structs) -> (r: Option
             Some(r) => Some(r),
             None => check_expr(e, all, ps, sd, *l),
         },
+        Stmt::PushField(_, e, l) => check_expr(e, all, ps, sd, *l),
         Stmt::Call(_, _, args, l) => check_args(args, all, ps, sd, *l),
         Stmt::While(c, _, _, l) => loop_write(c, all, sd, *l),
         Stmt::For(init, c, step, _, _, l) => match write_check(init, all, ps, sd) {
@@ -5733,6 +5760,34 @@ pub open spec fn spec_stmt(s: Stmt, all: Fns, env: Params, ps: Params, sd: Struc
             },
             None => Err(Refusal::Syntax(l)),
         },
+        // `f.push_back(e)` and `f.pop_back()` of a sequence field in a member function that writes its object are new values of the
+        // field, decision 0191. A pop is PopBack of the prelude, whose requires line Dafny checks.
+        // ponytail: the value of a push is code with no call. Upgrade: run its calls before it, as PushBack does, decision 0170.
+        Stmt::PushField(f, e, l) => match spec_self(ps) {
+            Some((p, t)) => match t {
+                Ty::ThisMut(k) => match spec_field_ty(sd, k, f) {
+                    Some(Ty::Seq(_, _)) => match spec_code(e, l) {
+                        Ok(de) => Ok(DStmt::SetField(f, DExpr::Append(Box::new(DExpr::Field(Box::new(DExpr::After), f)), Box::new(de)))),
+                        Err(r) => Err(r),
+                    },
+                    Some(_) => Err(Refusal::Syntax(l)),
+                    None => Err(Refusal::NoField(f, l)),
+                },
+                _ => Err(Refusal::WriteParam(p, l)),
+            },
+            None => Err(Refusal::Syntax(l)),
+        },
+        Stmt::PopField(f, l) => match spec_self(ps) {
+            Some((p, t)) => match t {
+                Ty::ThisMut(k) => match spec_field_ty(sd, k, f) {
+                    Some(Ty::Seq(_, _)) => Ok(DStmt::SetField(f, DExpr::PopBack(Box::new(DExpr::Field(Box::new(DExpr::After), f))))),
+                    Some(_) => Err(Refusal::Syntax(l)),
+                    None => Err(Refusal::NoField(f, l)),
+                },
+                _ => Err(Refusal::WriteParam(p, l)),
+            },
+            None => Err(Refusal::Syntax(l)),
+        },
         // `v.push_back(e)` appends one element, decision 0148. A failed push_back throws and never returns to verified code.
         // ponytail: a call in the value is refused as out of place, as for SetIndex. Upgrade: lift the calls, decision 0104.
         // `v.push_back(std::make_unique<D>(a))` runs the constructor of `D` before it, decision 0170.
@@ -5876,6 +5931,7 @@ pub open spec fn spec_has_result(e: Expr) -> bool
         Expr::Neg(a) => spec_has_result(*a),
         Expr::Paren(a) => spec_has_result(*a),
         Expr::Size(a) => spec_has_result(*a),
+        Expr::Back(a) => spec_has_result(*a),
         Expr::Empty(a) => spec_has_result(*a),
         Expr::Apply(_, args) => spec_has_result_args(*args),
         Expr::MApply(o, _, args) => spec_has_result(*o) || spec_has_result_args(*args),
@@ -7408,6 +7464,7 @@ pub open spec fn unknown_expr(e: Expr) -> bool
         Expr::Brace(a) => unknown_expr(*a),
         Expr::Call(_, _, args, _) => unknown_args(*args),
         Expr::Size(a) => unknown_expr(*a),
+        Expr::Back(a) => unknown_expr(*a),
         Expr::Index(a, i) => unknown_expr(*a) || unknown_expr(*i),
         Expr::CountIf(a, _, _, t) => unknown_expr(*a) || unknown_expr(*t),
         Expr::Copy(a, _, _) => unknown_expr(*a),
@@ -7466,6 +7523,8 @@ pub open spec fn unknown_stmt(s: Stmt) -> bool
         Stmt::SetOwnField(_, _, e, _) => unknown_expr(e),
         Stmt::SetIndex(_, i, e, _) => unknown_expr(i) || unknown_expr(e),
         Stmt::SetFieldAt(_, i, e, _) => unknown_expr(i) || unknown_expr(e),
+        Stmt::PushField(_, e, _) => unknown_expr(e),
+        Stmt::PopField(_, _) => false,
         Stmt::PushBack(_, e, _) => unknown_expr(e),
         Stmt::Sort(_, _) => false,
         Stmt::SortBy(_, _, _, _, e, _) => unknown_expr(e),
@@ -7716,6 +7775,7 @@ pub proof fn lemma_unknown_stmt_is_refused(s: Stmt, all: Fns, env: Params, ps: P
                 lemma_unknown_code_is_refused(e, l);
             }
         },
+        Stmt::PushField(_, e, l) => lemma_unknown_code_is_refused(e, l),
         Stmt::PushBack(_, e, l) => {
             lemma_unknown_code_is_refused(e, l);
             lemma_unknown_lift_is_refused(e, all, l, sd, 0, true);
@@ -7974,7 +8034,7 @@ pub proof fn lemma_kept_assign(s: Stmt, all: Fns, env: Params, ps: Params, sd: S
 pub proof fn lemma_kept_set_field(s: Stmt, all: Fns, env: Params, ps: Params, sd: Structs)
     requires
         spec_stmt(s, all, env, ps, sd).is_ok(),
-        s is SetField || s is SetRefField || s is SetFieldAt || s is PushBack,
+        s is SetField || s is SetRefField || s is SetFieldAt || s is PushField || s is PopField || s is PushBack,
     ensures
         count_dstmt(spec_stmt(s, all, env, ps, sd).unwrap()) == 1,
 {
@@ -8138,6 +8198,7 @@ pub proof fn lemma_range_resolves(s: Stmt, all: Fns, env: Params, ps: Params, sd
     }
 }
 
+#[verifier::rlimit(30)]
 pub proof fn lemma_stmt_kept(s: Stmt, all: Fns, env: Params, ps: Params, sd: Structs)
     requires
         spec_stmt(s, all, env, ps, sd).is_ok(),
@@ -8155,6 +8216,8 @@ pub proof fn lemma_stmt_kept(s: Stmt, all: Fns, env: Params, ps: Params, sd: Str
         Stmt::SetOwnField(_, _, _, _) => lemma_kept_set_own_field(s, all, env, ps, sd),
         Stmt::PushBack(_, _, _) => lemma_kept_set_field(s, all, env, ps, sd),
         Stmt::SetFieldAt(_, _, _, _) => lemma_kept_set_field(s, all, env, ps, sd),
+        Stmt::PushField(_, _, _) => lemma_kept_set_field(s, all, env, ps, sd),
+        Stmt::PopField(_, _) => lemma_kept_set_field(s, all, env, ps, sd),
         Stmt::Switch(e, k, cs, l) => {
             lemma_cases_kept(*cs, all, env, ps, sd);
             let ce = spec_lift(e, all, l, sd, 0, true).unwrap();
@@ -8401,6 +8464,7 @@ pub proof fn lemma_lift_resolves(e: Expr, all: Fns, line: u32, sd: Structs, n: u
         Expr::Paren(a) => lemma_lift_resolves(*a, all, line, sd, n, open),
         Expr::Brace(a) => lemma_lift_resolves(*a, all, line, sd, n, open),
         Expr::Size(a) => lemma_lift_resolves(*a, all, line, sd, n, open),
+        Expr::Back(a) => lemma_lift_resolves(*a, all, line, sd, n, open),
         Expr::Copy(a, _, _) => lemma_lift_resolves(*a, all, line, sd, n, open),
         Expr::Field(a, _) => lemma_lift_resolves(*a, all, line, sd, n, open),
         Expr::HasValue(a) => lemma_lift_resolves(*a, all, line, sd, n, open),
@@ -8510,6 +8574,7 @@ pub proof fn lemma_unknown_lift_is_refused(e: Expr, all: Fns, line: u32, sd: Str
         Expr::Paren(a) => lemma_unknown_lift_is_refused(*a, all, line, sd, n, open),
         Expr::Brace(a) => lemma_unknown_lift_is_refused(*a, all, line, sd, n, open),
         Expr::Size(a) => lemma_unknown_lift_is_refused(*a, all, line, sd, n, open),
+        Expr::Back(a) => lemma_unknown_lift_is_refused(*a, all, line, sd, n, open),
         Expr::Copy(a, _, _) => lemma_unknown_lift_is_refused(*a, all, line, sd, n, open),
         Expr::Field(a, _) => lemma_unknown_lift_is_refused(*a, all, line, sd, n, open),
         Expr::HasValue(a) => lemma_unknown_lift_is_refused(*a, all, line, sd, n, open),
@@ -8592,6 +8657,7 @@ pub proof fn lemma_closed_runs_no_call(e: Expr, all: Fns, line: u32, sd: Structs
         Expr::Paren(a) => lemma_closed_runs_no_call(*a, all, line, sd, n),
         Expr::Brace(a) => lemma_closed_runs_no_call(*a, all, line, sd, n),
         Expr::Size(a) => lemma_closed_runs_no_call(*a, all, line, sd, n),
+        Expr::Back(a) => lemma_closed_runs_no_call(*a, all, line, sd, n),
         Expr::Copy(a, _, _) => lemma_closed_runs_no_call(*a, all, line, sd, n),
         Expr::Field(a, _) => lemma_closed_runs_no_call(*a, all, line, sd, n),
         Expr::HasValue(a) => lemma_closed_runs_no_call(*a, all, line, sd, n),
@@ -8835,7 +8901,8 @@ pub proof fn lemma_resolves_set_own_field(s: Stmt, all: Fns, env: Params, ps: Pa
 pub proof fn lemma_resolves_plain(s: Stmt, all: Fns, env: Params, ps: Params, sd: Structs)
     requires
         spec_stmt(s, all, env, ps, sd).is_ok(),
-        s is Step || s is Assert || s is Apply || s is Unknown || s is SetIndex || s is SetFieldAt || s is Sort || s is SortBy,
+        s is Step || s is Assert || s is Apply || s is Unknown || s is SetIndex || s is SetFieldAt || s is PushField || s is PopField || s is Sort
+            || s is SortBy,
     ensures
         calls_resolve_stmt(spec_stmt(s, all, env, ps, sd).unwrap(), all, sd),
 {
@@ -8957,6 +9024,8 @@ pub proof fn lemma_stmt_calls_resolve(s: Stmt, all: Fns, env: Params, ps: Params
         Stmt::Unknown(_, _) => lemma_resolves_plain(s, all, env, ps, sd),
         Stmt::SetIndex(_, _, _, _) => lemma_resolves_plain(s, all, env, ps, sd),
         Stmt::SetFieldAt(_, _, _, _) => lemma_resolves_plain(s, all, env, ps, sd),
+        Stmt::PushField(_, _, _) => lemma_resolves_plain(s, all, env, ps, sd),
+        Stmt::PopField(_, _) => lemma_resolves_plain(s, all, env, ps, sd),
         Stmt::PushBack(_, _, _) => lemma_resolves_push(s, all, env, ps, sd),
         Stmt::Sort(_, _) => lemma_resolves_plain(s, all, env, ps, sd),
         Stmt::SortBy(_, _, _, _, _, _) => lemma_resolves_plain(s, all, env, ps, sd),
@@ -9536,6 +9605,10 @@ pub fn lift(e: &Expr, all: &Fns, line: u32, sd: &Structs, n: u32, open: bool) ->
             Err(r) => Err(r),
             Ok((c, d, n1)) => Ok((c, DExpr::Conv(DTy::UInt64, Box::new(DExpr::Len(Box::new(d)))), n1)),
         },
+        Expr::Back(o) => match lift(o, all, line, sd, n, open) {
+            Err(r) => Err(r),
+            Ok((c, d, n1)) => Ok((c, DExpr::Back(Box::new(d)), n1)),
+        },
         Expr::CountIf(o, x, xt, t) => match &**o {
             Expr::Var(v, vt) => match seq_elem(*vt) {
                 Some(s) => if elem(s) == *xt {
@@ -9941,7 +10014,7 @@ pub fn translate_contract(e: &Expr, decl: &Names, ps: &Params, ret: Option<Ty>, 
             Ok(_) => Err(Refusal::Syntax(line)),
             Err(r) => Err(r),
         },
-        Expr::Index(_, _) | Expr::Suffix(_, _) | Expr::Prefix(_, _) | Expr::Slice(_, _, _) => match path(e, decl, ps, ret, bound, line, sd) {
+        Expr::Index(_, _) | Expr::Back(_) | Expr::Suffix(_, _) | Expr::Prefix(_, _) | Expr::Slice(_, _, _) => match path(e, decl, ps, ret, bound, line, sd) {
             Ok((d, t)) => translate_leaf(d, t, line),
             Err(r) => Err(r),
         },
@@ -10242,6 +10315,11 @@ pub fn path(e: &Expr, decl: &Names, ps: &Params, ret: Option<Ty>, bound: &Names,
                 },
                 None => Err(Refusal::Syntax(line)),
             },
+            Err(r) => Err(r),
+        },
+        Expr::Back(o) => match path(o, decl, ps, ret, bound, line, sd) {
+            Ok((d, Ty::Seq(s, _))) => Ok((DExpr::Back(Box::new(d)), elem(s))),
+            Ok(_) => Err(Refusal::Syntax(line)),
             Err(r) => Err(r),
         },
         Expr::Index(o, i) => match path(o, decl, ps, ret, bound, line, sd) {
@@ -10721,6 +10799,8 @@ pub fn place(s: &Stmt) -> (r: u32)
         Stmt::Apply(_, _, l) => *l,
         Stmt::SetIndex(_, _, _, l) => *l,
         Stmt::SetFieldAt(_, _, _, l) => *l,
+        Stmt::PushField(_, _, l) => *l,
+        Stmt::PopField(_, l) => *l,
         Stmt::PushBack(_, _, l) => *l,
         Stmt::Sort(_, l) => *l,
         Stmt::SortBy(_, _, _, _, _, l) => *l,
@@ -11530,6 +11610,31 @@ pub fn translate_stmt(s: &Stmt, all: &Fns, env: &Params, ps: &Params, sd: &Struc
             },
             None => Err(Refusal::Syntax(*l)),
         },
+        Stmt::PushField(f, e, l) => match self_param(ps) {
+            Some((p, t)) => match t {
+                Ty::ThisMut(k) => match field_ty(sd, k, *f) {
+                    Some(Ty::Seq(_, _)) => match translate_code(e, *l) {
+                        Ok(de) => Ok(DStmt::SetField(*f, DExpr::Append(Box::new(DExpr::Field(Box::new(DExpr::After), *f)), Box::new(de)))),
+                        Err(r) => Err(r),
+                    },
+                    Some(_) => Err(Refusal::Syntax(*l)),
+                    None => Err(Refusal::NoField(*f, *l)),
+                },
+                _ => Err(Refusal::WriteParam(p, *l)),
+            },
+            None => Err(Refusal::Syntax(*l)),
+        },
+        Stmt::PopField(f, l) => match self_param(ps) {
+            Some((p, t)) => match t {
+                Ty::ThisMut(k) => match field_ty(sd, k, *f) {
+                    Some(Ty::Seq(_, _)) => Ok(DStmt::SetField(*f, DExpr::PopBack(Box::new(DExpr::Field(Box::new(DExpr::After), *f))))),
+                    Some(_) => Err(Refusal::Syntax(*l)),
+                    None => Err(Refusal::NoField(*f, *l)),
+                },
+                _ => Err(Refusal::WriteParam(p, *l)),
+            },
+            None => Err(Refusal::Syntax(*l)),
+        },
         Stmt::PushBack(v, e, l) => match get(ps, *v) {
             Some(Ty::MutSeq(_)) => match push_value(e, all, *l, sd) {
                 Ok((c, de)) => Ok(pre(c, DStmt::SetOut(*v, DExpr::Append(Box::new(DExpr::Out(*v)), Box::new(de))))),
@@ -11637,6 +11742,7 @@ pub fn has_result(e: &Expr) -> (r: bool)
         Expr::Neg(a) => has_result(a),
         Expr::Paren(a) => has_result(a),
         Expr::Size(a) => has_result(a),
+        Expr::Back(a) => has_result(a),
         Expr::Empty(a) => has_result(a),
         Expr::Apply(_, args) => has_result_args(args),
         Expr::MApply(o, _, args) => has_result(o) || has_result_args(args),
@@ -12103,6 +12209,8 @@ pub fn copy_dexpr(d: &DExpr) -> (r: DExpr)
         DExpr::SeqLit(x0) => DExpr::SeqLit(Box::new(copy_dargs(x0))),
         DExpr::EmptySeq => DExpr::EmptySeq,
         DExpr::SeqFill(x0, x1) => DExpr::SeqFill(Box::new(copy_dexpr(x0)), Box::new(copy_dexpr(x1))),
+        DExpr::Back(x0) => DExpr::Back(Box::new(copy_dexpr(x0))),
+        DExpr::PopBack(x0) => DExpr::PopBack(Box::new(copy_dexpr(x0))),
         DExpr::IntAbs(x0) => DExpr::IntAbs(Box::new(copy_dexpr(x0))),
         DExpr::Eps => DExpr::Eps,
         DExpr::Eta => DExpr::Eta,
@@ -12932,6 +13040,7 @@ pub enum Tok {
     HasValue,
     Value,
     Empty,
+    Back,
     Comma,
     DotDot,
     Forall,
@@ -13292,7 +13401,7 @@ fn parse_unary(toks: &Vec<Tok>, pos: usize, line: u32) -> (r: Result<(Expr, usiz
 /// A token that follows an atom: `.size()`, `.name` or `[`.
 fn is_postfix(t: Tok) -> bool {
     match t {
-        Tok::Size | Tok::Field(_) | Tok::HasValue | Tok::Value | Tok::Empty | Tok::LBracket | Tok::Arrow => true,
+        Tok::Size | Tok::Field(_) | Tok::HasValue | Tok::Value | Tok::Empty | Tok::Back | Tok::LBracket | Tok::Arrow => true,
         _ => false,
     }
 }
@@ -13342,6 +13451,9 @@ fn parse_postfix(toks: &Vec<Tok>, pos: usize, line: u32) -> (r: Result<(Expr, us
             p = p + 1;
         } else if toks[p] == Tok::Empty {
             a = Expr::Empty(Box::new(a));
+            p = p + 1;
+        } else if toks[p] == Tok::Back {
+            a = Expr::Back(Box::new(a));
             p = p + 1;
         } else if toks[p] == Tok::Arrow {
             // `o->f` is `o.value().f`, decision 0137. A name of a field follows. `o->f(a)` calls `f` on `o.value()`, decision 0168.
@@ -13840,6 +13952,7 @@ pub open spec fn spec_gexpr(e: Expr, gs: Params, gps: Params, hide: Names, fs: F
         Expr::Brace(f0) => Expr::Brace(Box::new(spec_gexpr(*f0, gs, gps, hide, fs))),
         Expr::Call(k, nm, args, at) => Expr::Call(k, nm, Box::new(spec_append(spec_gargs(*args, gs, gps, hide, fs), spec_gextra(k, gs, gps, fs))), at),
         Expr::Size(f0) => Expr::Size(Box::new(spec_gexpr(*f0, gs, gps, hide, fs))),
+        Expr::Back(f0) => Expr::Back(Box::new(spec_gexpr(*f0, gs, gps, hide, fs))),
         Expr::Index(f0, f1) => Expr::Index(Box::new(spec_gexpr(*f0, gs, gps, hide, fs)), Box::new(spec_gexpr(*f1, gs, gps, hide, fs))),
         Expr::Copy(f0, f1, f2) => Expr::Copy(Box::new(spec_gexpr(*f0, gs, gps, hide, fs)), f1, f2),
         Expr::Field(f0, f1) => Expr::Field(Box::new(spec_gexpr(*f0, gs, gps, hide, fs)), f1),
@@ -13916,6 +14029,7 @@ pub fn gexpr(e: &Expr, gs: &Params, gps: &Params, hide: &Names, fs: &Fns) -> (r:
         Expr::Brace(f0) => Expr::Brace(Box::new(gexpr(f0, gs, gps, hide, fs))),
         Expr::Call(k, nm, args, at) => Expr::Call(*k, *nm, Box::new(append(gargs(args, gs, gps, hide, fs), gextra(*k, gs, gps, fs))), *at),
         Expr::Size(f0) => Expr::Size(Box::new(gexpr(f0, gs, gps, hide, fs))),
+        Expr::Back(f0) => Expr::Back(Box::new(gexpr(f0, gs, gps, hide, fs))),
         Expr::Index(f0, f1) => Expr::Index(Box::new(gexpr(f0, gs, gps, hide, fs)), Box::new(gexpr(f1, gs, gps, hide, fs))),
         Expr::Copy(f0, f1, f2) => Expr::Copy(Box::new(gexpr(f0, gs, gps, hide, fs)), *f1, *f2),
         Expr::Field(f0, f1) => Expr::Field(Box::new(gexpr(f0, gs, gps, hide, fs)), *f1),
@@ -13991,6 +14105,7 @@ pub open spec fn spec_gcalls(e: Expr) -> List<(u32, u32, u32)>
         Expr::Brace(f0) => spec_gcalls(*f0),
         Expr::Call(k, nm, args, at) => List::Cons((k, nm, at), Box::new(spec_gcalls_args(*args))),
         Expr::Size(f0) => spec_gcalls(*f0),
+        Expr::Back(f0) => spec_gcalls(*f0),
         Expr::Index(f0, f1) => spec_append(spec_gcalls(*f0), spec_gcalls(*f1)),
         Expr::Copy(f0, _, _) => spec_gcalls(*f0),
         Expr::Field(f0, _) => spec_gcalls(*f0),
@@ -14062,6 +14177,7 @@ pub fn gcalls(e: &Expr) -> (r: List<(u32, u32, u32)>)
         Expr::Brace(f0) => gcalls(f0),
         Expr::Call(k, nm, args, at) => List::Cons((*k, *nm, *at), Box::new(gcalls_args(args))),
         Expr::Size(f0) => gcalls(f0),
+        Expr::Back(f0) => gcalls(f0),
         Expr::Index(f0, f1) => append(gcalls(f0), gcalls(f1)),
         Expr::Copy(f0, _, _) => gcalls(f0),
         Expr::Field(f0, _) => gcalls(f0),
@@ -14164,6 +14280,7 @@ pub open spec fn spec_gstmt(s: Stmt, gs: Params, gps: Params, hide: Names, fs: F
         Stmt::RangeFor(fr, x, xt, sq, lc, body, l) => Stmt::RangeFor(fr, x, xt, spec_gexpr(sq, gs, gps, hide, fs), lc, Box::new(spec_gstmts(*body, gs, gps, hide, fs)), l),
         Stmt::SetIndex(v, i, e, l) => Stmt::SetIndex(v, spec_gexpr(i, gs, gps, hide, fs), spec_gexpr(e, gs, gps, hide, fs), l),
         Stmt::SetFieldAt(f, i, e, l) => Stmt::SetFieldAt(f, spec_gexpr(i, gs, gps, hide, fs), spec_gexpr(e, gs, gps, hide, fs), l),
+        Stmt::PushField(f, e, l) => Stmt::PushField(f, spec_gexpr(e, gs, gps, hide, fs), l),
         Stmt::PushBack(v, e, l) => Stmt::PushBack(v, spec_gexpr(e, gs, gps, hide, fs), l),
         // The comparator reads a listed global as the function does. Its two parameters hide globals of their names.
         Stmt::SortBy(v, a, b, t, e, l) => Stmt::SortBy(v, a, b, t, spec_gexpr(e, gs, gps, List::Cons(a, Box::new(List::Cons(b, Box::new(hide)))), fs), l),
@@ -14232,6 +14349,8 @@ pub fn copy_stmt(s: &Stmt) -> (r: Stmt)
         Stmt::RangeFor(fr, x, xt, sq, lc, body, l) => Stmt::RangeFor(*fr, *x, *xt, copy_expr(sq), Box::new(copy_conds(lc)), Box::new(copy_stmts(body)), *l),
         Stmt::SetIndex(v, i, e, l) => Stmt::SetIndex(*v, copy_expr(i), copy_expr(e), *l),
         Stmt::SetFieldAt(f, i, e, l) => Stmt::SetFieldAt(*f, copy_expr(i), copy_expr(e), *l),
+        Stmt::PushField(f, e, l) => Stmt::PushField(*f, copy_expr(e), *l),
+        Stmt::PopField(f, l) => Stmt::PopField(*f, *l),
         Stmt::PushBack(v, e, l) => Stmt::PushBack(*v, copy_expr(e), *l),
         Stmt::Sort(v, l) => Stmt::Sort(*v, *l),
         Stmt::SortBy(v, a, b, t, e, l) => Stmt::SortBy(*v, *a, *b, *t, copy_expr(e), *l),
@@ -14298,6 +14417,7 @@ pub fn gstmt(s: &Stmt, gs: &Params, gps: &Params, hide: &Names, fs: &Fns) -> (r:
         Stmt::RangeFor(fr, x, xt, sq, lc, body, l) => Stmt::RangeFor(*fr, *x, *xt, gexpr(sq, gs, gps, hide, fs), Box::new(copy_conds(lc)), Box::new(gstmts(body, gs, gps, hide, fs)), *l),
         Stmt::SetIndex(v, i, e, l) => Stmt::SetIndex(*v, gexpr(i, gs, gps, hide, fs), gexpr(e, gs, gps, hide, fs), *l),
         Stmt::SetFieldAt(f, i, e, l) => Stmt::SetFieldAt(*f, gexpr(i, gs, gps, hide, fs), gexpr(e, gs, gps, hide, fs), *l),
+        Stmt::PushField(f, e, l) => Stmt::PushField(*f, gexpr(e, gs, gps, hide, fs), *l),
         Stmt::PushBack(v, e, l) => Stmt::PushBack(*v, gexpr(e, gs, gps, hide, fs), *l),
         Stmt::SortBy(v, a, b, t, e, l) => Stmt::SortBy(*v, *a, *b, *t, gexpr(e, gs, gps, &List::Cons(*a, Box::new(List::Cons(*b, Box::new(copy(hide))))), fs), *l),
         _ => copy_stmt(s),
@@ -14425,6 +14545,7 @@ pub open spec fn spec_gcalls_stmt(s: Stmt) -> List<(u32, u32, u32)>
         Stmt::RangeFor(_, _, _, sq, _, body, _) => spec_append(spec_gcalls(sq), spec_gcalls_stmts(*body)),
         Stmt::SetIndex(_, i, e, _) => spec_append(spec_gcalls(i), spec_gcalls(e)),
         Stmt::SetFieldAt(_, i, e, _) => spec_append(spec_gcalls(i), spec_gcalls(e)),
+        Stmt::PushField(_, e, _) => spec_gcalls(e),
         Stmt::PushBack(_, e, _) => spec_gcalls(e),
         _ => List::Nil,
     }
@@ -14470,6 +14591,7 @@ pub fn gcalls_stmt(s: &Stmt) -> (r: List<(u32, u32, u32)>)
         Stmt::RangeFor(_, _, _, sq, _, body, _) => append(gcalls(sq), gcalls_stmts(body)),
         Stmt::SetIndex(_, i, e, _) => append(gcalls(i), gcalls(e)),
         Stmt::SetFieldAt(_, i, e, _) => append(gcalls(i), gcalls(e)),
+        Stmt::PushField(_, e, _) => gcalls(e),
         Stmt::PushBack(_, e, _) => gcalls(e),
         _ => List::Nil,
     }

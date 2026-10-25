@@ -5882,8 +5882,9 @@ fn a_class_that_holds_a_vector_keeps_its_values() {
     assert_eq!(failed, want, "{text}");
 }
 
-/// push_back, a write through at and an assignment of a vector field, a struct that holds a vector in an optional, a vector or a
-/// unique_ptr, and a vector field with a default member initializer are refused, decision 0187.
+/// A write through at and an assignment of a vector field, a struct that holds a vector in an optional, a vector or a unique_ptr,
+/// and a vector field with a default member initializer are refused, decision 0187. A push_back of a field proves since decision
+/// 0191.
 #[test]
 fn a_class_that_holds_a_vector_with_no_rule_is_refused() {
     let Some(dafny) = dafny() else { return };
@@ -5896,7 +5897,6 @@ fn a_class_that_holds_a_vector_with_no_rule_is_refused() {
     let refused: Vec<&str> = text.lines().filter(|l| l.starts_with("Not proved: ") || l.starts_with("Not provable: ")).map(|l| l.rsplit_once(".cpp:").unwrap().1).collect();
     let holds = "a struct that holds a sequence has no rule yet in an optional, a pointer, a unique_ptr, or a vector that the code makes or writes.";
     let want = [
-        "20: CXXMemberCallExpr: the translator has no rule for it yet.".to_string(),
         "26: BinaryOperator =: the translator has no rule for it yet.".to_string(),
         "32: CXXOperatorCallExpr: the translator has no rule for it yet.".to_string(),
         format!("41: {holds}"),

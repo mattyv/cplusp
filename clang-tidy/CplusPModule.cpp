@@ -4234,6 +4234,7 @@ public:
                          : isa<CXXMethodDecl>(FD) && !Member && !Static && !Constructor ? "CXXMethodDecl"
                          : !FD->getBody() && !Trusted && !Interface ? "FunctionDecl without body"
                                                   : nullptr;
+    const QualType ValueResult = valueResult(FD);
     llvm::json::Array Params, Conds;
     Enclosing = FD;
     llvm::json::Value Hidden = hiddenConstants(FD);
@@ -4270,7 +4271,7 @@ public:
                               {"file", file(FD->getLocation())},
                               {"line", number(line(FD->getLocation()))},
                               {"params", std::move(Params)},
-                              {"ret", Opaque ? tag("Other", Opaque) : FD->getReturnType()->isVoidType() || fluent(FD) ? llvm::json::Value("Void") : resultType(FD->getReturnType())},
+                              {"ret", Opaque ? tag("Other", Opaque) : FD->getReturnType()->isVoidType() || fluent(FD) ? llvm::json::Value("Void") : !ValueResult.isNull() ? type(ValueResult) : resultType(FD->getReturnType())},
                               {"trusted", TrustedJson},
                               {"interface", Interface},
                               {"hidden", std::move(Hidden)},
@@ -5475,6 +5476,36 @@ private:
         return tag("Vec", type(Element));
     return type(T);
   }
+  // A const member function that gives back `const T&` of a scalar or a plain struct `T`, whose body is one `return` of a field of the object, or `f[i]`,
+  // `f.at(i)` or `f.back()` of a vector field, decision 0191. The model reads its result as the value `T`. Else null, and the reference keeps its refusal.
+  // ponytail: the body is that one statement. Upgrade: any body whose every return has the form.
+  QualType valueResult(const FunctionDecl *FD) const {
+    const auto *M = dyn_cast_or_null<CXXMethodDecl>(FD);
+    if (!M || !M->isConst() || M->isVirtual() || !member(M) || !M->getReturnType()->isLValueReferenceType() || !M->getReturnType()->getPointeeType().isConstQualified())
+      return QualType();
+    const QualType Pointee = M->getReturnType()->getPointeeType().getUnqualifiedType();
+    if (!(scalar(Pointee) || smallScalar(Pointee) || plainStruct(Pointee)))
+      return QualType();
+    const FunctionDecl *Def = M->getDefinition();
+    const auto *Body = Def ? dyn_cast_or_null<CompoundStmt>(Def->getBody()) : nullptr;
+    const auto *Return = Body && Body->size() == 1 ? dyn_cast<ReturnStmt>(Body->body_front()) : nullptr;
+    if (!Return || !Return->getRetValue())
+      return QualType();
+    // A returned temporary dies at the end of the return, so it is never the value, decision 0181. IgnoreParenImpCasts skips a MaterializeTemporaryExpr.
+    if (holdsTemporary(Return->getRetValue()))
+      return QualType();
+    const Expr *Value = Return->getRetValue()->IgnoreParenImpCasts();
+    if (Value->getType().getUnqualifiedType().getCanonicalType() != Pointee.getCanonicalType())
+      return QualType();
+    bool Form = objectField(Value) != nullptr;
+    if (const auto *Element = dyn_cast<CXXOperatorCallExpr>(Value); Element && Element->getOperator() == OO_Subscript && Element->getNumArgs() == 2)
+      Form = isFieldVec(Element->getArg(0));
+    if (const auto *Call = dyn_cast<CXXMemberCallExpr>(Value); Call && Call->getMethodDecl() && Call->getMethodDecl()->getDeclName().isIdentifier() && Call->getImplicitObjectArgument()) {
+      const StringRef Name = Call->getMethodDecl()->getName();
+      Form = ((Name == "at" && Call->getNumArgs() == 1) || (Name == "back" && Call->getNumArgs() == 0)) && isFieldVec(Call->getImplicitObjectArgument());
+    }
+    return Form ? Pointee : QualType();
+  }
   // The loop variable of a range-for has the element type whether it is `const` or a const reference, decision 0143. The loop is written only
   // when that type is the element's.
   llvm::json::Value varType(const ValueDecl *D) const {
@@ -5854,6 +5885,19 @@ private:
           }
       return tag("PushBack", llvm::json::Array{cast<DeclRefExpr>(Push->getImplicitObjectArgument()->IgnoreParenImpCasts())->getDecl()->getNameAsString(),
                                                std::move(Pushed), number(line(S->getBeginLoc()))});
+    }
+    // `f.push_back(e);` and `f.pop_back();` where `f` is a vector field of the object, decision 0191.
+    if (const auto *Call = dyn_cast<CXXMemberCallExpr>(Inner); Call && Call->getMethodDecl() && Call->getMethodDecl()->getDeclName().isIdentifier() &&
+                                                              Call->getImplicitObjectArgument() && isFieldVec(Call->getImplicitObjectArgument())) {
+      const FieldDecl *Field = objectField(Call->getImplicitObjectArgument()->IgnoreParenImpCasts());
+      if (Call->getNumArgs() == 1 && Call->getMethodDecl()->getName() == "push_back") {
+        const Expr *Arg = Call->getArg(0);
+        if (const auto *Temporary = dyn_cast<MaterializeTemporaryExpr>(Arg))
+          Arg = Temporary->getSubExpr();
+        return tag("PushField", llvm::json::Array{Field->getNameAsString(), expr(Arg, line(S->getBeginLoc())), number(line(S->getBeginLoc()))});
+      }
+      if (Call->getNumArgs() == 0 && Call->getMethodDecl()->getName() == "pop_back")
+        return tag("PopField", llvm::json::Array{Field->getNameAsString(), number(line(S->getBeginLoc()))});
     }
     // A call that is the whole statement, `f(a);` or `o.f(a);`. Its object is the first argument, decision 0096.
     // `std::sort(v.begin(), v.end())` of a vector that the function writes is a sort of the whole of `v`, decision 0161. A comparator lambda of the element type
@@ -6463,6 +6507,9 @@ private:
           if (!(D && member(D)))
             return expr(Held->getSubExpr(), Near);
         }
+      // A scalar temporary, `s.push(1)`, is its value as well, because the parameter `const T&` of a scalar is the scalar by value, decision 0175.
+      if (const auto *Held = dyn_cast<MaterializeTemporaryExpr>(Arg); Held && (scalar(Held->getType().getUnqualifiedType()) || smallScalar(Held->getType().getUnqualifiedType())))
+        return expr(Held->getSubExpr(), Near);
     }
     return expr(Arg, Near);
   }
@@ -6869,6 +6916,11 @@ private:
     if (const auto *Member = dyn_cast<CXXMemberCallExpr>(E); Member && Member->getNumArgs() == 0 && Member->getMethodDecl() && Member->getMethodDecl()->getNameAsString() == "size")
       if (const Expr *Object = Member->getImplicitObjectArgument(); Object && (isSeq(Object->getType()) || isMutSeq(Object) || isFieldVec(Object)))
         return tag("Size", expr(Object, Near));
+    // `v.back()` of a vector, in code, decision 0191.
+    if (const auto *Member = dyn_cast<CXXMemberCallExpr>(E); Member && Member->getNumArgs() == 0 && Member->getMethodDecl() && Member->getMethodDecl()->getDeclName().isIdentifier() &&
+                                                             Member->getMethodDecl()->getName() == "back")
+      if (const Expr *Object = Member->getImplicitObjectArgument(); Object && (isSeq(Object->getType()) || isMutSeq(Object) || isFieldVec(Object)))
+        return tag("Back", expr(Object, Near));
     // `v.empty()`, and `s.subspan(k)` with no explicit second argument, decision 0078. `subspan(k, n)` and `first(n)` stay unknown.
     if (const auto *Member = dyn_cast<CXXMemberCallExpr>(E); Member && Member->getNumArgs() == 0 && Member->getMethodDecl() && Member->getMethodDecl()->getNameAsString() == "empty")
       if (const Expr *Object = Member->getImplicitObjectArgument(); Object && isSeq(Object->getType()))

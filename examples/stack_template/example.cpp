@@ -26,6 +26,7 @@ class Stack {
 
   //@ requires valid() && size() < capacity()
   //@ ensures valid() && capacity() == old(capacity()) && size() == old(size()) + 1 && top() == x
+  //@ ensures forall i :: 0 <= i < old(size()) ==> items_[i] == old(items_[i])
   void push(const T& x) { items_.push_back(x); }
 
   //@ requires valid() && size() > 0
@@ -34,6 +35,7 @@ class Stack {
 
   //@ requires valid() && size() > 0
   //@ ensures valid() && capacity() == old(capacity()) && size() == old(size()) - 1
+  //@ ensures forall i :: 0 <= i < size() ==> items_[i] == old(items_[i])
   void pop() { items_.pop_back(); }
 
  private:
@@ -65,4 +67,15 @@ int32_t last_point_y() {
   s.push(Point{1, 2});
   s.push(Point{5, 7});
   return s.top().y;
+}
+
+// A pop leaves the elements below the top as they were.
+//@ ensures result == 2
+int32_t after_pop() {
+  Stack<int32_t> s(4);
+  s.push(1);
+  s.push(2);
+  s.push(3);
+  s.pop();
+  return s.top();
 }

@@ -122,6 +122,8 @@ enum JExpr {
     Paren(Box<JExpr>),
     Brace(Box<JExpr>),
     Size(Box<JExpr>),
+    /// `v.back()` of a vector, decision 0191.
+    Back(Box<JExpr>),
     Empty(Box<JExpr>),
     /// A local vector with no initial value, decision 0170.
     EmptyVec,
@@ -161,6 +163,10 @@ enum JStmt {
     SetFieldAt(String, JExpr, JExpr, u32),
     /// `v.push_back(e)` where `v` is a vector by reference, decision 0148.
     PushBack(String, JExpr, u32),
+    /// `f.push_back(e)` where `f` is a vector field of the object, decision 0191.
+    PushField(String, JExpr, u32),
+    /// `f.pop_back()` where `f` is a vector field of the object, decision 0191.
+    PopField(String, u32),
     /// `std::sort(v.begin(), v.end())`, decision 0161.
     Sort(String, u32),
     /// `std::sort(v.begin(), v.end(), [captures](T a, T b) { return e; })`: the vector, the two parameters, their type, the test and the line, decision 0162.
@@ -498,6 +504,7 @@ fn expr(e: JExpr, names: &mut Names) -> Expr {
         JExpr::Paren(a) => Expr::Paren(Box::new(expr(*a, names))),
         JExpr::Brace(a) => Expr::Brace(Box::new(expr(*a, names))),
         JExpr::Size(a) => Expr::Size(Box::new(expr(*a, names))),
+        JExpr::Back(a) => Expr::Back(Box::new(expr(*a, names))),
         JExpr::Empty(a) => Expr::Empty(Box::new(expr(*a, names))),
         JExpr::EmptyVec => Expr::EmptyVec,
         JExpr::Fill(n, x) => Expr::Fill(Box::new(expr(*n, names)), Box::new(expr(*x, names))),
@@ -536,6 +543,8 @@ fn stmt(s: JStmt, names: &mut Names) -> Stmt {
         JStmt::SetIndex(v, i, e, line) => Stmt::SetIndex(names.id(&v), expr(i, names), expr(e, names), names.here(line)),
         JStmt::SetFieldAt(f, i, e, line) => Stmt::SetFieldAt(names.id(&f), expr(i, names), expr(e, names), names.here(line)),
         JStmt::PushBack(v, e, line) => Stmt::PushBack(names.id(&v), expr(e, names), names.here(line)),
+        JStmt::PushField(f, e, line) => Stmt::PushField(names.id(&f), expr(e, names), names.here(line)),
+        JStmt::PopField(f, line) => Stmt::PopField(names.id(&f), names.here(line)),
         JStmt::Sort(v, line) => Stmt::Sort(names.id(&v), names.here(line)),
         JStmt::SortBy(v, a, b, t, e, line) => {
             let (v, a, b, t) = (names.id(&v), names.id(&a), names.id(&b), ty(t, names));
@@ -950,7 +959,7 @@ fn expr_names<'a>(e: &'a JExpr, out: &mut Vec<&'a str>) {
             expr_names(a, out);
             expr_names(b, out);
         }
-        JExpr::Not(a) | JExpr::Neg(a) | JExpr::Cast(_, a) | JExpr::Paren(a) | JExpr::Brace(a) | JExpr::Size(a) | JExpr::Empty(a) | JExpr::Copy(a, ..) | JExpr::Field(a, _) | JExpr::HasValue(a) | JExpr::Value(a) | JExpr::Wrap(a) => expr_names(a, out),
+        JExpr::Not(a) | JExpr::Neg(a) | JExpr::Cast(_, a) | JExpr::Paren(a) | JExpr::Brace(a) | JExpr::Size(a) | JExpr::Back(a) | JExpr::Empty(a) | JExpr::Copy(a, ..) | JExpr::Field(a, _) | JExpr::HasValue(a) | JExpr::Value(a) | JExpr::Wrap(a) => expr_names(a, out),
         JExpr::Call(_, _, args, _) | JExpr::Construct(_, args) | JExpr::List(args) => args.iter().for_each(|a| expr_names(a, out)),
         JExpr::Lit(..) | JExpr::Bool(_) | JExpr::RealLit(..) | JExpr::Ratio(..) | JExpr::Nullopt | JExpr::EmptyVec | JExpr::Enumerator(..) | JExpr::Unknown(..) => {}
     }
@@ -995,12 +1004,12 @@ fn stmt_names<'a>(s: &'a JStmt, out: &mut Vec<&'a str>) {
         }
         JStmt::Step(n, ..) => out.push(n),
         JStmt::SetField(_, e, _) => expr_names(e, out),
-        JStmt::Sort(v, _) => out.push(v),
+        JStmt::Sort(v, _) | JStmt::PopField(v, _) => out.push(v),
         JStmt::SortBy(v, a, b, _, e, _) => {
             out.extend([v, a, b].map(String::as_str));
             expr_names(e, out);
         }
-        JStmt::PushBack(v, e, _) => {
+        JStmt::PushBack(v, e, _) | JStmt::PushField(v, e, _) => {
             out.push(v);
             expr_names(e, out);
         }
@@ -1249,6 +1258,16 @@ function CountIf<T>(s: seq<T>, p: T -> bool): nat
 {
   if |s| == 0 then 0 else CountIf(s[..|s| - 1], p) + (if p(s[|s| - 1]) then 1 else 0)
 }
+function Back<T>(s: seq<T>): T
+  requires |s| > 0
+{
+  s[|s| - 1]
+}
+function PopBack<T>(s: seq<T>): seq<T>
+  requires |s| > 0
+{
+  s[..|s| - 1]
+}
 ";
 
 /// The model of std::sort, decision 0161: the file of the divergence tests as it is. The shell keeps no copy.
@@ -1422,6 +1441,8 @@ fn dexpr(e: &DExpr, names: &Names) -> String {
         DExpr::SeqLit(args) => format!("[{}]", dargs(args, names).join(", ")),
         DExpr::SeqFill(n, x) => format!("seq({} as int, _ => {})", dexpr(n, names), dexpr(x, names)),
         DExpr::Len(a) => format!("|{}|", dexpr(a, names)),
+        DExpr::Back(a) => format!("Back({})", dexpr(a, names)),
+        DExpr::PopBack(a) => format!("PopBack({})", dexpr(a, names)),
         DExpr::Index(a, i) => format!("{}[{}]", dexpr(a, names), dexpr(i, names)),
         DExpr::Append(a, e) => format!("({} + [{}])", dexpr(a, names), dexpr(e, names)),
         DExpr::CountIf(s, x, t, e) => format!("CountIf({}, ({}: {}) => {})", dexpr(s, names), mangle(names.text(*x)), dty(*t, names), dexpr(e, names)),

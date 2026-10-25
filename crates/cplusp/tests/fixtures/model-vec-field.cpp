@@ -23,6 +23,7 @@ class Points {
 
   //@ requires size() < capacity()
   //@ ensures size() == old(size()) + 1 && capacity() == old(capacity()) && top() == p
+  //@ ensures forall i :: 0 <= i < old(size()) ==> at(i) == old(at(i))
   void push(const Point& p) { items_.push_back(p); }
 
   // A const reference to the last element is its value.
@@ -32,6 +33,8 @@ class Points {
 
   //@ requires size() > 0
   //@ ensures size() == old(size()) - 1 && capacity() == old(capacity())
+  //@ ensures forall i :: 0 <= i < size() ==> at(i) == old(at(i))
+  //@ ensures size() > 0 ==> top() == at(size() - 1)
   void pop() { items_.pop_back(); }
 
   // A const reference to an element is its value.

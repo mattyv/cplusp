@@ -6,14 +6,14 @@
 class Ints {
  public:
   //@ ensures result == values_.size()
-  size_t size() const { return values_.size(); }
+  size_t count() const { return values_.size(); }
 
-  //@ requires size() < 1000
-  //@ ensures size() == old(size()) + 1
+  //@ requires count() < 1000
+  //@ ensures count() == old(count()) + 1
   void push(int32_t x) { values_.push_back(x); }
 
   // A pop of an empty vector is undefined behaviour.
-  //@ ensures size() == old(size()) - 1
+  //@ ensures count() == old(count()) - 1
   void drop() { values_.pop_back(); }
 
   // So is the last element of an empty vector.
@@ -25,7 +25,7 @@ class Ints {
 };
 
 // A pop takes the last element away, so the one before is last.
-//@ requires i.size() == 0
+//@ requires i.count() == 0
 //@ modifies i
 //@ ensures result == 7
 int32_t after(Ints& i) {

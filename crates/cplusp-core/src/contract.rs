@@ -390,6 +390,8 @@ pub open spec fn spec_token(t: Seq<u8>, i: int) -> (int, LexKind) {
         (i + 7, LexKind::Fixed(Tok::Size))
     } else if at(t, i, b".empty()"@) {
         (i + 8, LexKind::Fixed(Tok::Empty))
+    } else if at(t, i, b".back()"@) {
+        (i + 7, LexKind::Fixed(Tok::Back))
     } else if at(t, i, b".has_value()"@) {
         (i + 12, LexKind::Fixed(Tok::HasValue))
     } else if at(t, i, b".value()"@) {
@@ -1118,6 +1120,8 @@ fn token(t: &Vec<u8>, i: usize) -> (r: (usize, LexKind))
         (i + 7, LexKind::Fixed(Tok::Size))
     } else if at_exec(t, i, b".empty()") {
         (i + 8, LexKind::Fixed(Tok::Empty))
+    } else if at_exec(t, i, b".back()") {
+        (i + 7, LexKind::Fixed(Tok::Back))
     } else if at_exec(t, i, b".has_value()") {
         (i + 12, LexKind::Fixed(Tok::HasValue))
     } else if at_exec(t, i, b".value()") {
