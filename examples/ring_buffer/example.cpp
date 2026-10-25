@@ -7,6 +7,7 @@
 // The capacity is a run-time value, as in stack_template, and valid() keeps it at most a million, so no sum below can overflow.
 // The contracts use the implicit this, decision 0028. at(i) is the i-th oldest element, and the contracts of push and pop say what it
 // is before and after, so a caller proves the order of its elements from the contracts alone.
+// The facts about % that push and pop need are lemmas in example.spec.dfy, and each of the two applies one, decision 0167.
 class RingBuffer {
  public:
   //@ requires 0 < capacity && capacity <= 1000000
@@ -33,6 +34,7 @@ class RingBuffer {
   //@ ensures at(size() - 1) == x
   //@ ensures forall i :: 0 <= i < old(size()) ==> at(i) == old(at(i))
   void push(int32_t x) {
+    //@ apply SlotsDifferAll(head_, count_, capacity_)
     items_[(head_ + count_) % capacity_] = x;
     count_ += 1;
   }
@@ -42,6 +44,7 @@ class RingBuffer {
   //@ ensures result == old(at(0))
   //@ ensures forall i :: 0 <= i < size() ==> at(i) == old(at(i + 1))
   int32_t pop() {
+    //@ apply SlotsShiftAll(head_, capacity_)
     int32_t oldest = items_[head_];
     head_ = (head_ + 1) % capacity_;
     count_ -= 1;

@@ -2529,22 +2529,18 @@ fn prove_names_each_failed_read_and_measure_on_a_recursive_struct() {
     assert_eq!(failed.len(), 3, "{text}");
 }
 
-/// A struct that holds a sequence, directly or through a field, is refused as a local or a result, decision 0076.
+/// A struct that holds a sequence, directly or through a field, is a value: a local copy, a result and a copy of a struct around
+/// it translate, decision 0187.
 #[test]
-fn a_struct_that_holds_a_sequence_is_a_parameter_only() {
+fn a_struct_that_holds_a_sequence_is_a_value() {
     if !clang_tidy_available() {
         return;
     }
     let dir = tempfile::tempdir().unwrap();
-    let (o, _) = model("model-nodes-refuse.cpp", dir.path());
+    let (o, _) = model("model-nodes-value.cpp", dir.path());
     let text = stdout(&o);
-    assert_eq!(o.status.code(), Some(1), "stdout: {text} stderr: {}", stderr(&o));
-    let refusals: Vec<&str> = text.lines().filter(|l| l.starts_with("Not provable: ")).collect();
-    for line in [15, 19, 24] {
-        let want = format!("model-nodes-refuse.cpp:{line}: a struct that holds a sequence is in the subset only as a parameter that the function does not write.");
-        assert!(refusals.iter().any(|l| l.ends_with(&want)), "{want}: {text}");
-    }
-    assert_eq!(refusals.len(), 3, "{text}");
+    assert_eq!(o.status.code(), Some(0), "stdout: {text} stderr: {}", stderr(&o));
+    assert!(!text.lines().any(|l| l.starts_with("Not provable: ")), "{text}");
 }
 
 /// A struct or a field whose name Dafny cannot read is refused at the struct's line, as a function is, decision 0069. Found by the
@@ -3883,7 +3879,7 @@ fn an_optional_of_a_struct_that_holds_a_sequence_is_refused() {
     assert_eq!(o.status.code(), Some(1), "stdout: {text} stderr: {}", stderr(&o));
     assert_eq!(
         text.lines().filter(|l| l.starts_with("Not provable: ")).map(|l| l.rsplit_once(".cpp:").unwrap().1).collect::<Vec<_>>(),
-        vec!["11: a struct that holds a sequence is in the subset only as a parameter that the function does not write."],
+        vec!["11: a struct that holds a sequence has no rule yet in an optional, a pointer, a unique_ptr, or a vector that the code makes or writes."],
         "{text}"
     );
 }
@@ -5845,6 +5841,68 @@ fn a_vector_that_the_code_gives_up_with_no_rule_is_refused() {
         "36: CXXConstructExpr: the translator has no rule for it yet.".to_string(),
         "44: CXXOperatorCallExpr: the translator has no rule for it yet.".to_string(),
         "50: CXXTemporaryObjectExpr: the translator has no rule for it yet.".to_string(),
+    ];
+    assert_eq!(refused, want, "{text}");
+}
+
+/// A class that holds a vector is a local, a copy and the object of its member functions. A constructor starts the vector with n
+/// copies or empty, and a member function writes one element, decision 0187.
+#[test]
+fn a_class_that_holds_a_vector_proves() {
+    let Some(dafny) = dafny() else { return };
+    if !clang_tidy_available() {
+        return;
+    }
+    for name in ["model-bins.cpp", "../../../../examples/ring_buffer/example.cpp"] {
+        let o = prove(name, &[], &dafny);
+        let text = stdout(&o);
+        assert_eq!(o.status.code(), Some(0), "{name}: stdout: {text} stderr: {}", stderr(&o));
+        assert_eq!(text.lines().last(), Some("ok: proved"), "{name}: {text}");
+    }
+}
+
+/// A write past the end of a vector field fails, each count starts at zero, a copy keeps the source as it was, and the init list runs
+/// in the order of the fields, decision 0187.
+#[test]
+fn a_class_that_holds_a_vector_keeps_its_values() {
+    let Some(dafny) = dafny() else { return };
+    if !clang_tidy_available() {
+        return;
+    }
+    let o = prove("model-bins-wrong.cpp", &[], &dafny);
+    let text = stdout(&o);
+    assert_eq!(o.status.code(), Some(1), "stdout: {text} stderr: {}", stderr(&o));
+    let failed: Vec<&str> = text.lines().filter(|l| l.starts_with("Not proved: ") || l.starts_with("Not provable: ")).map(|l| l.rsplit_once(".cpp:").unwrap().1).collect();
+    let want = [
+        "30: the index may be out of range.",
+        "41: the ensures line may not hold on this return.",
+        "51: the ensures line may not hold on this return.",
+        "60: the ensures line may not hold on this return.",
+    ];
+    assert_eq!(failed, want, "{text}");
+}
+
+/// push_back, a write through at and an assignment of a vector field, a struct that holds a vector in an optional, a vector or a
+/// unique_ptr, and a vector field with a default member initializer are refused, decision 0187.
+#[test]
+fn a_class_that_holds_a_vector_with_no_rule_is_refused() {
+    let Some(dafny) = dafny() else { return };
+    if !clang_tidy_available() {
+        return;
+    }
+    let o = prove("model-bins-refuse.cpp", &[], &dafny);
+    let text = stdout(&o);
+    assert_eq!(o.status.code(), Some(1), "stdout: {text} stderr: {}", stderr(&o));
+    let refused: Vec<&str> = text.lines().filter(|l| l.starts_with("Not proved: ") || l.starts_with("Not provable: ")).map(|l| l.rsplit_once(".cpp:").unwrap().1).collect();
+    let holds = "a struct that holds a sequence has no rule yet in an optional, a pointer, a unique_ptr, or a vector that the code makes or writes.";
+    let want = [
+        "20: CXXMemberCallExpr: the translator has no rule for it yet.".to_string(),
+        "26: BinaryOperator =: the translator has no rule for it yet.".to_string(),
+        "32: CXXOperatorCallExpr: the translator has no rule for it yet.".to_string(),
+        format!("41: {holds}"),
+        format!("47: {holds}"),
+        format!("53: {holds}"),
+        "61: CXXConstructorDecl: the translator has no rule for it yet.".to_string(),
     ];
     assert_eq!(refused, want, "{text}");
 }

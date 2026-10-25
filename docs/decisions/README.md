@@ -191,3 +191,4 @@ Status is `decided`, `proposed` (the default until someone objects or the thin s
 | [0184](0184-a-local-array-from-a-brace-list.md) | A local array from a brace list | decided |
 | [0185](0185-a-vector-that-the-code-gives-up.md) | A vector that the code gives up | decided |
 | [0186](0186-a-tree-that-the-code-builds.md) | A tree that the code builds | decided |
+| [0187](0187-a-class-that-holds-a-vector.md) | A class that holds a vector | decided |

@@ -896,10 +896,11 @@ fn a_struct_may_hold_sequences_and_a_sequence_of_itself() {
     assert_eq!(translate_structs(&node_table()), want);
 }
 
+/// A struct that holds a sequence is a value: a local of Node, a local of Wrapper, which holds a Node by value, and a result of
+/// Node translate, decision 0187.
 #[test]
-fn a_struct_that_holds_a_sequence_is_refused_as_a_local_or_a_result() {
+fn a_struct_that_holds_a_sequence_is_a_value() {
     let param = |t: Ty| List::Cons((A, t), Box::new(List::Nil));
-    // A local of Node, and a local of Wrapper, which holds a Node by value.
     for k in [NODE, WRAP] {
         let f = Function {
             name: SAT,
@@ -911,25 +912,42 @@ fn a_struct_that_holds_a_sequence_is_refused_as_a_local_or_a_result() {
                 Box::new(Stmt::Local(B, Ty::Struct(k), read(A, Ty::Struct(k)), 15)),
                 Box::new(List::Cons(Box::new(Stmt::Return(Expr::Lit(0, Ty::I32), 16)), Box::new(List::Nil)))),
         };
-        assert_eq!(bare_refusal(translate_function(&f, &List::Nil, &node_table())), Refusal::HoldsSeq(15));
+        let Model::Full(m) = translate_function(&f, &List::Nil, &node_table()) else { panic!("a full model of a local") };
+        let List::Cons((local, _), _) = strip(m.body) else { panic!("a body") };
+        assert_eq!(*local, DStmt::Local(B, DTy::Struct(k), DExpr::Var(A)));
     }
-    // A result of Node: the function has no method, so a call to it is refused at the call.
     let result = Function { name: SUCC, line: 19, params: param(Ty::Struct(NODE)), ret: Ty::Struct(NODE), trusted: false, conds: List::Nil, body: one(Stmt::Return(read(A, Ty::Struct(NODE)), 20)) };
-    let caller = Function {
-        name: SAT,
-        line: 23,
-        params: param(Ty::Struct(NODE)),
-        ret: Ty::I32,
-        trusted: false, conds: List::Nil,
-        body: List::Cons(
-            Box::new(Stmt::Local(B, Ty::I32, Expr::Call(SUCC, SAT_NAME, Box::new(List::Cons(b(read(A, Ty::Struct(NODE))), Box::new(List::Nil))), 24), 24)),
-            Box::new(List::Cons(Box::new(Stmt::Return(Expr::Lit(0, Ty::I32), 25)), Box::new(List::Nil)))),
+    let Model::Full(m) = translate_function(&result, &List::Nil, &node_table()) else { panic!("a full model of a result") };
+    assert_eq!(m.ret, DTy::Struct(NODE));
+    // An optional of it stays out.
+    assert_eq!(translate_value_ty(Ty::Opt(Scalar::Struct(NODE)), 3, &node_table()), Err(Refusal::HoldsSeq(3)));
+    assert_eq!(translate_value_ty(Ty::Vec(Scalar::Struct(NODE)), 3, &node_table()), Err(Refusal::HoldsSeq(3)));
+}
+
+/// `prefix[i] = e` in a member function of Node that writes its object is a new value of the field. A field that is no sequence, a
+/// field that the struct does not have, and a member function that does not write its object are refused, decision 0187.
+#[test]
+fn a_member_function_writes_one_element_of_a_vector_field() {
+    let with = |t: Ty, s: Stmt| Function {
+        name: 480,
+        line: 9,
+        params: List::Cons((THIS, t), Box::new(List::Cons((X, Ty::U64), Box::new(List::Nil)))),
+        ret: Ty::Void,
+        trusted: false,
+        conds: List::Nil,
+        body: one(s),
     };
-    let all = fns(vec![result, caller]);
-    let List::Cons(first, rest) = translate_unit(&all, &node_table()) else { panic!("two models") };
-    assert_eq!(first, Model::Refused(Refusal::HoldsSeq(19)));
-    let List::Cons(second, _) = *rest else { panic!("two models") };
-    assert_eq!(bare_refusal(second), Refusal::Callee(SAT_NAME, 24));
+    let write = |f: u32| Stmt::SetFieldAt(f, Expr::Var(X, Ty::U64), Expr::Lit(1, Ty::U8), 10);
+    let Model::Full(m) = translate_function(&with(Ty::ThisMut(NODE), write(PRE)), &List::Nil, &node_table()) else { panic!("a full model") };
+    let List::Cons((s, _), rest) = strip(m.body) else { panic!("a body") };
+    assert_eq!(*rest, List::Nil);
+    let DStmt::SetField(f, DExpr::SetAt(base, i, _)) = *s else { panic!("a write of the field: {s:?}") };
+    assert_eq!(f, PRE);
+    assert_eq!(*base, DExpr::Field(Box::new(DExpr::After), PRE));
+    assert_eq!(*i, DExpr::Var(X));
+    assert_eq!(bare_refusal(translate_function(&with(Ty::ThisMut(NODE), write(VAL)), &List::Nil, &node_table())), Refusal::Syntax(10));
+    assert_eq!(bare_refusal(translate_function(&with(Ty::ThisMut(NODE), write(481)), &List::Nil, &node_table())), Refusal::NoField(481, 10));
+    assert_eq!(bare_refusal(translate_function(&with(Ty::This(NODE), write(PRE)), &List::Nil, &node_table())), Refusal::WriteParam(THIS, 10));
 }
 
 #[test]
@@ -1656,17 +1674,20 @@ fn a_constructor_gives_the_value_it_builds_and_its_contract_reads_that_value() {
     assert_eq!(m.function, None);
 }
 
+/// A constructor of a struct that holds a sequence gives its value, decision 0187.
 #[test]
-fn a_constructor_of_a_struct_that_holds_a_sequence_is_refused() {
+fn a_constructor_of_a_struct_that_holds_a_sequence_gives_its_value() {
     let f = Function {
         name: CTOR,
         line: 9,
-        params: List::Nil,
+        params: List::Cons((A, Ty::Struct(NODE)), Box::new(List::Nil)),
         ret: Ty::This(NODE),
         trusted: false, conds: List::Nil,
-        body: one(Stmt::Return(Expr::Lit(0, Ty::I32), 9)),
+        body: one(Stmt::Return(read(A, Ty::Struct(NODE)), 9)),
     };
-    assert_eq!(translate_function(&f, &List::Nil, &node_table()), Model::Refused(Refusal::HoldsSeq(9)));
+    let Model::Full(m) = translate_function(&f, &List::Nil, &node_table()) else { panic!("a full model") };
+    assert_eq!(m.ret, DTy::Struct(NODE));
+    assert_eq!(strip(m.body), List::Cons((Box::new(DStmt::Return(DExpr::Var(A))), 0), Box::new(List::Nil)));
 }
 
 const BUMP: u32 = 170;

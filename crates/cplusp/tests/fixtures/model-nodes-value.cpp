@@ -1,7 +1,7 @@
 #include <cstdint>
 #include <vector>
 
-// A struct that holds a sequence is a parameter only, decision 0076.
+// A struct that holds a sequence is a value: a local copy, a result and a copy of a struct around it translate, decision 0187.
 struct Node {
   std::vector<uint8_t> prefix;
   std::vector<Node> children;
