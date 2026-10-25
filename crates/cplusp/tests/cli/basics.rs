@@ -4,10 +4,8 @@ use super::*;
 /// model of examples/saturating_add.
 #[test]
 fn the_model_of_clamp_verifies_in_dafny() {
-    let Some(dafny) = dafny() else { return };
-    if !clang_tidy_available() {
-        return;
-    }
+    let dafny = dafny();
+    require_clang_tidy();
     let dir = tempfile::tempdir().unwrap();
     let (o, out) = model("model-clamp.cpp", dir.path());
     assert_eq!(o.status.code(), Some(0), "stdout: {} stderr: {}", stdout(&o), stderr(&o));
@@ -21,10 +19,8 @@ fn the_model_of_clamp_verifies_in_dafny() {
 /// The contract reaches the model: a wrong ensures line makes Dafny fail.
 #[test]
 fn a_wrong_contract_fails_in_dafny() {
-    let Some(dafny) = dafny() else { return };
-    if !clang_tidy_available() {
-        return;
-    }
+    let dafny = dafny();
+    require_clang_tidy();
     let dir = tempfile::tempdir().unwrap();
     let (o, out) = model("model-clamp-wrong.cpp", dir.path());
     assert_eq!(o.status.code(), Some(0), "stdout: {} stderr: {}", stdout(&o), stderr(&o));
@@ -38,9 +34,7 @@ fn a_wrong_contract_fails_in_dafny() {
 /// functions that the translator can model are still in the model.
 #[test]
 fn the_translator_refuses_what_it_has_no_rule_for() {
-    if !clang_tidy_available() {
-        return;
-    }
+    require_clang_tidy();
     let dir = tempfile::tempdir().unwrap();
     let (o, out) = model("model-refuse.cpp", dir.path());
     let text = stdout(&o);
@@ -60,9 +54,7 @@ fn the_translator_refuses_what_it_has_no_rule_for() {
 /// comment, or that ends in a backslash is refused. A deleted function runs nothing, so it has no model and no refusal.
 #[test]
 fn every_function_and_contract_line_in_view_is_modelled_or_refused() {
-    if !clang_tidy_available() {
-        return;
-    }
+    require_clang_tidy();
     let dir = tempfile::tempdir().unwrap();
     let (o, out) = model("model-coverage.cpp", dir.path());
     let text = stdout(&o);
@@ -97,10 +89,8 @@ fn every_function_and_contract_line_in_view_is_modelled_or_refused() {
 /// with the name of a function never shares a Dafny name with the method, decision 0060.
 #[test]
 fn reserved_names_and_unnamed_parameters_still_give_a_model_dafny_proves() {
-    let Some(dafny) = dafny() else { return };
-    if !clang_tidy_available() {
-        return;
-    }
+    let dafny = dafny();
+    require_clang_tidy();
     let dir = tempfile::tempdir().unwrap();
     let (o, out) = model("model-names.cpp", dir.path());
     assert_eq!(o.status.code(), Some(0), "stdout: {} stderr: {}", stdout(&o), stderr(&o));
@@ -114,9 +104,7 @@ fn reserved_names_and_unnamed_parameters_still_give_a_model_dafny_proves() {
 /// A file that does not compile cannot be modelled. It is exit 2, with the gate's message.
 #[test]
 fn a_file_that_does_not_compile_has_no_model() {
-    if !clang_tidy_available() {
-        return;
-    }
+    require_clang_tidy();
     let dir = tempfile::tempdir().unwrap();
     let (o, _) = model("model-broken.cpp", dir.path());
     let err = stderr(&o);
@@ -128,10 +116,8 @@ fn a_file_that_does_not_compile_has_no_model() {
 /// has a model that Dafny proves.
 #[test]
 fn the_model_of_saturating_add_and_successor_verifies_in_dafny() {
-    let Some(dafny) = dafny() else { return };
-    if !clang_tidy_available() {
-        return;
-    }
+    let dafny = dafny();
+    require_clang_tidy();
     let dir = tempfile::tempdir().unwrap();
     let example = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../examples/saturating_add/example.cpp");
     let (o, out) = model_of(&example, dir.path());
@@ -148,10 +134,8 @@ fn the_model_of_saturating_add_and_successor_verifies_in_dafny() {
 /// method with no contract and no body, so its callers still have a model, and the model still resolves in Dafny.
 #[test]
 fn calls_locals_and_casts_with_no_rule_are_refused_at_their_lines() {
-    let Some(dafny) = dafny() else { return };
-    if !clang_tidy_available() {
-        return;
-    }
+    let dafny = dafny();
+    require_clang_tidy();
     let dir = tempfile::tempdir().unwrap();
     let (o, out) = model("model-calls.cpp", dir.path());
     let text = stdout(&o);
@@ -191,10 +175,8 @@ fn calls_locals_and_casts_with_no_rule_are_refused_at_their_lines() {
 /// closes the finding of the review of slice 1 that two methods had one name and Dafny refused the file.
 #[test]
 fn overloads_and_namespaces_each_have_their_own_method() {
-    let Some(dafny) = dafny() else { return };
-    if !clang_tidy_available() {
-        return;
-    }
+    let dafny = dafny();
+    require_clang_tidy();
     let dir = tempfile::tempdir().unwrap();
     let (o, out) = model("model-overloads.cpp", dir.path());
     assert_eq!(o.status.code(), Some(0), "stdout: {} stderr: {}", stdout(&o), stderr(&o));
@@ -210,10 +192,8 @@ fn overloads_and_namespaces_each_have_their_own_method() {
 /// expansion alone would give them one.
 #[test]
 fn overloads_from_one_macro_each_have_their_own_method() {
-    let Some(dafny) = dafny() else { return };
-    if !clang_tidy_available() {
-        return;
-    }
+    let dafny = dafny();
+    require_clang_tidy();
     let dir = tempfile::tempdir().unwrap();
     let (o, out) = model("model-macro.cpp", dir.path());
     assert_eq!(o.status.code(), Some(0), "stdout: {} stderr: {}", stdout(&o), stderr(&o));
@@ -229,10 +209,8 @@ fn overloads_from_one_macro_each_have_their_own_method() {
 /// dropped the type proved `-1u < 1u` true. Now each wrap fails in Dafny.
 #[test]
 fn an_unsigned_wrap_of_literals_fails_in_dafny() {
-    let Some(dafny) = dafny() else { return };
-    if !clang_tidy_available() {
-        return;
-    }
+    let dafny = dafny();
+    require_clang_tidy();
     let dir = tempfile::tempdir().unwrap();
     let (o, out) = model("model-unsigned.cpp", dir.path());
     assert_eq!(o.status.code(), Some(0), "stdout: {} stderr: {}", stdout(&o), stderr(&o));
@@ -246,10 +224,8 @@ fn an_unsigned_wrap_of_literals_fails_in_dafny() {
 /// With the same order the model proves. With the names swapped, the C++ breaks its contract and Dafny refuses it.
 #[test]
 fn a_contract_on_a_declaration_reads_its_parameters_by_place() {
-    let Some(dafny) = dafny() else { return };
-    if !clang_tidy_available() {
-        return;
-    }
+    let dafny = dafny();
+    require_clang_tidy();
     let dir = tempfile::tempdir().unwrap();
     let (o, out) = model("model-redecl.cpp", dir.path());
     assert_eq!(o.status.code(), Some(0), "stdout: {} stderr: {}", stdout(&o), stderr(&o));
@@ -269,10 +245,8 @@ fn a_contract_on_a_declaration_reads_its_parameters_by_place() {
 /// decreases lines, give methods that Dafny proves.
 #[test]
 fn loops_with_invariants_verify_in_dafny() {
-    let Some(dafny) = dafny() else { return };
-    if !clang_tidy_available() {
-        return;
-    }
+    let dafny = dafny();
+    require_clang_tidy();
     let dir = tempfile::tempdir().unwrap();
     let (o, out) = model("model-loops.cpp", dir.path());
     assert_eq!(o.status.code(), Some(0), "stdout: {} stderr: {}", stdout(&o), stderr(&o));
@@ -289,9 +263,7 @@ fn loops_with_invariants_verify_in_dafny() {
 /// Each loop, write and loop contract that the third slice has no rule for is refused at its line, decision 0061.
 #[test]
 fn loops_and_writes_with_no_rule_are_refused_at_their_lines() {
-    if !clang_tidy_available() {
-        return;
-    }
+    require_clang_tidy();
     let dir = tempfile::tempdir().unwrap();
     let (o, _) = model("model-loops-refuse.cpp", dir.path());
     let text = stdout(&o);
@@ -320,9 +292,7 @@ fn loops_and_writes_with_no_rule_are_refused_at_their_lines() {
 /// A `//@` line after code on the same line belongs to no function and no loop, decision 0062. Each is refused, never dropped.
 #[test]
 fn a_contract_line_after_code_is_refused() {
-    if !clang_tidy_available() {
-        return;
-    }
+    require_clang_tidy();
     let dir = tempfile::tempdir().unwrap();
     let (o, _) = model("model-trailing.cpp", dir.path());
     let text = stdout(&o);
@@ -338,10 +308,8 @@ fn a_contract_line_after_code_is_refused() {
 /// A loop on the line of its function's name leaves the function its contract lines, decision 0062.
 #[test]
 fn a_loop_on_the_line_of_its_function_leaves_the_function_its_contract() {
-    let Some(dafny) = dafny() else { return };
-    if !clang_tidy_available() {
-        return;
-    }
+    let dafny = dafny();
+    require_clang_tidy();
     let dir = tempfile::tempdir().unwrap();
     let (o, out) = model("model-oneline.cpp", dir.path());
     assert_eq!(o.status.code(), Some(0), "stdout: {} stderr: {}", stdout(&o), stderr(&o));
@@ -354,10 +322,8 @@ fn a_loop_on_the_line_of_its_function_leaves_the_function_its_contract() {
 /// `true` and `false` in code are bool literals, decision 0063, and the model proves what they say.
 #[test]
 fn bool_literals_verify_in_dafny() {
-    let Some(dafny) = dafny() else { return };
-    if !clang_tidy_available() {
-        return;
-    }
+    let dafny = dafny();
+    require_clang_tidy();
     let dir = tempfile::tempdir().unwrap();
     let (o, out) = model("model-bool.cpp", dir.path());
     assert_eq!(o.status.code(), Some(0), "stdout: {} stderr: {}", stdout(&o), stderr(&o));
@@ -370,10 +336,8 @@ fn bool_literals_verify_in_dafny() {
 /// A literal holds the full range of uint64_t, in code and in a contract, decision 0063.
 #[test]
 fn the_largest_uint64_literal_verifies_in_dafny() {
-    let Some(dafny) = dafny() else { return };
-    if !clang_tidy_available() {
-        return;
-    }
+    let dafny = dafny();
+    require_clang_tidy();
     let dir = tempfile::tempdir().unwrap();
     let (o, out) = model("model-u64.cpp", dir.path());
     assert_eq!(o.status.code(), Some(0), "stdout: {} stderr: {}", stdout(&o), stderr(&o));
@@ -387,9 +351,7 @@ fn the_largest_uint64_literal_verifies_in_dafny() {
 /// file.
 #[test]
 fn a_contract_line_in_a_header_is_refused_at_the_header() {
-    if !clang_tidy_available() {
-        return;
-    }
+    require_clang_tidy();
     let dir = tempfile::tempdir().unwrap();
     let (o, _) = model("model-header-contract.cpp", dir.path());
     let text = stdout(&o);
@@ -403,10 +365,8 @@ fn a_contract_line_in_a_header_is_refused_at_the_header() {
 /// read them with `forall` and chained comparisons. `find` from examples/control_flow proves.
 #[test]
 fn read_only_sequences_verify_in_dafny() {
-    let Some(dafny) = dafny() else { return };
-    if !clang_tidy_available() {
-        return;
-    }
+    let dafny = dafny();
+    require_clang_tidy();
     let dir = tempfile::tempdir().unwrap();
     let (o, out) = model("model-seq.cpp", dir.path());
     assert_eq!(o.status.code(), Some(0), "stdout: {} stderr: {}", stdout(&o), stderr(&o));
@@ -419,10 +379,8 @@ fn read_only_sequences_verify_in_dafny() {
 /// The model reads a sequence only in range, decision 0064. A read with no check that the index fits fails in Dafny.
 #[test]
 fn a_read_out_of_range_fails_in_dafny() {
-    let Some(dafny) = dafny() else { return };
-    if !clang_tidy_available() {
-        return;
-    }
+    let dafny = dafny();
+    require_clang_tidy();
     let dir = tempfile::tempdir().unwrap();
     let (o, out) = model("model-seq-wrong.cpp", dir.path());
     assert_eq!(o.status.code(), Some(0), "stdout: {} stderr: {}", stdout(&o), stderr(&o));
@@ -436,9 +394,7 @@ fn a_read_out_of_range_fails_in_dafny() {
 /// parameter, a member call other than size, an index of a scalar, and a chain of two directions.
 #[test]
 fn sequences_with_no_rule_are_refused_at_their_lines() {
-    if !clang_tidy_available() {
-        return;
-    }
+    require_clang_tidy();
     let dir = tempfile::tempdir().unwrap();
     let (o, _) = model("model-seq-refuse.cpp", dir.path());
     let text = stdout(&o);
@@ -471,9 +427,7 @@ fn sequences_with_no_rule_are_refused_at_their_lines() {
 /// The model alone would read the span as constant across `g()`. The gate refuses the write, and the translator refuses `g`.
 #[test]
 fn a_callee_that_writes_the_data_behind_a_sequence_is_refused_by_the_gate() {
-    if !clang_tidy_available() {
-        return;
-    }
+    require_clang_tidy();
     let f = fixture("model-seq-global.cpp");
     let o = gated(&[f.to_str().unwrap(), "--", "-std=c++23", "-ffp-contract=off"]);
     let text = stdout(&o);
@@ -490,10 +444,8 @@ fn a_callee_that_writes_the_data_behind_a_sequence_is_refused_by_the_gate() {
 /// forall binds the same name.
 #[test]
 fn a_bound_name_is_an_integer() {
-    let Some(dafny) = dafny() else { return };
-    if !clang_tidy_available() {
-        return;
-    }
+    let dafny = dafny();
+    require_clang_tidy();
     let dir = tempfile::tempdir().unwrap();
     let (o, out) = model("model-forall.cpp", dir.path());
     assert_eq!(o.status.code(), Some(0), "stdout: {} stderr: {}", stdout(&o), stderr(&o));
@@ -508,10 +460,8 @@ fn a_bound_name_is_an_integer() {
 /// The model never wraps, decision 0061. An unsigned value below zero and a sum of literals that overflows each fail in Dafny.
 #[test]
 fn unsigned_wrap_and_literal_overflow_fail_in_dafny() {
-    let Some(dafny) = dafny() else { return };
-    if !clang_tidy_available() {
-        return;
-    }
+    let dafny = dafny();
+    require_clang_tidy();
     let dir = tempfile::tempdir().unwrap();
     let (o, out) = model("model-wrap.cpp", dir.path());
     assert_eq!(o.status.code(), Some(0), "stdout: {} stderr: {}", stdout(&o), stderr(&o));
@@ -524,10 +474,8 @@ fn unsigned_wrap_and_literal_overflow_fail_in_dafny() {
 /// The model does not wrap a narrowing cast, decision 0058. Dafny must prove that the value fits, and with no contract it cannot.
 #[test]
 fn a_narrowing_cast_that_may_not_fit_fails_in_dafny() {
-    let Some(dafny) = dafny() else { return };
-    if !clang_tidy_available() {
-        return;
-    }
+    let dafny = dafny();
+    require_clang_tidy();
     let dir = tempfile::tempdir().unwrap();
     let (o, out) = model("model-narrow.cpp", dir.path());
     assert_eq!(o.status.code(), Some(0), "stdout: {} stderr: {}", stdout(&o), stderr(&o));
@@ -540,10 +488,8 @@ fn a_narrowing_cast_that_may_not_fit_fails_in_dafny() {
 /// A file that proves gives `ok: proved` and exit 0, decision 0068.
 #[test]
 fn prove_says_ok_when_each_method_proves() {
-    let Some(dafny) = dafny() else { return };
-    if !clang_tidy_available() {
-        return;
-    }
+    let dafny = dafny();
+    require_clang_tidy();
     let o = prove("model-clamp.cpp", &[], &dafny);
     assert_eq!(o.status.code(), Some(0), "stdout: {} stderr: {}", stdout(&o), stderr(&o));
     assert_eq!(stdout(&o).lines().last(), Some("ok: proved"), "{}", stdout(&o));
@@ -552,10 +498,8 @@ fn prove_says_ok_when_each_method_proves() {
 /// A failed ensures is named at the C++ return, with the contract line it comes from and the requires lines it had, decision 0068.
 #[test]
 fn prove_names_a_failed_ensures_at_its_return_with_its_contract_and_assumptions() {
-    let Some(dafny) = dafny() else { return };
-    if !clang_tidy_available() {
-        return;
-    }
+    let dafny = dafny();
+    require_clang_tidy();
     let o = prove("model-clamp-wrong.cpp", &[], &dafny);
     let text = stdout(&o);
     assert_eq!(o.status.code(), Some(1), "stdout: {text} stderr: {}", stderr(&o));
@@ -569,10 +513,8 @@ fn prove_names_a_failed_ensures_at_its_return_with_its_contract_and_assumptions(
 /// decision 0068. The type is the C++ type.
 #[test]
 fn prove_names_a_value_that_may_not_fit_and_an_index_out_of_range() {
-    let Some(dafny) = dafny() else { return };
-    if !clang_tidy_available() {
-        return;
-    }
+    let dafny = dafny();
+    require_clang_tidy();
     let o = prove("model-wrap.cpp", &[], &dafny);
     let text = stdout(&o);
     assert_eq!(o.status.code(), Some(1), "stdout: {text} stderr: {}", stderr(&o));
@@ -589,10 +531,8 @@ fn prove_names_a_value_that_may_not_fit_and_an_index_out_of_range() {
 /// not meet are each named at their C++ line, decision 0068.
 #[test]
 fn prove_names_failed_invariants_and_a_callee_requires() {
-    let Some(dafny) = dafny() else { return };
-    if !clang_tidy_available() {
-        return;
-    }
+    let dafny = dafny();
+    require_clang_tidy();
     let o = prove("model-prove-loops.cpp", &[], &dafny);
     let text = stdout(&o);
     assert_eq!(o.status.code(), Some(1), "stdout: {text} stderr: {}", stderr(&o));
@@ -608,9 +548,8 @@ fn prove_names_failed_invariants_and_a_callee_requires() {
 /// the test runs a stand-in for Dafny that prints the line Dafny prints for a time limit.
 #[test]
 fn prove_says_a_time_limit_is_unknown() {
-    if dafny().is_none() || !clang_tidy_available() {
-        return;
-    }
+    dafny();
+    require_clang_tidy();
     let o = prove("model-prove-slow.cpp", &["--time-limit", "1"], &fixture("fake-dafny-timeout.sh"));
     let text = stdout(&o);
     assert_eq!(o.status.code(), Some(1), "stdout: {text} stderr: {}", stderr(&o));
@@ -622,10 +561,8 @@ fn prove_says_a_time_limit_is_unknown() {
 /// `prove` runs the gate first, decisions 0067 and 0068. A file the gate refuses gets the gate's findings and no proof.
 #[test]
 fn prove_runs_the_gate_first() {
-    let Some(dafny) = dafny() else { return };
-    if !clang_tidy_available() {
-        return;
-    }
+    let dafny = dafny();
+    require_clang_tidy();
     let o = prove("model-seq-global.cpp", &[], &dafny);
     let text = stdout(&o);
     assert_eq!(o.status.code(), Some(1), "stdout: {text} stderr: {}", stderr(&o));
@@ -637,9 +574,8 @@ fn prove_runs_the_gate_first() {
 /// failed. It never says ok, and it never names a C++ line for an error of the model.
 #[test]
 fn prove_stops_when_the_prover_cannot_read_the_model() {
-    if dafny().is_none() || !clang_tidy_available() {
-        return;
-    }
+    dafny();
+    require_clang_tidy();
     for stand_in in ["fake-dafny-parse-error.sh", "fake-dafny-silent.sh"] {
         let o = prove("model-clamp.cpp", &[], &fixture(stand_in));
         let (text, err) = (stdout(&o), stderr(&o));
@@ -652,9 +588,7 @@ fn prove_stops_when_the_prover_cannot_read_the_model() {
 /// A name with a character that Dafny cannot read is refused, decision 0069, so the model always parses.
 #[test]
 fn a_name_dafny_cannot_read_is_refused() {
-    if !clang_tidy_available() {
-        return;
-    }
+    require_clang_tidy();
     let dir = tempfile::tempdir().unwrap();
     let (o, _) = model("model-names-bad.cpp", dir.path());
     let text = stdout(&o);
@@ -665,10 +599,8 @@ fn a_name_dafny_cannot_read_is_refused() {
 /// `prove` runs the gate under the team's policy, decision 0069. A row the team tightened refuses the file before any proof.
 #[test]
 fn prove_runs_the_gate_under_the_teams_policy() {
-    let Some(dafny) = dafny() else { return };
-    if !clang_tidy_available() {
-        return;
-    }
+    let dafny = dafny();
+    require_clang_tidy();
     let team = fixture("team-tighten.yaml");
     let o = prove("model-prove-policy.cpp", &["--policy", team.to_str().unwrap()], &dafny);
     let text = stdout(&o);
@@ -682,10 +614,8 @@ fn prove_runs_the_gate_under_the_teams_policy() {
 /// start it has only what holds before the loop.
 #[test]
 fn prove_gives_each_obligation_its_own_line_and_assumptions() {
-    let Some(dafny) = dafny() else { return };
-    if !clang_tidy_available() {
-        return;
-    }
+    let dafny = dafny();
+    require_clang_tidy();
     let o = prove("model-prove-places.cpp", &[], &dafny);
     let text = stdout(&o);
     assert_eq!(o.status.code(), Some(1), "stdout: {text} stderr: {}", stderr(&o));
@@ -709,9 +639,8 @@ fn prove_gives_each_obligation_its_own_line_and_assumptions() {
 /// one that disagrees with the exit status, is a fault of the tool.
 #[test]
 fn prove_never_says_ok_when_the_summary_or_the_exit_status_says_otherwise() {
-    if dafny().is_none() || !clang_tidy_available() {
-        return;
-    }
+    dafny();
+    require_clang_tidy();
     for stand_in in ["fake-dafny-summary-errors.sh", "fake-dafny-exit-zero-errors.sh"] {
         let o = prove("model-clamp.cpp", &[], &fixture(stand_in));
         let (text, err) = (stdout(&o), stderr(&o));
@@ -724,10 +653,8 @@ fn prove_never_says_ok_when_the_summary_or_the_exit_status_says_otherwise() {
 /// A span with a fixed extent keeps its length, decision 0070, so a contract on its size and a read at index 0 prove.
 #[test]
 fn a_span_with_a_fixed_extent_keeps_its_length() {
-    let Some(dafny) = dafny() else { return };
-    if !clang_tidy_available() {
-        return;
-    }
+    let dafny = dafny();
+    require_clang_tidy();
     let o = prove("model-span-fixed.cpp", &[], &dafny);
     let text = stdout(&o);
     assert_eq!(o.status.code(), Some(0), "stdout: {text} stderr: {}", stderr(&o));
@@ -737,10 +664,8 @@ fn a_span_with_a_fixed_extent_keeps_its_length() {
 /// A span, a const vector and a span of fixed extent each pass to a span parameter with their value, decision 0070.
 #[test]
 fn a_sequence_passes_to_a_sequence_parameter() {
-    let Some(dafny) = dafny() else { return };
-    if !clang_tidy_available() {
-        return;
-    }
+    let dafny = dafny();
+    require_clang_tidy();
     let o = prove("model-span-copy.cpp", &[], &dafny);
     let text = stdout(&o);
     assert_eq!(o.status.code(), Some(0), "stdout: {text} stderr: {}", stderr(&o));
@@ -750,10 +675,8 @@ fn a_sequence_passes_to_a_sequence_parameter() {
 /// A recursion with a decreases line above its function proves, decision 0072.
 #[test]
 fn a_recursion_with_its_measure_proves() {
-    let Some(dafny) = dafny() else { return };
-    if !clang_tidy_available() {
-        return;
-    }
+    let dafny = dafny();
+    require_clang_tidy();
     let o = prove("model-recursion.cpp", &[], &dafny);
     let text = stdout(&o);
     assert_eq!(o.status.code(), Some(0), "stdout: {text} stderr: {}", stderr(&o));
@@ -764,10 +687,8 @@ fn a_recursion_with_its_measure_proves() {
 /// `result` is refused, decision 0072.
 #[test]
 fn prove_names_a_recursion_whose_measure_may_not_decrease() {
-    let Some(dafny) = dafny() else { return };
-    if !clang_tidy_available() {
-        return;
-    }
+    let dafny = dafny();
+    require_clang_tidy();
     let o = prove("model-recursion-wrong.cpp", &[], &dafny);
     let text = stdout(&o);
     assert_eq!(o.status.code(), Some(1), "stdout: {text} stderr: {}", stderr(&o));

@@ -1,5 +1,7 @@
 # Examples
 
+These are reference examples with hand-written models. The automatic translator is implemented, but success of `example.dfy` alone does not establish that `cplusp prove example.cpp` succeeds. See the [current status](../README.md).
+
 One folder per row of the policy that verified code may use: every `allow`, `restrict` and `trusted_only` row. Each shows the C++ as the bot should write it under the row, and the Dafny the bot writes for it by hand, decision 0017. The battery under `divergence/` shows where a naive model goes wrong. This folder shows the right way, one row at a time.
 
 Each folder has:
@@ -7,7 +9,7 @@ Each folder has:
 - `example.cpp`: C++ under the row, with its `//@` contract. It passes the gate.
 - `example.dfy`: the Dafny model of it, under the rules in `skills/cplusp-dafny/SKILL.md`. It verifies.
 - `example.spec.dfy`: for an example whose contract names a function of its own, such as `Sum`. The companion file of `cplusp prove` holds it, decision 0079.
-- `trusted.cpp`: for a `trusted_only` row, and for a larger example that needs one, decision 0031. The trusted function that uses the construct, behind the contract `example.cpp` declares. The gate refuses it, under that row alone for a row's folder, which shows the construct is there. The prover never reads it. `example.cpp` holds the declaration with the contract and a verified caller. The declaration carries `CPLUSP_TRUSTED("reason")` from `include/cplusp.h`, the marker of docs/plan.md. The gate does not read the marker yet, so the body lives in its own file.
+- `trusted.cpp`: for a `trusted_only` row, and for a larger example that needs one, decision 0031. The trusted function that uses the construct, behind the contract `example.cpp` declares. The gate refuses it, under that row alone for a row's folder, which shows the construct is there. The prover never reads it. `example.cpp` holds the declaration with the contract and a verified caller. The declaration carries `CPLUSP_TRUSTED("reason")` from `include/cplusp.h`, the marker of docs/plan.md. The gate reads trusted markers. These examples keep the body in its own file to exercise the trusted boundary separately.
 
 The test `every_row_the_bot_may_use_has_an_example` in `crates/divergence` runs the gate on every `example.cpp` and `trusted.cpp`, and Dafny on every `example.dfy`. A contract in an example is a real one: it says what the function promises, never only that it returns.
 

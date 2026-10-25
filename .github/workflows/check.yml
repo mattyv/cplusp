@@ -1,0 +1,70 @@
+name: Checks
+
+on:
+  pull_request:
+  push:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: checks-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  tests:
+    name: C++ and Dafny regression tests
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Install the C++ toolchain
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y clang-18 clang-tidy-18 libclang-18-dev llvm-18-dev libclang-rt-18-dev g++ cmake ninja-build unzip python3
+          rustup toolchain install 1.98.1 --profile minimal
+      - name: Install Dafny 4.11.0
+        run: |
+          curl --fail --location --retry 3 https://github.com/dafny-lang/dafny/releases/download/v4.11.0/dafny-4.11.0-x64-ubuntu-22.04.zip --output "$RUNNER_TEMP/dafny.zip"
+          echo "a46a9ff7cdd720f7955854c78e95df13f4cfe6b80691b05f8654fe19e8267179  $RUNNER_TEMP/dafny.zip" | sha256sum --check
+          unzip -q "$RUNNER_TEMP/dafny.zip" -d "$RUNNER_TEMP/dafny"
+          echo "DAFNY=$RUNNER_TEMP/dafny/dafny/dafny" >> "$GITHUB_ENV"
+      - name: Build the plugin
+        run: |
+          cmake -S clang-tidy -B target/plugin -G Ninja
+          cmake --build target/plugin
+      - name: Run the complete test suite
+        run: |
+          "$DAFNY" --version
+          clang-tidy-18 --version
+          cargo test --workspace --locked
+
+  proofs:
+    name: Verus core proofs
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Check out the Verus revision used by vstd
+        uses: actions/checkout@v4
+        with:
+          repository: verus-lang/verus
+          ref: 11ed7501a8ba5160be537da21cca330dafbecb9b
+          path: .verus
+          persist-credentials: false
+      - name: Build the pinned verifier
+        working-directory: .verus/source
+        run: |
+          rustup toolchain install 1.98.1 --profile minimal --component rustc-dev --component llvm-tools
+          ./tools/get-z3.sh
+          export VERUS_Z3_PATH="$PWD/z3"
+          echo "VERUS_Z3_PATH=$VERUS_Z3_PATH" >> "$GITHUB_ENV"
+          cargo build --release --locked
+          cargo run --release --locked -p cargo-verus -- build --release --manifest-path vstd/Cargo.toml
+      - name: Verify the core
+        run: .verus/source/target/release/cargo-verus verify --manifest-path crates/cplusp-core/Cargo.toml --locked

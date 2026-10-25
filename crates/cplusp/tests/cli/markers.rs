@@ -7,9 +7,7 @@ use super::*;
 /// and a stream, and a ban stands there, here `goto`. Nothing of a row stands in plain code. Verified code may not call plain code.
 #[test]
 fn a_finding_takes_the_kind_of_the_function_that_holds_it() {
-    if !clang_tidy_available() {
-        return;
-    }
+    require_clang_tidy();
     let f = fixture("markers.cpp");
     let plugin = plugin();
     let o = cplusp(&["gate", "--json", "--plugin", plugin.to_str().unwrap(), f.to_str().unwrap(), "--", "-std=c++23", "-ffp-contract=off"]);
@@ -25,9 +23,7 @@ fn a_finding_takes_the_kind_of_the_function_that_holds_it() {
 /// A marker that the gate cannot honour is refused, each at the line of the name it marks.
 #[test]
 fn gate_refuses_a_marker_it_cannot_honour() {
-    if !clang_tidy_available() {
-        return;
-    }
+    require_clang_tidy();
     let f = fixture("markers-errors.cpp");
     let o = gated(&[f.to_str().unwrap(), "--", "-std=c++23", "-ffp-contract=off"]);
     let out = stdout(&o);
@@ -54,9 +50,7 @@ fn gate_refuses_a_marker_it_cannot_honour() {
 /// plain, decision 0048. An abbreviated function template begins at its return type, decision 0049.
 #[test]
 fn a_finding_takes_the_kind_of_the_innermost_function_the_file_wrote() {
-    if !clang_tidy_available() {
-        return;
-    }
+    require_clang_tidy();
     let f = fixture("markers-places.cpp");
     let plugin = plugin();
     let o = cplusp(&["gate", "--json", "--plugin", plugin.to_str().unwrap(), f.to_str().unwrap(), "--", "-std=c++23", "-ffp-contract=off"]);
@@ -90,9 +84,7 @@ fn a_finding_takes_the_kind_of_the_innermost_function_the_file_wrote() {
 /// A virtual call reaches every override in the module, one that a class template writes too, decision 0048.
 #[test]
 fn verified_code_runs_no_plain_code() {
-    if !clang_tidy_available() {
-        return;
-    }
+    require_clang_tidy();
     let f = fixture("markers-reach.cpp");
     let plugin = plugin();
     let o = cplusp(&["gate", "--json", "--plugin", plugin.to_str().unwrap(), f.to_str().unwrap(), "--", "-std=c++23", "-ffp-contract=off"]);
@@ -115,9 +107,7 @@ fn verified_code_runs_no_plain_code() {
 /// other stands.
 #[test]
 fn each_build_judges_its_own_findings() {
-    if !clang_tidy_available() {
-        return;
-    }
+    require_clang_tidy();
     let (a, b) = (fixture("twice-a.cpp"), fixture("twice-b.cpp"));
     let o = gated(&[a.to_str().unwrap(), b.to_str().unwrap(), "--", "-std=c++23", "-ffp-contract=off"]);
     let out = stdout(&o);
@@ -131,9 +121,7 @@ fn each_build_judges_its_own_findings() {
 /// header's body trusted, and the build without it does not, so the finding of the second build stands.
 #[test]
 fn each_entry_of_a_compile_database_is_its_own_run() {
-    if !clang_tidy_available() {
-        return;
-    }
+    require_clang_tidy();
     let file = fixture("twice-b.cpp");
     let file = file.to_str().unwrap();
     let root = root();
@@ -157,9 +145,7 @@ fn each_entry_of_a_compile_database_is_its_own_run() {
 /// Only that row and the markers count here, because other rows judge the fields that hold the pointers.
 #[test]
 fn an_indirect_call_has_a_name_only_from_constants() {
-    if !clang_tidy_available() {
-        return;
-    }
+    require_clang_tidy();
     let f = fixture("indirect-calls.cpp");
     let plugin = plugin();
     let o = cplusp(&["gate", "--json", "--plugin", plugin.to_str().unwrap(), f.to_str().unwrap(), "--", "-std=c++23", "-ffp-contract=off"]);
@@ -179,9 +165,7 @@ fn an_indirect_call_has_a_name_only_from_constants() {
 /// reference to a plain type and a call of its trusted member are allowed.
 #[test]
 fn a_plain_type_is_out_of_view_and_verified_code_does_not_touch_it() {
-    if !clang_tidy_available() {
-        return;
-    }
+    require_clang_tidy();
     let f = fixture("markers-types.cpp");
     let plugin = plugin();
     let o = cplusp(&["gate", "--json", "--plugin", plugin.to_str().unwrap(), f.to_str().unwrap(), "--", "-std=c++23", "-ffp-contract=off"]);
@@ -203,9 +187,7 @@ fn a_plain_type_is_out_of_view_and_verified_code_does_not_touch_it() {
 /// plain type keeps its declaration in view, so the row `shared_ptr` sees its return type.
 #[test]
 fn a_plain_object_goes_only_to_the_files_own_code() {
-    if !clang_tidy_available() {
-        return;
-    }
+    require_clang_tidy();
     let f = fixture("markers-types-reads.cpp");
     let plugin = plugin();
     let o = cplusp(&["gate", "--json", "--plugin", plugin.to_str().unwrap(), f.to_str().unwrap(), "--", "-std=c++23", "-ffp-contract=off"]);
@@ -236,9 +218,7 @@ fn a_plain_object_goes_only_to_the_files_own_code() {
 /// in a plain type is out of view.
 #[test]
 fn a_pointer_counts_as_the_object_and_a_friend_of_a_plain_type_is_plain() {
-    if !clang_tidy_available() {
-        return;
-    }
+    require_clang_tidy();
     let f = fixture("markers-types-friends.cpp");
     let plugin = plugin();
     let o = cplusp(&["gate", "--json", "--plugin", plugin.to_str().unwrap(), f.to_str().unwrap(), "--", "-std=c++23", "-ffp-contract=off"]);
@@ -258,9 +238,7 @@ fn a_pointer_counts_as_the_object_and_a_friend_of_a_plain_type_is_plain() {
 /// bytes to the library, and an implicit cast hands them to a function of the file with a `const void*` parameter.
 #[test]
 fn a_cast_of_a_pointer_to_a_plain_object_is_a_use() {
-    if !clang_tidy_available() {
-        return;
-    }
+    require_clang_tidy();
     let f = fixture("markers-types-casts.cpp");
     let plugin = plugin();
     let o = cplusp(&["gate", "--json", "--plugin", plugin.to_str().unwrap(), f.to_str().unwrap(), "--", "-std=c++23", "-ffp-contract=off"]);
@@ -276,9 +254,7 @@ fn a_cast_of_a_pointer_to_a_plain_object_is_a_use() {
 /// nothing instantiates is judged by its spelling, as before. Only that row counts here.
 #[test]
 fn the_impure_operator_check_judges_each_instantiation() {
-    if !clang_tidy_available() {
-        return;
-    }
+    require_clang_tidy();
     let f = fixture("templates-impure.cpp");
     let plugin = plugin();
     let o = cplusp(&["gate", "--json", "--plugin", plugin.to_str().unwrap(), f.to_str().unwrap(), "--", "-std=c++23", "-ffp-contract=off"]);

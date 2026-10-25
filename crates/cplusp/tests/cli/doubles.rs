@@ -4,10 +4,8 @@ use super::*;
 /// Two functions pin a literal of code to a literal of the contract with another spelling of the same value.
 #[test]
 fn a_double_that_only_compares_proves() {
-    let Some(dafny) = dafny() else { return };
-    if !clang_tidy_available() {
-        return;
-    }
+    let dafny = dafny();
+    require_clang_tidy();
     let o = prove("model-double.cpp", &[], &dafny);
     let text = stdout(&o);
     assert_eq!(o.status.code(), Some(0), "stdout: {text} stderr: {}", stderr(&o));
@@ -23,9 +21,7 @@ fn a_double_that_only_compares_proves() {
 /// with their sentences, and a caller of that trusted function is refused too, decision 0150.
 #[test]
 fn a_double_with_no_rule_is_refused() {
-    if !clang_tidy_available() {
-        return;
-    }
+    require_clang_tidy();
     let dir = tempfile::tempdir().unwrap();
     let (o, _) = model("model-double-refuse.cpp", dir.path());
     let text = stdout(&o);
@@ -48,10 +44,8 @@ fn a_double_with_no_rule_is_refused() {
 /// The example double_only proves: a trusted reading, and a clamp by comparisons only, decision 0150.
 #[test]
 fn the_double_only_example_proves() {
-    let Some(dafny) = dafny() else { return };
-    if !clang_tidy_available() {
-        return;
-    }
+    let dafny = dafny();
+    require_clang_tidy();
     let o = prove("../../../../examples/double_only/example.cpp", &[], &dafny);
     let text = stdout(&o);
     assert_eq!(o.status.code(), Some(0), "stdout: {text} stderr: {}", stderr(&o));
@@ -62,10 +56,8 @@ fn the_double_only_example_proves() {
 /// bound, an equality that the rounding breaks and a divisor that may be zero fail with their sentences, decision 0154.
 #[test]
 fn a_double_operation_is_one_rounding() {
-    let Some(dafny) = dafny() else { return };
-    if !clang_tidy_available() {
-        return;
-    }
+    let dafny = dafny();
+    require_clang_tidy();
     let o = prove("model-double-ops.cpp", &[], &dafny);
     let text = stdout(&o);
     assert_eq!(o.status.code(), Some(0), "stdout: {text} stderr: {}", stderr(&o));
@@ -99,10 +91,8 @@ fn a_double_operation_is_one_rounding() {
 /// with them fails at its return, decision 0158.
 #[test]
 fn a_named_double_and_an_exact_double_prove() {
-    let Some(dafny) = dafny() else { return };
-    if !clang_tidy_available() {
-        return;
-    }
+    let dafny = dafny();
+    require_clang_tidy();
     let o = prove("model-double-const.cpp", &[], &dafny);
     let text = stdout(&o);
     assert_eq!(o.status.code(), Some(0), "stdout: {text} stderr: {}", stderr(&o));
@@ -118,9 +108,7 @@ fn a_named_double_and_an_exact_double_prove() {
 /// code and in a contract, decision 0158.
 #[test]
 fn a_double_that_the_model_cannot_write_is_refused() {
-    if !clang_tidy_available() {
-        return;
-    }
+    require_clang_tidy();
     let dir = tempfile::tempdir().unwrap();
     let (o, _) = model("model-double-const-refuse.cpp", dir.path());
     let text = stdout(&o);
@@ -144,9 +132,7 @@ fn a_double_that_the_model_cannot_write_is_refused() {
 /// the word hides the name of C++, decision 0158. A name of that spelling is no clash where no contract reads the word.
 #[test]
 fn a_name_of_cpp_with_the_name_of_a_contract_word_is_refused() {
-    if !clang_tidy_available() {
-        return;
-    }
+    require_clang_tidy();
     let word = |w: &str| format!("{w} in the contract is a contract word, and a C++ name too. Rename the C++ name.");
     let cases: [(&str, &[(u32, &str)]); 3] = [
         ("model-word-constant.cpp", &[(8, "eps"), (13, "eta")]),
@@ -171,10 +157,8 @@ fn a_name_of_cpp_with_the_name_of_a_contract_word_is_refused() {
 /// bound and an absolute value that the body does not give fail at their lines, decision 0159.
 #[test]
 fn an_integer_converts_to_a_double_exactly() {
-    let Some(dafny) = dafny() else { return };
-    if !clang_tidy_available() {
-        return;
-    }
+    let dafny = dafny();
+    require_clang_tidy();
     let exact = "Axiom: Double.dfy: RoundExactInt: an integer up to 2^53 in magnitude is a double.";
     let o = prove("model-double-convert.cpp", &[], &dafny);
     let text = stdout(&o);
@@ -197,10 +181,8 @@ fn an_integer_converts_to_a_double_exactly() {
 /// leaves the copy as it was, decision 0160. A contract that reads the copy as the vector, or the vector as a view, fails.
 #[test]
 fn a_local_vector_is_a_copy() {
-    let Some(dafny) = dafny() else { return };
-    if !clang_tidy_available() {
-        return;
-    }
+    let dafny = dafny();
+    require_clang_tidy();
     let o = prove("model-vec-local.cpp", &[], &dafny);
     let text = stdout(&o);
     assert_eq!(o.status.code(), Some(0), "stdout: {text} stderr: {}", stderr(&o));
@@ -216,9 +198,7 @@ fn a_local_vector_is_a_copy() {
 /// and a call that passes one by reference writes it back, decision 0170.
 #[test]
 fn a_local_vector_with_no_rule_is_refused() {
-    if !clang_tidy_available() {
-        return;
-    }
+    require_clang_tidy();
     let dir = tempfile::tempdir().unwrap();
     let (o, _) = model("model-vec-local-refuse.cpp", dir.path());
     let text = stdout(&o);
@@ -236,10 +216,8 @@ fn a_local_vector_with_no_rule_is_refused() {
 /// trusted contract once, decision 0161. A claim of the other order, or of the old first element, fails at its return.
 #[test]
 fn std_sort_of_a_vector_of_integers_is_std_sort() {
-    let Some(dafny) = dafny() else { return };
-    if !clang_tidy_available() {
-        return;
-    }
+    let dafny = dafny();
+    require_clang_tidy();
     let o = prove("model-sort.cpp", &[], &dafny);
     let text = stdout(&o);
     assert_eq!(o.status.code(), Some(0), "stdout: {text} stderr: {}", stderr(&o));
@@ -261,9 +239,7 @@ fn std_sort_of_a_vector_of_integers_is_std_sort() {
 /// refused with one sentence that names std::sort, decisions 0161 and 0162.
 #[test]
 fn std_sort_of_another_form_is_refused() {
-    if !clang_tidy_available() {
-        return;
-    }
+    require_clang_tidy();
     let dir = tempfile::tempdir().unwrap();
     let (o, _) = model("model-sort-refuse.cpp", dir.path());
     let text = stdout(&o);
@@ -280,10 +256,8 @@ fn std_sort_of_another_form_is_refused() {
 /// decision 0162. A comparator that is not a strict weak order fails at the call with its own sentence.
 #[test]
 fn std_sort_with_a_comparator_lambda_is_std_sort_with_the_lambda() {
-    let Some(dafny) = dafny() else { return };
-    if !clang_tidy_available() {
-        return;
-    }
+    let dafny = dafny();
+    require_clang_tidy();
     let o = prove("model-sort-by.cpp", &[], &dafny);
     let text = stdout(&o);
     assert_eq!(o.status.code(), Some(0), "stdout: {text} stderr: {}", stderr(&o));
@@ -302,10 +276,8 @@ fn std_sort_with_a_comparator_lambda_is_std_sort_with_the_lambda() {
 /// and a vector of integers as a result prove, decision 0163. A wrong size of a result fails at its return.
 #[test]
 fn a_vector_of_a_struct_and_a_vector_as_a_result_prove() {
-    let Some(dafny) = dafny() else { return };
-    if !clang_tidy_available() {
-        return;
-    }
+    let dafny = dafny();
+    require_clang_tidy();
     let o = prove("model-vec-struct.cpp", &[], &dafny);
     let text = stdout(&o);
     assert_eq!(o.status.code(), Some(0), "stdout: {text} stderr: {}", stderr(&o));
@@ -322,10 +294,8 @@ fn a_vector_of_a_struct_and_a_vector_as_a_result_prove() {
 /// names its ensures line.
 #[test]
 fn a_vector_too_long_and_a_failed_lemma_have_plain_sentences() {
-    let Some(dafny) = dafny() else { return };
-    if !clang_tidy_available() {
-        return;
-    }
+    let dafny = dafny();
+    require_clang_tidy();
     let failed = |name: &str| {
         let o = prove(name, &[], &dafny);
         let text = stdout(&o);
@@ -352,10 +322,8 @@ fn a_vector_too_long_and_a_failed_lemma_have_plain_sentences() {
 /// lines.
 #[test]
 fn two_failures_at_one_place_stay_two_lines() {
-    let Some(dafny) = dafny() else { return };
-    if !clang_tidy_available() {
-        return;
-    }
+    let dafny = dafny();
+    require_clang_tidy();
     let o = prove("model-companion-two.cpp", &[], &dafny);
     let text = stdout(&o);
     assert_eq!(o.status.code(), Some(1), "stdout: {text} stderr: {}", stderr(&o));
@@ -381,10 +349,8 @@ fn two_failures_at_one_place_stay_two_lines() {
 /// decision 0161, and sort_with_comparator sorts a copy of a vector of a struct by a field and gives it back, decision 0163.
 #[test]
 fn the_double_examples_prove() {
-    let Some(dafny) = dafny() else { return };
-    if !clang_tidy_available() {
-        return;
-    }
+    let dafny = dafny();
+    require_clang_tidy();
     for example in ["double", "double_expression", "fixed_point", "algorithms", "sort_with_comparator"] {
         let o = prove(&format!("../../../../examples/{example}/example.cpp"), &[], &dafny);
         let text = stdout(&o);
@@ -397,9 +363,7 @@ fn the_double_examples_prove() {
 /// decision 0155.
 #[test]
 fn each_refusal_names_its_own_cause() {
-    if !clang_tidy_available() {
-        return;
-    }
+    require_clang_tidy();
     let dir = tempfile::tempdir().unwrap();
     let (o, _) = model("model-sentences-refuse.cpp", dir.path());
     let text = stdout(&o);
@@ -416,10 +380,8 @@ fn each_refusal_names_its_own_cause() {
 /// A check that Dafny reports twice, the condition of a loop at its start and after a turn, is printed once, decision 0155.
 #[test]
 fn a_failure_is_printed_once() {
-    let Some(dafny) = dafny() else { return };
-    if !clang_tidy_available() {
-        return;
-    }
+    let dafny = dafny();
+    require_clang_tidy();
     let o = prove("model-dedup.cpp", &[], &dafny);
     let text = stdout(&o);
     assert_eq!(o.status.code(), Some(1), "stdout: {text} stderr: {}", stderr(&o));
@@ -430,10 +392,8 @@ fn a_failure_is_printed_once() {
 /// Two failures at one place of the model, each with its own contract line, are both printed, decision 0155.
 #[test]
 fn two_failures_at_one_place_are_both_printed() {
-    let Some(dafny) = dafny() else { return };
-    if !clang_tidy_available() {
-        return;
-    }
+    let dafny = dafny();
+    require_clang_tidy();
     let o = prove("model-dedup-two.cpp", &[], &dafny);
     let text = stdout(&o);
     assert_eq!(o.status.code(), Some(1), "stdout: {text} stderr: {}", stderr(&o));
@@ -448,9 +408,7 @@ fn two_failures_at_one_place_are_both_printed() {
 /// into an array is. A constant index stays allowed, decision 0156.
 #[test]
 fn a_ban_of_variable_index_covers_vectors_spans_and_at() {
-    if !clang_tidy_available() {
-        return;
-    }
+    require_clang_tidy();
     let team = fixture("team-tighten.yaml");
     let f = fixture("variable-index-ban.cpp");
     let o = gated(&["--policy", team.to_str().unwrap(), f.to_str().unwrap(), "--", "-std=c++23", "-ffp-contract=off"]);

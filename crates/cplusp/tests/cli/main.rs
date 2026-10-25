@@ -14,6 +14,7 @@ mod doubles;
 mod interfaces;
 mod names;
 mod classes;
+mod tools;
 
 fn root() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("../..").canonicalize().unwrap()
@@ -54,24 +55,23 @@ fn plugin() -> PathBuf {
     p
 }
 
-fn clang_tidy_available() -> bool {
-    ["clang-tidy-18", "clang-tidy"]
+fn require_clang_tidy() {
+    let available = ["clang-tidy-18", "clang-tidy"]
         .iter()
-        .any(|b| Command::new(b).arg("--version").output().map(|o| o.status.success()).unwrap_or(false))
+        .any(|b| Command::new(b).arg("--version").output().map(|o| o.status.success()).unwrap_or(false));
+    assert!(available, "clang-tidy is required for this test. Install clang-tidy 18 and build the plugin. See README.md.");
 }
 
 // ------------------------------------------------------------------ the translator, decisions 0056 and 0057
 
-/// Dafny, from `$DAFNY`, the battery's install, or the path. None skips the test.
-fn dafny() -> Option<PathBuf> {
-    if let Ok(d) = std::env::var("DAFNY") {
-        return Some(PathBuf::from(d));
-    }
+/// Dafny must run. An explicit DAFNY path never falls back to a different installation.
+fn dafny() -> PathBuf {
     let installed = PathBuf::from("/opt/dafny/dafny/dafny");
-    if installed.exists() {
-        return Some(installed);
-    }
-    Command::new("dafny").arg("--version").output().ok().filter(|o| o.status.success()).map(|_| PathBuf::from("dafny"))
+    let path = std::env::var_os("DAFNY").map(PathBuf::from)
+        .unwrap_or_else(|| if installed.exists() { installed } else { PathBuf::from("dafny") });
+    assert!(Command::new(&path).arg("--version").output().is_ok_and(|o| o.status.success()),
+        "Dafny is required for this test, but {} could not run. Set DAFNY to a working executable. See README.md.", path.display());
+    path
 }
 
 /// Translate one fixture into a Dafny file, and give the gate's output and the path of the model.

@@ -4,10 +4,8 @@ use super::*;
 /// return after its value. A member that writes its object can list a global. The example classes_raii proves, decision 0178.
 #[test]
 fn a_struct_with_a_destructor_proves() {
-    let Some(dafny) = dafny() else { return };
-    if !clang_tidy_available() {
-        return;
-    }
+    let dafny = dafny();
+    require_clang_tidy();
     for name in ["model-dtor.cpp", "../../../../examples/classes_raii/example.cpp"] {
         let o = prove(name, &[], &dafny);
         let text = stdout(&o);
@@ -20,10 +18,8 @@ fn a_struct_with_a_destructor_proves() {
 /// requires line fails is reported at the line where its local dies, decision 0178.
 #[test]
 fn a_struct_with_a_destructor_keeps_its_contract() {
-    let Some(dafny) = dafny() else { return };
-    if !clang_tidy_available() {
-        return;
-    }
+    let dafny = dafny();
+    require_clang_tidy();
     let o = prove("model-dtor-wrong.cpp", &[], &dafny);
     let text = stdout(&o);
     assert_eq!(o.status.code(), Some(1), "stdout: {text} stderr: {}", stderr(&o));
@@ -36,10 +32,8 @@ fn a_struct_with_a_destructor_keeps_its_contract() {
 /// destructor has no contract, and a local in the head of a for, are refused, decision 0178.
 #[test]
 fn a_struct_with_a_destructor_and_no_rule_is_refused() {
-    let Some(dafny) = dafny() else { return };
-    if !clang_tidy_available() {
-        return;
-    }
+    let dafny = dafny();
+    require_clang_tidy();
     let o = prove("model-dtor-refuse.cpp", &[], &dafny);
     let text = stdout(&o);
     assert_eq!(o.status.code(), Some(1), "stdout: {text} stderr: {}", stderr(&o));
@@ -59,10 +53,8 @@ fn a_struct_with_a_destructor_and_no_rule_is_refused() {
 /// its own block.
 #[test]
 fn a_move_of_a_struct_proves() {
-    let Some(dafny) = dafny() else { return };
-    if !clang_tidy_available() {
-        return;
-    }
+    let dafny = dafny();
+    require_clang_tidy();
     for name in ["model-move.cpp", "../../../../examples/raii_handle/example.cpp"] {
         let o = prove(name, &[], &dafny);
         let text = stdout(&o);
@@ -76,10 +68,8 @@ fn a_move_of_a_struct_proves() {
 /// 0179.
 #[test]
 fn a_move_of_a_struct_keeps_its_contract() {
-    let Some(dafny) = dafny() else { return };
-    if !clang_tidy_available() {
-        return;
-    }
+    let dafny = dafny();
+    require_clang_tidy();
     let o = prove("model-move-wrong.cpp", &[], &dafny);
     let text = stdout(&o);
     assert_eq!(o.status.code(), Some(1), "stdout: {text} stderr: {}", stderr(&o));
@@ -93,10 +83,8 @@ fn a_move_of_a_struct_keeps_its_contract() {
 /// decision 0179.
 #[test]
 fn a_move_with_no_rule_is_refused() {
-    let Some(dafny) = dafny() else { return };
-    if !clang_tidy_available() {
-        return;
-    }
+    let dafny = dafny();
+    require_clang_tidy();
     let o = prove("model-move-refuse.cpp", &[], &dafny);
     let text = stdout(&o);
     assert_eq!(o.status.code(), Some(1), "stdout: {text} stderr: {}", stderr(&o));
@@ -116,10 +104,8 @@ fn a_move_with_no_rule_is_refused() {
 /// a vector of n copies, decision 0185.
 #[test]
 fn a_vector_that_the_code_gives_up_proves() {
-    let Some(dafny) = dafny() else { return };
-    if !clang_tidy_available() {
-        return;
-    }
+    let dafny = dafny();
+    require_clang_tidy();
     for name in ["model-vec-move.cpp", "../../../../examples/rvalue_references/example.cpp"] {
         let o = prove(name, &[], &dafny);
         let text = stdout(&o);
@@ -132,10 +118,8 @@ fn a_vector_that_the_code_gives_up_proves() {
 /// decision 0185.
 #[test]
 fn a_vector_that_the_code_gives_up_keeps_no_value() {
-    let Some(dafny) = dafny() else { return };
-    if !clang_tidy_available() {
-        return;
-    }
+    let dafny = dafny();
+    require_clang_tidy();
     let o = prove("model-vec-move-wrong.cpp", &[], &dafny);
     let text = stdout(&o);
     assert_eq!(o.status.code(), Some(1), "stdout: {text} stderr: {}", stderr(&o));
@@ -148,10 +132,8 @@ fn a_vector_that_the_code_gives_up_keeps_no_value() {
 /// caller gets back a vector with any value, so neither claim proves, decision 0185.
 #[test]
 fn a_vector_that_the_code_gives_up_has_no_value_without_the_gate() {
-    let Some(dafny) = dafny() else { return };
-    if !clang_tidy_available() {
-        return;
-    }
+    let dafny = dafny();
+    require_clang_tidy();
     let team = fixture("team-loosen-move.yaml");
     let o = prove("model-vec-move-loose.cpp", &["--policy", team.to_str().unwrap()], &dafny);
     let text = stdout(&o);
@@ -164,9 +146,7 @@ fn a_vector_that_the_code_gives_up_has_no_value_without_the_gate() {
 /// and a read of one name in them is refused, decision 0185.
 #[test]
 fn a_vector_of_copies_keeps_the_order_check() {
-    if !clang_tidy_available() {
-        return;
-    }
+    require_clang_tidy();
     let dir = tempfile::tempdir().unwrap();
     let (o, _) = model("model-vec-fill-order.cpp", dir.path());
     let text = stdout(&o);
@@ -179,10 +159,8 @@ fn a_vector_of_copies_keeps_the_order_check() {
 /// in a return or an assignment are refused, decision 0185.
 #[test]
 fn a_vector_that_the_code_gives_up_with_no_rule_is_refused() {
-    let Some(dafny) = dafny() else { return };
-    if !clang_tidy_available() {
-        return;
-    }
+    let dafny = dafny();
+    require_clang_tidy();
     let o = prove("model-vec-move-refuse.cpp", &[], &dafny);
     let text = stdout(&o);
     assert_eq!(o.status.code(), Some(1), "stdout: {text} stderr: {}", stderr(&o));
@@ -204,10 +182,8 @@ fn a_vector_that_the_code_gives_up_with_no_rule_is_refused() {
 /// copies or empty, and a member function writes one element, decision 0187.
 #[test]
 fn a_class_that_holds_a_vector_proves() {
-    let Some(dafny) = dafny() else { return };
-    if !clang_tidy_available() {
-        return;
-    }
+    let dafny = dafny();
+    require_clang_tidy();
     for name in ["model-bins.cpp", "../../../../examples/ring_buffer/example.cpp"] {
         let o = prove(name, &[], &dafny);
         let text = stdout(&o);
@@ -220,10 +196,8 @@ fn a_class_that_holds_a_vector_proves() {
 /// in the order of the fields, decision 0187.
 #[test]
 fn a_class_that_holds_a_vector_keeps_its_values() {
-    let Some(dafny) = dafny() else { return };
-    if !clang_tidy_available() {
-        return;
-    }
+    let dafny = dafny();
+    require_clang_tidy();
     let o = prove("model-bins-wrong.cpp", &[], &dafny);
     let text = stdout(&o);
     assert_eq!(o.status.code(), Some(1), "stdout: {text} stderr: {}", stderr(&o));
@@ -242,10 +216,8 @@ fn a_class_that_holds_a_vector_keeps_its_values() {
 /// 0191.
 #[test]
 fn a_class_that_holds_a_vector_with_no_rule_is_refused() {
-    let Some(dafny) = dafny() else { return };
-    if !clang_tidy_available() {
-        return;
-    }
+    let dafny = dafny();
+    require_clang_tidy();
     let o = prove("model-bins-refuse.cpp", &[], &dafny);
     let text = stdout(&o);
     assert_eq!(o.status.code(), Some(1), "stdout: {text} stderr: {}", stderr(&o));
@@ -266,10 +238,8 @@ fn a_class_that_holds_a_vector_with_no_rule_is_refused() {
 /// instance, decision 0188.
 #[test]
 fn a_class_template_proves_at_each_type() {
-    let Some(dafny) = dafny() else { return };
-    if !clang_tidy_available() {
-        return;
-    }
+    let dafny = dafny();
+    require_clang_tidy();
     let o = prove("model-class-template.cpp", &[], &dafny);
     let text = stdout(&o);
     assert_eq!(o.status.code(), Some(0), "stdout: {text} stderr: {}", stderr(&o));
@@ -293,10 +263,8 @@ fn a_class_template_proves_at_each_type() {
 /// says, decision 0188.
 #[test]
 fn a_class_template_keeps_its_contract_at_each_type() {
-    let Some(dafny) = dafny() else { return };
-    if !clang_tidy_available() {
-        return;
-    }
+    let dafny = dafny();
+    require_clang_tidy();
     let o = prove("model-class-template-wrong.cpp", &[], &dafny);
     let text = stdout(&o);
     assert_eq!(o.status.code(), Some(1), "stdout: {text} stderr: {}", stderr(&o));
@@ -310,10 +278,8 @@ fn a_class_template_keeps_its_contract_at_each_type() {
 /// member of a plain struct that the file only declares names it by its name.
 #[test]
 fn a_class_template_with_no_rule_is_refused() {
-    let Some(dafny) = dafny() else { return };
-    if !clang_tidy_available() {
-        return;
-    }
+    let dafny = dafny();
+    require_clang_tidy();
     let o = prove("model-class-template-refuse.cpp", &[], &dafny);
     let text = stdout(&o);
     assert_eq!(o.status.code(), Some(1), "stdout: {text} stderr: {}", stderr(&o));
@@ -350,10 +316,8 @@ fn a_class_template_with_no_rule_is_refused() {
 /// can call it, also when its own contract calls one, decisions 0189 and 0190.
 #[test]
 fn a_call_of_a_plain_member_function_proves() {
-    let Some(dafny) = dafny() else { return };
-    if !clang_tidy_available() {
-        return;
-    }
+    let dafny = dafny();
+    require_clang_tidy();
     for name in ["model-plain-member.cpp", "../../../../examples/crtp/example.cpp"] {
         let o = prove(name, &[], &dafny);
         let text = stdout(&o);
@@ -366,10 +330,8 @@ fn a_call_of_a_plain_member_function_proves() {
 /// call in code, decision 0189.
 #[test]
 fn a_call_of_a_plain_member_function_keeps_its_contract() {
-    let Some(dafny) = dafny() else { return };
-    if !clang_tidy_available() {
-        return;
-    }
+    let dafny = dafny();
+    require_clang_tidy();
     let o = prove("model-plain-member-wrong.cpp", &[], &dafny);
     let text = stdout(&o);
     assert_eq!(o.status.code(), Some(1), "stdout: {text} stderr: {}", stderr(&o));
@@ -382,10 +344,8 @@ fn a_call_of_a_plain_member_function_keeps_its_contract() {
 /// virtual function of an interface is no call of a plain member function, decisions 0189 and 0190.
 #[test]
 fn a_call_of_a_member_function_that_is_not_plain_keeps_its_rules() {
-    let Some(dafny) = dafny() else { return };
-    if !clang_tidy_available() {
-        return;
-    }
+    let dafny = dafny();
+    require_clang_tidy();
     let o = prove("model-plain-member-refuse.cpp", &[], &dafny);
     let text = stdout(&o);
     assert_eq!(o.status.code(), Some(1), "stdout: {text} stderr: {}", stderr(&o));
@@ -410,10 +370,8 @@ fn a_call_of_a_member_function_that_is_not_plain_keeps_its_rules() {
 /// 0191.
 #[test]
 fn a_vector_field_that_grows_and_shrinks_proves() {
-    let Some(dafny) = dafny() else { return };
-    if !clang_tidy_available() {
-        return;
-    }
+    let dafny = dafny();
+    require_clang_tidy();
     for name in ["model-vec-field.cpp", "../../../../examples/stack_template/example.cpp"] {
         let o = prove(name, &[], &dafny);
         let text = stdout(&o);
@@ -426,10 +384,8 @@ fn a_vector_field_that_grows_and_shrinks_proves() {
 /// decision 0191.
 #[test]
 fn a_vector_field_that_grows_and_shrinks_keeps_its_contract() {
-    let Some(dafny) = dafny() else { return };
-    if !clang_tidy_available() {
-        return;
-    }
+    let dafny = dafny();
+    require_clang_tidy();
     let o = prove("model-vec-field-wrong.cpp", &[], &dafny);
     let text = stdout(&o);
     assert_eq!(o.status.code(), Some(1), "stdout: {text} stderr: {}", stderr(&o));
@@ -447,10 +403,8 @@ fn a_vector_field_that_grows_and_shrinks_keeps_its_contract() {
 /// front, emplace_back, a `const T&` result of a parameter and a pop of a local vector keep their sentence, decision 0191.
 #[test]
 fn a_vector_form_with_no_rule_is_refused() {
-    let Some(dafny) = dafny() else { return };
-    if !clang_tidy_available() {
-        return;
-    }
+    let dafny = dafny();
+    require_clang_tidy();
     let o = prove("model-vec-field-refuse.cpp", &[], &dafny);
     let text = stdout(&o);
     assert_eq!(o.status.code(), Some(1), "stdout: {text} stderr: {}", stderr(&o));
@@ -468,10 +422,8 @@ fn a_vector_form_with_no_rule_is_refused() {
 /// parameter, which is null after its move, decision 0186.
 #[test]
 fn a_tree_that_the_code_builds_proves() {
-    let Some(dafny) = dafny() else { return };
-    if !clang_tidy_available() {
-        return;
-    }
+    let dafny = dafny();
+    require_clang_tidy();
     for name in ["model-tree.cpp", "../../../../examples/tree_unique_ptr/example.cpp"] {
         let o = prove(name, &[], &dafny);
         let text = stdout(&o);
@@ -485,10 +437,8 @@ fn a_tree_that_the_code_builds_proves() {
 /// 0186.
 #[test]
 fn a_tree_that_the_code_builds_keeps_what_it_wrote() {
-    let Some(dafny) = dafny() else { return };
-    if !clang_tidy_available() {
-        return;
-    }
+    let dafny = dafny();
+    require_clang_tidy();
     let o = prove("model-tree-wrong.cpp", &[], &dafny);
     let text = stdout(&o);
     assert_eq!(o.status.code(), Some(1), "stdout: {text} stderr: {}", stderr(&o));
@@ -511,10 +461,8 @@ fn a_tree_that_the_code_builds_keeps_what_it_wrote() {
 /// refused, decision 0186.
 #[test]
 fn a_tree_that_the_code_builds_with_no_rule_is_refused() {
-    let Some(dafny) = dafny() else { return };
-    if !clang_tidy_available() {
-        return;
-    }
+    let dafny = dafny();
+    require_clang_tidy();
     let o = prove("model-tree-refuse.cpp", &[], &dafny);
     let text = stdout(&o);
     assert_eq!(o.status.code(), Some(1), "stdout: {text} stderr: {}", stderr(&o));
@@ -539,10 +487,8 @@ fn a_tree_that_the_code_builds_with_no_rule_is_refused() {
 /// passes it to a span parameter, decision 0184.
 #[test]
 fn a_local_array_from_a_brace_list_proves() {
-    let Some(dafny) = dafny() else { return };
-    if !clang_tidy_available() {
-        return;
-    }
+    let dafny = dafny();
+    require_clang_tidy();
     for name in ["model-array-local.cpp", "../../../../examples/strings/example.cpp"] {
         let o = prove(name, &[], &dafny);
         let text = stdout(&o);
@@ -555,10 +501,8 @@ fn a_local_array_from_a_brace_list_proves() {
 /// decision 0184.
 #[test]
 fn a_local_array_keeps_its_values() {
-    let Some(dafny) = dafny() else { return };
-    if !clang_tidy_available() {
-        return;
-    }
+    let dafny = dafny();
+    require_clang_tidy();
     let o = prove("model-array-local-wrong.cpp", &[], &dafny);
     let text = stdout(&o);
     assert_eq!(o.status.code(), Some(1), "stdout: {text} stderr: {}", stderr(&o));
@@ -574,10 +518,8 @@ fn a_local_array_keeps_its_values() {
 /// decision 0184.
 #[test]
 fn a_local_array_with_no_rule_is_refused() {
-    let Some(dafny) = dafny() else { return };
-    if !clang_tidy_available() {
-        return;
-    }
+    let dafny = dafny();
+    require_clang_tidy();
     let o = prove("model-array-local-refuse.cpp", &[], &dafny);
     let text = stdout(&o);
     assert_eq!(o.status.code(), Some(1), "stdout: {text} stderr: {}", stderr(&o));
@@ -594,10 +536,8 @@ fn a_local_array_with_no_rule_is_refused() {
 /// order on one object: a local, a temporary or a reference parameter, decision 0183.
 #[test]
 fn a_chain_of_calls_on_one_object_proves() {
-    let Some(dafny) = dafny() else { return };
-    if !clang_tidy_available() {
-        return;
-    }
+    let dafny = dafny();
+    require_clang_tidy();
     for name in ["model-this.cpp", "../../../../examples/builder/example.cpp"] {
         let o = prove(name, &[], &dafny);
         let text = stdout(&o);
@@ -610,10 +550,8 @@ fn a_chain_of_calls_on_one_object_proves() {
 /// line of the chain, decision 0183.
 #[test]
 fn a_chain_of_calls_keeps_each_step() {
-    let Some(dafny) = dafny() else { return };
-    if !clang_tidy_available() {
-        return;
-    }
+    let dafny = dafny();
+    require_clang_tidy();
     let o = prove("model-this-wrong.cpp", &[], &dafny);
     let text = stdout(&o);
     assert_eq!(o.status.code(), Some(1), "stdout: {text} stderr: {}", stderr(&o));
@@ -630,10 +568,8 @@ fn a_chain_of_calls_keeps_each_step() {
 /// destructor, and a chain where C++ may not run it once or inside an expression are refused too.
 #[test]
 fn a_chain_with_no_rule_is_refused() {
-    let Some(dafny) = dafny() else { return };
-    if !clang_tidy_available() {
-        return;
-    }
+    let dafny = dafny();
+    require_clang_tidy();
     let o = prove("model-this-refuse.cpp", &[], &dafny);
     let text = stdout(&o);
     assert_eq!(o.status.code(), Some(1), "stdout: {text} stderr: {}", stderr(&o));
@@ -658,10 +594,8 @@ fn a_chain_with_no_rule_is_refused() {
 /// A temporary of a plain struct, bound to a `const T&` parameter, is its value, decision 0181.
 #[test]
 fn a_temporary_bound_to_a_const_reference_proves() {
-    let Some(dafny) = dafny() else { return };
-    if !clang_tidy_available() {
-        return;
-    }
+    let dafny = dafny();
+    require_clang_tidy();
     for name in ["model-temp-ref.cpp", "../../../../examples/callbacks/example.cpp"] {
         let o = prove(name, &[], &dafny);
         let text = stdout(&o);
@@ -673,10 +607,8 @@ fn a_temporary_bound_to_a_const_reference_proves() {
 /// A temporary is the value it is built from, so a claim about another value fails at the return, decision 0181.
 #[test]
 fn a_temporary_bound_to_a_const_reference_keeps_its_value() {
-    let Some(dafny) = dafny() else { return };
-    if !clang_tidy_available() {
-        return;
-    }
+    let dafny = dafny();
+    require_clang_tidy();
     let o = prove("model-temp-ref-wrong.cpp", &[], &dafny);
     let text = stdout(&o);
     assert_eq!(o.status.code(), Some(1), "stdout: {text} stderr: {}", stderr(&o));
@@ -688,10 +620,8 @@ fn a_temporary_bound_to_a_const_reference_keeps_its_value() {
 /// return, before the caller reads the reference.
 #[test]
 fn a_temporary_in_a_return_by_reference_is_refused() {
-    let Some(dafny) = dafny() else { return };
-    if !clang_tidy_available() {
-        return;
-    }
+    let dafny = dafny();
+    require_clang_tidy();
     let o = prove("model-temp-ref-refuse.cpp", &[], &dafny);
     let text = stdout(&o);
     assert_eq!(o.status.code(), Some(1), "stdout: {text} stderr: {}", stderr(&o));
@@ -705,10 +635,8 @@ fn a_temporary_in_a_return_by_reference_is_refused() {
 /// numbered as overloads are.
 #[test]
 fn a_function_template_proves_at_each_type() {
-    let Some(dafny) = dafny() else { return };
-    if !clang_tidy_available() {
-        return;
-    }
+    let dafny = dafny();
+    require_clang_tidy();
     for name in ["model-template.cpp", "../../../../examples/templates/example.cpp"] {
         let o = prove(name, &[], &dafny);
         let text = stdout(&o);
@@ -736,10 +664,8 @@ fn a_function_template_proves_at_each_type() {
 /// 0180.
 #[test]
 fn a_function_template_keeps_its_contract_at_each_type() {
-    let Some(dafny) = dafny() else { return };
-    if !clang_tidy_available() {
-        return;
-    }
+    let dafny = dafny();
+    require_clang_tidy();
     let o = prove("model-template-wrong.cpp", &[], &dafny);
     let text = stdout(&o);
     assert_eq!(o.status.code(), Some(1), "stdout: {text} stderr: {}", stderr(&o));
@@ -765,10 +691,8 @@ fn a_function_template_keeps_its_contract_at_each_type() {
 /// callers, decision 0180. A struct of a class template is a type of the model since decision 0188.
 #[test]
 fn a_function_template_with_no_rule_is_refused() {
-    let Some(dafny) = dafny() else { return };
-    if !clang_tidy_available() {
-        return;
-    }
+    let dafny = dafny();
+    require_clang_tidy();
     let o = prove("model-template-refuse.cpp", &[], &dafny);
     let text = stdout(&o);
     assert_eq!(o.status.code(), Some(1), "stdout: {text} stderr: {}", stderr(&o));

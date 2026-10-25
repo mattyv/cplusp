@@ -198,3 +198,4 @@ Status is `decided`, `proposed` (the default until someone objects or the thin s
 | [0191](0191-a-vector-field-that-grows-and-shrinks.md) | A vector field that grows and shrinks | decided |
 | [0192](0192-a-scalar-temporary-bound-to-a-const-reference.md) | A scalar temporary bound to a const reference | decided |
 | [0193](0193-files-by-topic.md) | Files by topic | decided |
+| [0194](0194-required-test-tools-and-current-status.md) | Required test tools and current status | decided |

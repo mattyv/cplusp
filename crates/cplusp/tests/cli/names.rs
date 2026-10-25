@@ -4,10 +4,8 @@ use super::*;
 /// call passes it on, a trusted function takes it, and a function can change only the globals it lists, decision 0173.
 #[test]
 fn a_global_is_an_implicit_parameter() {
-    let Some(dafny) = dafny() else { return };
-    if !clang_tidy_available() {
-        return;
-    }
+    let dafny = dafny();
+    require_clang_tidy();
     for name in ["model-state.cpp", "../../../../examples/global_state/example.cpp"] {
         let o = prove(name, &[], &dafny);
         let text = stdout(&o);
@@ -20,10 +18,8 @@ fn a_global_is_an_implicit_parameter() {
 /// their lines. A lambda reads its own parameter, and a comparator reads the global after the write, decision 0173.
 #[test]
 fn a_global_keeps_the_contract_of_its_function() {
-    let Some(dafny) = dafny() else { return };
-    if !clang_tidy_available() {
-        return;
-    }
+    let dafny = dafny();
+    require_clang_tidy();
     let o = prove("model-state-wrong.cpp", &[], &dafny);
     let text = stdout(&o);
     assert_eq!(o.status.code(), Some(1), "stdout: {text} stderr: {}", stderr(&o));
@@ -46,10 +42,8 @@ fn a_global_keeps_the_contract_of_its_function() {
 /// line that names no global keeps its old sentence, decision 0173.
 #[test]
 fn a_global_with_no_rule_is_refused() {
-    let Some(dafny) = dafny() else { return };
-    if !clang_tidy_available() {
-        return;
-    }
+    let dafny = dafny();
+    require_clang_tidy();
     let o = prove("model-state-refuse.cpp", &[], &dafny);
     let text = stdout(&o);
     assert_eq!(o.status.code(), Some(1), "stdout: {text} stderr: {}", stderr(&o));
@@ -70,10 +64,8 @@ fn a_global_with_no_rule_is_refused() {
 /// function twin, which a contract calls with the values before or after. The examples singleton and arena prove, decision 0174.
 #[test]
 fn a_static_member_function_is_a_free_function() {
-    let Some(dafny) = dafny() else { return };
-    if !clang_tidy_available() {
-        return;
-    }
+    let dafny = dafny();
+    require_clang_tidy();
     for name in ["model-static.cpp", "../../../../examples/singleton/example.cpp", "../../../../examples/arena/example.cpp"] {
         let o = prove(name, &[], &dafny);
         let text = stdout(&o);
@@ -86,10 +78,8 @@ fn a_static_member_function_is_a_free_function() {
 /// before its requires line holds, and a caller that misses a requires line of a trusted static, decision 0174.
 #[test]
 fn a_static_keeps_the_contract_of_its_class() {
-    let Some(dafny) = dafny() else { return };
-    if !clang_tidy_available() {
-        return;
-    }
+    let dafny = dafny();
+    require_clang_tidy();
     let o = prove("model-static-wrong.cpp", &[], &dafny);
     let text = stdout(&o);
     assert_eq!(o.status.code(), Some(1), "stdout: {text} stderr: {}", stderr(&o));
@@ -112,10 +102,8 @@ fn a_static_keeps_the_contract_of_its_class() {
 /// class are refused, decision 0174.
 #[test]
 fn a_static_with_no_rule_is_refused() {
-    let Some(dafny) = dafny() else { return };
-    if !clang_tidy_available() {
-        return;
-    }
+    let dafny = dafny();
+    require_clang_tidy();
     let o = prove("model-static-refuse.cpp", &[], &dafny);
     let text = stdout(&o);
     assert_eq!(o.status.code(), Some(1), "stdout: {text} stderr: {}", stderr(&o));
@@ -137,10 +125,8 @@ fn a_static_with_no_rule_is_refused() {
 /// reinterpret_const_cast prove, decision 0175.
 #[test]
 fn types_that_are_an_integer_prove() {
-    let Some(dafny) = dafny() else { return };
-    if !clang_tidy_available() {
-        return;
-    }
+    let dafny = dafny();
+    require_clang_tidy();
     let examples = ["enum_table", "chrono", "operator_overloading", "reinterpret_const_cast"].map(|e| format!("../../../../examples/{e}/example.cpp"));
     for name in std::iter::once("model-int-types.cpp".to_string()).chain(examples) {
         let o = prove(&name, &[], &dafny);
@@ -154,10 +140,8 @@ fn types_that_are_an_integer_prove() {
 /// free operator that adds the wrong field each fail at their return, decision 0175.
 #[test]
 fn types_that_are_an_integer_keep_their_contracts() {
-    let Some(dafny) = dafny() else { return };
-    if !clang_tidy_available() {
-        return;
-    }
+    let dafny = dafny();
+    require_clang_tidy();
     let o = prove("model-int-types-wrong.cpp", &[], &dafny);
     let text = stdout(&o);
     assert_eq!(o.status.code(), Some(1), "stdout: {text} stderr: {}", stderr(&o));
@@ -170,10 +154,8 @@ fn types_that_are_an_integer_keep_their_contracts() {
 /// short of the extent are refused, decision 0175.
 #[test]
 fn types_that_are_an_integer_with_no_rule_are_refused() {
-    let Some(dafny) = dafny() else { return };
-    if !clang_tidy_available() {
-        return;
-    }
+    let dafny = dafny();
+    require_clang_tidy();
     let o = prove("model-int-types-refuse.cpp", &[], &dafny);
     let text = stdout(&o);
     assert_eq!(o.status.code(), Some(1), "stdout: {text} stderr: {}", stderr(&o));
@@ -195,10 +177,8 @@ fn types_that_are_an_integer_with_no_rule_are_refused() {
 /// decision 0176.
 #[test]
 fn a_free_function_twin_proves() {
-    let Some(dafny) = dafny() else { return };
-    if !clang_tidy_available() {
-        return;
-    }
+    let dafny = dafny();
+    require_clang_tidy();
     for name in ["model-free-twin.cpp", "../../../../examples/bit_flags/example.cpp"] {
         let o = prove(name, &[], &dafny);
         let text = stdout(&o);
@@ -210,10 +190,8 @@ fn a_free_function_twin_proves() {
 /// A grant that drops the old flags, and a six that is seven, fail at their returns through the twins, decision 0176.
 #[test]
 fn a_free_function_twin_keeps_its_contract() {
-    let Some(dafny) = dafny() else { return };
-    if !clang_tidy_available() {
-        return;
-    }
+    let dafny = dafny();
+    require_clang_tidy();
     let o = prove("model-free-twin-wrong.cpp", &[], &dafny);
     let text = stdout(&o);
     assert_eq!(o.status.code(), Some(1), "stdout: {text} stderr: {}", stderr(&o));
@@ -226,10 +204,8 @@ fn a_free_function_twin_keeps_its_contract() {
 /// decision 0176.
 #[test]
 fn a_free_function_with_no_twin_is_refused() {
-    let Some(dafny) = dafny() else { return };
-    if !clang_tidy_available() {
-        return;
-    }
+    let dafny = dafny();
+    require_clang_tidy();
     let o = prove("model-free-twin-refuse.cpp", &[], &dafny);
     let text = stdout(&o);
     assert_eq!(o.status.code(), Some(1), "stdout: {text} stderr: {}", stderr(&o));
@@ -248,9 +224,7 @@ fn a_free_function_with_no_twin_is_refused() {
 /// A name that is a function of the file and of the companion file is refused at the contract line that calls it, decision 0176.
 #[test]
 fn a_name_of_the_file_and_of_the_companion_file_is_refused() {
-    if !clang_tidy_available() {
-        return;
-    }
+    require_clang_tidy();
     let dir = tempfile::tempdir().unwrap();
     let (o, _) = model("model-free-twin-clash.cpp", dir.path());
     let text = stdout(&o);
@@ -265,10 +239,8 @@ fn a_name_of_the_file_and_of_the_companion_file_is_refused() {
 /// of && or || or in a branch of ?: prove. The example evaluation_order proves, decision 0177.
 #[test]
 fn a_write_inside_an_expression_proves() {
-    let Some(dafny) = dafny() else { return };
-    if !clang_tidy_available() {
-        return;
-    }
+    let dafny = dafny();
+    require_clang_tidy();
     for name in ["model-writes.cpp", "../../../../examples/evaluation_order/example.cpp"] {
         let o = prove(name, &[], &dafny);
         let text = stdout(&o);
@@ -281,10 +253,8 @@ fn a_write_inside_an_expression_proves() {
 /// against a contract that says nothing changes, fail at their returns, decision 0177.
 #[test]
 fn a_write_inside_an_expression_keeps_its_contract() {
-    let Some(dafny) = dafny() else { return };
-    if !clang_tidy_available() {
-        return;
-    }
+    let dafny = dafny();
+    require_clang_tidy();
     let o = prove("model-writes-wrong.cpp", &[], &dafny);
     let text = stdout(&o);
     assert_eq!(o.status.code(), Some(1), "stdout: {text} stderr: {}", stderr(&o));
@@ -297,10 +267,8 @@ fn a_write_inside_an_expression_keeps_its_contract() {
 /// their lines, decision 0177.
 #[test]
 fn a_write_inside_an_expression_with_no_rule_is_refused() {
-    let Some(dafny) = dafny() else { return };
-    if !clang_tidy_available() {
-        return;
-    }
+    let dafny = dafny();
+    require_clang_tidy();
     let o = prove("model-writes-refuse.cpp", &[], &dafny);
     let text = stdout(&o);
     assert_eq!(o.status.code(), Some(1), "stdout: {text} stderr: {}", stderr(&o));

@@ -4,10 +4,8 @@ use super::*;
 /// and in a contract, and a character in a contract, prove, decision 0106. Each constant has its true value, decision 0107.
 #[test]
 fn small_forms_prove() {
-    let Some(dafny) = dafny() else { return };
-    if !clang_tidy_available() {
-        return;
-    }
+    let dafny = dafny();
+    require_clang_tidy();
     let o = prove("model-small.cpp", &[], &dafny);
     let text = stdout(&o);
     assert_eq!(o.status.code(), Some(0), "stdout: {text} stderr: {}", stderr(&o));
@@ -18,10 +16,8 @@ fn small_forms_prove() {
 /// not meet, are named at their lines, decisions 0106 and 0107.
 #[test]
 fn prove_names_a_narrowing_and_a_shift_that_may_fail() {
-    let Some(dafny) = dafny() else { return };
-    if !clang_tidy_available() {
-        return;
-    }
+    let dafny = dafny();
+    require_clang_tidy();
     let o = prove("model-small-wrong.cpp", &[], &dafny);
     let text = stdout(&o);
     assert_eq!(o.status.code(), Some(1), "stdout: {text} stderr: {}", stderr(&o));
@@ -41,9 +37,7 @@ fn prove_names_a_narrowing_and_a_shift_that_may_fail() {
 /// file with the same name, and so does a name with two meanings. The name in the contract is no constant then, decision 0107.
 #[test]
 fn a_constant_that_cpp_does_not_find_from_the_function_is_no_constant() {
-    if !clang_tidy_available() {
-        return;
-    }
+    require_clang_tidy();
     let dir = tempfile::tempdir().unwrap();
     let (o, _) = model("model-small-hidden.cpp", dir.path());
     let text = stdout(&o);
@@ -66,9 +60,7 @@ fn a_constant_that_cpp_does_not_find_from_the_function_is_no_constant() {
 /// A variable that is not constexpr is no constant of a contract, and a left shift has no rule, decision 0106.
 #[test]
 fn a_variable_in_a_contract_and_a_left_shift_are_refused() {
-    if !clang_tidy_available() {
-        return;
-    }
+    require_clang_tidy();
     let dir = tempfile::tempdir().unwrap();
     let (o, _) = model("model-small-refuse.cpp", dir.path());
     let text = stdout(&o);
@@ -84,10 +76,8 @@ fn a_variable_in_a_contract_and_a_left_shift_are_refused() {
 /// reference parameter, and a trusted function can write one, decision 0108.
 #[test]
 fn reference_parameters_prove() {
-    let Some(dafny) = dafny() else { return };
-    if !clang_tidy_available() {
-        return;
-    }
+    let dafny = dafny();
+    require_clang_tidy();
     let o = prove("model-ref.cpp", &[], &dafny);
     let text = stdout(&o);
     assert_eq!(o.status.code(), Some(0), "stdout: {text} stderr: {}", stderr(&o));
@@ -98,10 +88,8 @@ fn reference_parameters_prove() {
 /// that reads a local as it was before a call that wrote it, are named at their lines, decision 0108.
 #[test]
 fn prove_names_a_reference_parameter_that_does_not_meet_its_contract() {
-    let Some(dafny) = dafny() else { return };
-    if !clang_tidy_available() {
-        return;
-    }
+    let dafny = dafny();
+    require_clang_tidy();
     let o = prove("model-ref-wrong.cpp", &[], &dafny);
     let text = stdout(&o);
     assert_eq!(o.status.code(), Some(1), "stdout: {text} stderr: {}", stderr(&o));
@@ -122,9 +110,7 @@ fn prove_names_a_reference_parameter_that_does_not_meet_its_contract() {
 /// refused first, and a name with parts is a name, decision 0110.
 #[test]
 fn a_modifies_line_and_a_write_back_with_no_rule_are_refused() {
-    if !clang_tidy_available() {
-        return;
-    }
+    require_clang_tidy();
     let dir = tempfile::tempdir().unwrap();
     let (o, _) = model("model-ref-refuse.cpp", dir.path());
     let text = stdout(&o);
@@ -147,10 +133,8 @@ fn a_modifies_line_and_a_write_back_with_no_rule_are_refused() {
 /// A function whose body is refused keeps a header with the values it gives back, so Dafny resolves each call of it, decision 0108.
 #[test]
 fn a_caller_of_a_refused_function_that_writes_a_reference_resolves() {
-    let Some(dafny) = dafny() else { return };
-    if !clang_tidy_available() {
-        return;
-    }
+    let dafny = dafny();
+    require_clang_tidy();
     let o = prove("model-ref-refuse.cpp", &[], &dafny);
     let text = stdout(&o);
     assert_eq!(o.status.code(), Some(1), "stdout: {text} stderr: {}", stderr(&o));
@@ -163,10 +147,8 @@ fn a_caller_of_a_refused_function_that_writes_a_reference_resolves() {
 /// and case bodies in braces, decision 0114.
 #[test]
 fn enums_and_switches_prove() {
-    let Some(dafny) = dafny() else { return };
-    if !clang_tidy_available() {
-        return;
-    }
+    let dafny = dafny();
+    require_clang_tidy();
     let o = prove("model-enum.cpp", &[], &dafny);
     let text = stdout(&o);
     assert_eq!(o.status.code(), Some(0), "stdout: {text} stderr: {}", stderr(&o));
@@ -177,10 +159,8 @@ fn enums_and_switches_prove() {
 /// 0109.
 #[test]
 fn prove_names_a_switch_that_does_not_meet_its_contract() {
-    let Some(dafny) = dafny() else { return };
-    if !clang_tidy_available() {
-        return;
-    }
+    let dafny = dafny();
+    require_clang_tidy();
     let o = prove("model-enum-wrong.cpp", &[], &dafny);
     let text = stdout(&o);
     assert_eq!(o.status.code(), Some(1), "stdout: {text} stderr: {}", stderr(&o));
@@ -196,9 +176,7 @@ fn prove_names_a_switch_that_does_not_meet_its_contract() {
 /// and an enumerator whose name Dafny cannot read, decision 0114.
 #[test]
 fn switches_and_enums_with_no_rule_are_refused() {
-    if !clang_tidy_available() {
-        return;
-    }
+    require_clang_tidy();
     let dir = tempfile::tempdir().unwrap();
     let (o, _) = model("model-enum-refuse.cpp", dir.path());
     let text = stdout(&o);
@@ -225,9 +203,7 @@ fn switches_and_enums_with_no_rule_are_refused() {
 /// the system header is exempt from the row type_punning.
 #[test]
 fn a_byte_that_the_file_declares_is_no_view_as_bytes() {
-    if !clang_tidy_available() {
-        return;
-    }
+    require_clang_tidy();
     let f = fixture("punning-own-byte.cpp");
     let plugin = plugin();
     let o = cplusp(&["gate", "--json", "--plugin", plugin.to_str().unwrap(), f.to_str().unwrap(), "--", "-std=c++23", "-ffp-contract=off"]);
@@ -240,9 +216,7 @@ fn a_byte_that_the_file_declares_is_no_view_as_bytes() {
 /// A raw copy tells the bot why the gate refuses it, decision 0120. The sentence of the plugin follows the message of the row.
 #[test]
 fn a_raw_copy_says_why_it_is_refused() {
-    if !clang_tidy_available() {
-        return;
-    }
+    require_clang_tidy();
     let banned = root().join("rules/type_punning/banned.cpp");
     let o = gated(&[banned.to_str().unwrap(), "--", "-std=c++23", "-ffp-contract=off"]);
     let out = stdout(&o);
@@ -266,9 +240,7 @@ fn a_raw_copy_says_why_it_is_refused() {
 /// not a quoted space.
 #[test]
 fn an_invisible_character_in_a_contract_is_named_by_its_code_point() {
-    if !clang_tidy_available() {
-        return;
-    }
+    require_clang_tidy();
     let dir = tempfile::tempdir().unwrap();
     let (o, _) = model("model-invisible.cpp", dir.path());
     let text = stdout(&o);
@@ -281,9 +253,7 @@ fn an_invisible_character_in_a_contract_is_named_by_its_code_point() {
 /// A format character, such as a zero-width space or a right-to-left override, is named by its code point too, decision 0126.
 #[test]
 fn a_format_character_in_a_contract_is_named_by_its_code_point() {
-    if !clang_tidy_available() {
-        return;
-    }
+    require_clang_tidy();
     let dir = tempfile::tempdir().unwrap();
     let (o, _) = model("model-format-char.cpp", dir.path());
     let text = stdout(&o);
@@ -297,9 +267,7 @@ fn a_format_character_in_a_contract_is_named_by_its_code_point() {
 /// A Hangul filler is a letter that prints as nothing, so it is named by its code point too, decision 0126.
 #[test]
 fn a_hangul_filler_in_a_contract_is_named_by_its_code_point() {
-    if !clang_tidy_available() {
-        return;
-    }
+    require_clang_tidy();
     let dir = tempfile::tempdir().unwrap();
     let (o, _) = model("model-filler.cpp", dir.path());
     let text = stdout(&o);
@@ -313,10 +281,8 @@ fn a_hangul_filler_in_a_contract_is_named_by_its_code_point() {
 /// comparison of each chain, and the first and the last index of the sorted form.
 #[test]
 fn a_longer_chain_and_the_star_of_an_optional_prove() {
-    let Some(dafny) = dafny() else { return };
-    if !clang_tidy_available() {
-        return;
-    }
+    let dafny = dafny();
+    require_clang_tidy();
     let o = prove("model-chain.cpp", &[], &dafny);
     let text = stdout(&o);
     assert_eq!(o.status.code(), Some(0), "stdout: {text} stderr: {}", stderr(&o));
@@ -326,10 +292,8 @@ fn a_longer_chain_and_the_star_of_an_optional_prove() {
 /// The chain gives no more than it says, and `*result` with no test of has_value does not prove, decision 0131.
 #[test]
 fn a_longer_chain_gives_no_more_and_the_star_needs_a_value() {
-    let Some(dafny) = dafny() else { return };
-    if !clang_tidy_available() {
-        return;
-    }
+    let dafny = dafny();
+    require_clang_tidy();
     let o = prove("model-chain-wrong.cpp", &[], &dafny);
     let text = stdout(&o);
     assert_eq!(o.status.code(), Some(1), "stdout: {text} stderr: {}", stderr(&o));
@@ -341,9 +305,7 @@ fn a_longer_chain_gives_no_more_and_the_star_needs_a_value() {
 /// A chain with two directions anywhere in it, and `*` on a value that is not an optional, are refused, decision 0131.
 #[test]
 fn a_chain_that_turns_and_the_star_of_a_scalar_are_refused() {
-    if !clang_tidy_available() {
-        return;
-    }
+    require_clang_tidy();
     let dir = tempfile::tempdir().unwrap();
     let (o, _) = model("model-chain-refuse.cpp", dir.path());
     let text = stdout(&o);
@@ -359,10 +321,8 @@ fn a_chain_that_turns_and_the_star_of_a_scalar_are_refused() {
 /// A const std::array is a read-only sequence of fixed length, decision 0132: by reference and by value.
 #[test]
 fn a_const_array_is_a_sequence_of_fixed_length() {
-    let Some(dafny) = dafny() else { return };
-    if !clang_tidy_available() {
-        return;
-    }
+    let dafny = dafny();
+    require_clang_tidy();
     let o = prove("model-array.cpp", &[], &dafny);
     let text = stdout(&o);
     assert_eq!(o.status.code(), Some(0), "stdout: {text} stderr: {}", stderr(&o));
@@ -380,9 +340,7 @@ fn a_const_array_is_a_sequence_of_fixed_length() {
 /// An array with no const, a struct with an array field, and an array of bool stay out of the subset, decisions 0132 and 0136.
 #[test]
 fn an_array_with_no_const_and_an_array_field_are_refused() {
-    if !clang_tidy_available() {
-        return;
-    }
+    require_clang_tidy();
     let dir = tempfile::tempdir().unwrap();
     let (o, _) = model("model-array-refuse.cpp", dir.path());
     let text = stdout(&o);
@@ -402,10 +360,8 @@ fn an_array_with_no_const_and_an_array_field_are_refused() {
 /// not prove.
 #[test]
 fn an_optional_that_a_call_gives_is_read_through_its_temporary() {
-    let Some(dafny) = dafny() else { return };
-    if !clang_tidy_available() {
-        return;
-    }
+    let dafny = dafny();
+    require_clang_tidy();
     let o = prove("model-temp-opt.cpp", &[], &dafny);
     let text = stdout(&o);
     assert_eq!(o.status.code(), Some(0), "stdout: {text} stderr: {}", stderr(&o));
@@ -423,10 +379,8 @@ fn an_optional_that_a_call_gives_is_read_through_its_temporary() {
 /// An optional of a plain struct, and `->` in code and in a contract, decision 0137.
 #[test]
 fn an_optional_of_a_struct_and_the_arrow_prove() {
-    let Some(dafny) = dafny() else { return };
-    if !clang_tidy_available() {
-        return;
-    }
+    let dafny = dafny();
+    require_clang_tidy();
     let o = prove("model-opt-struct.cpp", &[], &dafny);
     let text = stdout(&o);
     assert_eq!(o.status.code(), Some(0), "stdout: {text} stderr: {}", stderr(&o));
@@ -436,10 +390,8 @@ fn an_optional_of_a_struct_and_the_arrow_prove() {
 /// A read through `->` of an optional that may be empty does not prove, in code and in a contract, decision 0137.
 #[test]
 fn the_arrow_needs_a_value() {
-    let Some(dafny) = dafny() else { return };
-    if !clang_tidy_available() {
-        return;
-    }
+    let dafny = dafny();
+    require_clang_tidy();
     let o = prove("model-opt-struct-wrong.cpp", &[], &dafny);
     let text = stdout(&o);
     assert_eq!(o.status.code(), Some(1), "stdout: {text} stderr: {}", stderr(&o));
@@ -451,9 +403,7 @@ fn the_arrow_needs_a_value() {
 /// An optional of a struct that holds a sequence stays out, decision 0137.
 #[test]
 fn an_optional_of_a_struct_that_holds_a_sequence_is_refused() {
-    if !clang_tidy_available() {
-        return;
-    }
+    require_clang_tidy();
     let dir = tempfile::tempdir().unwrap();
     let (o, _) = model("model-opt-struct-refuse.cpp", dir.path());
     let text = stdout(&o);
@@ -468,10 +418,8 @@ fn an_optional_of_a_struct_that_holds_a_sequence_is_refused() {
 /// int8_t, int16_t and uint16_t fields of a plain struct, decision 0138. A value that may not fit the field does not prove.
 #[test]
 fn small_integer_types_can_be_fields() {
-    let Some(dafny) = dafny() else { return };
-    if !clang_tidy_available() {
-        return;
-    }
+    let dafny = dafny();
+    require_clang_tidy();
     let o = prove("model-small-fields.cpp", &[], &dafny);
     let text = stdout(&o);
     assert_eq!(o.status.code(), Some(0), "stdout: {text} stderr: {}", stderr(&o));
@@ -489,10 +437,8 @@ fn small_integer_types_can_be_fields() {
 /// `at` of a read-only sequence is an index, decision 0139. An index that may be out of range does not prove.
 #[test]
 fn at_is_an_index() {
-    let Some(dafny) = dafny() else { return };
-    if !clang_tidy_available() {
-        return;
-    }
+    let dafny = dafny();
+    require_clang_tidy();
     let o = prove("model-at.cpp", &[], &dafny);
     let text = stdout(&o);
     assert_eq!(o.status.code(), Some(0), "stdout: {text} stderr: {}", stderr(&o));
@@ -511,10 +457,8 @@ fn at_is_an_index() {
 /// the arguments `&x`, `nullptr` and a pointer parameter.
 #[test]
 fn a_pointer_to_const_is_an_optional() {
-    let Some(dafny) = dafny() else { return };
-    if !clang_tidy_available() {
-        return;
-    }
+    let dafny = dafny();
+    require_clang_tidy();
     let o = prove("model-pointer.cpp", &[], &dafny);
     let text = stdout(&o);
     assert_eq!(o.status.code(), Some(0), "stdout: {text} stderr: {}", stderr(&o));
@@ -525,10 +469,8 @@ fn a_pointer_to_const_is_an_optional() {
 /// decision 0140.
 #[test]
 fn a_pointer_that_may_be_null_does_not_prove() {
-    let Some(dafny) = dafny() else { return };
-    if !clang_tidy_available() {
-        return;
-    }
+    let dafny = dafny();
+    require_clang_tidy();
     let o = prove("model-pointer-wrong.cpp", &[], &dafny);
     let text = stdout(&o);
     assert_eq!(o.status.code(), Some(1), "stdout: {text} stderr: {}", stderr(&o));
@@ -545,9 +487,7 @@ fn a_pointer_that_may_be_null_does_not_prove() {
 /// and in a contract, and neither does `this`, decision 0141. No refusal speaks in the words of Dafny.
 #[test]
 fn a_pointer_with_no_const_and_a_pointer_as_a_bool_are_refused() {
-    if !clang_tidy_available() {
-        return;
-    }
+    require_clang_tidy();
     let dir = tempfile::tempdir().unwrap();
     let (o, _) = model("model-pointer-refuse.cpp", dir.path());
     let text = stdout(&o);
@@ -567,10 +507,8 @@ fn a_pointer_with_no_const_and_a_pointer_as_a_bool_are_refused() {
 /// sets, std::make_unique, `*p`, `p->f` and the test against nullptr.
 #[test]
 fn a_unique_ptr_that_is_only_read_proves() {
-    let Some(dafny) = dafny() else { return };
-    if !clang_tidy_available() {
-        return;
-    }
+    let dafny = dafny();
+    require_clang_tidy();
     let o = prove("model-unique.cpp", &[], &dafny);
     let text = stdout(&o);
     assert_eq!(o.status.code(), Some(0), "stdout: {text} stderr: {}", stderr(&o));
@@ -589,9 +527,7 @@ fn a_unique_ptr_that_is_only_read_proves() {
 /// rule, decision 0142.
 #[test]
 fn a_unique_ptr_that_is_written_or_compared_is_refused() {
-    if !clang_tidy_available() {
-        return;
-    }
+    require_clang_tidy();
     let dir = tempfile::tempdir().unwrap();
     let (o, _) = model("model-unique-refuse.cpp", dir.path());
     let text = stdout(&o);
@@ -607,10 +543,8 @@ fn a_unique_ptr_that_is_written_or_compared_is_refused() {
 /// A range-for is a loop over indexes, and an index line names the index, decision 0143. A loop with no index line proves too.
 #[test]
 fn a_range_for_is_a_loop_over_indexes() {
-    let Some(dafny) = dafny() else { return };
-    if !clang_tidy_available() {
-        return;
-    }
+    let dafny = dafny();
+    require_clang_tidy();
     let o = prove("model-range.cpp", &[], &dafny);
     let text = stdout(&o);
     assert_eq!(o.status.code(), Some(0), "stdout: {text} stderr: {}", stderr(&o));
@@ -627,9 +561,7 @@ fn a_range_for_is_a_loop_over_indexes() {
 /// are refused, decision 0143. So are an index named as a field or a constant, and a structured binding, decision 0144.
 #[test]
 fn an_index_line_in_the_wrong_place_or_with_a_used_name_is_refused() {
-    if !clang_tidy_available() {
-        return;
-    }
+    require_clang_tidy();
     let dir = tempfile::tempdir().unwrap();
     let (o, _) = model("model-range-refuse.cpp", dir.path());
     let text = stdout(&o);
@@ -654,10 +586,8 @@ fn an_index_line_in_the_wrong_place_or_with_a_used_name_is_refused() {
 /// and a loop that writes each element.
 #[test]
 fn a_vector_by_reference_that_the_function_writes_proves() {
-    let Some(dafny) = dafny() else { return };
-    if !clang_tidy_available() {
-        return;
-    }
+    let dafny = dafny();
+    require_clang_tidy();
     let o = prove("model-vec-ref.cpp", &[], &dafny);
     let text = stdout(&o);
     assert_eq!(o.status.code(), Some(0), "stdout: {text} stderr: {}", stderr(&o));
@@ -675,9 +605,7 @@ fn a_vector_by_reference_that_the_function_writes_proves() {
 /// passes the vector on are refused, decisions 0145, 0147 and 0148.
 #[test]
 fn a_vector_by_reference_with_no_rule_is_refused() {
-    if !clang_tidy_available() {
-        return;
-    }
+    require_clang_tidy();
     let dir = tempfile::tempdir().unwrap();
     let (o, _) = model("model-vec-ref-refuse.cpp", dir.path());
     let text = stdout(&o);
@@ -696,10 +624,8 @@ fn a_vector_by_reference_with_no_rule_is_refused() {
 /// 0148.
 #[test]
 fn push_back_grows_a_vector_by_reference() {
-    let Some(dafny) = dafny() else { return };
-    if !clang_tidy_available() {
-        return;
-    }
+    let dafny = dafny();
+    require_clang_tidy();
     let o = prove("model-vec-push.cpp", &[], &dafny);
     let text = stdout(&o);
     assert_eq!(o.status.code(), Some(0), "stdout: {text} stderr: {}", stderr(&o));
@@ -716,10 +642,8 @@ fn push_back_grows_a_vector_by_reference() {
 /// The example sorted_insert proves with push_back, its loop invariants and its companion file, decision 0148.
 #[test]
 fn the_sorted_insert_example_proves() {
-    let Some(dafny) = dafny() else { return };
-    if !clang_tidy_available() {
-        return;
-    }
+    let dafny = dafny();
+    require_clang_tidy();
     let o = prove("../../../../examples/sorted_insert/example.cpp", &[], &dafny);
     let text = stdout(&o);
     assert_eq!(o.status.code(), Some(0), "stdout: {text} stderr: {}", stderr(&o));
@@ -730,10 +654,8 @@ fn the_sorted_insert_example_proves() {
 /// with another test fails its ensures line, and a count with no bound fails the int64 fit and the int32 fit at line 14.
 #[test]
 fn count_if_with_a_lambda_proves() {
-    let Some(dafny) = dafny() else { return };
-    if !clang_tidy_available() {
-        return;
-    }
+    let dafny = dafny();
+    require_clang_tidy();
     let o = prove("model-count-if.cpp", &[], &dafny);
     let text = stdout(&o);
     assert_eq!(o.status.code(), Some(0), "stdout: {text} stderr: {}", stderr(&o));
@@ -752,9 +674,7 @@ fn count_if_with_a_lambda_proves() {
 /// function of its own, decision 0149.
 #[test]
 fn count_if_with_no_rule_is_refused() {
-    if !clang_tidy_available() {
-        return;
-    }
+    require_clang_tidy();
     let dir = tempfile::tempdir().unwrap();
     let (o, _) = model("model-count-if-refuse.cpp", dir.path());
     let text = stdout(&o);
@@ -780,10 +700,8 @@ fn count_if_with_no_rule_is_refused() {
 /// The example lambdas proves with count_if and its companion file, decision 0149.
 #[test]
 fn the_lambdas_example_proves() {
-    let Some(dafny) = dafny() else { return };
-    if !clang_tidy_available() {
-        return;
-    }
+    let dafny = dafny();
+    require_clang_tidy();
     let o = prove("../../../../examples/lambdas/example.cpp", &[], &dafny);
     let text = stdout(&o);
     assert_eq!(o.status.code(), Some(0), "stdout: {text} stderr: {}", stderr(&o));

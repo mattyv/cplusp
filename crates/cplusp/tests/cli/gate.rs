@@ -4,10 +4,7 @@ use super::*;
 
 #[test]
 fn gate_passes_an_allowed_sample_and_fails_a_banned_one() {
-    if !clang_tidy_available() {
-        eprintln!("skipped: clang-tidy not installed");
-        return;
-    }
+    require_clang_tidy();
     let allowed = root().join("rules/c_style_casts/allowed.cpp");
     let o = gated(&[allowed.to_str().unwrap(), "--", "-std=c++23", "-ffp-contract=off"]);
     assert_eq!(o.status.code(), Some(0), "stdout: {} stderr: {}", stdout(&o), stderr(&o));
@@ -23,10 +20,7 @@ fn gate_passes_an_allowed_sample_and_fails_a_banned_one() {
 
 #[test]
 fn gate_reports_a_trusted_only_construct_with_its_own_wording() {
-    if !clang_tidy_available() {
-        eprintln!("skipped: clang-tidy not installed");
-        return;
-    }
+    require_clang_tidy();
     let banned = root().join("rules/reinterpret_const_cast/banned.cpp");
     let o = gated(&[banned.to_str().unwrap(), "--", "-std=c++23", "-ffp-contract=off"]);
     assert_eq!(o.status.code(), Some(1), "stdout: {} stderr: {}", stdout(&o), stderr(&o));
@@ -37,10 +31,7 @@ fn gate_reports_a_trusted_only_construct_with_its_own_wording() {
 
 #[test]
 fn gate_refuses_a_file_that_does_not_compile() {
-    if !clang_tidy_available() {
-        eprintln!("skipped: clang-tidy not installed");
-        return;
-    }
+    require_clang_tidy();
     let f = fixture("does-not-compile.cpp");
     let o = gated(&[f.to_str().unwrap(), "--", "-std=c++23", "-ffp-contract=off"]);
     assert_eq!(o.status.code(), Some(2), "stdout: {} stderr: {}", stdout(&o), stderr(&o));
@@ -51,9 +42,7 @@ fn gate_refuses_a_file_that_does_not_compile() {
 
 #[test]
 fn gate_refuses_a_compile_error_named_after_a_warning() {
-    if !clang_tidy_available() {
-        return;
-    }
+    require_clang_tidy();
     let f = fixture("narrowing.cpp");
     let o = gated(&[f.to_str().unwrap(), "--", "-std=c++23", "-ffp-contract=off"]);
     assert_eq!(o.status.code(), Some(2), "stdout: {} stderr: {}", stdout(&o), stderr(&o));
@@ -62,9 +51,7 @@ fn gate_refuses_a_compile_error_named_after_a_warning() {
 
 #[test]
 fn gate_treats_nolint_as_a_finding() {
-    if !clang_tidy_available() {
-        return;
-    }
+    require_clang_tidy();
     let f = fixture("nolint.cpp");
     let o = gated(&[f.to_str().unwrap(), "--", "-std=c++23", "-ffp-contract=off"]);
     assert_eq!(o.status.code(), Some(1), "stdout: {} stderr: {}", stdout(&o), stderr(&o));
@@ -76,9 +63,7 @@ fn gate_treats_nolint_as_a_finding() {
 /// The flags after `--` can break all three, so the gate reads them before clang-tidy does.
 #[test]
 fn gate_refuses_flags_the_proofs_cannot_follow() {
-    if !clang_tidy_available() {
-        return;
-    }
+    require_clang_tidy();
     let float = "not allowed with the gate. It changes floating-point results, and the proofs assume IEEE 754 round to nearest.";
     for (flags, message) in [
         (vec!["-std=c++23", "-ffp-contract=off", "-ffast-math"], format!("-ffast-math: {float}")),
@@ -128,9 +113,7 @@ fn gate_refuses_flags_the_proofs_cannot_follow() {
 
 #[test]
 fn gate_refuses_a_build_dir_without_compile_commands() {
-    if !clang_tidy_available() {
-        return;
-    }
+    require_clang_tidy();
     let f = root().join("rules/goto/allowed.cpp");
     let o = cplusp(&["gate", "-p", root().to_str().unwrap(), f.to_str().unwrap()]);
     assert_eq!(o.status.code(), Some(2), "stdout: {} stderr: {}", stdout(&o), stderr(&o));
@@ -139,9 +122,7 @@ fn gate_refuses_a_build_dir_without_compile_commands() {
 
 #[test]
 fn gate_refuses_a_build_dir_together_with_trailing_flags() {
-    if !clang_tidy_available() {
-        return;
-    }
+    require_clang_tidy();
     let f = root().join("rules/goto/allowed.cpp");
     let o = cplusp(&["gate", "-p", root().to_str().unwrap(), f.to_str().unwrap(), "--", "-std=c++23", "-ffp-contract=off"]);
     assert_eq!(o.status.code(), Some(2), "stdout: {} stderr: {}", stdout(&o), stderr(&o));
@@ -152,9 +133,7 @@ fn gate_refuses_a_build_dir_together_with_trailing_flags() {
 /// so the gate refuses the run. Decision 0025.
 #[test]
 fn gate_refuses_a_run_that_cannot_enforce_every_row() {
-    if !clang_tidy_available() {
-        return;
-    }
+    require_clang_tidy();
     let f = root().join("rules/goto/allowed.cpp");
     let o = cplusp(&["gate", f.to_str().unwrap(), "--", "-std=c++23", "-ffp-contract=off"]);
     assert_eq!(o.status.code(), Some(2), "stdout: {} stderr: {}", stdout(&o), stderr(&o));
@@ -168,9 +147,7 @@ fn gate_refuses_a_run_that_cannot_enforce_every_row() {
 /// With the plugin every row has its check, so a clean run says nothing on stderr.
 #[test]
 fn gate_with_the_plugin_is_silent_on_stderr() {
-    if !clang_tidy_available() {
-        return;
-    }
+    require_clang_tidy();
     let f = root().join("rules/goto/allowed.cpp");
     let o = gated(&[f.to_str().unwrap(), "--", "-std=c++23", "-ffp-contract=off"]);
     assert_eq!(o.status.code(), Some(0), "stdout: {} stderr: {}", stdout(&o), stderr(&o));
@@ -180,9 +157,7 @@ fn gate_with_the_plugin_is_silent_on_stderr() {
 /// With `-p` the flags come from the database. The gate judges them the same way, and refuses a response file it cannot read.
 #[test]
 fn gate_reads_the_flags_of_the_compile_database() {
-    if !clang_tidy_available() {
-        return;
-    }
+    require_clang_tidy();
     let file = root().join("rules/goto/allowed.cpp");
     let file = file.to_str().unwrap();
     let root = root();
@@ -210,9 +185,7 @@ fn gate_reads_the_flags_of_the_compile_database() {
 /// A diagnostic pragma silences a compiler warning the policy relies on. Like NOLINT, it is a finding.
 #[test]
 fn gate_treats_a_diagnostic_pragma_as_a_finding() {
-    if !clang_tidy_available() {
-        return;
-    }
+    require_clang_tidy();
     let f = fixture("pragma.cpp");
     let o = gated(&[f.to_str().unwrap(), "--", "-std=c++23", "-ffp-contract=off"]);
     assert_eq!(o.status.code(), Some(1), "stdout: {} stderr: {}", stdout(&o), stderr(&o));
@@ -227,9 +200,7 @@ fn gate_treats_a_diagnostic_pragma_as_a_finding() {
 /// a macro from the command line, and the Microsoft form. The gate reads the preprocessor's view, so each is a finding.
 #[test]
 fn gate_sees_every_spelling_of_a_diagnostic_pragma() {
-    if !clang_tidy_available() {
-        return;
-    }
+    require_clang_tidy();
     let pragma = "pragma diagnostic: not allowed in verified code. It silences the gate.";
     let f = fixture("pragma-spellings.cpp");
     let o = gated(&[f.to_str().unwrap(), "--", "-std=c++23", "-ffp-contract=off"]);
@@ -260,9 +231,7 @@ fn gate_sees_every_spelling_of_a_diagnostic_pragma() {
 /// It is a finding, and what follows it is still judged under the name it gave.
 #[test]
 fn gate_treats_a_line_directive_as_a_finding() {
-    if !clang_tidy_available() {
-        return;
-    }
+    require_clang_tidy();
     let f = fixture("line-directive.cpp");
     let o = gated(&[f.to_str().unwrap(), "--", "-std=c++23", "-ffp-contract=off"]);
     assert_eq!(o.status.code(), Some(1), "stdout: {} stderr: {}", stdout(&o), stderr(&o));
@@ -279,9 +248,7 @@ fn gate_treats_a_line_directive_as_a_finding() {
 /// a system header, which clang-tidy does not judge, and the output alone cannot tell it from a real include. The source text can.
 #[test]
 fn gate_treats_a_forged_line_marker_as_a_finding() {
-    if !clang_tidy_available() {
-        return;
-    }
+    require_clang_tidy();
     // The plain spelling, one in a header, and the spellings a text scan forgets: a block comment before the `#`, a digraph,
     // a line splice after the `#`, and a comment between the `#` and the number. Each is a directive to the preprocessor.
     for (file, at) in [
@@ -312,9 +279,7 @@ fn gate_treats_a_forged_line_marker_as_a_finding() {
 /// apart. The file is written at test time, because the marker must hold the file's own path.
 #[test]
 fn gate_treats_a_marker_that_names_the_file_itself_as_a_finding() {
-    if !clang_tidy_available() {
-        return;
-    }
+    require_clang_tidy();
     let dir = std::env::temp_dir().join(format!("cplusp-own-name-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     let f = dir.join("forged-own-name.cpp");
@@ -333,9 +298,7 @@ fn gate_treats_a_marker_that_names_the_file_itself_as_a_finding() {
 /// one row must not loosen another.
 #[test]
 fn the_sequencing_check_reads_a_callees_body_under_a_loosened_state_row() {
-    if !clang_tidy_available() {
-        return;
-    }
+    require_clang_tidy();
     let f = fixture("sequencing-through-bodies.cpp");
     let team = fixture("team-loosen-state.yaml");
     let plugin = plugin();
@@ -361,9 +324,7 @@ fn the_sequencing_check_reads_a_callees_body_under_a_loosened_state_row() {
 /// reads it there, decision 0037. Its finding names the header's line.
 #[test]
 fn gate_reads_a_virtual_call_in_the_second_inclusion_of_a_header() {
-    if !clang_tidy_available() {
-        return;
-    }
+    require_clang_tidy();
     let f = fixture("includes-twice.cpp");
     let o = gated(&[f.to_str().unwrap(), "--", "-std=c++23", "-ffp-contract=off"]);
     assert_eq!(o.status.code(), Some(1), "stdout: {} stderr: {}", stdout(&o), stderr(&o));
@@ -375,9 +336,7 @@ fn gate_reads_a_virtual_call_in_the_second_inclusion_of_a_header() {
 /// is the forged one. A reader with flags of its own would not see it.
 #[test]
 fn gate_reads_directives_under_the_builds_flags() {
-    if !clang_tidy_available() {
-        return;
-    }
+    require_clang_tidy();
     let f = fixture("forged-trigraph.cpp");
     let o = gated(&[f.to_str().unwrap(), "--", "-std=c++23", "-ffp-contract=off", "-trigraphs"]);
     assert_eq!(o.status.code(), Some(1), "stdout: {} stderr: {}", stdout(&o), stderr(&o));
@@ -389,9 +348,7 @@ fn gate_reads_directives_under_the_builds_flags() {
 /// A macro or a flag that turns `once` into a diagnostic pragma silences a row, and the gate must name what runs, decision 0038.
 #[test]
 fn gate_reads_the_words_a_pragma_runs_with() {
-    if !clang_tidy_available() {
-        return;
-    }
+    require_clang_tidy();
     for (file, extra) in [("pragma-once-macro.cpp", None), ("pragma-once-flag.cpp", Some("-Donce=clang diagnostic ignored \"-Wreturn-stack-address\""))] {
         let f = fixture(file);
         let mut args = vec![f.to_str().unwrap(), "--", "-std=c++23", "-ffp-contract=off", "-fms-extensions"];
@@ -408,9 +365,7 @@ fn gate_reads_the_words_a_pragma_runs_with() {
 /// A `#line` directive may give a file name with a tab in it. The findings after it still print under that name.
 #[test]
 fn gate_prints_findings_under_a_file_name_with_a_tab() {
-    if !clang_tidy_available() {
-        return;
-    }
+    require_clang_tidy();
     let f = fixture("line-tab.cpp");
     let o = gated(&[f.to_str().unwrap(), "--", "-std=c++23", "-ffp-contract=off"]);
     let out = stdout(&o);
@@ -423,9 +378,7 @@ fn gate_prints_findings_under_a_file_name_with_a_tab() {
 /// could hide from the NOLINT scan behind its twin. The include is refused, decision 0038. The files are written at test time.
 #[test]
 fn gate_refuses_a_header_name_with_a_backslash() {
-    if !clang_tidy_available() {
-        return;
-    }
+    require_clang_tidy();
     let dir = std::env::temp_dir().join(format!("cplusp-backslash-{}", std::process::id()));
     std::fs::create_dir_all(dir.join("back")).unwrap();
     std::fs::write(dir.join("back\\slash.h"), "#include <cstdint>\nint plain();  // NOLINT\n").unwrap();
@@ -444,9 +397,7 @@ fn gate_refuses_a_header_name_with_a_backslash() {
 /// drops them, so they neither write a file nor hide the list.
 #[test]
 fn gate_drops_the_flags_that_write_a_file() {
-    if !clang_tidy_available() {
-        return;
-    }
+    require_clang_tidy();
     let dir = std::env::temp_dir().join(format!("cplusp-mf-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     let mf = format!("-MF{}", dir.join("deps.d").display());
@@ -460,9 +411,7 @@ fn gate_drops_the_flags_that_write_a_file() {
 /// The files are written at test time.
 #[test]
 fn gate_refuses_a_dependency_list_it_cannot_read() {
-    if !clang_tidy_available() {
-        return;
-    }
+    require_clang_tidy();
     let dir = std::env::temp_dir().join(format!("cplusp-tab-{}", std::process::id()));
     std::fs::create_dir_all(dir.join("di\tr")).unwrap();
     std::fs::create_dir_all(dir.join("r")).unwrap();
@@ -487,9 +436,7 @@ fn gate_refuses_a_dependency_list_it_cannot_read() {
 /// are written at test time.
 #[test]
 fn gate_refuses_a_system_header_that_changes_the_warnings_of_its_includer() {
-    if !clang_tidy_available() {
-        return;
-    }
+    require_clang_tidy();
     let dir = std::env::temp_dir().join(format!("cplusp-leak-{}", std::process::id()));
     std::fs::create_dir_all(dir.join("sys")).unwrap();
     std::fs::write(dir.join("sys").join("leak.h"), "#pragma clang diagnostic ignored \"-Wreturn-stack-address\"\n").unwrap();
@@ -513,9 +460,7 @@ fn gate_refuses_a_system_header_that_changes_the_warnings_of_its_includer() {
 /// test time.
 #[test]
 fn gate_asks_the_compiler_whether_a_system_header_changed_the_warnings() {
-    if !clang_tidy_available() {
-        return;
-    }
+    require_clang_tidy();
     let dir = std::env::temp_dir().join(format!("cplusp-leak2-{}", std::process::id()));
     let sys = dir.join("sys");
     std::fs::create_dir_all(&sys).unwrap();
@@ -560,9 +505,7 @@ fn gate_asks_the_compiler_whether_a_system_header_changed_the_warnings() {
 /// are written at test time.
 #[test]
 fn gate_refuses_a_precompiled_header_that_the_compiler_loads_on_its_own() {
-    if !clang_tidy_available() {
-        return;
-    }
+    require_clang_tidy();
     let dir = std::env::temp_dir().join(format!("cplusp-pch-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     let header = dir.join("h.h");
@@ -589,9 +532,7 @@ fn gate_refuses_a_precompiled_header_that_the_compiler_loads_on_its_own() {
 /// call on what the handle owns, decision 0040, and the finding sits at the `for`.
 #[test]
 fn a_range_for_over_a_const_handle_calls_only_const_begin_and_end() {
-    if !clang_tidy_available() {
-        return;
-    }
+    require_clang_tidy();
     let f = fixture("range-begin-writes.cpp");
     let plugin = plugin();
     let o = cplusp(&["gate", "--json", "--plugin", plugin.to_str().unwrap(), f.to_str().unwrap(), "--", "-std=c++23", "-ffp-contract=off"]);
@@ -605,9 +546,7 @@ fn a_range_for_over_a_const_handle_calls_only_const_begin_and_end() {
 /// so the const-handle check is the only guard. A read that hands out nothing stays clean.
 #[test]
 fn what_carries_a_way_to_write_is_no_read() {
-    if !clang_tidy_available() {
-        return;
-    }
+    require_clang_tidy();
     let f = fixture("const-carriers.cpp");
     let sys = fixture("carriers");
     let plugin = plugin();
@@ -621,9 +560,7 @@ fn what_carries_a_way_to_write_is_no_read() {
 /// the namespace, as for every other test of std.
 #[test]
 fn a_range_for_trusts_only_a_begin_of_the_library() {
-    if !clang_tidy_available() {
-        return;
-    }
+    require_clang_tidy();
     let f = fixture("std-begin.cpp");
     let plugin = plugin();
     let o = cplusp(&["gate", "--json", "--plugin", plugin.to_str().unwrap(), f.to_str().unwrap(), "--", "-std=c++23", "-ffp-contract=off"]);
@@ -636,9 +573,7 @@ fn a_range_for_trusts_only_a_begin_of_the_library() {
 /// elements stays clean.
 #[test]
 fn a_library_type_counts_by_what_it_holds() {
-    if !clang_tidy_available() {
-        return;
-    }
+    require_clang_tidy();
     let f = fixture("const-library-carriers.cpp");
     let plugin = plugin();
     let o = cplusp(&["gate", "--json", "--plugin", plugin.to_str().unwrap(), f.to_str().unwrap(), "--", "-std=c++23", "-ffp-contract=off"]);
@@ -656,9 +591,7 @@ fn a_library_type_counts_by_what_it_holds() {
 /// and a member class of a library type, a template or not, holds what the type around it holds.
 #[test]
 fn the_const_handle_check_trusts_the_library_by_place_and_refuses_what_it_cannot_see() {
-    if !clang_tidy_available() {
-        return;
-    }
+    require_clang_tidy();
     let f = fixture("const-edges.cpp");
     let plugin = plugin();
     let o = cplusp(&["gate", "--json", "--plugin", plugin.to_str().unwrap(), f.to_str().unwrap(), "--", "-std=c++23", "-ffp-contract=off"]);
@@ -671,9 +604,7 @@ fn the_const_handle_check_trusts_the_library_by_place_and_refuses_what_it_cannot
 /// behind the flags: clang's own and the standard's. The message names the pragma by its first two words.
 #[test]
 fn gate_treats_any_other_pragma_as_a_finding() {
-    if !clang_tidy_available() {
-        return;
-    }
+    require_clang_tidy();
     for (file, name) in [("pragma-fp.cpp", "pragma clang fp"), ("pragma-stdc.cpp", "pragma STDC FP_CONTRACT"), ("pragma-pack.cpp", "pragma pack")] {
         let f = fixture(file);
         let o = gated(&[f.to_str().unwrap(), "--", "-std=c++23", "-ffp-contract=off"]);
@@ -688,9 +619,7 @@ fn gate_treats_any_other_pragma_as_a_finding() {
 /// would refuse the same lines under `unlisted` and the documented feature would be a lie.
 #[test]
 fn a_loosened_row_that_claims_kinds_allows_them() {
-    if !clang_tidy_available() {
-        return;
-    }
+    require_clang_tidy();
     let team = fixture("team-loosen.yaml");
     let banned = root().join("rules/goto/banned.cpp");
     let plugin = plugin();
@@ -703,9 +632,7 @@ fn a_loosened_row_that_claims_kinds_allows_them() {
 /// A team that loosens the allowlist itself keeps every ban. The kinds a row claims stay with the row, decision 0036.
 #[test]
 fn a_loosened_allowlist_keeps_every_ban() {
-    if !clang_tidy_available() {
-        return;
-    }
+    require_clang_tidy();
     let team = fixture("team-loosen-unlisted.yaml");
     let banned = root().join("rules/goto/banned.cpp");
     let plugin = plugin();
@@ -719,9 +646,7 @@ fn a_loosened_allowlist_keeps_every_ban() {
 /// would leave the gate blind or make it judge something else. The run is refused.
 #[test]
 fn gate_refuses_flags_that_change_what_the_compiler_reports() {
-    if !clang_tidy_available() {
-        return;
-    }
+    require_clang_tidy();
     for flag in ["-E", "-P", "-Wp,-P", "-dM", "-M", "-MM", "-MV", "-Xpreprocessor", "-Xclang", "-include-pch", "-fmodules", "-fmodule-file=m.pcm", "-###", "-fdriver-only"] {
         let o = gated(&["rules/goto/allowed.cpp", "--", "-std=c++23", "-ffp-contract=off", flag]);
         assert_eq!(o.status.code(), Some(2), "{flag}: stdout {} stderr {}", stdout(&o), stderr(&o));
@@ -736,9 +661,7 @@ fn gate_refuses_flags_that_change_what_the_compiler_reports() {
 /// compiler's include graph names, decision 0038. The files are written at test time, because the fake marker holds the header's path.
 #[test]
 fn gate_finds_a_system_header_pragma_behind_a_marker_in_a_raw_string() {
-    if !clang_tidy_available() {
-        return;
-    }
+    require_clang_tidy();
     let dir = std::env::temp_dir().join(format!("cplusp-raw-marker-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     let header = dir.join("hidden.hpp");
@@ -764,9 +687,7 @@ fn gate_finds_a_system_header_pragma_behind_a_marker_in_a_raw_string() {
 /// A file the preprocessor cannot read cannot be judged. The message has the shape of the other refusals.
 #[test]
 fn gate_names_a_missing_include() {
-    if !clang_tidy_available() {
-        return;
-    }
+    require_clang_tidy();
     let f = fixture("missing-include.cpp");
     let o = gated(&[f.to_str().unwrap(), "--", "-std=c++23", "-ffp-contract=off"]);
     assert_eq!(o.status.code(), Some(2), "stdout: {} stderr: {}", stdout(&o), stderr(&o));
@@ -779,9 +700,7 @@ fn gate_names_a_missing_include() {
 /// unused when the gate lists the headers, so the compiler warns about it before it reads the file.
 #[test]
 fn gate_names_the_error_of_the_preprocessor_and_not_a_warning() {
-    if !clang_tidy_available() {
-        return;
-    }
+    require_clang_tidy();
     let f = fixture("missing-include.cpp");
     let o = gated(&[f.to_str().unwrap(), "--", "-std=c++23", "-ffp-contract=off", "-Wl,--foo"]);
     assert_eq!(o.status.code(), Some(2), "stdout: {} stderr: {}", stdout(&o), stderr(&o));
@@ -794,9 +713,7 @@ fn gate_names_the_error_of_the_preprocessor_and_not_a_warning() {
 /// is refused, because the gate cannot read it the way the shell would. A `--config` file is a response file by another name.
 #[test]
 fn gate_judges_every_database_entry_and_refuses_what_it_cannot_read() {
-    if !clang_tidy_available() {
-        return;
-    }
+    require_clang_tidy();
     let root = root();
     let file = root.join("rules/goto/allowed.cpp");
     let file = file.to_str().unwrap();
@@ -838,9 +755,7 @@ fn gate_judges_every_database_entry_and_refuses_what_it_cannot_read() {
 /// The gate judges the headers a file includes, outside the system paths, and scans them for suppressions too.
 #[test]
 fn gate_judges_and_scans_the_headers_a_file_includes() {
-    if !clang_tidy_available() {
-        return;
-    }
+    require_clang_tidy();
     let f = fixture("includes-banned.cpp");
     let o = gated(&[f.to_str().unwrap(), "--", "-std=c++23", "-ffp-contract=off"]);
     assert_eq!(o.status.code(), Some(1), "stdout: {} stderr: {}", stdout(&o), stderr(&o));
@@ -860,9 +775,7 @@ fn gate_judges_and_scans_the_headers_a_file_includes() {
 
 #[test]
 fn gate_refuses_a_plugin_that_does_not_load() {
-    if !clang_tidy_available() {
-        return;
-    }
+    require_clang_tidy();
     let f = root().join("rules/goto/allowed.cpp");
     let o = cplusp(&["gate", "--plugin", "/nonexistent/libcplusp.so", f.to_str().unwrap(), "--", "-std=c++23", "-ffp-contract=off"]);
     assert_eq!(o.status.code(), Some(2), "stdout: {} stderr: {}", stdout(&o), stderr(&o));
@@ -885,9 +798,7 @@ fn policy_emit_turns_matcher_patterns_into_options_of_the_generic_check() {
 
 #[test]
 fn gate_refuses_a_policy_whose_matcher_does_not_parse() {
-    if !clang_tidy_available() {
-        return;
-    }
+    require_clang_tidy();
     let policy = fixture("bad-matcher.yaml");
     let f = root().join("rules/goto/allowed.cpp");
     let o = cplusp(&["gate", "--plugin", plugin().to_str().unwrap(), "--policy", policy.to_str().unwrap(), f.to_str().unwrap(), "--", "-std=c++23", "-ffp-contract=off"]);
@@ -921,9 +832,7 @@ fn an_override_with_a_field_it_may_not_set_is_refused() {
 
 #[test]
 fn gate_prints_each_finding_once() {
-    if !clang_tidy_available() {
-        return;
-    }
+    require_clang_tidy();
     let f = fixture("twice.cpp");
     let o = gated(&[f.to_str().unwrap(), "--", "-std=c++23", "-ffp-contract=off"]);
     assert_eq!(o.status.code(), Some(1), "stdout: {} stderr: {}", stdout(&o), stderr(&o));
@@ -935,9 +844,7 @@ fn gate_prints_each_finding_once() {
 
 #[test]
 fn gate_prints_paths_relative_to_the_working_directory() {
-    if !clang_tidy_available() {
-        return;
-    }
+    require_clang_tidy();
     let o = gated(&["rules/goto/banned.cpp", "--", "-std=c++23", "-ffp-contract=off"]);
     assert_eq!(o.status.code(), Some(1), "stdout: {} stderr: {}", stdout(&o), stderr(&o));
     assert!(stdout(&o).lines().any(|l| l.starts_with("Not provable: rules/goto/banned.cpp:4: ")), "{}", stdout(&o));
@@ -945,9 +852,7 @@ fn gate_prints_paths_relative_to_the_working_directory() {
 
 #[test]
 fn gate_names_a_missing_input_file() {
-    if !clang_tidy_available() {
-        return;
-    }
+    require_clang_tidy();
     let o = gated(&["nope.cpp", "--", "-std=c++23", "-ffp-contract=off"]);
     assert_eq!(o.status.code(), Some(2), "stdout: {} stderr: {}", stdout(&o), stderr(&o));
     assert!(stderr(&o).contains("cannot read nope.cpp"), "{}", stderr(&o));
@@ -966,9 +871,7 @@ fn policy_show_marks_a_loosened_rule() {
 /// local or a pointer local of a local is still refused, decision 0182.
 #[test]
 fn a_view_local_does_not_hide_a_local() {
-    if !clang_tidy_available() {
-        return;
-    }
+    require_clang_tidy();
     let team = fixture("team-loosen-views.yaml");
     let f = fixture("return-local-view.cpp");
     let o = gated(&["--policy", team.to_str().unwrap(), f.to_str().unwrap(), "--", "-std=c++23", "-ffp-contract=off"]);
@@ -988,10 +891,7 @@ fn a_view_local_does_not_hide_a_local() {
 /// a second row also refuses says so: `// BANNED also: other_rule`.
 #[test]
 fn every_sample_pair_agrees_with_its_rule() {
-    if !clang_tidy_available() {
-        eprintln!("skipped: clang-tidy not installed");
-        return;
-    }
+    require_clang_tidy();
     let rules_dir = root().join("rules");
     let mut checked = 0;
     for entry in std::fs::read_dir(&rules_dir).unwrap() {

@@ -1,6 +1,6 @@
 # Working on cplusp
 
-`docs/plan.md` is the design. `docs/policy.md` is the policy file format. `docs/decisions/` is the decision log: one numbered file per decision, never edited after the fact, a new file to reverse one. Amend them rather than contradict them. A decision made in conversation is not made until it has a file.
+Start with `README.md` for current behaviour, proof limits and check commands. `docs/plan.md` is the historical design. `docs/policy.md` is the policy file format. `docs/decisions/` is the decision log: one numbered file per decision, never edited after the fact, a new file to reverse one. Amend them rather than contradict them. A decision made in conversation is not made until it has a file.
 
 ## One proof after another
 
@@ -54,4 +54,4 @@ Everything the bot reads follows Simplified Technical English: short sentences, 
 
 ## Toolchain
 
-Rust is pinned in `rust-toolchain.toml` to the version the Verus release needs. Verus itself is the release named in `docs/plan.md`. clang-tidy is 18 from Ubuntu 24.04 apt, with `clang-18` for the preprocessor the gate runs. `libclang-18-dev` and `llvm-18-dev` give the plugin headers and CMake files. Build the plugin with `cmake -S clang-tidy -B target/plugin -G Ninja && cmake --build target/plugin`. The tests look for it at `target/plugin/libcplusp.so` or `$CPLUSP_PLUGIN`.
+Rust is pinned in `rust-toolchain.toml` to the version the Verus release needs. Verus is built from revision `11ed7501a8ba5160be537da21cca330dafbecb9b`, matching `vstd`. The Checks workflow records the build commands. clang-tidy is 18 from Ubuntu 24.04 apt, with `clang-18` for the preprocessor the gate runs. `libclang-18-dev` and `llvm-18-dev` give the plugin headers and CMake files. Build the plugin with `cmake -S clang-tidy -B target/plugin -G Ninja && cmake --build target/plugin`. The tests look for it at `target/plugin/libcplusp.so` or `$CPLUSP_PLUGIN`.

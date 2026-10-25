@@ -4,10 +4,8 @@ use super::*;
 /// is checked against the contract of the interface, decision 0165. prove names the trust once for each interface.
 #[test]
 fn a_call_through_an_interface_proves_and_each_override_is_checked() {
-    let Some(dafny) = dafny() else { return };
-    if !clang_tidy_available() {
-        return;
-    }
+    let dafny = dafny();
+    require_clang_tidy();
     let o = prove("model-virtual.cpp", &[], &dafny);
     let text = stdout(&o);
     assert_eq!(o.status.code(), Some(0), "stdout: {text} stderr: {}", stderr(&o));
@@ -23,10 +21,8 @@ fn a_call_through_an_interface_proves_and_each_override_is_checked() {
 /// sentence and the contract line of the interface under it. A class over two interfaces is checked against each, decision 0165.
 #[test]
 fn an_override_that_breaks_the_contract_of_the_interface_fails_at_its_line() {
-    let Some(dafny) = dafny() else { return };
-    if !clang_tidy_available() {
-        return;
-    }
+    let dafny = dafny();
+    require_clang_tidy();
     let o = prove("model-virtual-wrong.cpp", &[], &dafny);
     let text = stdout(&o);
     assert_eq!(o.status.code(), Some(1), "stdout: {text} stderr: {}", stderr(&o));
@@ -50,10 +46,8 @@ fn an_override_that_breaks_the_contract_of_the_interface_fails_at_its_line() {
 /// line, and adds no failure of its own, decision 0165.
 #[test]
 fn a_requires_line_of_an_interface_that_fails_fails_once() {
-    let Some(dafny) = dafny() else { return };
-    if !clang_tidy_available() {
-        return;
-    }
+    let dafny = dafny();
+    require_clang_tidy();
     let o = prove("model-virtual-index.cpp", &[], &dafny);
     let text = stdout(&o);
     assert_eq!(o.status.code(), Some(1), "stdout: {text} stderr: {}", stderr(&o));
@@ -67,9 +61,7 @@ fn a_requires_line_of_an_interface_that_fails_fails_once() {
 /// of a pure virtual function have no rule. A call through the interface still translates, decision 0165.
 #[test]
 fn a_class_over_an_interface_with_no_rule_is_refused_at_its_line() {
-    if !clang_tidy_available() {
-        return;
-    }
+    require_clang_tidy();
     let dir = tempfile::tempdir().unwrap();
     let (o, out) = model("model-virtual-refuse.cpp", dir.path());
     let text = stdout(&o);
@@ -96,10 +88,8 @@ fn a_class_over_an_interface_with_no_rule_is_refused_at_its_line() {
 /// The example single_inheritance proves: an interface, a final class over it, and a call through each, decision 0165.
 #[test]
 fn the_virtual_examples_prove() {
-    let Some(dafny) = dafny() else { return };
-    if !clang_tidy_available() {
-        return;
-    }
+    let dafny = dafny();
+    require_clang_tidy();
     let o = prove("../../../../examples/single_inheritance/example.cpp", &[], &dafny);
     let text = stdout(&o);
     assert_eq!(o.status.code(), Some(0), "stdout: {text} stderr: {}", stderr(&o));
@@ -111,10 +101,8 @@ fn the_virtual_examples_prove() {
 /// upcast, decision 0166.
 #[test]
 fn a_virtual_call_in_a_contract_and_an_upcast_prove() {
-    let Some(dafny) = dafny() else { return };
-    if !clang_tidy_available() {
-        return;
-    }
+    let dafny = dafny();
+    require_clang_tidy();
     let o = prove("model-virtual-call.cpp", &[], &dafny);
     let text = stdout(&o);
     assert_eq!(o.status.code(), Some(0), "stdout: {text} stderr: {}", stderr(&o));
@@ -125,10 +113,8 @@ fn a_virtual_call_in_a_contract_and_an_upcast_prove() {
 /// fails at the contract line, and an object whose valid() is false fails at the call that upcasts it, decision 0166.
 #[test]
 fn a_virtual_call_and_an_upcast_keep_the_contract_of_the_interface() {
-    let Some(dafny) = dafny() else { return };
-    if !clang_tidy_available() {
-        return;
-    }
+    let dafny = dafny();
+    require_clang_tidy();
     let o = prove("model-virtual-call-wrong.cpp", &[], &dafny);
     let text = stdout(&o);
     assert_eq!(o.status.code(), Some(1), "stdout: {text} stderr: {}", stderr(&o));
@@ -150,9 +136,7 @@ fn a_virtual_call_and_an_upcast_keep_the_contract_of_the_interface() {
 /// function is a function of the model with no body, decision 0166.
 #[test]
 fn a_contract_of_an_interface_reads_only_the_functions_above_it() {
-    if !clang_tidy_available() {
-        return;
-    }
+    require_clang_tidy();
     let dir = tempfile::tempdir().unwrap();
     let (o, out) = model("model-virtual-call-refuse.cpp", dir.path());
     let text = stdout(&o);
@@ -175,10 +159,8 @@ fn a_contract_of_an_interface_reads_only_the_functions_above_it() {
 /// A call that upcasts a class with no check stops Dafny on the name of the upcast, after the refusal of the class, decision 0166.
 #[test]
 fn an_upcast_of_a_class_with_no_check_is_not_in_the_model() {
-    let Some(dafny) = dafny() else { return };
-    if !clang_tidy_available() {
-        return;
-    }
+    let dafny = dafny();
+    require_clang_tidy();
     let o = prove("model-virtual-call-unchecked.cpp", &[], &dafny);
     let text = stdout(&o);
     assert_eq!(o.status.code(), Some(1), "stdout: {text} stderr: {}", stderr(&o));
@@ -190,10 +172,8 @@ fn an_upcast_of_a_class_with_no_check_is_not_in_the_model() {
 /// The Axiom line names the interface by its C++ name. Two interfaces of one name show their full names, decision 0166.
 #[test]
 fn the_axiom_line_of_an_interface_names_it_in_cpp() {
-    let Some(dafny) = dafny() else { return };
-    if !clang_tidy_available() {
-        return;
-    }
+    let dafny = dafny();
+    require_clang_tidy();
     let o = prove("model-virtual-names.cpp", &[], &dafny);
     let text = stdout(&o);
     assert_eq!(o.status.code(), Some(0), "stdout: {text} stderr: {}", stderr(&o));
@@ -207,10 +187,8 @@ fn the_axiom_line_of_an_interface_names_it_in_cpp() {
 /// and check call the lemma too. A caller knows the value of the override, decision 0167.
 #[test]
 fn the_bound_of_a_product_proves_with_mul_bound() {
-    let Some(dafny) = dafny() else { return };
-    if !clang_tidy_available() {
-        return;
-    }
+    let dafny = dafny();
+    require_clang_tidy();
     let o = prove("model-product.cpp", &[], &dafny);
     let text = stdout(&o);
     assert_eq!(o.status.code(), Some(0), "stdout: {text} stderr: {}", stderr(&o));
@@ -229,10 +207,8 @@ fn the_bound_of_a_product_proves_with_mul_bound() {
 /// override, decision 0167.
 #[test]
 fn mul_bound_with_a_bound_that_does_not_hold_fails_at_its_line() {
-    let Some(dafny) = dafny() else { return };
-    if !clang_tidy_available() {
-        return;
-    }
+    let dafny = dafny();
+    require_clang_tidy();
     let o = prove("model-product-wrong.cpp", &[], &dafny);
     let text = stdout(&o);
     assert_eq!(o.status.code(), Some(1), "stdout: {text} stderr: {}", stderr(&o));
@@ -243,10 +219,8 @@ fn mul_bound_with_a_bound_that_does_not_hold_fails_at_its_line() {
 /// The examples whose overrides bound a product prove with an apply line of MulBound, decision 0167.
 #[test]
 fn the_product_examples_prove() {
-    let Some(dafny) = dafny() else { return };
-    if !clang_tidy_available() {
-        return;
-    }
+    let dafny = dafny();
+    require_clang_tidy();
     for example in ["strategy"] {
         let o = prove(&format!("../../../../examples/{example}/example.cpp"), &[], &dafny);
         let text = stdout(&o);
@@ -260,10 +234,8 @@ fn the_product_examples_prove() {
 /// words of the hint, decision 0167.
 #[test]
 fn a_hint_that_fails_only_in_the_check_names_the_requires_half() {
-    let Some(dafny) = dafny() else { return };
-    if !clang_tidy_available() {
-        return;
-    }
+    let dafny = dafny();
+    require_clang_tidy();
     let more = "16: the override may require more than Shape::area.";
     for (name, want) in [("model-product-more.cpp", vec![more]), ("model-product-more-twin.cpp", vec![more, "27: a requires line of the callee may not hold."])] {
         let o = prove(name, &[], &dafny);
@@ -280,10 +252,8 @@ fn a_hint_that_fails_only_in_the_check_names_the_requires_half() {
 /// that a call sets, and a parameter by const reference prove, decision 0168.
 #[test]
 fn a_unique_ptr_of_an_interface_proves() {
-    let Some(dafny) = dafny() else { return };
-    if !clang_tidy_available() {
-        return;
-    }
+    let dafny = dafny();
+    require_clang_tidy();
     let o = prove("model-unique-iface.cpp", &[], &dafny);
     let text = stdout(&o);
     assert_eq!(o.status.code(), Some(0), "stdout: {text} stderr: {}", stderr(&o));
@@ -294,10 +264,8 @@ fn a_unique_ptr_of_an_interface_proves() {
 /// may not be valid fails with the requires line of the interface, decision 0168.
 #[test]
 fn a_call_through_a_unique_ptr_of_an_interface_keeps_its_contract() {
-    let Some(dafny) = dafny() else { return };
-    if !clang_tidy_available() {
-        return;
-    }
+    let dafny = dafny();
+    require_clang_tidy();
     let o = prove("model-unique-iface-wrong.cpp", &[], &dafny);
     let text = stdout(&o);
     assert_eq!(o.status.code(), Some(1), "stdout: {text} stderr: {}", stderr(&o));
@@ -309,10 +277,8 @@ fn a_call_through_a_unique_ptr_of_an_interface_keeps_its_contract() {
 /// The example factory makes a shape with std::make_unique and reads it through std::unique_ptr<Shape>, decision 0168.
 #[test]
 fn the_unique_ptr_examples_prove() {
-    let Some(dafny) = dafny() else { return };
-    if !clang_tidy_available() {
-        return;
-    }
+    let dafny = dafny();
+    require_clang_tidy();
     let o = prove("../../../../examples/factory/example.cpp", &[], &dafny);
     let text = stdout(&o);
     assert_eq!(o.status.code(), Some(0), "stdout: {text} stderr: {}", stderr(&o));
@@ -324,10 +290,8 @@ fn the_unique_ptr_examples_prove() {
 /// pointer reaches the model, decision 0168.
 #[test]
 fn a_unique_ptr_of_an_interface_has_one_owner_that_only_reads() {
-    let Some(dafny) = dafny() else { return };
-    if !clang_tidy_available() {
-        return;
-    }
+    let dafny = dafny();
+    require_clang_tidy();
     let o = prove("model-unique-iface-refuse.cpp", &[], &dafny);
     let text = stdout(&o);
     assert_eq!(o.status.code(), Some(1), "stdout: {text} stderr: {}", stderr(&o));
@@ -354,10 +318,8 @@ fn a_unique_ptr_of_an_interface_has_one_owner_that_only_reads() {
 /// unique_ptr, which takes the new value. Each override is checked on the contracts, decision 0169.
 #[test]
 fn a_virtual_function_that_writes_its_object_proves() {
-    let Some(dafny) = dafny() else { return };
-    if !clang_tidy_available() {
-        return;
-    }
+    let dafny = dafny();
+    require_clang_tidy();
     for name in ["model-virtual-mut.cpp", "model-virtual-mut-ref.cpp"] {
         let o = prove(name, &[], &dafny);
         let text = stdout(&o);
@@ -370,10 +332,8 @@ fn a_virtual_function_that_writes_its_object_proves() {
 /// line, decision 0169.
 #[test]
 fn an_override_that_writes_keeps_the_contract_of_the_interface() {
-    let Some(dafny) = dafny() else { return };
-    if !clang_tidy_available() {
-        return;
-    }
+    let dafny = dafny();
+    require_clang_tidy();
     let o = prove("model-virtual-mut-wrong.cpp", &[], &dafny);
     let text = stdout(&o);
     assert_eq!(o.status.code(), Some(1), "stdout: {text} stderr: {}", stderr(&o));
@@ -393,9 +353,7 @@ fn an_override_that_writes_keeps_the_contract_of_the_interface() {
 /// a reference parameter of an interface function that no modifies line names are refused at their lines, decision 0169.
 #[test]
 fn a_write_through_an_interface_with_no_rule_is_refused() {
-    if !clang_tidy_available() {
-        return;
-    }
+    require_clang_tidy();
     let dir = tempfile::tempdir().unwrap();
     let (o, _) = model("model-virtual-mut-refuse.cpp", dir.path());
     let text = stdout(&o);
@@ -419,10 +377,8 @@ fn a_write_through_an_interface_with_no_rule_is_refused() {
 /// that writes an element writes it back, also through a local passed by reference, decision 0170.
 #[test]
 fn a_vector_of_unique_ptr_of_an_interface_proves() {
-    let Some(dafny) = dafny() else { return };
-    if !clang_tidy_available() {
-        return;
-    }
+    let dafny = dafny();
+    require_clang_tidy();
     for name in ["model-vec-unique.cpp", "model-vec-unique-mut.cpp"] {
         let o = prove(name, &[], &dafny);
         let text = stdout(&o);
@@ -435,10 +391,8 @@ fn a_vector_of_unique_ptr_of_an_interface_proves() {
 /// decision 0170.
 #[test]
 fn a_vector_of_unique_ptr_keeps_its_bounds_and_its_values() {
-    let Some(dafny) = dafny() else { return };
-    if !clang_tidy_available() {
-        return;
-    }
+    let dafny = dafny();
+    require_clang_tidy();
     let o = prove("model-vec-unique-wrong.cpp", &[], &dafny);
     let text = stdout(&o);
     assert_eq!(o.status.code(), Some(1), "stdout: {text} stderr: {}", stderr(&o));
@@ -454,9 +408,7 @@ fn a_vector_of_unique_ptr_keeps_its_bounds_and_its_values() {
 /// writes are refused at their lines, decision 0170.
 #[test]
 fn a_vector_of_unique_ptr_with_no_rule_is_refused() {
-    if !clang_tidy_available() {
-        return;
-    }
+    require_clang_tidy();
     let dir = tempfile::tempdir().unwrap();
     let (o, _) = model("model-vec-unique-refuse.cpp", dir.path());
     let text = stdout(&o);
@@ -479,10 +431,8 @@ fn a_vector_of_unique_ptr_with_no_rule_is_refused() {
 /// The examples shape_area_sum and command keep their objects in a vector of unique_ptr of an interface, decision 0170.
 #[test]
 fn the_vector_examples_prove() {
-    let Some(dafny) = dafny() else { return };
-    if !clang_tidy_available() {
-        return;
-    }
+    let dafny = dafny();
+    require_clang_tidy();
     for example in ["shape_area_sum", "command"] {
         let o = prove(&format!("../../../../examples/{example}/example.cpp"), &[], &dafny);
         let text = stdout(&o);
@@ -496,10 +446,8 @@ fn the_vector_examples_prove() {
 /// 0171.
 #[test]
 fn a_unique_ptr_field_and_a_move_prove() {
-    let Some(dafny) = dafny() else { return };
-    if !clang_tidy_available() {
-        return;
-    }
+    let dafny = dafny();
+    require_clang_tidy();
     let o = prove("model-unique-field.cpp", &[], &dafny);
     let text = stdout(&o);
     assert_eq!(o.status.code(), Some(0), "stdout: {text} stderr: {}", stderr(&o));
@@ -510,10 +458,8 @@ fn a_unique_ptr_field_and_a_move_prove() {
 /// requires lines of the constructor that takes it, decision 0171.
 #[test]
 fn a_call_through_a_unique_ptr_field_keeps_its_contract() {
-    let Some(dafny) = dafny() else { return };
-    if !clang_tidy_available() {
-        return;
-    }
+    let dafny = dafny();
+    require_clang_tidy();
     let o = prove("model-unique-field-wrong.cpp", &[], &dafny);
     let text = stdout(&o);
     assert_eq!(o.status.code(), Some(1), "stdout: {text} stderr: {}", stderr(&o));
@@ -537,10 +483,8 @@ fn a_call_through_a_unique_ptr_field_keeps_its_contract() {
 /// since decision 0186.
 #[test]
 fn a_moved_unique_ptr_has_one_owner() {
-    let Some(dafny) = dafny() else { return };
-    if !clang_tidy_available() {
-        return;
-    }
+    let dafny = dafny();
+    require_clang_tidy();
     let o = prove("model-unique-field-refuse.cpp", &[], &dafny);
     let text = stdout(&o);
     assert_eq!(o.status.code(), Some(1), "stdout: {text} stderr: {}", stderr(&o));
@@ -564,10 +508,8 @@ fn a_moved_unique_ptr_has_one_owner() {
 /// call of a virtual function on the right of &&, decision 0172.
 #[test]
 fn a_pure_override_that_calls_its_field_proves() {
-    let Some(dafny) = dafny() else { return };
-    if !clang_tidy_available() {
-        return;
-    }
+    let dafny = dafny();
+    require_clang_tidy();
     let o = prove("model-pure-calls.cpp", &[], &dafny);
     let text = stdout(&o);
     assert_eq!(o.status.code(), Some(0), "stdout: {text} stderr: {}", stderr(&o));
@@ -578,10 +520,8 @@ fn a_pure_override_that_calls_its_field_proves() {
 /// lines of the interface. A bound that the decorator does not give fails at the return, decision 0172.
 #[test]
 fn a_pure_override_keeps_the_checks_of_its_calls() {
-    let Some(dafny) = dafny() else { return };
-    if !clang_tidy_available() {
-        return;
-    }
+    let dafny = dafny();
+    require_clang_tidy();
     let o = prove("model-pure-calls-wrong.cpp", &[], &dafny);
     let text = stdout(&o);
     assert_eq!(o.status.code(), Some(1), "stdout: {text} stderr: {}", stderr(&o));
@@ -602,10 +542,8 @@ fn a_pure_override_keeps_the_checks_of_its_calls() {
 /// function in the model, so its class is refused, decisions 0172 and 0189.
 #[test]
 fn an_override_that_is_no_pure_body_is_refused() {
-    let Some(dafny) = dafny() else { return };
-    if !clang_tidy_available() {
-        return;
-    }
+    let dafny = dafny();
+    require_clang_tidy();
     let o = prove("model-pure-calls-refuse.cpp", &[], &dafny);
     let text = stdout(&o);
     assert_eq!(o.status.code(), Some(1), "stdout: {text} stderr: {}", stderr(&o));
@@ -625,10 +563,8 @@ fn an_override_that_is_no_pure_body_is_refused() {
 /// The example decorator proves with decisions 0171 and 0172.
 #[test]
 fn the_decorator_example_proves() {
-    let Some(dafny) = dafny() else { return };
-    if !clang_tidy_available() {
-        return;
-    }
+    let dafny = dafny();
+    require_clang_tidy();
     let o = prove("../../../../examples/decorator/example.cpp", &[], &dafny);
     let text = stdout(&o);
     assert_eq!(o.status.code(), Some(0), "stdout: {text} stderr: {}", stderr(&o));

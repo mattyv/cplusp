@@ -108,8 +108,23 @@ fn run(exe: &Path) -> (String, String) {
     (String::from_utf8_lossy(&o.stdout).into_owned(), String::from_utf8_lossy(&o.stderr).into_owned())
 }
 
-fn clang_tidy_available() -> bool {
-    ["clang-tidy-18", "clang-tidy"].iter().any(|b| Command::new(b).arg("--version").output().map(|o| o.status.success()).unwrap_or(false))
+fn require_clang_tidy() {
+    let available = ["clang-tidy-18", "clang-tidy"].iter().any(|b| Command::new(b).arg("--version").output().map(|o| o.status.success()).unwrap_or(false));
+    assert!(available, "clang-tidy is required for the battery. Install clang-tidy 18 and build the plugin. See README.md.");
+}
+
+#[test]
+fn missing_clang_tidy_fails_the_battery() {
+    for test in ["every_case_says_what_it_claims", "every_row_the_bot_may_use_has_an_example"] {
+        let output = Command::new(std::env::current_exe().unwrap())
+            .args(["--exact", test, "--nocapture"])
+            .env("PATH", "")
+            .current_dir(root())
+            .output()
+            .unwrap();
+        let said = format!("{}{}", String::from_utf8_lossy(&output.stdout), String::from_utf8_lossy(&output.stderr));
+        assert!(!output.status.success() && said.contains("clang-tidy is required"), "{test}: missing clang-tidy must fail before the battery runs: {said}");
+    }
 }
 
 /// The gate on one file, through the cplusp binary. The plugin must be built, as for the cli tests.
@@ -135,10 +150,7 @@ fn every_case_says_what_it_claims() {
     let cases = root().join("divergence/dafny/cases");
     let skill = std::fs::read_to_string(root().join("skills/cplusp-dafny/SKILL.md")).unwrap();
     let policy = std::fs::read_to_string(root().join("policy/cplusp-policy.yaml")).unwrap();
-    let gate_available = clang_tidy_available();
-    if !gate_available {
-        eprintln!("skipped the gate: clang-tidy not installed");
-    }
+    require_clang_tidy();
     let out_dir = std::env::temp_dir().join(format!("cplusp-divergence-{}", std::process::id()));
     std::fs::create_dir_all(&out_dir).unwrap();
     let check = |dir: &Path| {
@@ -215,22 +227,20 @@ fn every_case_says_what_it_claims() {
         }
 
         // The gate: the case is about C+P code, so code.cpp passes, unless the gate row is the mitigation.
-        if gate_available {
-            let o = gate(&code);
+        let o = gate(&code);
+        let (out, err) = text(&o);
+        match (&case.side, &case.gate_rule) {
+            (Side::Gate, Some(rule)) => {
+                assert_eq!(o.status.code(), Some(1), "{id}: code.cpp must fail the gate, that is the mitigation. stdout: {out} stderr: {err}");
+                // The named row is the reason. Another row may refuse the same code too.
+                assert!(out.lines().any(|l| l.contains(&format!("\"rule\":\"{rule}\""))), "{id}: the gate must report code.cpp under {rule}, got: {out}");
+            }
+            _ => assert!(o.status.code() == Some(0) && out.trim().is_empty(), "{id}: code.cpp must pass the gate, or the case is not about C+P. stdout: {out} stderr: {err}"),
+        }
+        if needs_fixed {
+            let o = gate(&fixed);
             let (out, err) = text(&o);
-            match (&case.side, &case.gate_rule) {
-                (Side::Gate, Some(rule)) => {
-                    assert_eq!(o.status.code(), Some(1), "{id}: code.cpp must fail the gate, that is the mitigation. stdout: {out} stderr: {err}");
-                    // The named row is the reason. Another row may refuse the same code too.
-                    assert!(out.lines().any(|l| l.contains(&format!("\"rule\":\"{rule}\""))), "{id}: the gate must report code.cpp under {rule}, got: {out}");
-                }
-                _ => assert!(o.status.code() == Some(0) && out.trim().is_empty(), "{id}: code.cpp must pass the gate, or the case is not about C+P. stdout: {out} stderr: {err}"),
-            }
-            if needs_fixed {
-                let o = gate(&fixed);
-                let (out, err) = text(&o);
-                assert!(o.status.code() == Some(0) && out.trim().is_empty(), "{id}: fixed.cpp must pass the gate. stdout: {out} stderr: {err}");
-            }
+            assert!(o.status.code() == Some(0) && out.trim().is_empty(), "{id}: fixed.cpp must pass the gate. stdout: {out} stderr: {err}");
         }
 
         // The rule is in the skill, word for word.
@@ -410,7 +420,7 @@ fn every_row_the_bot_may_use_has_an_example() {
             }
         }
     }
-    let gate_available = clang_tidy_available();
+    require_clang_tidy();
     let check = |row: &PolicyRow| {
         let dir = root().join("examples").join(&row.id);
         let id = &row.id;
@@ -427,19 +437,17 @@ fn every_row_the_bot_may_use_has_an_example() {
             assert!(declaration.contains("CPLUSP_TRUSTED(\""), "{id}: the trusted declaration in example.cpp carries CPLUSP_TRUSTED with a reason, from include/cplusp.h");
         }
         assert_eq!(verdict(&dfy), Verdict::Verifies, "{id}: example.dfy must verify");
-        if gate_available {
-            let o = gate(&cpp);
+        let o = gate(&cpp);
+        let (out, err) = text(&o);
+        assert!(o.status.code() == Some(0) && out.trim().is_empty(), "{id}: example.cpp must pass the gate. stdout: {out} stderr: {err}");
+        if trusted.exists() {
+            let o = gate(&trusted);
             let (out, err) = text(&o);
-            assert!(o.status.code() == Some(0) && out.trim().is_empty(), "{id}: example.cpp must pass the gate. stdout: {out} stderr: {err}");
-            if trusted.exists() {
-                let o = gate(&trusted);
-                let (out, err) = text(&o);
-                assert_eq!(o.status.code(), Some(1), "{id}: trusted.cpp must fail the gate, it holds the construct. stdout: {out} stderr: {err}");
-                // A row's trusted body shows that row's construct and no other. A larger example's trusted body may hit any row.
-                if row.decision == "trusted_only" {
-                    for line in out.lines() {
-                        assert!(line.contains(&format!("\"rule\":\"{id}\"")), "{id}: the gate must refuse trusted.cpp under {id} only, got: {line}");
-                    }
+            assert_eq!(o.status.code(), Some(1), "{id}: trusted.cpp must fail the gate, it holds the construct. stdout: {out} stderr: {err}");
+            // A row's trusted body shows that row's construct and no other. A larger example's trusted body may hit any row.
+            if row.decision == "trusted_only" {
+                for line in out.lines() {
+                    assert!(line.contains(&format!("\"rule\":\"{id}\"")), "{id}: the gate must refuse trusted.cpp under {id} only, got: {line}");
                 }
             }
         }

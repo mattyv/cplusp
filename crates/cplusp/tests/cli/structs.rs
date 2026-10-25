@@ -3,10 +3,8 @@ use super::*;
 /// A struct of scalars is a Dafny datatype, decision 0073. Field reads, braced values, nested structs and a copy to a parameter prove.
 #[test]
 fn structs_of_scalars_prove() {
-    let Some(dafny) = dafny() else { return };
-    if !clang_tidy_available() {
-        return;
-    }
+    let dafny = dafny();
+    require_clang_tidy();
     let o = prove("model-struct.cpp", &[], &dafny);
     let text = stdout(&o);
     assert_eq!(o.status.code(), Some(0), "stdout: {text} stderr: {}", stderr(&o));
@@ -16,9 +14,7 @@ fn structs_of_scalars_prove() {
 /// Each struct with no rule is refused at its line, decision 0073.
 #[test]
 fn structs_with_no_rule_are_refused_at_their_lines() {
-    if !clang_tidy_available() {
-        return;
-    }
+    require_clang_tidy();
     let dir = tempfile::tempdir().unwrap();
     let (o, _) = model("model-struct-refuse.cpp", dir.path());
     let text = stdout(&o);
@@ -41,9 +37,7 @@ fn structs_with_no_rule_are_refused_at_their_lines() {
 /// spelling, decisions 0069 and 0178.
 #[test]
 fn a_member_function_reaches_the_dafny_text_as_a_word_whatever_its_name() {
-    if !clang_tidy_available() {
-        return;
-    }
+    require_clang_tidy();
     let dir = tempfile::tempdir().unwrap();
     let (o, out) = model("model-member-names.cpp", dir.path());
     let text = stdout(&o);
@@ -58,10 +52,8 @@ fn a_member_function_reaches_the_dafny_text_as_a_word_whatever_its_name() {
 /// value, a field, a copy and a call prove.
 #[test]
 fn optional_scalars_prove() {
-    let Some(dafny) = dafny() else { return };
-    if !clang_tidy_available() {
-        return;
-    }
+    let dafny = dafny();
+    require_clang_tidy();
     let o = prove("model-optional.cpp", &[], &dafny);
     let text = stdout(&o);
     assert_eq!(o.status.code(), Some(0), "stdout: {text} stderr: {}", stderr(&o));
@@ -71,10 +63,8 @@ fn optional_scalars_prove() {
 /// Each read of an optional that may be empty is named at its line, in code and in a contract, decision 0075.
 #[test]
 fn prove_names_each_read_of_an_optional_that_may_be_empty() {
-    let Some(dafny) = dafny() else { return };
-    if !clang_tidy_available() {
-        return;
-    }
+    let dafny = dafny();
+    require_clang_tidy();
     let o = prove("model-optional-wrong.cpp", &[], &dafny);
     let text = stdout(&o);
     assert_eq!(o.status.code(), Some(1), "stdout: {text} stderr: {}", stderr(&o));
@@ -97,9 +87,7 @@ fn prove_names_each_read_of_an_optional_that_may_be_empty() {
 /// struct has a rule since decision 0137, so `of_struct` is no longer refused.
 #[test]
 fn optionals_with_no_rule_are_refused_at_their_lines() {
-    if !clang_tidy_available() {
-        return;
-    }
+    require_clang_tidy();
     let dir = tempfile::tempdir().unwrap();
     let (o, _) = model("model-optional-refuse.cpp", dir.path());
     let text = stdout(&o);
@@ -123,10 +111,8 @@ fn optionals_with_no_rule_are_refused_at_their_lines() {
 /// element, contracts on a path, a loop over the children and a recursion into a child.
 #[test]
 fn structs_that_hold_sequences_prove() {
-    let Some(dafny) = dafny() else { return };
-    if !clang_tidy_available() {
-        return;
-    }
+    let dafny = dafny();
+    require_clang_tidy();
     let o = prove("model-nodes.cpp", &[], &dafny);
     let text = stdout(&o);
     assert_eq!(o.status.code(), Some(0), "stdout: {text} stderr: {}", stderr(&o));
@@ -136,10 +122,8 @@ fn structs_that_hold_sequences_prove() {
 /// Each index into a nested sequence and a recursion that does not go down are named at their lines, decision 0076.
 #[test]
 fn prove_names_each_failed_read_and_measure_on_a_recursive_struct() {
-    let Some(dafny) = dafny() else { return };
-    if !clang_tidy_available() {
-        return;
-    }
+    let dafny = dafny();
+    require_clang_tidy();
     let o = prove("model-nodes-wrong.cpp", &[], &dafny);
     let text = stdout(&o);
     assert_eq!(o.status.code(), Some(1), "stdout: {text} stderr: {}", stderr(&o));
@@ -155,9 +139,7 @@ fn prove_names_each_failed_read_and_measure_on_a_recursive_struct() {
 /// it translate, decision 0187.
 #[test]
 fn a_struct_that_holds_a_sequence_is_a_value() {
-    if !clang_tidy_available() {
-        return;
-    }
+    require_clang_tidy();
     let dir = tempfile::tempdir().unwrap();
     let (o, _) = model("model-nodes-value.cpp", dir.path());
     let text = stdout(&o);
@@ -169,9 +151,7 @@ fn a_struct_that_holds_a_sequence_is_a_value() {
 /// review of decision 0076.
 #[test]
 fn a_struct_or_field_name_dafny_cannot_read_is_refused() {
-    if !clang_tidy_available() {
-        return;
-    }
+    require_clang_tidy();
     let dir = tempfile::tempdir().unwrap();
     let (o, _) = model("model-struct-names.cpp", dir.path());
     let text = stdout(&o);
@@ -187,10 +167,8 @@ fn a_struct_or_field_name_dafny_cannot_read_is_refused() {
 /// `empty()` and `subspan(k)` prove, in code and in contracts, through a recursion over a span, decision 0078.
 #[test]
 fn subspan_and_empty_prove() {
-    let Some(dafny) = dafny() else { return };
-    if !clang_tidy_available() {
-        return;
-    }
+    let dafny = dafny();
+    require_clang_tidy();
     let o = prove("model-subspan.cpp", &[], &dafny);
     let text = stdout(&o);
     assert_eq!(o.status.code(), Some(0), "stdout: {text} stderr: {}", stderr(&o));
@@ -200,10 +178,8 @@ fn subspan_and_empty_prove() {
 /// An offset past the end of a span is named at its line, decision 0078.
 #[test]
 fn prove_names_an_offset_that_may_be_past_the_end() {
-    let Some(dafny) = dafny() else { return };
-    if !clang_tidy_available() {
-        return;
-    }
+    let dafny = dafny();
+    require_clang_tidy();
     let o = prove("model-subspan-wrong.cpp", &[], &dafny);
     let text = stdout(&o);
     assert_eq!(o.status.code(), Some(1), "stdout: {text} stderr: {}", stderr(&o));
@@ -216,9 +192,7 @@ fn prove_names_an_offset_that_may_be_past_the_end() {
 /// The forms of a span with no rule yet are refused at their lines, decision 0078.
 #[test]
 fn spans_with_no_rule_are_refused_at_their_lines() {
-    if !clang_tidy_available() {
-        return;
-    }
+    require_clang_tidy();
     let dir = tempfile::tempdir().unwrap();
     let (o, _) = model("model-subspan-refuse.cpp", dir.path());
     let text = stdout(&o);
@@ -235,10 +209,8 @@ fn spans_with_no_rule_are_refused_at_their_lines() {
 /// recursive struct, and a predicate in a requires line.
 #[test]
 fn specification_functions_from_the_companion_file_prove() {
-    let Some(dafny) = dafny() else { return };
-    if !clang_tidy_available() {
-        return;
-    }
+    let dafny = dafny();
+    require_clang_tidy();
     let o = prove("model-spec.cpp", &[], &dafny);
     let text = stdout(&o);
     assert_eq!(o.status.code(), Some(0), "stdout: {text} stderr: {}", stderr(&o));
@@ -249,10 +221,8 @@ fn specification_functions_from_the_companion_file_prove() {
 /// must not say proved, decision 0079.
 #[test]
 fn prove_refuses_an_axiom_in_the_companion_file() {
-    let Some(dafny) = dafny() else { return };
-    if !clang_tidy_available() {
-        return;
-    }
+    let dafny = dafny();
+    require_clang_tidy();
     let o = prove("model-spec-axiom.cpp", &[], &dafny);
     let text = stdout(&o);
     assert_eq!(o.status.code(), Some(1), "stdout: {text} stderr: {}", stderr(&o));
@@ -264,9 +234,7 @@ fn prove_refuses_an_axiom_in_the_companion_file() {
 /// A call to a name that the companion file does not declare is refused at the contract line, decision 0079.
 #[test]
 fn a_call_to_a_name_the_companion_file_does_not_declare_is_refused() {
-    if !clang_tidy_available() {
-        return;
-    }
+    require_clang_tidy();
     let dir = tempfile::tempdir().unwrap();
     let (o, _) = model("model-spec-name.cpp", dir.path());
     let text = stdout(&o);
@@ -281,9 +249,7 @@ fn a_call_to_a_name_the_companion_file_does_not_declare_is_refused() {
 /// decisions 0079 and 0099.
 #[test]
 fn a_companion_file_with_other_words_is_refused() {
-    if !clang_tidy_available() {
-        return;
-    }
+    require_clang_tidy();
     let dir = tempfile::tempdir().unwrap();
     let (o, _) = model("model-spec-words.cpp", dir.path());
     let text = stdout(&o);
@@ -302,10 +268,8 @@ fn a_companion_file_with_other_words_is_refused() {
 /// text. Found after decision 0078.
 #[test]
 fn prove_stops_at_the_refusal_of_a_struct_name() {
-    let Some(dafny) = dafny() else { return };
-    if !clang_tidy_available() {
-        return;
-    }
+    let dafny = dafny();
+    require_clang_tidy();
     let o = prove("model-struct-names.cpp", &[], &dafny);
     let text = stdout(&o);
     assert_eq!(o.status.code(), Some(1), "stdout: {text} stderr: {}", stderr(&o));
@@ -316,10 +280,8 @@ fn prove_stops_at_the_refusal_of_a_struct_name() {
 /// file of specification functions. The height bound is the rule of the battery case stack_depth.
 #[test]
 fn radix_find_proves_end_to_end() {
-    let Some(dafny) = dafny() else { return };
-    if !clang_tidy_available() {
-        return;
-    }
+    let dafny = dafny();
+    require_clang_tidy();
     let o = prove("model-radix.cpp", &["--time-limit", "60"], &dafny);
     let text = stdout(&o);
     assert_eq!(o.status.code(), Some(0), "stdout: {text} stderr: {}", stderr(&o));
@@ -330,10 +292,8 @@ fn radix_find_proves_end_to_end() {
 /// hides an axiom or the model, and no run says proved, decision 0080.
 #[test]
 fn prove_refuses_each_companion_file_that_hid_an_axiom_or_the_model() {
-    let Some(dafny) = dafny() else { return };
-    if !clang_tidy_available() {
-        return;
-    }
+    let dafny = dafny();
+    require_clang_tidy();
     let word = |w: &str| format!("{w}: a companion file can hold only functions, predicates and lemmas.");
     let cases: [(&str, Vec<(u32, String)>); 4] = [
         ("unclosed", vec![(2, "a comment that does not end.".to_string())]),
@@ -357,10 +317,8 @@ fn prove_refuses_each_companion_file_that_hid_an_axiom_or_the_model() {
 /// exit 1. It is no failure of the tool, decision 0080.
 #[test]
 fn prove_names_a_resolution_error_at_its_line() {
-    let Some(dafny) = dafny() else { return };
-    if !clang_tidy_available() {
-        return;
-    }
+    let dafny = dafny();
+    require_clang_tidy();
     let o = prove("model-spec-arity.cpp", &[], &dafny);
     let text = stdout(&o);
     assert_eq!(o.status.code(), Some(1), "stdout: {text} stderr: {}", stderr(&o));
@@ -373,10 +331,8 @@ fn prove_names_a_resolution_error_at_its_line() {
 /// function named Some changed the model's Some. Both are refused, and neither proves, decision 0083.
 #[test]
 fn prove_refuses_a_lone_carriage_return_and_a_name_of_the_model() {
-    let Some(dafny) = dafny() else { return };
-    if !clang_tidy_available() {
-        return;
-    }
+    let dafny = dafny();
+    require_clang_tidy();
     for (name, want) in [
         ("cr", "model-spec-cr.spec.dfy:1: a character that a companion file cannot hold."),
         ("some", "model-spec-some.spec.dfy:1: Some: a name that the model uses."),
@@ -392,10 +348,8 @@ fn prove_refuses_a_lone_carriage_return_and_a_name_of_the_model() {
 /// A parse error in the companion file is the author's, named in its file in the words of Dafny, with exit 1, decision 0083.
 #[test]
 fn prove_names_a_parse_error_in_the_companion_file() {
-    let Some(dafny) = dafny() else { return };
-    if !clang_tidy_available() {
-        return;
-    }
+    let dafny = dafny();
+    require_clang_tidy();
     let o = prove("model-spec-brace.cpp", &[], &dafny);
     let text = stdout(&o);
     assert_eq!(o.status.code(), Some(1), "stdout: {text} stderr: {}", stderr(&o));
@@ -407,9 +361,8 @@ fn prove_names_a_parse_error_in_the_companion_file() {
 /// When Dafny verifies fewer items than the model has methods, and nothing else is wrong, prove says so in one line, decision 0083.
 #[test]
 fn prove_names_a_run_that_verified_too_few_items() {
-    if dafny().is_none() || !clang_tidy_available() {
-        return;
-    }
+    dafny();
+    require_clang_tidy();
     let o = prove("model-clamp.cpp", &[], &fixture("fake-dafny-few-verified.sh"));
     let text = stdout(&o);
     assert_eq!(o.status.code(), Some(1), "stdout: {text} stderr: {}", stderr(&o));
@@ -420,10 +373,8 @@ fn prove_names_a_run_that_verified_too_few_items() {
 /// Hex literals, exists, forall with two bound names, and true and false prove, decisions 0082 and 0084.
 #[test]
 fn hex_literals_exists_and_several_bound_names_prove() {
-    let Some(dafny) = dafny() else { return };
-    if !clang_tidy_available() {
-        return;
-    }
+    let dafny = dafny();
+    require_clang_tidy();
     let o = prove("model-quant.cpp", &[], &dafny);
     let text = stdout(&o);
     assert_eq!(o.status.code(), Some(0), "stdout: {text} stderr: {}", stderr(&o));
@@ -433,9 +384,7 @@ fn hex_literals_exists_and_several_bound_names_prove() {
 /// A hex literal too large for uint64_t is refused, and a shift in a contract has no rule, decisions 0082 and 0088.
 #[test]
 fn a_hex_literal_too_large_and_a_shift_in_a_contract_are_refused() {
-    if !clang_tidy_available() {
-        return;
-    }
+    require_clang_tidy();
     let dir = tempfile::tempdir().unwrap();
     let (o, _) = model("model-quant-refuse.cpp", dir.path());
     let text = stdout(&o);
@@ -456,10 +405,8 @@ fn a_hex_literal_too_large_and_a_shift_in_a_contract_are_refused() {
 /// An error inside a function of the companion file prints in the words of Dafny, not as a return of a method, decision 0084.
 #[test]
 fn an_error_in_the_companion_file_prints_in_the_words_of_dafny() {
-    let Some(dafny) = dafny() else { return };
-    if !clang_tidy_available() {
-        return;
-    }
+    let dafny = dafny();
+    require_clang_tidy();
     let o = prove("model-spec-wording.cpp", &[], &dafny);
     let text = stdout(&o);
     assert_eq!(o.status.code(), Some(1), "stdout: {text} stderr: {}", stderr(&o));
@@ -472,9 +419,7 @@ fn an_error_in_the_companion_file_prints_in_the_words_of_dafny() {
 /// `forall j 99999999999999999999 j > j` into `forall j :: j > j`, a requires line that is false. From the review of decision 0082.
 #[test]
 fn a_literal_that_is_too_large_never_stands_for_another_token() {
-    if !clang_tidy_available() {
-        return;
-    }
+    require_clang_tidy();
     let dir = tempfile::tempdir().unwrap();
     let (o, _) = model("model-quant-junk.cpp", dir.path());
     let text = stdout(&o);
@@ -486,10 +431,8 @@ fn a_literal_that_is_too_large_never_stands_for_another_token() {
 /// Slices in a contract prove: examples/recursion with Count(v[i..], x), and the size, an element and empty of a part, decision 0085.
 #[test]
 fn slices_in_a_contract_prove() {
-    let Some(dafny) = dafny() else { return };
-    if !clang_tidy_available() {
-        return;
-    }
+    let dafny = dafny();
+    require_clang_tidy();
     let o = prove("model-slice.cpp", &[], &dafny);
     let text = stdout(&o);
     assert_eq!(o.status.code(), Some(0), "stdout: {text} stderr: {}", stderr(&o));
@@ -499,10 +442,8 @@ fn slices_in_a_contract_prove() {
 /// A slice that may start past the end is named at its contract line, decision 0085.
 #[test]
 fn prove_names_a_slice_that_may_start_past_the_end() {
-    let Some(dafny) = dafny() else { return };
-    if !clang_tidy_available() {
-        return;
-    }
+    let dafny = dafny();
+    require_clang_tidy();
     let o = prove("model-slice-wrong.cpp", &[], &dafny);
     let text = stdout(&o);
     assert_eq!(o.status.code(), Some(1), "stdout: {text} stderr: {}", stderr(&o));
@@ -516,10 +457,8 @@ fn prove_names_a_slice_that_may_start_past_the_end() {
 /// Division and remainder truncate as in C++, in code and in contracts, signed and unsigned, decision 0088.
 #[test]
 fn division_truncates_as_in_cpp() {
-    let Some(dafny) = dafny() else { return };
-    if !clang_tidy_available() {
-        return;
-    }
+    let dafny = dafny();
+    require_clang_tidy();
     let o = prove("model-div.cpp", &[], &dafny);
     let text = stdout(&o);
     assert_eq!(o.status.code(), Some(0), "stdout: {text} stderr: {}", stderr(&o));
@@ -530,10 +469,8 @@ fn division_truncates_as_in_cpp() {
 /// each named at their lines, decision 0088.
 #[test]
 fn prove_names_a_division_that_may_fail() {
-    let Some(dafny) = dafny() else { return };
-    if !clang_tidy_available() {
-        return;
-    }
+    let dafny = dafny();
+    require_clang_tidy();
     let o = prove("model-div-wrong.cpp", &[], &dafny);
     let text = stdout(&o);
     assert_eq!(o.status.code(), Some(1), "stdout: {text} stderr: {}", stderr(&o));
@@ -553,10 +490,8 @@ fn prove_names_a_division_that_may_fail() {
 /// member function inside another and from a free function, and a private field, decision 0089 steps 1 and 2.
 #[test]
 fn const_member_functions_prove() {
-    let Some(dafny) = dafny() else { return };
-    if !clang_tidy_available() {
-        return;
-    }
+    let dafny = dafny();
+    require_clang_tidy();
     let o = prove("model-method.cpp", &[], &dafny);
     let text = stdout(&o);
     assert_eq!(o.status.code(), Some(0), "stdout: {text} stderr: {}", stderr(&o));
@@ -567,9 +502,7 @@ fn const_member_functions_prove() {
 /// refused at their lines, and the rest of the struct still translates, decision 0089.
 #[test]
 fn member_functions_with_no_rule_are_refused_at_their_lines() {
-    if !clang_tidy_available() {
-        return;
-    }
+    require_clang_tidy();
     let dir = tempfile::tempdir().unwrap();
     let (o, _) = model("model-method-refuse.cpp", dir.path());
     let text = stdout(&o);
@@ -589,10 +522,8 @@ fn member_functions_with_no_rule_are_refused_at_their_lines() {
 /// outside it, and a caller of the method knows the value of the function, decision 0090.
 #[test]
 fn pure_member_functions_are_functions_that_contracts_call() {
-    let Some(dafny) = dafny() else { return };
-    if !clang_tidy_available() {
-        return;
-    }
+    let dafny = dafny();
+    require_clang_tidy();
     let o = prove("model-pure.cpp", &[], &dafny);
     let text = stdout(&o);
     assert_eq!(o.status.code(), Some(0), "stdout: {text} stderr: {}", stderr(&o));
@@ -603,9 +534,7 @@ fn pure_member_functions_are_functions_that_contracts_call() {
 /// decision 0090. So is one that calls a member whose own contract is refused, decision 0095.
 #[test]
 fn a_contract_that_calls_a_member_function_that_is_not_pure_is_refused() {
-    if !clang_tidy_available() {
-        return;
-    }
+    require_clang_tidy();
     let dir = tempfile::tempdir().unwrap();
     let (o, _) = model("model-pure-refuse.cpp", dir.path());
     let text = stdout(&o);
@@ -626,10 +555,8 @@ fn a_contract_that_calls_a_member_function_that_is_not_pure_is_refused() {
 /// decision 0095.
 #[test]
 fn the_arguments_of_a_member_function_in_a_contract_pass_as_its_parameter_types() {
-    let Some(dafny) = dafny() else { return };
-    if !clang_tidy_available() {
-        return;
-    }
+    let dafny = dafny();
+    require_clang_tidy();
     let o = prove("model-pure-args.cpp", &[], &dafny);
     let text = stdout(&o);
     assert_eq!(o.status.code(), Some(0), "stdout: {text} stderr: {}", stderr(&o));
@@ -640,10 +567,8 @@ fn the_arguments_of_a_member_function_in_a_contract_pass_as_its_parameter_types(
 /// may not hold, decision 0095.
 #[test]
 fn prove_names_a_contract_call_outside_the_requires_of_a_member_function() {
-    let Some(dafny) = dafny() else { return };
-    if !clang_tidy_available() {
-        return;
-    }
+    let dafny = dafny();
+    require_clang_tidy();
     let o = prove("model-pure-args-wrong.cpp", &[], &dafny);
     let text = stdout(&o);
     assert_eq!(o.status.code(), Some(1), "stdout: {text} stderr: {}", stderr(&o));
@@ -656,10 +581,8 @@ fn prove_names_a_contract_call_outside_the_requires_of_a_member_function() {
 /// caller that builds a value, in a local and in a return, knows it, decision 0094.
 #[test]
 fn a_constructor_gives_the_value_it_builds() {
-    let Some(dafny) = dafny() else { return };
-    if !clang_tidy_available() {
-        return;
-    }
+    let dafny = dafny();
+    require_clang_tidy();
     let o = prove("model-ctor.cpp", &[], &dafny);
     let text = stdout(&o);
     assert_eq!(o.status.code(), Some(0), "stdout: {text} stderr: {}", stderr(&o));
@@ -670,9 +593,7 @@ fn a_constructor_gives_the_value_it_builds() {
 /// field are refused at their lines, decisions 0094 and 0179.
 #[test]
 fn constructors_with_no_rule_are_refused_at_their_lines() {
-    if !clang_tidy_available() {
-        return;
-    }
+    require_clang_tidy();
     let dir = tempfile::tempdir().unwrap();
     let (o, _) = model("model-ctor-refuse.cpp", dir.path());
     let text = stdout(&o);
@@ -691,10 +612,8 @@ fn constructors_with_no_rule_are_refused_at_their_lines() {
 /// an ensures line, calls on a local that write it back, compound assignment of a local, and a void free function, decision 0096.
 #[test]
 fn member_functions_that_write_their_object_prove() {
-    let Some(dafny) = dafny() else { return };
-    if !clang_tidy_available() {
-        return;
-    }
+    let dafny = dafny();
+    require_clang_tidy();
     let o = prove("model-mut.cpp", &[], &dafny);
     let text = stdout(&o);
     assert_eq!(o.status.code(), Some(0), "stdout: {text} stderr: {}", stderr(&o));
@@ -705,10 +624,8 @@ fn member_functions_that_write_their_object_prove() {
 /// The end of a void function is named at the line of the function, decision 0096.
 #[test]
 fn prove_names_a_write_that_may_overflow_and_an_ensures_line_of_a_void_function() {
-    let Some(dafny) = dafny() else { return };
-    if !clang_tidy_available() {
-        return;
-    }
+    let dafny = dafny();
+    require_clang_tidy();
     let o = prove("model-mut-wrong.cpp", &[], &dafny);
     let text = stdout(&o);
     assert_eq!(o.status.code(), Some(1), "stdout: {text} stderr: {}", stderr(&o));
@@ -724,9 +641,7 @@ fn prove_names_a_write_that_may_overflow_and_an_ensures_line_of_a_void_function(
 /// lines, decisions 0096 and 0097.
 #[test]
 fn writes_with_no_rule_are_refused_at_their_lines() {
-    if !clang_tidy_available() {
-        return;
-    }
+    require_clang_tidy();
     let dir = tempfile::tempdir().unwrap();
     let (o, _) = model("model-mut-refuse.cpp", dir.path());
     let text = stdout(&o);
@@ -749,10 +664,8 @@ fn writes_with_no_rule_are_refused_at_their_lines() {
 /// decision 0098.
 #[test]
 fn conditionals_and_functors_prove() {
-    let Some(dafny) = dafny() else { return };
-    if !clang_tidy_available() {
-        return;
-    }
+    let dafny = dafny();
+    require_clang_tidy();
     let o = prove("model-cond.cpp", &[], &dafny);
     let text = stdout(&o);
     assert_eq!(o.status.code(), Some(0), "stdout: {text} stderr: {}", stderr(&o));
@@ -762,10 +675,8 @@ fn conditionals_and_functors_prove() {
 /// An ensures line that a conditional does not meet, and a branch that may overflow, are named at their lines, decision 0098.
 #[test]
 fn prove_names_a_conditional_that_does_not_meet_its_contract() {
-    let Some(dafny) = dafny() else { return };
-    if !clang_tidy_available() {
-        return;
-    }
+    let dafny = dafny();
+    require_clang_tidy();
     let o = prove("model-cond-wrong.cpp", &[], &dafny);
     let text = stdout(&o);
     assert_eq!(o.status.code(), Some(1), "stdout: {text} stderr: {}", stderr(&o));
@@ -780,9 +691,7 @@ fn prove_names_a_conditional_that_does_not_meet_its_contract() {
 /// their lines, decisions 0098 and 0100. A call in a branch of a conditional in a return has a model, decision 0177.
 #[test]
 fn conditionals_and_functors_with_no_rule_are_refused_at_their_lines() {
-    if !clang_tidy_available() {
-        return;
-    }
+    require_clang_tidy();
     let dir = tempfile::tempdir().unwrap();
     let (o, _) = model("model-cond-refuse.cpp", dir.path());
     let text = stdout(&o);
@@ -801,10 +710,8 @@ fn conditionals_and_functors_with_no_rule_are_refused_at_their_lines() {
 /// member function that writes it, prove, decision 0099.
 #[test]
 fn assert_and_apply_lines_prove() {
-    let Some(dafny) = dafny() else { return };
-    if !clang_tidy_available() {
-        return;
-    }
+    let dafny = dafny();
+    require_clang_tidy();
     let o = prove("model-assert.cpp", &[], &dafny);
     let text = stdout(&o);
     assert_eq!(o.status.code(), Some(0), "stdout: {text} stderr: {}", stderr(&o));
@@ -815,10 +722,8 @@ fn assert_and_apply_lines_prove() {
 /// lines, decision 0099.
 #[test]
 fn prove_names_an_assert_line_and_an_apply_line_that_may_not_hold() {
-    let Some(dafny) = dafny() else { return };
-    if !clang_tidy_available() {
-        return;
-    }
+    let dafny = dafny();
+    require_clang_tidy();
     let o = prove("model-assert-wrong.cpp", &[], &dafny);
     let text = stdout(&o);
     assert_eq!(o.status.code(), Some(1), "stdout: {text} stderr: {}", stderr(&o));
@@ -834,9 +739,7 @@ fn prove_names_an_assert_line_and_an_apply_line_that_may_not_hold() {
 /// lines, decisions 0099 and 0101.
 #[test]
 fn assert_and_apply_lines_with_no_rule_are_refused_at_their_lines() {
-    if !clang_tidy_available() {
-        return;
-    }
+    require_clang_tidy();
     let dir = tempfile::tempdir().unwrap();
     let (o, _) = model("model-assert-refuse.cpp", dir.path());
     let text = stdout(&o);
@@ -858,10 +761,8 @@ fn assert_and_apply_lines_with_no_rule_are_refused_at_their_lines() {
 /// A lemma with no body in the companion file is an axiom, so prove refuses the file and never says proved, decision 0099.
 #[test]
 fn prove_refuses_a_lemma_with_no_body_in_the_companion_file() {
-    let Some(dafny) = dafny() else { return };
-    if !clang_tidy_available() {
-        return;
-    }
+    let dafny = dafny();
+    require_clang_tidy();
     let o = prove("model-spec-lemma.cpp", &[], &dafny);
     let text = stdout(&o);
     assert_eq!(o.status.code(), Some(1), "stdout: {text} stderr: {}", stderr(&o));
@@ -874,10 +775,8 @@ fn prove_refuses_a_lemma_with_no_body_in_the_companion_file() {
 /// proved, decision 0101.
 #[test]
 fn prove_refuses_a_forall_statement_with_no_body_in_the_companion_file() {
-    let Some(dafny) = dafny() else { return };
-    if !clang_tidy_available() {
-        return;
-    }
+    let dafny = dafny();
+    require_clang_tidy();
     let o = prove("model-spec-forall.cpp", &[], &dafny);
     let text = stdout(&o);
     assert_eq!(o.status.code(), Some(1), "stdout: {text} stderr: {}", stderr(&o));
@@ -890,10 +789,8 @@ fn prove_refuses_a_forall_statement_with_no_body_in_the_companion_file() {
 /// trusted function with its reason before the verdict, decision 0102.
 #[test]
 fn trusted_functions_are_contracts_that_prove_names() {
-    let Some(dafny) = dafny() else { return };
-    if !clang_tidy_available() {
-        return;
-    }
+    let dafny = dafny();
+    require_clang_tidy();
     let o = prove("model-trusted.cpp", &[], &dafny);
     let text = stdout(&o);
     assert_eq!(o.status.code(), Some(0), "stdout: {text} stderr: {}", stderr(&o));
@@ -919,10 +816,8 @@ fn trusted_functions_are_contracts_that_prove_names() {
 /// Trusted: lines come first, before each refusal and each failure, decisions 0102 and 0103.
 #[test]
 fn prove_names_a_caller_that_needs_more_than_a_trusted_contract() {
-    let Some(dafny) = dafny() else { return };
-    if !clang_tidy_available() {
-        return;
-    }
+    let dafny = dafny();
+    require_clang_tidy();
     let o = prove("model-trusted-wrong.cpp", &[], &dafny);
     let text = stdout(&o);
     assert_eq!(o.status.code(), Some(1), "stdout: {text} stderr: {}", stderr(&o));
@@ -944,10 +839,8 @@ fn prove_names_a_caller_that_needs_more_than_a_trusted_contract() {
 /// declaration, decision 0103.
 #[test]
 fn a_trusted_definition_keeps_the_lines_of_its_body_and_names_its_marked_declaration() {
-    let Some(dafny) = dafny() else { return };
-    if !clang_tidy_available() {
-        return;
-    }
+    let dafny = dafny();
+    require_clang_tidy();
     let o = prove("model-trusted-body.cpp", &[], &dafny);
     let text = stdout(&o);
     assert_eq!(o.status.code(), Some(0), "stdout: {text} stderr: {}", stderr(&o));
@@ -960,9 +853,7 @@ fn a_trusted_definition_keeps_the_lines_of_its_body_and_names_its_marked_declara
 /// A function with no body and no marker has no method, so a call of it is refused at its line, decision 0102.
 #[test]
 fn a_call_of_a_function_with_no_body_and_no_marker_is_refused() {
-    if !clang_tidy_available() {
-        return;
-    }
+    require_clang_tidy();
     let dir = tempfile::tempdir().unwrap();
     let (o, _) = model("model-trusted-refuse.cpp", dir.path());
     let text = stdout(&o);
@@ -977,10 +868,8 @@ fn a_call_of_a_function_with_no_body_and_no_marker_is_refused() {
 /// else-if condition, in the start and the step of a for loop, and a constructor call prove, decisions 0104 and 0105.
 #[test]
 fn calls_inside_expressions_prove() {
-    let Some(dafny) = dafny() else { return };
-    if !clang_tidy_available() {
-        return;
-    }
+    let dafny = dafny();
+    require_clang_tidy();
     let o = prove("model-lift.cpp", &[], &dafny);
     let text = stdout(&o);
     assert_eq!(o.status.code(), Some(0), "stdout: {text} stderr: {}", stderr(&o));
@@ -991,10 +880,8 @@ fn calls_inside_expressions_prove() {
 /// callee, decisions 0104 and 0105.
 #[test]
 fn prove_names_a_call_inside_an_expression_that_does_not_meet_a_contract() {
-    let Some(dafny) = dafny() else { return };
-    if !clang_tidy_available() {
-        return;
-    }
+    let dafny = dafny();
+    require_clang_tidy();
     let o = prove("model-lift-wrong.cpp", &[], &dafny);
     let text = stdout(&o);
     assert_eq!(o.status.code(), Some(1), "stdout: {text} stderr: {}", stderr(&o));
@@ -1013,9 +900,7 @@ fn prove_names_a_call_inside_an_expression_that_does_not_meet_a_contract() {
 /// the right of && or || or in a branch of ?: in a return has a model, decision 0177.
 #[test]
 fn a_call_that_cpp_may_not_run_once_is_refused_at_its_line() {
-    if !clang_tidy_available() {
-        return;
-    }
+    require_clang_tidy();
     let dir = tempfile::tempdir().unwrap();
     let (o, _) = model("model-lift-refuse.cpp", dir.path());
     let text = stdout(&o);
