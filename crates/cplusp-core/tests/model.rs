@@ -950,6 +950,56 @@ fn a_member_function_writes_one_element_of_a_vector_field() {
     assert_eq!(bare_refusal(translate_function(&with(Ty::This(NODE), write(PRE)), &List::Nil, &node_table())), Refusal::WriteParam(THIS, 10));
 }
 
+/// `prefix.push_back(e)` and `prefix.pop_back()` in a member function of Node that writes its object are new values of the field.
+/// The pop is PopBack of the prelude, whose requires line Dafny checks. A field that is no sequence, a field that the struct does
+/// not have, and a member function that does not write its object are refused, decision 0191.
+#[test]
+fn a_member_function_grows_and_shrinks_a_vector_field() {
+    let with = |t: Ty, s: Stmt| Function {
+        name: 480,
+        line: 9,
+        params: List::Cons((THIS, t), Box::new(List::Nil)),
+        ret: Ty::Void,
+        trusted: false,
+        conds: List::Nil,
+        body: one(s),
+    };
+    let after = || Box::new(DExpr::Field(Box::new(DExpr::After), PRE));
+    let push = |f: u32| Stmt::PushField(f, Expr::Lit(1, Ty::U8), 10);
+    let pop = |f: u32| Stmt::PopField(f, 10);
+    let Model::Full(m) = translate_function(&with(Ty::ThisMut(NODE), push(PRE)), &List::Nil, &node_table()) else { panic!("a full model of a push") };
+    let List::Cons((s, _), rest) = strip(m.body) else { panic!("a body") };
+    assert_eq!(*rest, List::Nil);
+    let DStmt::SetField(f, DExpr::Append(base, _)) = *s else { panic!("an append to the field: {s:?}") };
+    assert_eq!((f, base), (PRE, after()));
+    let Model::Full(m) = translate_function(&with(Ty::ThisMut(NODE), pop(PRE)), &List::Nil, &node_table()) else { panic!("a full model of a pop") };
+    let List::Cons((s, _), _) = strip(m.body) else { panic!("a body") };
+    assert_eq!(*s, DStmt::SetField(PRE, DExpr::PopBack(after())));
+    for s in [push, pop] {
+        assert_eq!(bare_refusal(translate_function(&with(Ty::ThisMut(NODE), s(VAL)), &List::Nil, &node_table())), Refusal::Syntax(10));
+        assert_eq!(bare_refusal(translate_function(&with(Ty::ThisMut(NODE), s(481)), &List::Nil, &node_table())), Refusal::NoField(481, 10));
+        assert_eq!(bare_refusal(translate_function(&with(Ty::This(NODE), s(PRE)), &List::Nil, &node_table())), Refusal::WriteParam(THIS, 10));
+    }
+}
+
+/// `v.back()` is Back of the prelude, in code and in a contract, and its type is the element type, decision 0191.
+#[test]
+fn back_is_the_last_element_in_code_and_in_a_contract() {
+    let seq = Ty::Seq(Scalar::I32, Extent::Dynamic);
+    let code = Expr::Back(b(Expr::Var(X, seq)));
+    assert_eq!(translate_code(&code, 3), Ok(DExpr::Back(Box::new(DExpr::Var(X)))));
+    assert_eq!(parse_contract(&vec![Tok::Ident(X), Tok::Back], 4), Ok(Expr::Back(b(Expr::Name(X)))));
+    // result == v.back() + 1 compares an int32 with an int32.
+    let sum = Expr::Bin(BinOp::Eq, b(Expr::Result), b(Expr::Bin(BinOp::Add, b(Expr::Back(b(Expr::Name(X)))), b(Expr::Int(1)))));
+    let ps = List::Cons((X, seq), Box::new(List::Nil));
+    let Ok(d) = translate_contract(&sum, &List::Cons(X, Box::new(List::Nil)), &ps, Some(Ty::I32), &List::Nil, 5, &List::Nil) else { panic!("a contract") };
+    assert!(format!("{d:?}").contains("Back(Var("), "{d:?}");
+    // The last element of a value that is no sequence is refused.
+    let ps = List::Cons((X, Ty::I32), Box::new(List::Nil));
+    let bad = Expr::Bin(BinOp::Eq, b(Expr::Result), b(Expr::Back(b(Expr::Name(X)))));
+    assert_eq!(translate_contract(&bad, &List::Cons(X, Box::new(List::Nil)), &ps, Some(Ty::I32), &List::Nil, 5, &List::Nil), Err(Refusal::Syntax(5)));
+}
+
 #[test]
 fn a_struct_that_holds_a_sequence_is_a_parameter_by_value_or_by_reference() {
     let f = Function { name: SAT, line: 14, params: List::Cons((A, Ty::Struct(NODE)), Box::new(List::Nil)), ret: Ty::I32, trusted: false, conds: List::Nil, body: one(Stmt::Return(Expr::Lit(0, Ty::I32), 15)) };

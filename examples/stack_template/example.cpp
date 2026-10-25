@@ -46,6 +46,10 @@ struct Point {
   int32_t y;
 };
 
+// Each instance has its own model, decision 0188.
+template class Stack<int32_t>;
+template class Stack<Point>;
+
 //@ ensures result == 3
 int32_t push_three() {
   Stack<int32_t> s(4);

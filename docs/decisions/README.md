@@ -195,3 +195,4 @@ Status is `decided`, `proposed` (the default until someone objects or the thin s
 | [0188](0188-a-class-template.md) | A class template | decided |
 | [0189](0189-a-call-of-a-plain-member-function.md) | A call of a plain member function | decided |
 | [0190](0190-marks-that-hold-of-their-own-table.md) | Marks that hold of their own table | decided |
+| [0191](0191-a-vector-field-that-grows-and-shrinks.md) | A vector field that grows and shrinks | decided |

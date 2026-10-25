@@ -6050,6 +6050,65 @@ fn a_call_of_a_member_function_that_is_not_plain_keeps_its_rules() {
     assert!(!text.contains("Dafny says"), "{text}");
 }
 
+/// A member function adds an element at the end of a vector field, takes the last one away and reads it. A `const T&` result of a
+/// field, of an element or of the last element is its value, and a braced value at a `const T&` parameter is its value, decision
+/// 0191.
+#[test]
+fn a_vector_field_that_grows_and_shrinks_proves() {
+    let Some(dafny) = dafny() else { return };
+    if !clang_tidy_available() {
+        return;
+    }
+    for name in ["model-vec-field.cpp", "../../../../examples/stack_template/example.cpp"] {
+        let o = prove(name, &[], &dafny);
+        let text = stdout(&o);
+        assert_eq!(o.status.code(), Some(0), "{name}: stdout: {text} stderr: {}", stderr(&o));
+        assert_eq!(text.lines().last(), Some("ok: proved"), "{name}: {text}");
+    }
+}
+
+/// A pop and a read of the last element of a vector that can be empty fail at their line, and a pop takes the last element away,
+/// decision 0191.
+#[test]
+fn a_vector_field_that_grows_and_shrinks_keeps_its_contract() {
+    let Some(dafny) = dafny() else { return };
+    if !clang_tidy_available() {
+        return;
+    }
+    let o = prove("model-vec-field-wrong.cpp", &[], &dafny);
+    let text = stdout(&o);
+    assert_eq!(o.status.code(), Some(1), "stdout: {text} stderr: {}", stderr(&o));
+    let mut failed: Vec<&str> = text.lines().filter(|l| l.starts_with("Not proved: ") || l.starts_with("Not provable: ")).map(|l| l.rsplit_once(".cpp:").unwrap().1).collect();
+    failed.sort_by_key(|l| l.split(':').next().unwrap().parse::<u32>().unwrap());
+    let want = [
+        "17: a requires line of the callee may not hold.",
+        "21: a requires line of the callee may not hold.",
+        "35: the ensures line may not hold on this return.",
+    ];
+    assert_eq!(failed, want, "{text}");
+    assert!(!text.contains("Dafny says"), "{text}");
+}
+
+/// front, emplace_back, a `const T&` result of a parameter and a pop of a local vector keep their sentence, decision 0191.
+#[test]
+fn a_vector_form_with_no_rule_is_refused() {
+    let Some(dafny) = dafny() else { return };
+    if !clang_tidy_available() {
+        return;
+    }
+    let o = prove("model-vec-field-refuse.cpp", &[], &dafny);
+    let text = stdout(&o);
+    assert_eq!(o.status.code(), Some(1), "stdout: {text} stderr: {}", stderr(&o));
+    let refused: Vec<&str> = text.lines().filter(|l| l.starts_with("Not proved: ") || l.starts_with("Not provable: ")).map(|l| l.rsplit_once(".cpp:").unwrap().1).collect();
+    let want = [
+        "10: CXXMemberCallExpr: the translator has no rule for it yet.",
+        "14: CXXMemberCallExpr: the translator has no rule for it yet.",
+        "18: const int32_t &: the translator has no rule for it yet.",
+        "29: CXXMemberCallExpr: the translator has no rule for it yet.",
+    ];
+    assert_eq!(refused, want, "{text}");
+}
+
 /// A node that the code makes with std::make_unique, writes through its pointer and moves into a field proves. So does a moved
 /// parameter, which is null after its move, decision 0186.
 #[test]
