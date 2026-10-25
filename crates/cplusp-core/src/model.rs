@@ -348,7 +348,7 @@ pub type Args = List<Box<Expr>>;
 /// std::array, decision 0184. `PushBack` is `v.push_back(e)`, decision 0148.
 /// `Sort` is `std::sort(v.begin(), v.end())`, decision 0161, and `SortBy` is the same with a comparator lambda, by the names and the
 /// type of its two parameters and the expression of its one `return`, decision 0162. `Block` is a bare block `{ ... }`, a scope of
-/// its own, decision 0178.
+/// its own, decision 0178. `SetOwnField` is `n->f = e` of a local `std::unique_ptr` of a plain struct, decision 0186.
 #[derive(PartialEq, Eq, Debug)]
 pub enum Stmt {
     Return(Expr, u32),
@@ -360,6 +360,7 @@ pub enum Stmt {
     For(Box<Stmt>, Expr, Box<Stmt>, Box<Conds>, Box<Stmts>, u32),
     SetField(u32, Expr, u32),
     SetRefField(u32, u32, Expr, u32),
+    SetOwnField(u32, u32, Expr, u32),
     Switch(Expr, u32, Box<Cases>, u32),
     Call(u32, u32, Box<Args>, u32),
     Exit(u32),
@@ -562,7 +563,7 @@ pub type DArgs = List<DExpr>;
 /// arguments hold each argument of the call. `CallStmt` is `m(args);` of a method that gives no value, and `Exit` is `return;`, decision 0096. `Assert` is
 /// `assert e;` and `Apply` is `l(args);` of a lemma, decision 0099. `Sort` is `p := StdSort(p, (a: T, b: T) => a < b);` of a place
 /// and the type of its elements, decision 0161. `SortBy` is `p := StdSort(p, (a: T, b: T) => e);` with a comparator, decision 0162. `Match` is a match over the enum with the key, decision 0109. `Pre` is a statement with the calls that run before it, decision
-/// 0104.
+/// 0104. `SetOwnField` is `n := Some(n.value.(f := e));` of a local unique_ptr, decision 0186.
 #[derive(PartialEq, Eq, Debug)]
 pub enum DStmt {
     Return(DExpr),
@@ -578,6 +579,7 @@ pub enum DStmt {
     SetField(u32, DExpr),
     SetOut(u32, DExpr),
     SetOutField(u32, u32, DExpr),
+    SetOwnField(u32, u32, DExpr),
     Update(Objs, u32, DArgs),
     UpdateAt(Obj, Box<DExpr>, Objs, u32, DArgs),
     LocalUpdate(u32, DTy, Objs, u32, DArgs),
@@ -1893,8 +1895,9 @@ pub fn var_names_args(args: &Args) -> (r: Names)
 }
 
 /// The moves `ns` of one statement that reads the names `reads` besides, decision 0171. C++ does not fix the order of the
-/// arguments of a call, so a statement that moves a name reads it nowhere else and moves it once. A parameter moves only in a
-/// return, because the model cannot write a parameter.
+/// arguments of a call, so a statement that moves a name reads it nowhere else and moves it once. The parameters `ps` move only in a
+/// return, because the model cannot write a parameter. A unique_ptr parameter that the body moves outside a return is a local of the
+/// body and not in `ps`, decision 0186.
 pub open spec fn spec_move_check(ns: Names, reads: Names, ps: Params, ret: bool, line: u32) -> Option<Refusal>
     decreases ns,
 {
@@ -3024,6 +3027,7 @@ pub open spec fn spec_place(s: Stmt) -> u32 {
         Stmt::RangeFor(_, _, _, _, _, _, l) => l,
         Stmt::SetField(_, _, l) => l,
         Stmt::SetRefField(_, _, _, l) => l,
+        Stmt::SetOwnField(_, _, _, l) => l,
         Stmt::Switch(_, _, _, l) => l,
         Stmt::Call(_, _, _, l) => l,
         Stmt::Exit(l) => l,
@@ -4308,6 +4312,7 @@ pub open spec fn spec_write_check(s: Stmt, all: Fns, ps: Params, sd: Structs) ->
         Stmt::Assign(_, e, l) => spec_check_expr(e, all, ps, sd, l),
         Stmt::SetField(_, e, l) => spec_check_expr(e, all, ps, sd, l),
         Stmt::SetRefField(_, _, e, l) => spec_check_expr(e, all, ps, sd, l),
+        Stmt::SetOwnField(_, _, e, l) => spec_check_expr(e, all, ps, sd, l),
         Stmt::PushBack(_, e, l) => spec_check_expr(e, all, ps, sd, l),
         Stmt::If(c, _, _, l) => spec_check_expr(c, all, ps, sd, l),
         Stmt::Switch(e, _, _, l) => spec_check_expr(e, all, ps, sd, l),
@@ -4371,6 +4376,7 @@ pub fn write_check(s: &Stmt, all: &Fns, ps: &Params, sd: &Structs) -> (r: Option
         Stmt::Assign(_, e, l) => check_expr(e, all, ps, sd, *l),
         Stmt::SetField(_, e, l) => check_expr(e, all, ps, sd, *l),
         Stmt::SetRefField(_, _, e, l) => check_expr(e, all, ps, sd, *l),
+        Stmt::SetOwnField(_, _, e, l) => check_expr(e, all, ps, sd, *l),
         Stmt::PushBack(_, e, l) => check_expr(e, all, ps, sd, *l),
         Stmt::If(c, _, _, l) => check_expr(c, all, ps, sd, *l),
         Stmt::Switch(e, _, _, l) => check_expr(e, all, ps, sd, *l),
@@ -5543,6 +5549,26 @@ pub open spec fn spec_stmt(s: Stmt, all: Fns, env: Params, ps: Params, sd: Struc
             Some(_) => Err(Refusal::WriteParam(p, l)),
             None => Err(Refusal::Syntax(l)),
         },
+        // A write through a local unique_ptr writes the value that it owns. The value can move a local, and the statement reads
+        // the pointer, so the pointer cannot move in it, decision 0186.
+        Stmt::SetOwnField(n, f, e, l) => if spec_get(ps, n) is Some {
+            Err(Refusal::WriteParam(n, l))
+        } else {
+            match spec_get(env, n) {
+                Some(Ty::Own(Scalar::Struct(k))) => match spec_field_ty(sd, k, f) {
+                    Some(Ty::Seq(_, _)) => Err(Refusal::SeqParam(l)),
+                    Some(_) => match spec_move_check(spec_unmove(e).1, List::Cons(n, Box::new(spec_var_names(e))), ps, false, l) {
+                        Some(r) => Err(r),
+                        None => match spec_lift(spec_unmove(e).0, all, l, sd, 0, true) {
+                            Ok((c, d, _)) => Ok(spec_moved(spec_pre(c, DStmt::SetOwnField(n, f, d)), spec_unmove(e).1)),
+                            Err(r) => Err(r),
+                        },
+                    },
+                    None => Err(Refusal::NoField(f, l)),
+                },
+                _ => Err(Refusal::Syntax(l)),
+            }
+        },
         Stmt::Switch(e, k, cs, l) => match spec_lift(e, all, l, sd, 0, true) {
             Ok((c, d, _)) => match spec_cases(*cs, all, env, ps, sd) {
                 Ok(dc) => Ok(spec_pre(c, DStmt::Match(d, k, Box::new(dc)))),
@@ -5979,6 +6005,93 @@ pub open spec fn spec_misreturn_stmt(s: Stmt, void: bool) -> Option<u32>
     }
 }
 
+/// The names that a body moves outside a `return`, at any depth, in their order, decision 0186. A move stands only at the start
+/// value of a local, in a call that stands alone and in a write through a unique_ptr, so these are the only places to look.
+pub open spec fn spec_moves_stmts(ss: Stmts) -> Names
+    decreases ss,
+{
+    match ss {
+        List::Nil => List::Nil,
+        List::Cons(s, rest) => spec_append(spec_moves_stmt(*s), spec_moves_stmts(*rest)),
+    }
+}
+
+pub open spec fn spec_moves_stmt(s: Stmt) -> Names
+    decreases s,
+{
+    match s {
+        Stmt::Local(_, _, e, _) => spec_unmove(e).1,
+        Stmt::Call(_, _, args, _) => spec_unmove_args(*args).1,
+        Stmt::SetOwnField(_, _, e, _) => spec_unmove(e).1,
+        Stmt::If(_, t, f, _) => spec_append(spec_moves_stmts(*t), spec_moves_stmts(*f)),
+        Stmt::While(_, _, body, _) => spec_moves_stmts(*body),
+        Stmt::For(init, _, step, _, body, _) => spec_append(spec_moves_stmt(*init), spec_append(spec_moves_stmt(*step), spec_moves_stmts(*body))),
+        Stmt::Switch(_, _, cs, _) => spec_moves_cases(*cs),
+        Stmt::RangeFor(_, _, _, _, _, body, _) => spec_moves_stmts(*body),
+        Stmt::Block(b, _) => spec_moves_stmts(*b),
+        _ => List::Nil,
+    }
+}
+
+pub open spec fn spec_moves_cases(cs: Cases) -> Names
+    decreases cs,
+{
+    match cs {
+        List::Nil => List::Nil,
+        List::Cons((_, body), rest) => spec_append(spec_moves_stmts(*body), spec_moves_cases(*rest)),
+    }
+}
+
+/// The unique_ptr parameters among `ps` that the body moves, by their names and what they own, decision 0186.
+pub open spec fn spec_moved_params(ps: Params, ms: Names) -> List<(u32, Scalar)>
+    decreases ps,
+{
+    match ps {
+        List::Nil => List::Nil,
+        List::Cons((n, t), rest) => match t {
+            Ty::Own(s) => if spec_has(ms, n) {
+                List::Cons((n, s), Box::new(spec_moved_params(*rest, ms)))
+            } else {
+                spec_moved_params(*rest, ms)
+            },
+            _ => spec_moved_params(*rest, ms),
+        },
+    }
+}
+
+/// The parameters among `ps` that stay parameters of the body: each one but a unique_ptr that the body moves, decision 0186.
+pub open spec fn spec_kept_params(ps: Params, ms: Names) -> Params
+    decreases ps,
+{
+    match ps {
+        List::Nil => List::Nil,
+        List::Cons((n, t), rest) => if (t is Own) && spec_has(ms, n) {
+            spec_kept_params(*rest, ms)
+        } else {
+            List::Cons((n, t), Box::new(spec_kept_params(*rest, ms)))
+        },
+    }
+}
+
+/// `var p: Option<T> := p;` for each moved parameter, at the line of the function, then `tail`, decision 0186.
+pub open spec fn spec_param_locals(mp: List<(u32, Scalar)>, line: u32, tail: DStmts) -> DStmts
+    decreases mp,
+{
+    match mp {
+        List::Nil => tail,
+        List::Cons((n, s), rest) => List::Cons((Box::new(DStmt::Local(n, DTy::Opt(s), DExpr::Var(n))), line), Box::new(spec_param_locals(*rest, line, tail))),
+    }
+}
+
+/// The body with a local for each moved parameter. The body is a block, so Dafny reads each name in it as the local, and a contract
+/// reads the parameter. A body that moves no parameter stays as it is, decision 0186.
+pub open spec fn spec_param_block(mp: List<(u32, Scalar)>, line: u32, body: DStmts) -> DStmts {
+    match mp {
+        List::Nil => body,
+        _ => List::Cons((Box::new(DStmt::Scope(Box::new(spec_param_locals(mp, line, body)))), line), Box::new(List::Nil)),
+    }
+}
+
 /// The contract and the body of a function whose signature is in the subset: the requires lines, the ensures lines, the decreases
 /// lines and the body. A trusted function has no body, decision 0102.
 pub open spec fn spec_inside(f: Function, all: Fns, sd: Structs) -> Result<(DConds, DConds, DConds, DStmts), Refusal> {
@@ -5995,9 +6108,10 @@ pub open spec fn spec_inside(f: Function, all: Fns, sd: Structs) -> Result<(DCon
                     Some((n, l)) => Err(Refusal::Twice(n, l)),
                     None => match spec_misreturn(f.body, f.ret == Ty::Void) {
                         Some(l) => Err(Refusal::Syntax(l)),
-                        None => match spec_stmts(f.body, all, f.params, f.params, sd) {
+                        // A unique_ptr parameter that the body moves is a local of the body, decision 0186.
+                        None => match spec_stmts(f.body, all, f.params, spec_kept_params(f.params, spec_moves_stmts(f.body)), sd) {
                             Err(r) => Err(r),
-                            Ok(body) => Ok((req, ens, dec, body)),
+                            Ok(body) => Ok((req, ens, dec, spec_param_block(spec_moved_params(f.params, spec_moves_stmts(f.body)), f.line, body))),
                         },
                     },
                     }
@@ -7159,6 +7273,7 @@ pub open spec fn unknown_stmt(s: Stmt) -> bool
         Stmt::RangeFor(_, _, _, seq, _, body, _) => unknown_expr(seq) || unknown_stmts(*body),
         Stmt::SetField(_, e, _) => unknown_expr(e),
         Stmt::SetRefField(_, _, e, _) => unknown_expr(e),
+        Stmt::SetOwnField(_, _, e, _) => unknown_expr(e),
         Stmt::SetIndex(_, i, e, _) => unknown_expr(i) || unknown_expr(e),
         Stmt::PushBack(_, e, _) => unknown_expr(e),
         Stmt::Sort(_, _) => false,
@@ -7391,6 +7506,11 @@ pub proof fn lemma_unknown_stmt_is_refused(s: Stmt, all: Fns, env: Params, ps: P
         },
         Stmt::SetField(_, e, l) => lemma_unknown_lift_is_refused(e, all, l, sd, 0, true),
         Stmt::SetRefField(_, _, e, l) => lemma_unknown_lift_is_refused(e, all, l, sd, 0, true),
+        // The value of a write through a unique_ptr lifts after its moves, decision 0186.
+        Stmt::SetOwnField(_, _, e, l) => {
+            lemma_unmove_unknown(e);
+            lemma_unknown_lift_is_refused(spec_unmove(e).0, all, l, sd, 0, true);
+        },
         Stmt::SetIndex(_, i, e, l) => {
             if unknown_expr(i) {
                 lemma_unknown_code_is_refused(i, l);
@@ -7506,7 +7626,7 @@ pub proof fn lemma_unknown_is_refused(f: Function, all: Fns, sd: Structs)
     ensures
         !(spec_function(f, all, sd) is Full),
 {
-    lemma_unknown_stmts_is_refused(f.body, all, f.params, f.params, sd);
+    lemma_unknown_stmts_is_refused(f.body, all, f.params, spec_kept_params(f.params, spec_moves_stmts(f.body)), sd);
 }
 
 pub open spec fn count_stmts(ss: Stmts) -> nat
@@ -7660,6 +7780,21 @@ pub proof fn lemma_kept_set_field(s: Stmt, all: Fns, env: Params, ps: Params, sd
     ensures
         count_dstmt(spec_stmt(s, all, env, ps, sd).unwrap()) == 1,
 {
+    reveal_with_fuel(count_dstmt, 2);
+}
+
+pub proof fn lemma_kept_set_own_field(s: Stmt, all: Fns, env: Params, ps: Params, sd: Structs)
+    requires
+        spec_stmt(s, all, env, ps, sd).is_ok(),
+        s is SetOwnField,
+    ensures
+        count_dstmt(spec_stmt(s, all, env, ps, sd).unwrap()) == 1,
+{
+    let (n, f, l) = (s->SetOwnField_0, s->SetOwnField_1, s->SetOwnField_3);
+    let (e2, ns) = spec_unmove(s->SetOwnField_2);
+    let (c, d, _) = spec_lift(e2, all, l, sd, 0, true).unwrap();
+    lemma_pre_count(c, DStmt::SetOwnField(n, f, d));
+    lemma_moved_count(spec_pre(c, DStmt::SetOwnField(n, f, d)), ns);
     reveal_with_fuel(count_dstmt, 2);
 }
 
@@ -7819,6 +7954,7 @@ pub proof fn lemma_stmt_kept(s: Stmt, all: Fns, env: Params, ps: Params, sd: Str
         Stmt::Assign(_, _, _) => lemma_kept_assign(s, all, env, ps, sd),
         Stmt::SetField(_, _, _) => lemma_kept_set_field(s, all, env, ps, sd),
         Stmt::SetRefField(_, _, _, _) => lemma_kept_set_field(s, all, env, ps, sd),
+        Stmt::SetOwnField(_, _, _, _) => lemma_kept_set_own_field(s, all, env, ps, sd),
         Stmt::PushBack(_, _, _) => lemma_kept_set_field(s, all, env, ps, sd),
         Stmt::Switch(e, k, cs, l) => {
             lemma_cases_kept(*cs, all, env, ps, sd);
@@ -8478,6 +8614,23 @@ pub proof fn lemma_resolves_set_ref_field(s: Stmt, all: Fns, env: Params, ps: Pa
     }
 }
 
+pub proof fn lemma_resolves_set_own_field(s: Stmt, all: Fns, env: Params, ps: Params, sd: Structs)
+    requires
+        spec_stmt(s, all, env, ps, sd).is_ok(),
+        s is SetOwnField,
+    ensures
+        calls_resolve_stmt(spec_stmt(s, all, env, ps, sd).unwrap(), all, sd),
+{
+    reveal_with_fuel(calls_resolve_stmt, 3);
+    let e = spec_unmove(s->SetOwnField_2).0;
+    let l = s->SetOwnField_3;
+    if spec_lift(e, all, l, sd, 0, true).is_ok() {
+        lemma_lift_resolves(e, all, l, sd, 0, true);
+        let (c, d, _) = spec_lift(e, all, l, sd, 0, true).unwrap();
+        lemma_pre_resolves(c, DStmt::SetOwnField(s->SetOwnField_0, s->SetOwnField_1, d), all, sd);
+    }
+}
+
 /// A statement that holds no call gives a Dafny statement that holds none.
 #[verifier::rlimit(60)]
 pub proof fn lemma_resolves_plain(s: Stmt, all: Fns, env: Params, ps: Params, sd: Structs)
@@ -8588,6 +8741,7 @@ pub proof fn lemma_stmt_calls_resolve(s: Stmt, all: Fns, env: Params, ps: Params
         Stmt::Assign(_, _, _) => lemma_resolves_assign(s, all, env, ps, sd),
         Stmt::SetField(_, _, _) => lemma_resolves_set_field(s, all, env, ps, sd),
         Stmt::SetRefField(_, _, _, _) => lemma_resolves_set_ref_field(s, all, env, ps, sd),
+        Stmt::SetOwnField(_, _, _, _) => lemma_resolves_set_own_field(s, all, env, ps, sd),
         Stmt::Switch(e, k, cs, l) => {
             lemma_cases_calls_resolve(*cs, all, env, ps, sd);
             lemma_lift_resolves(e, all, l, sd, 0, true);
@@ -8693,6 +8847,34 @@ pub proof fn lemma_callable_has_method(fs: Fns, all: Fns, key: u32, sd: Structs)
     }
 }
 
+/// The locals of the moved parameters hold no call, so the block of them resolves when the body does, decision 0186.
+pub proof fn lemma_param_locals_resolve(mp: List<(u32, Scalar)>, line: u32, tail: DStmts, all: Fns, sd: Structs)
+    requires
+        calls_resolve(tail, all, sd),
+    ensures
+        calls_resolve(spec_param_locals(mp, line, tail), all, sd),
+    decreases mp,
+{
+    match mp {
+        List::Nil => {},
+        List::Cons((n, sc), rest) => {
+            lemma_param_locals_resolve(*rest, line, tail, all, sd);
+            assert(calls_resolve_stmt(DStmt::Local(n, DTy::Opt(sc), DExpr::Var(n)), all, sd));
+        },
+    }
+}
+
+pub proof fn lemma_param_block_resolves(mp: List<(u32, Scalar)>, line: u32, body: DStmts, all: Fns, sd: Structs)
+    requires
+        calls_resolve(body, all, sd),
+    ensures
+        calls_resolve(spec_param_block(mp, line, body), all, sd),
+{
+    lemma_param_locals_resolve(mp, line, body, all, sd);
+    reveal_with_fuel(calls_resolve, 2);
+    reveal_with_fuel(calls_resolve_stmt, 2);
+}
+
 /// Each call in a full method of the file names a method of the model of the file, so the Dafny file resolves.
 pub proof fn lemma_calls_resolve(f: Function, all: Fns, sd: Structs)
     requires
@@ -8702,7 +8884,9 @@ pub proof fn lemma_calls_resolve(f: Function, all: Fns, sd: Structs)
         forall|k: u32| spec_callable(all, k, sd) ==> #[trigger] has_method(spec_unit(all, all, sd), k),
 {
     if !f.trusted {
-        lemma_stmts_calls_resolve(f.body, all, f.params, f.params, sd);
+        let ms = spec_moves_stmts(f.body);
+        lemma_stmts_calls_resolve(f.body, all, f.params, spec_kept_params(f.params, ms), sd);
+        lemma_param_block_resolves(spec_moved_params(f.params, ms), f.line, spec_stmts(f.body, all, f.params, spec_kept_params(f.params, ms), sd).unwrap(), all, sd);
     }
     assert forall|k: u32| spec_callable(all, k, sd) implies #[trigger] has_method(spec_unit(all, all, sd), k) by {
         lemma_callable_has_method(all, all, k, sd);
@@ -10334,6 +10518,7 @@ pub fn place(s: &Stmt) -> (r: u32)
         Stmt::RangeFor(_, _, _, _, _, _, l) => *l,
         Stmt::SetField(_, _, l) => *l,
         Stmt::SetRefField(_, _, _, l) => *l,
+        Stmt::SetOwnField(_, _, _, l) => *l,
         Stmt::Switch(_, _, _, l) => *l,
         Stmt::Call(_, _, _, l) => *l,
         Stmt::Exit(l) => *l,
@@ -11050,6 +11235,27 @@ pub fn translate_stmt(s: &Stmt, all: &Fns, env: &Params, ps: &Params, sd: &Struc
             Some(_) => Err(Refusal::WriteParam(*p, *l)),
             None => Err(Refusal::Syntax(*l)),
         },
+        Stmt::SetOwnField(n, f, e, l) => if get(ps, *n).is_some() {
+            Err(Refusal::WriteParam(*n, *l))
+        } else {
+            match get(env, *n) {
+                Some(Ty::Own(Scalar::Struct(k))) => match field_ty(sd, k, *f) {
+                    Some(Ty::Seq(_, _)) => Err(Refusal::SeqParam(*l)),
+                    Some(_) => {
+                        let (e2, ns) = unmove(e);
+                        match move_check(&ns, &List::Cons(*n, Box::new(var_names(e))), ps, false, *l) {
+                            Some(r) => Err(r),
+                            None => match lift(&e2, all, *l, sd, 0, true) {
+                                Ok((c, d, _)) => Ok(moved(pre(c, DStmt::SetOwnField(*n, *f, d)), ns)),
+                                Err(r) => Err(r),
+                            },
+                        }
+                    },
+                    None => Err(Refusal::NoField(*f, *l)),
+                },
+                _ => Err(Refusal::Syntax(*l)),
+            }
+        },
         Stmt::Switch(e, k, cs, l) => match lift(e, all, *l, sd, 0, true) {
             Ok((c, d, _)) => match translate_cases(cs, all, env, ps, sd) {
                 Ok(dc) => Ok(pre(c, DStmt::Match(d, *k, Box::new(dc)))),
@@ -11485,6 +11691,101 @@ pub fn misreturn_stmt(s: &Stmt, void: bool) -> (r: Option<u32>)
     }
 }
 
+pub fn moves_stmts(ss: &Stmts) -> (r: Names)
+    ensures
+        r == spec_moves_stmts(*ss),
+    decreases ss,
+{
+    match ss {
+        List::Nil => List::Nil,
+        List::Cons(s, rest) => append(moves_stmt(s), moves_stmts(rest)),
+    }
+}
+
+pub fn moves_stmt(s: &Stmt) -> (r: Names)
+    ensures
+        r == spec_moves_stmt(*s),
+    decreases s,
+{
+    match s {
+        Stmt::Local(_, _, e, _) => unmove(e).1,
+        Stmt::Call(_, _, args, _) => unmove_args(args).1,
+        Stmt::SetOwnField(_, _, e, _) => unmove(e).1,
+        Stmt::If(_, t, f, _) => append(moves_stmts(t), moves_stmts(f)),
+        Stmt::While(_, _, body, _) => moves_stmts(body),
+        Stmt::For(init, _, step, _, body, _) => append(moves_stmt(init), append(moves_stmt(step), moves_stmts(body))),
+        Stmt::Switch(_, _, cs, _) => moves_cases(cs),
+        Stmt::RangeFor(_, _, _, _, _, body, _) => moves_stmts(body),
+        Stmt::Block(b, _) => moves_stmts(b),
+        _ => List::Nil,
+    }
+}
+
+pub fn moves_cases(cs: &Cases) -> (r: Names)
+    ensures
+        r == spec_moves_cases(*cs),
+    decreases cs,
+{
+    match cs {
+        List::Nil => List::Nil,
+        List::Cons((_, body), rest) => append(moves_stmts(body), moves_cases(rest)),
+    }
+}
+
+pub fn moved_params(ps: &Params, ms: &Names) -> (r: List<(u32, Scalar)>)
+    ensures
+        r == spec_moved_params(*ps, *ms),
+    decreases ps,
+{
+    match ps {
+        List::Nil => List::Nil,
+        List::Cons((n, t), rest) => match t {
+            Ty::Own(s) => if has(ms, *n) {
+                List::Cons((*n, *s), Box::new(moved_params(rest, ms)))
+            } else {
+                moved_params(rest, ms)
+            },
+            _ => moved_params(rest, ms),
+        },
+    }
+}
+
+pub fn kept_params(ps: &Params, ms: &Names) -> (r: Params)
+    ensures
+        r == spec_kept_params(*ps, *ms),
+    decreases ps,
+{
+    match ps {
+        List::Nil => List::Nil,
+        List::Cons((n, t), rest) => if matches!(t, Ty::Own(_)) && has(ms, *n) {
+            kept_params(rest, ms)
+        } else {
+            List::Cons((*n, *t), Box::new(kept_params(rest, ms)))
+        },
+    }
+}
+
+pub fn param_locals(mp: &List<(u32, Scalar)>, line: u32, tail: DStmts) -> (r: DStmts)
+    ensures
+        r == spec_param_locals(*mp, line, tail),
+    decreases mp,
+{
+    match mp {
+        List::Nil => tail,
+        List::Cons((n, s), rest) => List::Cons((Box::new(DStmt::Local(*n, DTy::Opt(*s), DExpr::Var(*n))), line), Box::new(param_locals(rest, line, tail))),
+    }
+}
+
+pub fn param_block(mp: &List<(u32, Scalar)>, line: u32, body: DStmts) -> (r: DStmts)
+    ensures
+        r == spec_param_block(*mp, line, body),
+{
+    match mp {
+        List::Nil => body,
+        _ => List::Cons((Box::new(DStmt::Scope(Box::new(param_locals(mp, line, body)))), line), Box::new(List::Nil)),
+    }
+}
+
 pub fn translate_inside(f: &Function, all: &Fns, sd: &Structs) -> (r: Result<(DConds, DConds, DConds, DStmts), Refusal>)
     ensures
         r == spec_inside(*f, *all, *sd),
@@ -11502,9 +11803,12 @@ pub fn translate_inside(f: &Function, all: &Fns, sd: &Structs) -> (r: Result<(DC
                     Some((n, l)) => Err(Refusal::Twice(n, l)),
                     None => match misreturn(&f.body, f.ret == Ty::Void) {
                         Some(l) => Err(Refusal::Syntax(l)),
-                        None => match translate_stmts(&f.body, all, &f.params, &f.params, sd) {
-                            Err(r) => Err(r),
-                            Ok(body) => Ok((req, ens, dec, body)),
+                        None => {
+                            let ms = moves_stmts(&f.body);
+                            match translate_stmts(&f.body, all, &f.params, &kept_params(&f.params, &ms), sd) {
+                                Err(r) => Err(r),
+                                Ok(body) => Ok((req, ens, dec, param_block(&moved_params(&f.params, &ms), f.line, body))),
+                            }
                         },
                     },
                     }
@@ -13540,6 +13844,7 @@ pub open spec fn spec_gstmt(s: Stmt, gs: Params, gps: Params, hide: Names, fs: F
         ),
         Stmt::SetField(f, e, l) => Stmt::SetField(f, spec_gexpr(e, gs, gps, hide, fs), l),
         Stmt::SetRefField(x, f, e, l) => Stmt::SetRefField(x, f, spec_gexpr(e, gs, gps, hide, fs), l),
+        Stmt::SetOwnField(x, f, e, l) => Stmt::SetOwnField(x, f, spec_gexpr(e, gs, gps, hide, fs), l),
         Stmt::Switch(e, k, cs, l) => Stmt::Switch(spec_gexpr(e, gs, gps, hide, fs), k, Box::new(spec_gcases(*cs, gs, gps, hide, fs)), l),
         Stmt::Call(k, nm, args, l) => Stmt::Call(k, nm, Box::new(spec_append(spec_gargs(*args, gs, gps, hide, fs), spec_gextra(k, gs, gps, fs))), l),
         Stmt::RangeFor(fr, x, xt, sq, lc, body, l) => Stmt::RangeFor(fr, x, xt, spec_gexpr(sq, gs, gps, hide, fs), lc, Box::new(spec_gstmts(*body, gs, gps, hide, fs)), l),
@@ -13603,6 +13908,7 @@ pub fn copy_stmt(s: &Stmt) -> (r: Stmt)
         ),
         Stmt::SetField(f, e, l) => Stmt::SetField(*f, copy_expr(e), *l),
         Stmt::SetRefField(x, f, e, l) => Stmt::SetRefField(*x, *f, copy_expr(e), *l),
+        Stmt::SetOwnField(x, f, e, l) => Stmt::SetOwnField(*x, *f, copy_expr(e), *l),
         Stmt::Switch(e, k, cs, l) => Stmt::Switch(copy_expr(e), *k, Box::new(copy_cases(cs)), *l),
         Stmt::Call(k, nm, args, l) => Stmt::Call(*k, *nm, Box::new(copy_args(args)), *l),
         Stmt::Exit(l) => Stmt::Exit(*l),
@@ -13670,6 +13976,7 @@ pub fn gstmt(s: &Stmt, gs: &Params, gps: &Params, hide: &Names, fs: &Fns) -> (r:
         ),
         Stmt::SetField(f, e, l) => Stmt::SetField(*f, gexpr(e, gs, gps, hide, fs), *l),
         Stmt::SetRefField(x, f, e, l) => Stmt::SetRefField(*x, *f, gexpr(e, gs, gps, hide, fs), *l),
+        Stmt::SetOwnField(x, f, e, l) => Stmt::SetOwnField(*x, *f, gexpr(e, gs, gps, hide, fs), *l),
         Stmt::Switch(e, k, cs, l) => Stmt::Switch(gexpr(e, gs, gps, hide, fs), *k, Box::new(gcases(cs, gs, gps, hide, fs)), *l),
         Stmt::Call(k, nm, args, l) => Stmt::Call(*k, *nm, Box::new(append(gargs(args, gs, gps, hide, fs), gextra(*k, gs, gps, fs))), *l),
         Stmt::RangeFor(fr, x, xt, sq, lc, body, l) => Stmt::RangeFor(*fr, *x, *xt, gexpr(sq, gs, gps, hide, fs), Box::new(copy_conds(lc)), Box::new(gstmts(body, gs, gps, hide, fs)), *l),
@@ -13795,6 +14102,7 @@ pub open spec fn spec_gcalls_stmt(s: Stmt) -> List<(u32, u32, u32)>
         Stmt::For(init, c, step, _, body, _) => spec_append(spec_gcalls_stmt(*init), spec_append(spec_gcalls(c), spec_append(spec_gcalls_stmt(*step), spec_gcalls_stmts(*body)))),
         Stmt::SetField(_, e, _) => spec_gcalls(e),
         Stmt::SetRefField(_, _, e, _) => spec_gcalls(e),
+        Stmt::SetOwnField(_, _, e, _) => spec_gcalls(e),
         Stmt::Switch(e, _, cs, _) => spec_append(spec_gcalls(e), spec_gcalls_cases(*cs)),
         Stmt::Call(k, nm, args, l) => List::Cons((k, nm, l), Box::new(spec_gcalls_args(*args))),
         Stmt::RangeFor(_, _, _, sq, _, body, _) => spec_append(spec_gcalls(sq), spec_gcalls_stmts(*body)),
@@ -13838,6 +14146,7 @@ pub fn gcalls_stmt(s: &Stmt) -> (r: List<(u32, u32, u32)>)
         Stmt::For(init, c, step, _, body, _) => append(gcalls_stmt(init), append(gcalls(c), append(gcalls_stmt(step), gcalls_stmts(body)))),
         Stmt::SetField(_, e, _) => gcalls(e),
         Stmt::SetRefField(_, _, e, _) => gcalls(e),
+        Stmt::SetOwnField(_, _, e, _) => gcalls(e),
         Stmt::Switch(e, _, cs, _) => append(gcalls(e), gcalls_cases(cs)),
         Stmt::Call(k, nm, args, l) => List::Cons((*k, *nm, *l), Box::new(gcalls_args(args))),
         Stmt::RangeFor(_, _, _, sq, _, body, _) => append(gcalls(sq), gcalls_stmts(body)),

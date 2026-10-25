@@ -165,6 +165,8 @@ enum JStmt {
     SortBy(String, String, String, JTy, JExpr, u32),
     /// `p.f = e` where `p` is a reference parameter, decision 0108.
     SetRefField(String, String, JExpr, u32),
+    /// `n->f = e` where `n` is a local `std::unique_ptr` of a plain struct, decision 0186.
+    SetOwnField(String, String, JExpr, u32),
     /// A switch over an enum, decision 0109: its condition, the key of the enum, the cases as (place of the enumerator, statements), and the line.
     Switch(JExpr, String, Vec<(u32, Vec<JStmt>)>, u32),
     Call(String, String, Vec<JExpr>, u32),
@@ -537,6 +539,7 @@ fn stmt(s: JStmt, names: &mut Names) -> Stmt {
             Stmt::Switch(expr(e, names), key, Box::new(cases), place)
         }
         JStmt::SetRefField(p, f, e, line) => Stmt::SetRefField(names.id(&p), names.id(&f), expr(e, names), names.here(line)),
+        JStmt::SetOwnField(n, f, e, line) => Stmt::SetOwnField(names.id(&n), names.id(&f), expr(e, names), names.here(line)),
         JStmt::Call(key, name, args, line) => {
             let args: Vec<Expr> = args.into_iter().map(|a| expr(a, names)).collect();
             let args = args.into_iter().rev().fold(Args::Nil, |rest, a| Args::Cons(Box::new(a), Box::new(rest)));
@@ -1001,7 +1004,7 @@ fn stmt_names<'a>(s: &'a JStmt, out: &mut Vec<&'a str>) {
             expr_names(e, out);
             cases.iter().flat_map(|(_, body)| body).for_each(|s| stmt_names(s, out));
         }
-        JStmt::SetRefField(p, _, e, _) => {
+        JStmt::SetRefField(p, _, e, _) | JStmt::SetOwnField(p, _, e, _) => {
             out.push(p);
             expr_names(e, out);
         }
@@ -1644,6 +1647,11 @@ impl Printer<'_> {
                 let x = format!("{}'", mangle(names.text(*x)));
                 self.put(depth, format!("{x} := {x}.(f_{} := {});", names.text(*f), dexpr(e, names)), place);
             }
+            // Decision 0186: the pointer owns a value, and the write keeps the other fields.
+            DStmt::SetOwnField(n, f, e) => {
+                let n = mangle(names.text(*n));
+                self.put(depth, format!("{n} := Some({n}.value.(f_{} := {}));", names.text(*f), dexpr(e, names)), place);
+            }
             DStmt::Update(objs, m, args) => {
                 let (object, call, before, after) = self.update(objs, *m, args);
                 match self.rets.get(m) {
@@ -2203,7 +2211,7 @@ fn sentence(r: Refusal, names: &Names) -> (u32, String) {
         Refusal::Element(line) => (line, "an optional of a struct or a sequence of bool has no rule yet.".to_string()),
         Refusal::Extent(line) => (line, "a sequence or an optional made from one of another type or length.".to_string()),
         Refusal::MoveRead(n, line) => (line, format!("{} moves and is read in one statement. C++ does not fix the order.", names.text(n))),
-        Refusal::MovePlace(line) => (line, "a std::move of a std::unique_ptr has a rule only in a call that stands alone, the start value of a local or a return.".to_string()),
+        Refusal::MovePlace(line) => (line, "a std::move of a std::unique_ptr has no rule here. It has a rule only in a call that stands alone, the start value of a local, a return or a field write.".to_string()),
         Refusal::NoTarget(line) => (line, "the call writes a value back, and the translator writes back only to a local or a reference parameter.".to_string()),
         Refusal::NoObject(n, line) => (line, format!("{} is a member of the struct. A requires line of a constructor has no object yet.", names.text(n))),
         Refusal::IndexName(n, line) => (line, format!("{} on the index line is a name the function already has.", names.text(n))),

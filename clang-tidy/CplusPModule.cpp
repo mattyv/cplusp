@@ -5611,6 +5611,9 @@ private:
         return tag("SetIndex", llvm::json::Array{cast<DeclRefExpr>(Subscript->getArg(0)->IgnoreParenImpCasts())->getDecl()->getNameAsString(),
                                                  expr(Subscript->getArg(1), line(S->getBeginLoc())), expr(Assign->getRHS(), line(S->getBeginLoc())),
                                                  number(line(S->getBeginLoc()))});
+      // A write of a field through a local `std::unique_ptr`, decision 0186. The core refuses a parameter that the body does not move.
+      if (const auto [Own, Field] = ownField(Assign->getLHS()); Own)
+        return tag("SetOwnField", llvm::json::Array{nameOf(Own), Field->getNameAsString(), expr(Assign->getRHS(), line(S->getBeginLoc())), number(line(S->getBeginLoc()))});
       // A write of a field of a reference parameter, decision 0108.
       if (const auto [Param, Field] = refField(Assign->getLHS()); Param)
         return tag("SetRefField", llvm::json::Array{Param->getNameAsString(), Field->getNameAsString(), expr(Assign->getRHS(), line(S->getBeginLoc())), number(line(S->getBeginLoc()))});
@@ -5623,6 +5626,14 @@ private:
       const Stmt *Plain = S;
       if (const auto *Cleanups = dyn_cast<ExprWithCleanups>(Plain))
         Plain = Cleanups->getSubExpr();
+      // `n->f = e` of a unique_ptr field, where `e` is `std::move(x)` of a local or a `std::make_unique` call, decision 0186.
+      if (const auto *Assign = dyn_cast<CXXOperatorCallExpr>(Plain); Assign && Assign->getOperator() == OO_Equal && Assign->getNumArgs() == 2)
+        if (const auto [Own, Field] = ownField(Assign->getArg(0)); Own && isUniquePtr(Field->getType())) {
+          llvm::json::Value Value = moveOfLocal(Assign->getArg(1), Field->getType());
+          if (Value.getAsNull())
+            Value = expr(Assign->getArg(1), line(S->getBeginLoc()));
+          return tag("SetOwnField", llvm::json::Array{nameOf(Own), Field->getNameAsString(), std::move(Value), number(line(S->getBeginLoc()))});
+        }
       if (const auto *Assign = dyn_cast<CXXOperatorCallExpr>(Plain); Assign && Assign->getOperator() == OO_Equal && Assign->getNumArgs() == 2 && isUniquePtr(Assign->getArg(0)->getType()))
         if (const auto *Element = dyn_cast<CXXOperatorCallExpr>(Assign->getArg(0)->IgnoreParenImpCasts()); Element && Element->getOperator() == OO_Subscript)
           return unknown(S, "an assignment to a unique_ptr element", line(S->getBeginLoc()));
@@ -5991,6 +6002,31 @@ private:
     return Parameter->getIdentifier() ? Declared.getCanonicalType().getUnqualifiedType() : QualType();
   }
 
+  // The literal of an integer value of the type `T`, or null when the magnitude needs more than 64 bits. A negative value is the negation of a literal, as `-5` is,
+  // decisions 0106 and 0186.
+  llvm::json::Value intLiteral(const llvm::APSInt &Value, QualType T) const {
+    // The magnitude of a negative value, taken one bit wider so that the minimum of a type does not overflow.
+    llvm::APSInt Wide = Value.extend(Value.getBitWidth() + 1);
+    if (Value.isNegative())
+      Wide = -Wide;
+    if (Wide.getActiveBits() > 64)
+      return nullptr;
+    const llvm::json::Value Own = type(T);
+    if (!Value.isNegative())
+      return tag("Lit", llvm::json::Array{number(Wide.getZExtValue()), Own});
+    // A negative value is computed in int, or in long for int64_t, and converted to its type. The minimum of int and of long is
+    // the negation of the maximum, less 1, so that no literal is too large.
+    const bool Long = Value.getBitWidth() > 32;
+    const char *Computed = Long ? "I64" : "I32";
+    const uint64_t Maximum = Long ? INT64_MAX : INT32_MAX;
+    llvm::json::Value Negative = Wide.getZExtValue() <= Maximum
+                                     ? tag("Neg", tag("Lit", llvm::json::Array{number(Wide.getZExtValue()), Computed}))
+                                     : tag("Bin", llvm::json::Array{"Sub", tag("Neg", tag("Lit", llvm::json::Array{number(Maximum), Computed})),
+                                                                    tag("Lit", llvm::json::Array{number(1), Computed})});
+    if (StringRef(Computed) == Own.getAsString().value_or(""))
+      return Negative;
+    return tag("Cast", llvm::json::Array{tag("Integral", llvm::json::Array{Computed, Own}), std::move(Negative)});
+  }
   // The kind of a cast of a final class over an interface to one of its interfaces, or null, decision 0166.
   llvm::json::Value upcastKind(const CastExpr *Cast) const {
     const CXXRecordDecl *To = Cast->getType()->getAsCXXRecordDecl();
@@ -6022,19 +6058,87 @@ private:
         return Found;
     return nullptr;
   }
+  // `n->f` where `n` is a local, or a parameter by value, of type `std::unique_ptr<S>` for a plain struct `S`: the pair (`n`, `f`). A pair of nulls for any other form,
+  // such as a reference parameter or the field of a field, decision 0186.
+  std::pair<const VarDecl *, const FieldDecl *> ownField(const Expr *E) const {
+    const auto *Member = dyn_cast<MemberExpr>(E->IgnoreParens());
+    const auto *Field = Member ? dyn_cast<FieldDecl>(Member->getMemberDecl()) : nullptr;
+    const auto *Arrow = Member && Member->isArrow() ? dyn_cast<CXXOperatorCallExpr>(Member->getBase()->IgnoreParenImpCasts()) : nullptr;
+    if (!Field || !Arrow || Arrow->getOperator() != OO_Arrow || Arrow->getNumArgs() != 1)
+      return {};
+    const auto *Ref = dyn_cast<DeclRefExpr>(Arrow->getArg(0)->IgnoreParenImpCasts());
+    const auto *Var = Ref ? dyn_cast<VarDecl>(Ref->getDecl()) : nullptr;
+    if (!Var || !Var->hasLocalStorage() || Var->getType()->isReferenceType() || Var->getType().isConstQualified())
+      return {};
+    const QualType Held = ownElement(Var->getType());
+    if (Held.isNull() || !plainStruct(Held))
+      return {};
+    return {Var, Field};
+  }
+  // `std::make_unique<S>()` of a plain struct `S`: `Wrap(Construct(S, values))` with the start value of each field, decision 0186. An integer or bool field starts with its
+  // default member initializer, which must be a constant expression. A `std::unique_ptr` field with no initializer, or with `nullptr`, starts null. Null for any other form.
+  llvm::json::Value makeUniqueNew(const CallExpr *Make) const {
+    const QualType Made = ownElement(Make->getType());
+    const CXXRecordDecl *RD = Made.isNull() ? nullptr : plainStruct(Made);
+    if (!RD || finalOverInterface(RD) || !SM.isInSystemHeader(Make->getDirectCallee()->getLocation()))
+      return nullptr;
+    // A constructor of its own may set any field, so the start values would not be those of the initializers.
+    for (const CXXConstructorDecl *C : RD->ctors())
+      if (C->isDefaultConstructor() && C->isUserProvided())
+        return nullptr;
+    llvm::json::Array Values;
+    for (const FieldDecl *F : RD->fields()) {
+      const QualType FT = F->getType();
+      const Expr *Init = F->hasInClassInitializer() ? F->getInClassInitializer() : nullptr;
+      if (!ownVecElement(FT).isNull()) {
+        // The initializer `nullptr` is a conversion of the null literal to the unique_ptr.
+        if (Init) {
+          Init = Init->IgnoreParenImpCasts();
+          if (const auto *Construct = dyn_cast<CXXConstructExpr>(Init); Construct && Construct->getNumArgs() == 1)
+            Init = Construct->getArg(0)->IgnoreParenImpCasts();
+          if (!isa<CXXNullPtrLiteralExpr>(Init))
+            return nullptr;
+        }
+        Values.push_back("Nullopt");
+        continue;
+      }
+      const char *Scalar = scalar(FT) ? scalar(FT) : smallScalar(FT);
+      // A constant expression of C++11 has no overflow and no side effect, so `2147483647 + 1` and `(g = 9, 4)` keep the sentence of today.
+      APValue Value;
+      if (!Scalar || !Init || Init->isValueDependent() || !Init->isCXX11ConstantExpr(Context, &Value) || !Value.isInt())
+        return nullptr;
+      if (StringRef(Scalar) == "Bool") {
+        Values.push_back(tag("Bool", Value.getInt().getBoolValue()));
+        continue;
+      }
+      llvm::json::Value Literal = intLiteral(Value.getInt(), FT.getCanonicalType().getUnqualifiedType());
+      if (Literal.getAsNull())
+        return nullptr;
+      Values.push_back(std::move(Literal));
+    }
+    (void)type(Made);  // writes the struct
+    return tag("Wrap", tag("Construct", llvm::json::Array{structKey(RD), std::move(Values)}));
+  }
   // `std::move(x)` of a local or a parameter `x` whose type is exactly the `std::unique_ptr<B>` type `Target`: `Move(x, Own(B))`, decision 0171. Null for any other form.
+  // The name of a local or a parameter by value as an xvalue, with no `std::move` call, is the implicit move of `return x;`, which gives the same `Move`, decision 0186.
   llvm::json::Value moveOfLocal(const Expr *Moved, QualType Target) const {
     const auto *Call = dyn_cast<CallExpr>(Moved->IgnoreParenImpCasts());
     const FunctionDecl *Callee = Call && Call->getNumArgs() == 1 ? Call->getDirectCallee() : nullptr;
-    if (!Callee || !Callee->isInStdNamespace() || !Callee->getDeclName().isIdentifier() || Callee->getName() != "move")
+    const auto *Implicit = dyn_cast<ImplicitCastExpr>(Moved->IgnoreParens());
+    const bool Moves = Callee && Callee->isInStdNamespace() && Callee->getDeclName().isIdentifier() && Callee->getName() == "move";
+    const bool Returns = !Call && Implicit && Implicit->isXValue() && Implicit->getCastKind() == CK_NoOp;
+    if (!Moves && !Returns)
       return nullptr;
-    const auto *Ref = dyn_cast<DeclRefExpr>(Call->getArg(0)->IgnoreParenImpCasts());
+    const auto *Ref = dyn_cast<DeclRefExpr>((Moves ? Call->getArg(0) : Moved)->IgnoreParenImpCasts());
     const auto *Var = Ref ? dyn_cast<VarDecl>(Ref->getDecl()) : nullptr;
     if (!Var || !Var->hasLocalStorage() || Var->getType()->isReferenceType() || Var->getType().hasQualifiers() ||
         Var->getType().getCanonicalType() != Target.getUnqualifiedType().getCanonicalType())
       return nullptr;
     const QualType Held = ownVecElement(Var->getType());
     if (Held.isNull())
+      return nullptr;
+    // The implicit move of a pointer to an interface keeps the refusal of decision 0168. Decision 0186 names the struct.
+    if (!Moves && isInterface(ownElement(Held)->getAsCXXRecordDecl()))
       return nullptr;
     return tag("Move", llvm::json::Array{Var->getNameAsString(), tag("Own", ownScalar(ownElement(Held)))});
   }
@@ -6256,6 +6360,11 @@ private:
         return expr(Inner, Near);
       return unknown(E, "a std::unique_ptr of a class as a std::unique_ptr of its interface", Near);
     }
+    // `std::make_unique<S>()` of a plain struct is a new value with the start value of each field, decision 0186.
+    if (const auto *Make = dyn_cast<CallExpr>(E); Make && Make->getNumArgs() == 0 && Make->getDirectCallee() && Make->getDirectCallee()->isInStdNamespace() &&
+                                                  Make->getDirectCallee()->getDeclName().isIdentifier() && Make->getDirectCallee()->getName() == "make_unique")
+      if (llvm::json::Value Made = makeUniqueNew(Make); !Made.getAsNull())
+        return Made;
     // `std::make_unique<T>(x)` of a scalar, with an argument of exactly that type, is a value of `x`, decision 0142.
     if (const auto *Make = dyn_cast<CallExpr>(E); Make && Make->getNumArgs() == 1 && Make->getDirectCallee() && Make->getDirectCallee()->isInStdNamespace() &&
                                                   Make->getDirectCallee()->getDeclName().isIdentifier() && Make->getDirectCallee()->getName() == "make_unique")
@@ -6321,29 +6430,9 @@ private:
         return unknown(E, "a double constant that the model cannot write exactly", Near);
       }
       // A named constant is its value, decision 0106. A negative one is the negation of a literal, as `-5` is.
-      if (const std::optional<llvm::APSInt> Value = constant(D)) {
-        // The magnitude of a negative value, taken one bit wider so that the minimum of a type does not overflow.
-        llvm::APSInt Wide = Value->extend(Value->getBitWidth() + 1);
-        if (Value->isNegative())
-          Wide = -Wide;
-        if (Wide.getActiveBits() <= 64) {
-          const llvm::json::Value Own = type(D->getType().getCanonicalType().getUnqualifiedType());
-          if (!Value->isNegative())
-            return tag("Lit", llvm::json::Array{number(Wide.getZExtValue()), Own});
-          // A negative value is computed in int, or in long for int64_t, and converted to its type. The minimum of int and of long is
-          // the negation of the maximum, less 1, so that no literal is too large.
-          const bool Long = Value->getBitWidth() > 32;
-          const char *Computed = Long ? "I64" : "I32";
-          const uint64_t Maximum = Long ? INT64_MAX : INT32_MAX;
-          llvm::json::Value Negative = Wide.getZExtValue() <= Maximum
-                                           ? tag("Neg", tag("Lit", llvm::json::Array{number(Wide.getZExtValue()), Computed}))
-                                           : tag("Bin", llvm::json::Array{"Sub", tag("Neg", tag("Lit", llvm::json::Array{number(Maximum), Computed})),
-                                                                          tag("Lit", llvm::json::Array{number(1), Computed})});
-          if (StringRef(Computed) == Own.getAsString().value_or(""))
-            return Negative;
-          return tag("Cast", llvm::json::Array{tag("Integral", llvm::json::Array{Computed, Own}), std::move(Negative)});
-        }
-      }
+      if (const std::optional<llvm::APSInt> Value = constant(D))
+        if (llvm::json::Value Literal = intLiteral(*Value, D->getType().getCanonicalType().getUnqualifiedType()); !Literal.getAsNull())
+          return Literal;
     }
     // A character is an integer once the compiler has converted it, decision 0106. An ASCII character only: the sign of `char` plays no part.
     if (const auto *Convert = dyn_cast<ImplicitCastExpr>(E); Convert && Convert->getCastKind() == CK_IntegralCast)
