@@ -5907,6 +5907,89 @@ fn a_class_that_holds_a_vector_with_no_rule_is_refused() {
     assert_eq!(refused, want, "{text}");
 }
 
+/// A class template is a struct for each type that the file uses it at, with its member functions under the Dafny name of the
+/// instance, decision 0188.
+#[test]
+fn a_class_template_proves_at_each_type() {
+    let Some(dafny) = dafny() else { return };
+    if !clang_tidy_available() {
+        return;
+    }
+    let o = prove("model-class-template.cpp", &[], &dafny);
+    let text = stdout(&o);
+    assert_eq!(o.status.code(), Some(0), "stdout: {text} stderr: {}", stderr(&o));
+    assert_eq!(text.lines().last(), Some("ok: proved"), "{text}");
+    let dir = tempfile::tempdir().unwrap();
+    let (o, out) = model("model-class-template.cpp", dir.path());
+    assert_eq!(o.status.code(), Some(0), "stdout: {} stderr: {}", stdout(&o), stderr(&o));
+    let text = std::fs::read_to_string(out).unwrap();
+    for header in [
+        "datatype S_Box'of'int32 = S_Box'of'int32(f_v_: int32)",
+        "datatype S_Box'of'bool = S_Box'of'bool(f_v_: bool)",
+        "datatype S_Pair'of'S_Point'bool = S_Pair'of'S_Point'bool(f_first: S_Point, f_second: bool)",
+        "method c_Box'of'int32'set(v_this: S_Box'of'int32, v_v: int32) returns (v_this': S_Box'of'int32)",
+        "method c_Box'of'bool'set(v_this: S_Box'of'bool, v_v: bool) returns (v_this': S_Box'of'bool)",
+    ] {
+        assert_eq!(text.matches(header).count(), 1, "{header}: {text}");
+    }
+}
+
+/// A contract of a class template that holds at one type fails at another, and a caller of an instance proves what the instance
+/// says, decision 0188.
+#[test]
+fn a_class_template_keeps_its_contract_at_each_type() {
+    let Some(dafny) = dafny() else { return };
+    if !clang_tidy_available() {
+        return;
+    }
+    let o = prove("model-class-template-wrong.cpp", &[], &dafny);
+    let text = stdout(&o);
+    assert_eq!(o.status.code(), Some(1), "stdout: {text} stderr: {}", stderr(&o));
+    let failed: Vec<&str> = text.lines().filter(|l| l.starts_with("Not proved: ") || l.starts_with("Not provable: ")).map(|l| l.rsplit_once(".cpp:").unwrap().1).collect();
+    assert_eq!(failed, ["18: the value may not fit int32_t.", "34: the ensures line may not hold on this return."], "{text}");
+}
+
+/// A class template with no instance, a type argument with no Dafny name, a member function template, a member function with a
+/// contract that no instance makes, a contract that calls such a member by any path, and a member of an instance that is no struct
+/// of the model are refused, decision 0188. A member that writes keeps its own sentence beside an instance. A contract that calls a
+/// member of a plain struct that the file only declares names it by its name.
+#[test]
+fn a_class_template_with_no_rule_is_refused() {
+    let Some(dafny) = dafny() else { return };
+    if !clang_tidy_available() {
+        return;
+    }
+    let o = prove("model-class-template-refuse.cpp", &[], &dafny);
+    let text = stdout(&o);
+    assert_eq!(o.status.code(), Some(1), "stdout: {text} stderr: {}", stderr(&o));
+    let refused: Vec<&str> = text.lines().filter(|l| l.starts_with("Not proved: ") || l.starts_with("Not provable: ")).map(|l| l.rsplit_once(".cpp:").unwrap().1).collect();
+    let no_model = "a call to Gauge<int>::valid, which has no model in view.";
+    let no_instance = "a member function with no instance: the translator has no rule for it yet.";
+    let method = "CXXMethodDecl: the translator has no rule for it yet.";
+    let want = [
+        "9: a class template with no instance: the translator has no rule for it yet.".to_string(),
+        "15: a type argument with no Dafny name: the translator has no rule for it yet.".to_string(),
+        "20: const Holder<std::vector<int32_t>> &: the translator has no rule for it yet.".to_string(),
+        "33: a member function template: the translator has no rule for it yet.".to_string(),
+        format!("48: {no_instance}"),
+        format!("50: {no_model}"),
+        format!("58: {no_model}"),
+        format!("69: {no_model}"),
+        format!("76: {no_model}"),
+        "91: valid is no pure function. A contract calls a function with one return and no write.".to_string(),
+        format!("106: {method}"),
+        format!("115: {method}"),
+        format!("125: {no_instance}"),
+        "136: a class template with no instance: the translator has no rule for it yet.".to_string(),
+        format!("149: {no_instance}"),
+        format!("151: {no_instance}"),
+        "155: a call to Meter<int>::value, which has no model in view.".to_string(),
+        "161: a call to Meter<int>::operator(), which has no model in view.".to_string(),
+        "172: a call to Probe::valid, which has no model in view.".to_string(),
+    ];
+    assert_eq!(refused, want, "{text}");
+}
+
 /// A node that the code makes with std::make_unique, writes through its pointer and moves into a field proves. So does a moved
 /// parameter, which is null after its move, decision 0186.
 #[test]
@@ -6205,7 +6288,7 @@ fn a_function_template_keeps_its_contract_at_each_type() {
 
 /// A member function template, an instance whose body has no rule, a template with no instance, a call of an instance that the
 /// file only declares, and a type argument with no type of the model are refused. A refused instance has no contract for its
-/// callers, decision 0180.
+/// callers, decision 0180. A struct of a class template is a type of the model since decision 0188.
 #[test]
 fn a_function_template_with_no_rule_is_refused() {
     let Some(dafny) = dafny() else { return };
@@ -6222,8 +6305,6 @@ fn a_function_template_with_no_rule_is_refused() {
         "17: UnaryExprOrTypeTraitExpr: the translator has no rule for it yet.",
         "28: a function template with no instance: the translator has no rule for it yet.",
         "43: a call to larger<int>, which has no model in view.",
-        "54: Box<int>: the translator has no rule for it yet.",
-        "58: Box<int32_t>: the translator has no rule for it yet.",
         "65: a function template with no instance: the translator has no rule for it yet.",
         "84: a type argument with no Dafny name: the translator has no rule for it yet.",
         "90: a call to count<std::vector<int>>, which has no model in view.",

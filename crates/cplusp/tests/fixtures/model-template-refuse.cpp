@@ -43,7 +43,7 @@ int32_t larger32(int32_t a, int32_t b) {
   return larger(a, b);
 }
 
-// A type argument that has no type of the model.
+// A struct of a class template as a type argument. It is a type of the model since decision 0188.
 template <typename T>
 struct Box {
   T v;

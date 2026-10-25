@@ -1587,6 +1587,23 @@ fn the_unit_marks_which_members_are_pure_whatever_the_table_says() {
     assert_eq!(bare_refusal(last), Refusal::NotPure(VALID, 23));
 }
 
+/// A contract that calls a member with no function of the file, as a member of a class template that no instance makes, gets the
+/// sentence of a call with no model by the key of the member. A member that is not pure keeps its own sentence, decision 0188.
+#[test]
+fn a_contract_call_of_a_member_with_no_function_has_no_model() {
+    let user = Function {
+        name: SAT,
+        line: 24,
+        params: List::Cons((A, Ty::Struct(COUNTER)), Box::new(List::Nil)),
+        ret: Ty::Bool,
+        trusted: false,
+        conds: List::Cons((CondKind::Requires, Expr::MApply(b(Expr::Name(A)), VALID, Box::new(List::Nil)), 23, names(&[A])), Box::new(List::Nil)),
+        body: one(Stmt::Return(Expr::Bool(true), 25)),
+    };
+    let List::Cons(m, _) = translate_unit(&fns(vec![user]), &members_table(None, None)) else { panic!("a model") };
+    assert_eq!(bare_refusal(m), Refusal::Callee(VKEY, 23));
+}
+
 #[test]
 fn the_parser_reads_a_call_of_a_member_function_on_a_path() {
     // c.value() and c.get(1, b)
