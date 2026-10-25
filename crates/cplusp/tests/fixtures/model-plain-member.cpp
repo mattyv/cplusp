@@ -50,3 +50,39 @@ int32_t back(const Twice& t, int32_t x) {
 int32_t pick(const Pair& p) {
   return p.a > 0 && p.first() > 0 ? p.twice() : 0;
 }
+
+// A contract can call a member function that calls only plain member functions, also when its own contract calls one.
+//@ requires t.valid() && -1000000 <= x && x <= 1000000
+//@ ensures result == t.run(x)
+int32_t again(const Twice& t, int32_t x) {
+  return t.run(x);
+}
+
+// The object of the call is a local, and the call stands on the right of ||.
+//@ requires -1000 <= x && x <= 1000
+//@ ensures result == (x <= 0 || x > 5)
+bool local_or(int32_t x) {
+  const Pair p{x, 0};
+  return x <= 0 || p.first() > 5;
+}
+
+// The call is the condition of a loop.
+struct Loop {
+  int32_t n = 0;
+
+  //@ requires 0 <= i
+  //@ ensures result == (i < n)
+  bool more(int32_t i) const { return i < n; }
+
+  //@ requires 0 <= n && n <= 1000
+  //@ ensures result == n
+  int32_t count() const {
+    int32_t i = 0;
+    //@ invariant 0 <= i && i <= n
+    //@ decreases n - i
+    while (more(i)) {
+      i = i + 1;
+    }
+    return i;
+  }
+};

@@ -5990,8 +5990,9 @@ fn a_class_template_with_no_rule_is_refused() {
     assert_eq!(refused, want, "{text}");
 }
 
-/// A call of a plain member function is its function in place, of a field, of its own class, and on the right of && and in a
-/// branch of ?:. A member function that calls only plain member functions is pure, and a contract can call it, decision 0189.
+/// A call of a plain member function is its function in place, of a field, of its own class, of a local, on the right of && and of
+/// ||, in a branch of ?: and in a loop condition. A member function that calls only plain member functions is pure, and a contract
+/// can call it, also when its own contract calls one, decisions 0189 and 0190.
 #[test]
 fn a_call_of_a_plain_member_function_proves() {
     let Some(dafny) = dafny() else { return };
@@ -6022,7 +6023,8 @@ fn a_call_of_a_plain_member_function_keeps_its_contract() {
 }
 
 /// A member function whose body holds a call is no plain member function, so a member that calls it is no pure function. A plain
-/// member function whose contract has no model stays a method, decision 0189.
+/// member function whose contract has no model stays a method, and so a member that calls it is no pure function. A call of a
+/// virtual function of an interface is no call of a plain member function, decisions 0189 and 0190.
 #[test]
 fn a_call_of_a_member_function_that_is_not_plain_keeps_its_rules() {
     let Some(dafny) = dafny() else { return };
@@ -6034,9 +6036,15 @@ fn a_call_of_a_member_function_that_is_not_plain_keeps_its_rules() {
     assert_eq!(o.status.code(), Some(1), "stdout: {text} stderr: {}", stderr(&o));
     let failed: Vec<&str> = text.lines().filter(|l| l.starts_with("Not proved: ") || l.starts_with("Not provable: ")).map(|l| l.rsplit_once(".cpp:").unwrap().1).collect();
     let want = [
-        "21: top is no pure function. A contract calls a function with one return and no write.",
-        "31: the contract line has a form the translator cannot read.",
-        "37: the ensures line may not hold on this return.",
+        "22: top is no pure function. A contract calls a function with one return and no write.",
+        "32: the contract line has a form the translator cannot read.",
+        "45: the contract line has a form the translator cannot read.",
+        "52: g2 is no pure function. A contract calls a function with one return and no write.",
+        "76: outer is no pure function. A contract calls a function with one return and no write.",
+        "38: the ensures line may not hold on this return.",
+        "49: the ensures line may not hold on this return.",
+        "86: the prover cannot show that this ends.",
+        "91: the prover cannot show that this ends.",
     ];
     assert_eq!(failed, want, "{text}");
     assert!(!text.contains("Dafny says"), "{text}");

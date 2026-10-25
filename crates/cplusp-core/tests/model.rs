@@ -1545,7 +1545,9 @@ fn a_call_of_a_plain_member_function_is_its_function_in_place() {
     let List::Cons(Model::Full(m), _) = *rest else { panic!("a full model of the caller") };
     let List::Cons((s, _), rest) = strip(m.body) else { panic!("a body") };
     assert_eq!(*rest, List::Nil);
-    assert!(matches!(&*s, DStmt::Return(_)), "{s:?}");
+    let DStmt::Return(DExpr::Bin(BinOp::Add, l, r)) = *s else { panic!("a return of a sum: {s:?}") };
+    assert_eq!(*l, DExpr::FCall(NKEY, Box::new(List::Cons(DExpr::Var(A), Box::new(List::Nil)))));
+    assert_eq!(*r, lit32(1));
     // Two statements: the call runs before its statement.
     let two = value_fn(List::Cons(Box::new(Stmt::Local(B, Ty::I32, read_n(), 10)), Box::new(one(Stmt::Return(read(B, Ty::I32), 11)))));
     let List::Cons(_, rest) = translate_unit(&fns(vec![two, caller()]), &members_table(None, None)) else { panic!("models") };
