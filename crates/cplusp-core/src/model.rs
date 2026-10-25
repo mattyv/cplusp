@@ -1296,22 +1296,96 @@ pub open spec fn spec_callee_ty(all: Fns, key: u32, line: u32, sd: Structs) -> R
     }
 }
 
-/// The callee `key` is a const virtual function of an interface, a function of the model with no body. A call of it is that
-/// function in any place of code, because it changes no state, decision 0172.
-pub open spec fn spec_inline(all: Fns, key: u32) -> bool {
+/// The callee `key` is a const virtual function of an interface, a function of the model with no body, decision 0172, or a plain
+/// member function that the table `sd` marks pure, decision 0189. A call of it is that function in any place of code, because it
+/// changes no state.
+pub open spec fn spec_inline(all: Fns, key: u32, sd: Structs) -> bool {
     match spec_find(all, key) {
-        Some(f) => spec_const_virtual(f),
+        Some(f) => spec_const_virtual(f) || (spec_plain(f) && spec_key_pure(sd, key)),
         None => false,
     }
 }
 
-pub fn inline(all: &Fns, key: u32) -> (r: bool)
+pub fn inline(all: &Fns, key: u32, sd: &Structs) -> (r: bool)
     ensures
-        r == spec_inline(*all, key),
+        r == spec_inline(*all, key, *sd),
 {
     match find(all, key) {
-        Some(f) => const_virtual(f),
+        Some(f) => const_virtual(f) || (plain(f) && key_pure(sd, key)),
         None => false,
+    }
+}
+
+/// A plain member function: a const member function with no reference parameter that it writes, whose body is one return of an
+/// expression with no call, decision 0189. It calls nothing, so a call of it can never be part of a cycle.
+pub open spec fn spec_plain(f: Function) -> bool {
+    !f.trusted && (spec_head_ty(f.params) matches Some(Ty::This(_))) && !spec_mutates(f.params) && match f.body {
+        List::Cons(st, rest) => *rest == List::Nil && match *st {
+            Stmt::Return(e, _) => spec_gcalls(e) == List::<(u32, u32, u32)>::Nil,
+            _ => false,
+        },
+        List::Nil => false,
+    }
+}
+
+pub fn plain(f: &Function) -> (r: bool)
+    ensures
+        r == spec_plain(*f),
+{
+    !f.trusted && matches!(head_ty(&f.params), Some(Ty::This(_))) && !mutates(&f.params) && match &f.body {
+        List::Cons(st, rest) => matches!(&**rest, List::Nil) && match &**st {
+            Stmt::Return(e, _) => matches!(gcalls(e), List::Nil),
+            _ => false,
+        },
+        List::Nil => false,
+    }
+}
+
+/// A member of a struct of `sd` with the key `key` is marked pure, with a type that is no mark of a member with no function,
+/// decisions 0095 and 0188.
+pub open spec fn spec_key_pure(sd: Structs, key: u32) -> bool
+    decreases sd,
+{
+    match sd {
+        List::Nil => false,
+        List::Cons((_, (_, _, ms)), rest) => spec_members_key_pure(ms, key) || spec_key_pure(*rest, key),
+    }
+}
+
+pub open spec fn spec_members_key_pure(ms: Members, key: u32) -> bool
+    decreases ms,
+{
+    match ms {
+        List::Nil => false,
+        List::Cons((_, (k, m)), rest) => (k == key && match m {
+            Some((t, _)) => !(t is Other),
+            None => false,
+        }) || spec_members_key_pure(*rest, key),
+    }
+}
+
+pub fn key_pure(sd: &Structs, key: u32) -> (r: bool)
+    ensures
+        r == spec_key_pure(*sd, key),
+    decreases sd,
+{
+    match sd {
+        List::Nil => false,
+        List::Cons((_, (_, _, ms)), rest) => members_key_pure(ms, key) || key_pure(rest, key),
+    }
+}
+
+pub fn members_key_pure(ms: &Members, key: u32) -> (r: bool)
+    ensures
+        r == spec_members_key_pure(*ms, key),
+    decreases ms,
+{
+    match ms {
+        List::Nil => false,
+        List::Cons((_, (k, m)), rest) => (*k == key && match m {
+            Some((t, _)) => !matches!(t, Ty::Other(_)),
+            None => false,
+        }) || members_key_pure(rest, key),
     }
 }
 
@@ -1337,8 +1411,9 @@ pub open spec fn spec_lift(e: Expr, all: Fns, line: u32, sd: Structs, n: u32, op
             Ok(_) => Ok((List::Nil, spec_code_var(v, t), n)),
             Err(r) => Err(r),
         },
-        // A call of a const virtual function of an interface is its function in place, decision 0172.
-        Expr::Call(k, nm, args, at) => if spec_inline(all, k) && spec_callable(all, k, sd) {
+        // A call of a const virtual function of an interface, decision 0172, or of a plain member function, decision 0189, is its
+        // function in place.
+        Expr::Call(k, nm, args, at) => if spec_inline(all, k, sd) && spec_callable(all, k, sd) {
             match spec_lift_args(*args, all, line, sd, n, open) {
                 Err(r) => Err(r),
                 Ok((ca, da, n1)) => Ok((ca, DExpr::FCall(k, Box::new(da)), n1)),
@@ -6165,8 +6240,9 @@ pub open spec fn spec_bounds(ps: Params, line: u32, tail: DConds) -> DConds
 /// writes a reference parameter is never pure, decision 0108.
 /// The value of a body of apply lines and one return: the value of the return after each lemma, in order, decision 0167. A local
 /// before the return is a `var` of the value, decision 0172. A call of a const virtual function of an interface as the value of the
-/// return or of a local is the function of the interface, whose method gives the same value, decision 0166.
-pub open spec fn spec_pure_value(body: DStmts, all: Fns) -> Option<DExpr>
+/// return or of a local is the function of the interface, whose method gives the same value, decision 0166. So is a call of a plain
+/// member function that the table `sd` marks pure, decision 0189.
+pub open spec fn spec_pure_value(body: DStmts, all: Fns, sd: Structs) -> Option<DExpr>
     decreases body,
 {
     match body {
@@ -6176,21 +6252,21 @@ pub open spec fn spec_pure_value(body: DStmts, all: Fns) -> Option<DExpr>
             } else {
                 None
             },
-            DStmt::ReturnCall(k, da) => if *rest == List::Nil && spec_inline(all, k) {
+            DStmt::ReturnCall(k, da) => if *rest == List::Nil && spec_inline(all, k, sd) {
                 Some(DExpr::FCall(k, Box::new(da)))
             } else {
                 None
             },
-            DStmt::Apply(f, da) => match spec_pure_value(*rest, all) {
+            DStmt::Apply(f, da) => match spec_pure_value(*rest, all, sd) {
                 Some(e) => Some(DExpr::Lemma(f, Box::new(da), Box::new(e))),
                 None => None,
             },
-            DStmt::Local(n, dt, d) => match spec_pure_value(*rest, all) {
+            DStmt::Local(n, dt, d) => match spec_pure_value(*rest, all, sd) {
                 Some(e) => Some(DExpr::Let(n, dt, Box::new(d), Box::new(e))),
                 None => None,
             },
-            DStmt::LocalCall(n, dt, k, da) => if spec_inline(all, k) {
-                match spec_pure_value(*rest, all) {
+            DStmt::LocalCall(n, dt, k, da) => if spec_inline(all, k, sd) {
+                match spec_pure_value(*rest, all, sd) {
                     Some(e) => Some(DExpr::Let(n, dt, Box::new(DExpr::FCall(k, Box::new(da))), Box::new(e))),
                     None => None,
                 }
@@ -6205,9 +6281,9 @@ pub open spec fn spec_pure_value(body: DStmts, all: Fns) -> Option<DExpr>
 
 /// A member function with `this`, or a static member function, `stat`, that writes nothing, has the value of its pure body as its
 /// function, decisions 0090 and 0174. A free function never has one.
-pub open spec fn spec_pure_body(ps: Params, body: DStmts, all: Fns, stat: bool) -> Option<DExpr> {
+pub open spec fn spec_pure_body(ps: Params, body: DStmts, all: Fns, sd: Structs, stat: bool) -> Option<DExpr> {
     if (spec_this(ps) is Some || stat) && !spec_mutates(ps) {
-        spec_pure_value(body, all)
+        spec_pure_value(body, all, sd)
     } else {
         None
     }
@@ -6533,7 +6609,7 @@ pub open spec fn spec_pure_ret(all: Fns, key: u32, sd: Structs, strict: bool) ->
             None
         } else if strict {
             match spec_inside(f, all, sd) {
-                Ok((_, _, _, body)) => match spec_pure_body(f.params, body, all, spec_static_key(sd, f.name)) {
+                Ok((_, _, _, body)) => match spec_pure_body(f.params, body, all, sd, spec_static_key(sd, f.name)) {
                     Some(_) => Some((f.ret, f.params)),
                     None => None,
                 },
@@ -6541,7 +6617,7 @@ pub open spec fn spec_pure_ret(all: Fns, key: u32, sd: Structs, strict: bool) ->
             }
         } else {
             match spec_stmts(f.body, all, f.params, f.params, sd) {
-                Ok(body) => match spec_pure_body(f.params, body, all, spec_static_key(sd, f.name)) {
+                Ok(body) => match spec_pure_body(f.params, body, all, sd, spec_static_key(sd, f.name)) {
                     Some(_) => Some((f.ret, f.params)),
                     None => None,
                 },
@@ -6585,7 +6661,86 @@ pub open spec fn spec_mark(t: Structs, all: Fns, sd: Structs, strict: bool) -> S
 /// The table of the unit: first the members whose body is pure, then of those the members whose contract also has a model under
 /// that first table, decision 0095. A contract that calls a member reads the second table.
 pub open spec fn spec_marked(sd: Structs, all: Fns) -> Structs {
-    spec_mark(sd, all, spec_mark(sd, all, sd, false), true)
+    spec_settle(sd, all, spec_top(sd, all), spec_all_members(sd))
+}
+
+/// The table with each member marked pure, as its signature says, and each member with no function marked as such. The marks of
+/// the unit come down from it, decision 0190.
+pub open spec fn spec_top(t: Structs, all: Fns) -> Structs
+    decreases t,
+{
+    match t {
+        List::Nil => List::Nil,
+        List::Cons((k, (l, fields, ms)), rest) => List::Cons((k, (l, fields, spec_top_members(ms, all))), Box::new(spec_top(*rest, all))),
+    }
+}
+
+pub open spec fn spec_top_members(ms: Members, all: Fns) -> Members
+    decreases ms,
+{
+    match ms {
+        List::Nil => List::Nil,
+        List::Cons((n, (key, _)), rest) => List::Cons((n, (key, spec_top_mark(all, key))), Box::new(spec_top_members(*rest, all))),
+    }
+}
+
+pub open spec fn spec_top_mark(all: Fns, key: u32) -> Option<(Ty, Params)> {
+    match spec_find(all, key) {
+        Some(f) => Some((f.ret, f.params)),
+        None => Some((Ty::Other(key), List::Nil)),
+    }
+}
+
+/// The members of each struct of the table, in order. Their count bounds the passes of the marks.
+pub open spec fn spec_all_members(t: Structs) -> Members
+    decreases t,
+{
+    match t {
+        List::Nil => List::Nil,
+        List::Cons((_, (_, _, ms)), rest) => spec_append(ms, spec_all_members(*rest)),
+    }
+}
+
+/// The strict marks, from the table `t`, until a pass marks no member other than `t` does. A member keeps its mark only when its
+/// body is pure and its contract has a model under the marks before. Each pass takes marks away, never adds one, so there is one
+/// pass at most for each member of `ks`, and the marks then hold of their own table. So a call of a plain member function in a body
+/// reads the same marks as a contract that calls its caller, decisions 0189 and 0190.
+/// ponytail: the core does not prove that a pass only takes marks away, nor that the result holds of its own table, and the last
+/// pass at the bound is not checked. A break shows as a call of a function that the model does not define, which Dafny refuses.
+/// The upgrade is a lemma that spec_mark is monotone in its table, and from it a lemma that each FCall key of spec_unit names a
+/// model whose function is Some.
+pub open spec fn spec_settle(sd: Structs, all: Fns, t: Structs, ks: Members) -> Structs
+    decreases ks,
+{
+    match ks {
+        List::Nil => spec_mark(sd, all, t, true),
+        List::Cons(_, rest) => if spec_same_marks(spec_mark(sd, all, t, true), t) {
+            t
+        } else {
+            spec_settle(sd, all, spec_mark(sd, all, t, true), *rest)
+        },
+    }
+}
+
+/// Two tables of one shape mark the same members.
+pub open spec fn spec_same_marks(a: Structs, b: Structs) -> bool
+    decreases a,
+{
+    match (a, b) {
+        (List::Nil, List::Nil) => true,
+        (List::Cons((_, (_, _, ma)), ra), List::Cons((_, (_, _, mb)), rb)) => spec_same_member_marks(ma, mb) && spec_same_marks(*ra, *rb),
+        _ => false,
+    }
+}
+
+pub open spec fn spec_same_member_marks(a: Members, b: Members) -> bool
+    decreases a,
+{
+    match (a, b) {
+        (List::Nil, List::Nil) => true,
+        (List::Cons((_, (_, x)), ra), List::Cons((_, (_, y)), rb)) => (x is Some) == (y is Some) && spec_same_member_marks(*ra, *rb),
+        _ => false,
+    }
 }
 
 // ------------------------------------------------------------------ virtual functions, decision 0165
@@ -6925,10 +7080,10 @@ pub open spec fn spec_function(f: Function, all: Fns, sd: Structs) -> Model {
                             params: ps,
                             ret,
                             requires: spec_bounds(f.params, f.line, req),
-                            ensures: spec_ret_len(f.ret, f.line, spec_linked(f, ens, spec_pure_body(f.params, body, all, spec_static_key(sd, f.name)))),
+                            ensures: spec_ret_len(f.ret, f.line, spec_linked(f, ens, spec_pure_body(f.params, body, all, sd, spec_static_key(sd, f.name)))),
                             decreases: dec,
                             body,
-                            function: spec_pure_body(f.params, body, all, spec_static_key(sd, f.name)),
+                            function: spec_pure_body(f.params, body, all, sd, spec_static_key(sd, f.name)),
                             writes: spec_writes(f.params),
                             outs: spec_outs(f.params),
                             trusted: f.trusted,
@@ -8187,7 +8342,7 @@ pub proof fn lemma_lift_resolves(e: Expr, all: Fns, line: u32, sd: Structs, n: u
             lemma_lift_args_resolves(*args, all, line, sd, n, open);
             let (ca, da, n1) = spec_lift_args(*args, all, line, sd, n, open).unwrap();
             assert(spec_callable(all, k, sd));
-            if !(spec_inline(all, k) && spec_callable(all, k, sd)) {
+            if !(spec_inline(all, k, sd) && spec_callable(all, k, sd)) {
                 let dt = spec_callee_ty(all, k, line, sd).unwrap();
                 // A call that writes back runs as an update, decision 0177, and any other as a call. Each names a callable key.
                 let p = if spec_callee_writes(all, k) {
@@ -9227,7 +9382,7 @@ pub fn lift(e: &Expr, all: &Fns, line: u32, sd: &Structs, n: u32, open: bool) ->
             Ok(_) => Ok((List::Nil, code_var(*v, *t), n)),
             Err(r) => Err(r),
         },
-        Expr::Call(k, nm, args, at) => if inline(all, *k) && callable(all, *k, sd) {
+        Expr::Call(k, nm, args, at) => if inline(all, *k, sd) && callable(all, *k, sd) {
             match lift_args(args, all, line, sd, n, open) {
                 Err(r) => Err(r),
                 Ok((ca, da, n1)) => Ok((ca, DExpr::FCall(*k, Box::new(da)), n1)),
@@ -11966,9 +12121,9 @@ pub fn copy_dargs(a: &DArgs) -> (r: DArgs)
     }
 }
 
-pub fn pure_value(body: &DStmts, all: &Fns) -> (r: Option<DExpr>)
+pub fn pure_value(body: &DStmts, all: &Fns, sd: &Structs) -> (r: Option<DExpr>)
     ensures
-        r == spec_pure_value(*body, *all),
+        r == spec_pure_value(*body, *all, *sd),
     decreases body,
 {
     match body {
@@ -11978,23 +12133,23 @@ pub fn pure_value(body: &DStmts, all: &Fns) -> (r: Option<DExpr>)
                 _ => None,
             },
             DStmt::ReturnCall(k, da) => match &**rest {
-                List::Nil => if inline(all, *k) {
+                List::Nil => if inline(all, *k, sd) {
                     Some(DExpr::FCall(*k, Box::new(copy_dargs(da))))
                 } else {
                     None
                 },
                 _ => None,
             },
-            DStmt::Apply(f, da) => match pure_value(rest, all) {
+            DStmt::Apply(f, da) => match pure_value(rest, all, sd) {
                 Some(e) => Some(DExpr::Lemma(*f, Box::new(copy_dargs(da)), Box::new(e))),
                 None => None,
             },
-            DStmt::Local(n, dt, d) => match pure_value(rest, all) {
+            DStmt::Local(n, dt, d) => match pure_value(rest, all, sd) {
                 Some(e) => Some(DExpr::Let(*n, *dt, Box::new(copy_dexpr(d)), Box::new(e))),
                 None => None,
             },
-            DStmt::LocalCall(n, dt, k, da) => if inline(all, *k) {
-                match pure_value(rest, all) {
+            DStmt::LocalCall(n, dt, k, da) => if inline(all, *k, sd) {
+                match pure_value(rest, all, sd) {
                     Some(e) => Some(DExpr::Let(*n, *dt, Box::new(DExpr::FCall(*k, Box::new(copy_dargs(da)))), Box::new(e))),
                     None => None,
                 }
@@ -12007,12 +12162,12 @@ pub fn pure_value(body: &DStmts, all: &Fns) -> (r: Option<DExpr>)
     }
 }
 
-pub fn pure_body(ps: &Params, body: &DStmts, all: &Fns, stat: bool) -> (r: Option<DExpr>)
+pub fn pure_body(ps: &Params, body: &DStmts, all: &Fns, sd: &Structs, stat: bool) -> (r: Option<DExpr>)
     ensures
-        r == spec_pure_body(*ps, *body, *all, stat),
+        r == spec_pure_body(*ps, *body, *all, *sd, stat),
 {
     if (this_param(ps).is_some() || stat) && !mutates(ps) {
-        pure_value(body, all)
+        pure_value(body, all, sd)
     } else {
         None
     }
@@ -12275,7 +12430,7 @@ pub fn pure_ret(all: &Fns, key: u32, sd: &Structs, strict: bool) -> (r: Option<(
             None
         } else if strict {
             match translate_inside(f, all, sd) {
-                Ok((_, _, _, body)) => match pure_body(&f.params, &body, all, static_key(sd, f.name)) {
+                Ok((_, _, _, body)) => match pure_body(&f.params, &body, all, sd, static_key(sd, f.name)) {
                     Some(_) => Some((f.ret, copy(&f.params))),
                     None => None,
                 },
@@ -12283,7 +12438,7 @@ pub fn pure_ret(all: &Fns, key: u32, sd: &Structs, strict: bool) -> (r: Option<(
             }
         } else {
             match translate_stmts(&f.body, all, &f.params, &f.params, sd) {
-                Ok(body) => match pure_body(&f.params, &body, all, static_key(sd, f.name)) {
+                Ok(body) => match pure_body(&f.params, &body, all, sd, static_key(sd, f.name)) {
                     Some(_) => Some((f.ret, copy(&f.params))),
                     None => None,
                 },
@@ -12388,7 +12543,7 @@ pub fn translate_function(f: &Function, all: &Fns, sd: &Structs) -> (r: Model)
                 None => match translate_inside_of(f, all, sd) {
                     Err(r) => Model::Bare(f.name, ps, ret, r),
                     Ok((req, ens, dec, body)) => {
-                        let pure = pure_body(&f.params, &body, all, static_key(sd, f.name));
+                        let pure = pure_body(&f.params, &body, all, sd, static_key(sd, f.name));
                         let ensures = ret_len(f.ret, f.line, linked(f, ens, &pure));
                         Model::Full(
                             Method {
@@ -12471,12 +12626,103 @@ pub fn translate_structs_in(sd: &Structs, all: &Structs) -> (r: StructModels)
 }
 
 /// The models of the functions of one file, in their order.
+pub fn marked(sd: &Structs, all: &Fns) -> (r: Structs)
+    ensures
+        r == spec_marked(*sd, *all),
+{
+    let top = top(sd, all);
+    let ks = all_members(sd);
+    settle(sd, all, top, &ks)
+}
+
+pub fn top(t: &Structs, all: &Fns) -> (r: Structs)
+    ensures
+        r == spec_top(*t, *all),
+    decreases t,
+{
+    match t {
+        List::Nil => List::Nil,
+        List::Cons((k, (l, fields, ms)), rest) => List::Cons((*k, (*l, copy(fields), top_members(ms, all))), Box::new(top(rest, all))),
+    }
+}
+
+pub fn top_members(ms: &Members, all: &Fns) -> (r: Members)
+    ensures
+        r == spec_top_members(*ms, *all),
+    decreases ms,
+{
+    match ms {
+        List::Nil => List::Nil,
+        List::Cons((n, (key, _)), rest) => List::Cons((*n, (*key, top_mark(all, *key))), Box::new(top_members(rest, all))),
+    }
+}
+
+pub fn top_mark(all: &Fns, key: u32) -> (r: Option<(Ty, Params)>)
+    ensures
+        r == spec_top_mark(*all, key),
+{
+    match find(all, key) {
+        Some(f) => Some((f.ret, copy(&f.params))),
+        None => Some((Ty::Other(key), List::Nil)),
+    }
+}
+
+pub fn all_members(t: &Structs) -> (r: Members)
+    ensures
+        r == spec_all_members(*t),
+    decreases t,
+{
+    match t {
+        List::Nil => List::Nil,
+        List::Cons((_, (_, _, ms)), rest) => append(copy_members(ms), all_members(rest)),
+    }
+}
+
+pub fn settle(sd: &Structs, all: &Fns, t: Structs, ks: &Members) -> (r: Structs)
+    ensures
+        r == spec_settle(*sd, *all, t, *ks),
+    decreases ks,
+{
+    let next = mark(sd, all, &t, true);
+    match ks {
+        List::Nil => next,
+        List::Cons(_, rest) => if same_marks(&next, &t) {
+            t
+        } else {
+            settle(sd, all, next, rest)
+        },
+    }
+}
+
+pub fn same_marks(a: &Structs, b: &Structs) -> (r: bool)
+    ensures
+        r == spec_same_marks(*a, *b),
+    decreases a,
+{
+    match (a, b) {
+        (List::Nil, List::Nil) => true,
+        (List::Cons((_, (_, _, ma)), ra), List::Cons((_, (_, _, mb)), rb)) => same_member_marks(ma, mb) && same_marks(ra, rb),
+        _ => false,
+    }
+}
+
+pub fn same_member_marks(a: &Members, b: &Members) -> (r: bool)
+    ensures
+        r == spec_same_member_marks(*a, *b),
+    decreases a,
+{
+    match (a, b) {
+        (List::Nil, List::Nil) => true,
+        (List::Cons((_, (_, x)), ra), List::Cons((_, (_, y)), rb)) => x.is_some() == y.is_some() && same_member_marks(ra, rb),
+        _ => false,
+    }
+}
+
 pub fn translate_unit(all: &Fns, sd: &Structs) -> (r: Models)
     ensures
         r == spec_unit(*all, *all, spec_marked(*sd, *all)),
 {
-    let first = mark(sd, all, sd, false);
-    let marked = mark(sd, all, &first, true);
+    let marked = marked(sd, all);
     translate_each(all, all, &marked)
 }
 
@@ -12655,8 +12901,7 @@ pub fn translate_overrides(bases: &List<(u32, (Names, bool))>, all: &Fns, sd: &S
     ensures
         r == spec_upcasts(*bases, *all, spec_marked(*sd, *all)),
 {
-    let first = mark(sd, all, sd, false);
-    let marked = mark(sd, all, &first, true);
+    let marked = marked(sd, all);
     upcasts(bases, all, &marked)
 }
 
