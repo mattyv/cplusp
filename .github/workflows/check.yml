@@ -51,15 +51,16 @@ jobs:
       - uses: actions/checkout@v4
         with:
           persist-credentials: false
+          path: cplusp
       - name: Check out the Verus revision used by vstd
         uses: actions/checkout@v4
         with:
           repository: verus-lang/verus
           ref: 11ed7501a8ba5160be537da21cca330dafbecb9b
-          path: .verus
+          path: verus
           persist-credentials: false
       - name: Build the pinned verifier
-        working-directory: .verus/source
+        working-directory: verus/source
         run: |
           rustup toolchain install 1.98.1 --profile minimal --component rustc-dev --component llvm-tools
           ./tools/get-z3.sh
@@ -68,4 +69,5 @@ jobs:
           cargo build --release --locked
           cargo run --release --locked -p cargo-verus -- build --release --manifest-path vstd/Cargo.toml
       - name: Verify the core
-        run: .verus/source/target/release/cargo-verus verify --manifest-path crates/cplusp-core/Cargo.toml --locked
+        working-directory: cplusp
+        run: ../verus/source/target-verus/release/cargo-verus verify --manifest-path crates/cplusp-core/Cargo.toml --locked
