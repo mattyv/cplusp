@@ -535,11 +535,49 @@ pub proof fn lemma_kept_return(s: Stmt, all: Fns, env: Params, ps: Params, sd: S
 }
 
 /// A statement that moves is one Dafny statement, as the statement inside it, decision 0171.
-pub proof fn lemma_moved_count(d: DStmt, ns: Names)
+pub proof fn lemma_gone_all_count(d: DStmt, vs: Names)
     ensures
-        count_dstmt(spec_moved(d, ns)) == count_dstmt(d),
+        count_dstmt(spec_gone_all(d, vs)) == count_dstmt(d),
+    decreases vs,
 {
     reveal_with_fuel(count_dstmt, 2);
+    match vs {
+        List::Nil => {},
+        List::Cons(w, rest) => lemma_gone_all_count(DStmt::Gone(Box::new(d), w, false), *rest),
+    }
+}
+
+pub proof fn lemma_gone_all_resolves(d: DStmt, vs: Names, all: Fns, sd: Structs)
+    requires
+        calls_resolve_stmt(d, all, sd),
+    ensures
+        calls_resolve_stmt(spec_gone_all(d, vs), all, sd),
+    decreases vs,
+{
+    reveal_with_fuel(calls_resolve_stmt, 2);
+    match vs {
+        List::Nil => {},
+        List::Cons(w, rest) => lemma_gone_all_resolves(DStmt::Gone(Box::new(d), w, false), *rest, all, sd),
+    }
+}
+
+/// A statement that moves resolves when the statement does.
+pub proof fn lemma_moved_resolves(d: DStmt, ns: Names, vs: Names, all: Fns, sd: Structs)
+    requires
+        calls_resolve_stmt(d, all, sd),
+    ensures
+        calls_resolve_stmt(spec_moved(d, ns, vs), all, sd),
+{
+    reveal_with_fuel(calls_resolve_stmt, 2);
+    lemma_gone_all_resolves(spec_nulled(d, spec_without(ns, vs)), vs, all, sd);
+}
+
+pub proof fn lemma_moved_count(d: DStmt, ns: Names, vs: Names)
+    ensures
+        count_dstmt(spec_moved(d, ns, vs)) == count_dstmt(d),
+{
+    reveal_with_fuel(count_dstmt, 2);
+    lemma_gone_all_count(spec_nulled(d, spec_without(ns, vs)), vs);
 }
 
 pub proof fn lemma_local_value_kept(n: u32, dt: DTy, e: Expr, l: u32, all: Fns, ps: Params, sd: Structs)
@@ -575,7 +613,7 @@ pub proof fn lemma_kept_local(s: Stmt, all: Fns, env: Params, ps: Params, sd: St
         let dt = spec_value_ty(t, l, sd).unwrap();
         let (e2, ns) = spec_unmove(e);
         lemma_local_value_kept(n, dt, e2, l, all, ps, sd);
-        lemma_moved_count(spec_local_value(n, dt, e2, l, all, ps, sd).unwrap(), ns);
+        lemma_moved_count(spec_local_value(n, dt, e2, l, all, ps, sd).unwrap(), ns, spec_vec_moves(e));
     }
 }
 
@@ -611,7 +649,7 @@ pub proof fn lemma_kept_set_own_field(s: Stmt, all: Fns, env: Params, ps: Params
     let (e2, ns) = spec_unmove(s->SetOwnField_2);
     let (c, d, _) = spec_lift(e2, all, l, sd, 0, true).unwrap();
     lemma_pre_count(c, DStmt::SetOwnField(n, f, d));
-    lemma_moved_count(spec_pre(c, DStmt::SetOwnField(n, f, d)), ns);
+    lemma_moved_count(spec_pre(c, DStmt::SetOwnField(n, f, d)), ns, spec_vec_moves(s->SetOwnField_2));
     reveal_with_fuel(count_dstmt, 2);
 }
 
@@ -625,7 +663,7 @@ pub proof fn lemma_kept_call(s: Stmt, all: Fns, env: Params, ps: Params, sd: Str
     let (k, nm, l) = (s->Call_0, s->Call_1, s->Call_3);
     let (a2, ns) = spec_unmove_args(*s->Call_2);
     lemma_call_stmt_kept(k, nm, a2, l, all, ps, sd);
-    lemma_moved_count(spec_call_stmt(k, nm, a2, l, all, ps, sd).unwrap(), ns);
+    lemma_moved_count(spec_call_stmt(k, nm, a2, l, all, ps, sd).unwrap(), ns, spec_vec_moves_args(*s->Call_2));
 }
 
 
@@ -1452,6 +1490,9 @@ pub proof fn lemma_resolves_set_own_field(s: Stmt, all: Fns, env: Params, ps: Pa
         lemma_lift_resolves(e, all, l, sd, 0, true);
         let (c, d, _) = spec_lift(e, all, l, sd, 0, true).unwrap();
         lemma_pre_resolves(c, DStmt::SetOwnField(s->SetOwnField_0, s->SetOwnField_1, d), all, sd);
+        let inner = spec_pre(c, DStmt::SetOwnField(s->SetOwnField_0, s->SetOwnField_1, d));
+        assert(calls_resolve_stmt(inner, all, sd));
+        lemma_moved_resolves(inner, spec_unmove(s->SetOwnField_2).1, spec_vec_moves(s->SetOwnField_2), all, sd);
     }
 }
 
@@ -1529,6 +1570,15 @@ pub proof fn lemma_resolves_local(s: Stmt, all: Fns, env: Params, ps: Params, sd
             }
         }
     }
+    // The other arm moves after its value, decisions 0171 and 0194.
+    if spec_value_ty(s->Local_1, l, sd).is_ok() {
+        let dt = spec_value_ty(s->Local_1, l, sd).unwrap();
+        if spec_local_value(s->Local_0, dt, e2, l, all, ps, sd).is_ok() {
+            let inner = spec_local_value(s->Local_0, dt, e2, l, all, ps, sd).unwrap();
+            assert(calls_resolve_stmt(inner, all, sd));
+            lemma_moved_resolves(inner, spec_unmove(e1).1, spec_vec_moves(e1), all, sd);
+        }
+    }
 }
 
 pub proof fn lemma_resolves_call(s: Stmt, all: Fns, env: Params, ps: Params, sd: Structs)
@@ -1550,6 +1600,11 @@ pub proof fn lemma_resolves_call(s: Stmt, all: Fns, env: Params, ps: Params, sd:
         if spec_call_lift(k, nm, *rest, l, all, l, sd).is_ok() {
             lemma_call_lift_resolves(k, nm, *rest, l, all, l, sd);
         }
+    }
+    if spec_call_stmt(k, nm, args, l, all, ps, sd).is_ok() {
+        let inner = spec_call_stmt(k, nm, args, l, all, ps, sd).unwrap();
+        assert(calls_resolve_stmt(inner, all, sd));
+        lemma_moved_resolves(inner, spec_unmove_args(*s->Call_2).1, spec_vec_moves_args(*s->Call_2), all, sd);
     }
 }
 
@@ -1676,7 +1731,7 @@ pub proof fn lemma_callable_has_method(fs: Fns, all: Fns, key: u32, sd: Structs)
 }
 
 /// The locals of the moved parameters hold no call, so the block of them resolves when the body does, decision 0186.
-pub proof fn lemma_param_locals_resolve(mp: List<(u32, Scalar)>, line: u32, tail: DStmts, all: Fns, sd: Structs)
+pub proof fn lemma_param_locals_resolve(mp: List<(u32, DTy)>, line: u32, tail: DStmts, all: Fns, sd: Structs)
     requires
         calls_resolve(tail, all, sd),
     ensures
@@ -1685,14 +1740,14 @@ pub proof fn lemma_param_locals_resolve(mp: List<(u32, Scalar)>, line: u32, tail
 {
     match mp {
         List::Nil => {},
-        List::Cons((n, sc), rest) => {
+        List::Cons((n, dt), rest) => {
             lemma_param_locals_resolve(*rest, line, tail, all, sd);
-            assert(calls_resolve_stmt(DStmt::Local(n, DTy::Opt(sc), DExpr::Var(n)), all, sd));
+            assert(calls_resolve_stmt(DStmt::Local(n, dt, DExpr::Var(n)), all, sd));
         },
     }
 }
 
-pub proof fn lemma_param_block_resolves(mp: List<(u32, Scalar)>, line: u32, body: DStmts, all: Fns, sd: Structs)
+pub proof fn lemma_param_block_resolves(mp: List<(u32, DTy)>, line: u32, body: DStmts, all: Fns, sd: Structs)
     requires
         calls_resolve(body, all, sd),
     ensures

@@ -16,7 +16,8 @@
 // the size by the prover.
 class Series {
  public:
-  //@ ensures length() == items.size() && forall i :: 0 <= i < length() ==> at(i) == items[i]
+  // The contract names the field, because the prover matches a quantifier on an index of a sequence and not on a call with a size_t.
+  //@ ensures items_.size() == items.size() && forall i :: 0 <= i < items.size() ==> items_[i] == items[i]
   explicit Series(std::vector<int32_t> items) : items_(std::move(items)) {}
 
   // A contract reads `s.size()` as the size of a vector, so the member function has another name, decision 0191.
@@ -55,5 +56,10 @@ int32_t demo() {
   items.push_back(9);
   items.push_back(4);
   const Series s(std::move(items));
-  return largest(s);
+  const int32_t m = largest(s);
+  // The contracts of Series and largest hold for each index. The prover uses them at the indexes that the code names, so the asserts
+  // name each one.
+  //@ assert s.at(0) == 3 && s.at(1) == 9 && s.at(2) == 4
+  //@ assert s.at(1) <= m
+  return m;
 }

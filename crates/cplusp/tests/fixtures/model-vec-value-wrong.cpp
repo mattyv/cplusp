@@ -27,6 +27,6 @@ class Bag {
 //@ ensures result == 3
 size_t leaks() {
   std::vector<int32_t> a(2, 7);
-  grown(a);
-  return a.size();
+  size_t n = grown(a);
+  return a.size() + n - n;
 }

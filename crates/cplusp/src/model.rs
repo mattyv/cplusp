@@ -2296,6 +2296,10 @@ fn sentence(r: Refusal, names: &Names) -> (u32, String) {
         Refusal::Element(line) => (line, "an optional of a struct or a sequence of bool has no rule yet.".to_string()),
         Refusal::Extent(line) => (line, "a sequence or an optional made from one of another type or length.".to_string()),
         Refusal::MoveRead(n, line) => (line, format!("{} moves and is read in one statement. C++ does not fix the order.", names.text(n))),
+        Refusal::VecMovePlace(line) => (
+            line,
+            "a std::move of a std::vector has no rule here. It has a rule as the start value of a local vector and in the init list of a constructor. It also has a rule at a parameter by value of a call. That call stands alone, is the value of a return, or is the start value of a local that is no vector.".to_string(),
+        ),
         Refusal::MovePlace(line) => (line, "a std::move of a std::unique_ptr has no rule here. It has a rule only in a call that stands alone, the start value of a local, a return or a field write.".to_string()),
         Refusal::NoTarget(line) => (line, "the call writes a value back, and the translator writes back only to a local or a reference parameter.".to_string()),
         Refusal::NoObject(n, line) => (line, format!("{} is a member of the struct. A requires line of a constructor has no object yet.", names.text(n))),

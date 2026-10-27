@@ -199,3 +199,4 @@ Status is `decided`, `proposed` (the default until someone objects or the thin s
 | [0192](0192-a-scalar-temporary-bound-to-a-const-reference.md) | A scalar temporary bound to a const reference | decided |
 | [0193](0193-files-by-topic.md) | Files by topic | decided |
 | [0194](0194-a-vector-by-value.md) | A vector by value | decided |
+| [0195](0195-the-sentence-of-a-vector-move.md) | The sentence of a vector move | decided |

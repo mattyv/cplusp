@@ -526,6 +526,7 @@ pub fn lift(e: &Expr, all: &Fns, line: u32, sd: &Structs, n: u32, open: bool) ->
             },
         },
         Expr::Name(v) => Err(Refusal::Name(*v, line)),
+        Expr::Move(_, Ty::Vec(_)) => Err(Refusal::VecMovePlace(line)),
         Expr::Move(_, _) => Err(Refusal::MovePlace(line)),
         Expr::Unknown(k, l) => Err(Refusal::Construct(*k, *l)),
         _ => Err(Refusal::Syntax(line)),
@@ -1578,6 +1579,11 @@ pub fn param_ty(t: Ty, line: u32, sd: &Structs) -> (r: Result<DTy, Refusal>)
         } else {
             translate_ty(t, line)
         },
+        Ty::Vec(Scalar::Struct(k)) => if holds_seq(sd, k) {
+            Err(Refusal::HoldsSeq(line))
+        } else {
+            translate_ty(t, line)
+        },
         _ => translate_ty(t, line),
     }
 }
@@ -2192,7 +2198,7 @@ pub fn translate_stmt(s: &Stmt, all: &Fns, env: &Params, ps: &Params, sd: &Struc
                     match move_check(&ns, &var_names(e), ps, false, *l) {
                         Some(r) => Err(r),
                         None => match local_value(*n, dt, &e2, *l, all, ps, sd) {
-                            Ok(d) => Ok(moved(d, ns)),
+                            Ok(d) => Ok(moved(d, ns, vec_moves(e))),
                             Err(r) => Err(r),
                         },
                     }
@@ -2366,7 +2372,7 @@ pub fn translate_stmt(s: &Stmt, all: &Fns, env: &Params, ps: &Params, sd: &Struc
                         match move_check(&ns, &List::Cons(*n, Box::new(var_names(e))), ps, false, *l) {
                             Some(r) => Err(r),
                             None => match lift(&e2, all, *l, sd, 0, true) {
-                                Ok((c, d, _)) => Ok(moved(pre(c, DStmt::SetOwnField(*n, *f, d)), ns)),
+                                Ok((c, d, _)) => Ok(moved(pre(c, DStmt::SetOwnField(*n, *f, d)), ns, vec_moves(e))),
                                 Err(r) => Err(r),
                             },
                         }
@@ -2388,7 +2394,7 @@ pub fn translate_stmt(s: &Stmt, all: &Fns, env: &Params, ps: &Params, sd: &Struc
             match move_check(&ns, &var_names_args(args), ps, false, *l) {
                 Some(r) => Err(r),
                 None => match call_stmt(*k, *nm, &a2, *l, all, ps, sd) {
-                    Ok(d) => Ok(moved(d, ns)),
+                    Ok(d) => Ok(moved(d, ns, vec_moves_args(args))),
                     Err(r) => Err(r),
                 },
             }
@@ -2895,7 +2901,7 @@ pub fn moves_cases(cs: &Cases) -> (r: Names)
     }
 }
 
-pub fn moved_params(ps: &Params, ms: &Names) -> (r: List<(u32, Scalar)>)
+pub fn moved_params(ps: &Params, ms: &Names) -> (r: List<(u32, DTy)>)
     ensures
         r == spec_moved_params(*ps, *ms),
     decreases ps,
@@ -2904,10 +2910,11 @@ pub fn moved_params(ps: &Params, ms: &Names) -> (r: List<(u32, Scalar)>)
         List::Nil => List::Nil,
         List::Cons((n, t), rest) => match t {
             Ty::Own(s) => if has(ms, *n) {
-                List::Cons((*n, *s), Box::new(moved_params(rest, ms)))
+                List::Cons((*n, DTy::Opt(*s)), Box::new(moved_params(rest, ms)))
             } else {
                 moved_params(rest, ms)
             },
+            Ty::Vec(s) => List::Cons((*n, DTy::Seq(*s)), Box::new(moved_params(rest, ms))),
             _ => moved_params(rest, ms),
         },
     }
@@ -2920,7 +2927,7 @@ pub fn kept_params(ps: &Params, ms: &Names) -> (r: Params)
 {
     match ps {
         List::Nil => List::Nil,
-        List::Cons((n, t), rest) => if matches!(t, Ty::Own(_)) && has(ms, *n) {
+        List::Cons((n, t), rest) => if (matches!(t, Ty::Own(_)) && has(ms, *n)) || matches!(t, Ty::Vec(_)) {
             kept_params(rest, ms)
         } else {
             List::Cons((*n, *t), Box::new(kept_params(rest, ms)))
@@ -2928,18 +2935,18 @@ pub fn kept_params(ps: &Params, ms: &Names) -> (r: Params)
     }
 }
 
-pub fn param_locals(mp: &List<(u32, Scalar)>, line: u32, tail: DStmts) -> (r: DStmts)
+pub fn param_locals(mp: &List<(u32, DTy)>, line: u32, tail: DStmts) -> (r: DStmts)
     ensures
         r == spec_param_locals(*mp, line, tail),
     decreases mp,
 {
     match mp {
         List::Nil => tail,
-        List::Cons((n, s), rest) => List::Cons((Box::new(DStmt::Local(*n, DTy::Opt(*s), DExpr::Var(*n))), line), Box::new(param_locals(rest, line, tail))),
+        List::Cons((n, dt), rest) => List::Cons((Box::new(DStmt::Local(*n, *dt, DExpr::Var(*n))), line), Box::new(param_locals(rest, line, tail))),
     }
 }
 
-pub fn param_block(mp: &List<(u32, Scalar)>, line: u32, body: DStmts) -> (r: DStmts)
+pub fn param_block(mp: &List<(u32, DTy)>, line: u32, body: DStmts) -> (r: DStmts)
     ensures
         r == spec_param_block(*mp, line, body),
 {

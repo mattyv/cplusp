@@ -677,7 +677,7 @@ pub open spec fn spec_local_stmt(n: u32, t: Ty, e: Expr, l: u32, all: Fns, env: 
                 None => match spec_move_check(spec_unmove(e).1, spec_var_names(e), ps, false, l) {
                     Some(r) => Err(r),
                     None => match spec_local_value(n, dt, spec_unmove(e).0, l, all, ps, sd) {
-                        Ok(d) => Ok(spec_moved(d, spec_unmove(e).1)),
+                        Ok(d) => Ok(spec_moved(d, spec_unmove(e).1, spec_vec_moves(e))),
                         Err(r) => Err(r),
                     },
                 },
@@ -877,7 +877,7 @@ pub open spec fn spec_stmt(s: Stmt, all: Fns, env: Params, ps: Params, sd: Struc
                     Some(_) => match spec_move_check(spec_unmove(e).1, List::Cons(n, Box::new(spec_var_names(e))), ps, false, l) {
                         Some(r) => Err(r),
                         None => match spec_lift(spec_unmove(e).0, all, l, sd, 0, true) {
-                            Ok((c, d, _)) => Ok(spec_moved(spec_pre(c, DStmt::SetOwnField(n, f, d)), spec_unmove(e).1)),
+                            Ok((c, d, _)) => Ok(spec_moved(spec_pre(c, DStmt::SetOwnField(n, f, d)), spec_unmove(e).1, spec_vec_moves(e))),
                             Err(r) => Err(r),
                         },
                     },
@@ -897,7 +897,7 @@ pub open spec fn spec_stmt(s: Stmt, all: Fns, env: Params, ps: Params, sd: Struc
         Stmt::Call(k, nm, args, l) => match spec_move_check(spec_unmove_args(*args).1, spec_var_names_args(*args), ps, false, l) {
             Some(r) => Err(r),
             None => match spec_call_stmt(k, nm, spec_unmove_args(*args).0, l, all, ps, sd) {
-                Ok(d) => Ok(spec_moved(d, spec_unmove_args(*args).1)),
+                Ok(d) => Ok(spec_moved(d, spec_unmove_args(*args).1, spec_vec_moves_args(*args))),
                 Err(r) => Err(r),
             },
         },
@@ -1406,30 +1406,33 @@ pub open spec fn spec_moves_cases(cs: Cases) -> Names
     }
 }
 
-/// The unique_ptr parameters among `ps` that the body moves, by their names and what they own, decision 0186.
-pub open spec fn spec_moved_params(ps: Params, ms: Names) -> List<(u32, Scalar)>
+/// The parameters among `ps` that are locals of the body, by their names and Dafny types: a unique_ptr that the body moves,
+/// decision 0186, and each vector by value, decision 0194.
+pub open spec fn spec_moved_params(ps: Params, ms: Names) -> List<(u32, DTy)>
     decreases ps,
 {
     match ps {
         List::Nil => List::Nil,
         List::Cons((n, t), rest) => match t {
             Ty::Own(s) => if spec_has(ms, n) {
-                List::Cons((n, s), Box::new(spec_moved_params(*rest, ms)))
+                List::Cons((n, DTy::Opt(s)), Box::new(spec_moved_params(*rest, ms)))
             } else {
                 spec_moved_params(*rest, ms)
             },
+            Ty::Vec(s) => List::Cons((n, DTy::Seq(s)), Box::new(spec_moved_params(*rest, ms))),
             _ => spec_moved_params(*rest, ms),
         },
     }
 }
 
-/// The parameters among `ps` that stay parameters of the body: each one but a unique_ptr that the body moves, decision 0186.
+/// The parameters among `ps` that stay parameters of the body: each one but a unique_ptr that the body moves, decision 0186, and
+/// a vector by value, decision 0194.
 pub open spec fn spec_kept_params(ps: Params, ms: Names) -> Params
     decreases ps,
 {
     match ps {
         List::Nil => List::Nil,
-        List::Cons((n, t), rest) => if (t is Own) && spec_has(ms, n) {
+        List::Cons((n, t), rest) => if ((t is Own) && spec_has(ms, n)) || (t is Vec) {
             spec_kept_params(*rest, ms)
         } else {
             List::Cons((n, t), Box::new(spec_kept_params(*rest, ms)))
@@ -1437,19 +1440,20 @@ pub open spec fn spec_kept_params(ps: Params, ms: Names) -> Params
     }
 }
 
-/// `var p: Option<T> := p;` for each moved parameter, at the line of the function, then `tail`, decision 0186.
-pub open spec fn spec_param_locals(mp: List<(u32, Scalar)>, line: u32, tail: DStmts) -> DStmts
+/// `var p: T := p;` for each parameter that is a local of the body, at the line of the function, then `tail`, decisions 0186 and
+/// 0194.
+pub open spec fn spec_param_locals(mp: List<(u32, DTy)>, line: u32, tail: DStmts) -> DStmts
     decreases mp,
 {
     match mp {
         List::Nil => tail,
-        List::Cons((n, s), rest) => List::Cons((Box::new(DStmt::Local(n, DTy::Opt(s), DExpr::Var(n))), line), Box::new(spec_param_locals(*rest, line, tail))),
+        List::Cons((n, dt), rest) => List::Cons((Box::new(DStmt::Local(n, dt, DExpr::Var(n))), line), Box::new(spec_param_locals(*rest, line, tail))),
     }
 }
 
 /// The body with a local for each moved parameter. The body is a block, so Dafny reads each name in it as the local, and a contract
 /// reads the parameter. A body that moves no parameter stays as it is, decision 0186.
-pub open spec fn spec_param_block(mp: List<(u32, Scalar)>, line: u32, body: DStmts) -> DStmts {
+pub open spec fn spec_param_block(mp: List<(u32, DTy)>, line: u32, body: DStmts) -> DStmts {
     match mp {
         List::Nil => body,
         _ => List::Cons((Box::new(DStmt::Scope(Box::new(spec_param_locals(mp, line, body)))), line), Box::new(List::Nil)),

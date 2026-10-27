@@ -912,7 +912,9 @@ pub open spec fn spec_lift(e: Expr, all: Fns, line: u32, sd: Structs, n: u32, op
             },
         },
         Expr::Name(v) => Err(Refusal::Name(v, line)),
-        // A move that the statement did not take out stands in a place with no rule, decision 0171.
+        // A move that the statement did not take out stands in a place with no rule, decision 0171. A move of a vector has its own
+        // sentence, decision 0195.
+        Expr::Move(_, Ty::Vec(_)) => Err(Refusal::VecMovePlace(line)),
         Expr::Move(_, _) => Err(Refusal::MovePlace(line)),
         Expr::Unknown(k, l) => Err(Refusal::Construct(k, l)),
         _ => Err(Refusal::Syntax(line)),
@@ -1266,20 +1268,135 @@ pub fn move_check(ns: &Names, reads: &Names, ps: &Params, ret: bool, line: u32) 
 }
 
 /// A statement that moves the names `ns` sets each to null after it, decision 0171.
-pub open spec fn spec_moved(d: DStmt, ns: Names) -> DStmt {
+pub open spec fn spec_nulled(d: DStmt, ns: Names) -> DStmt {
     match ns {
         List::Nil => d,
         _ => DStmt::Moved(Box::new(d), ns),
     }
 }
 
-pub fn moved(d: DStmt, ns: Names) -> (r: DStmt)
+pub fn nulled(d: DStmt, ns: Names) -> (r: DStmt)
     ensures
-        r == spec_moved(d, ns),
+        r == spec_nulled(d, ns),
 {
     match ns {
         List::Nil => d,
         _ => DStmt::Moved(Box::new(d), ns),
+    }
+}
+
+/// The statement, then each vector of `vs` with any value, decisions 0185 and 0194.
+pub open spec fn spec_gone_all(d: DStmt, vs: Names) -> DStmt
+    decreases vs,
+{
+    match vs {
+        List::Nil => d,
+        List::Cons(w, rest) => spec_gone_all(DStmt::Gone(Box::new(d), w, false), *rest),
+    }
+}
+
+pub fn gone_all(d: DStmt, vs: &Names) -> (r: DStmt)
+    ensures
+        r == spec_gone_all(d, *vs),
+    decreases vs,
+{
+    match vs {
+        List::Nil => d,
+        List::Cons(w, rest) => gone_all(DStmt::Gone(Box::new(d), *w, false), rest),
+    }
+}
+
+/// The names of `ns` that are not in `vs`.
+pub open spec fn spec_without(ns: Names, vs: Names) -> Names
+    decreases ns,
+{
+    match ns {
+        List::Nil => List::Nil,
+        List::Cons(n, rest) => if spec_has(vs, n) {
+            spec_without(*rest, vs)
+        } else {
+            List::Cons(n, Box::new(spec_without(*rest, vs)))
+        },
+    }
+}
+
+pub fn without(ns: &Names, vs: &Names) -> (r: Names)
+    ensures
+        r == spec_without(*ns, *vs),
+    decreases ns,
+{
+    match ns {
+        List::Nil => List::Nil,
+        List::Cons(n, rest) => if has(vs, *n) {
+            without(rest, vs)
+        } else {
+            List::Cons(*n, Box::new(without(rest, vs)))
+        },
+    }
+}
+
+/// A statement that moves the names `ns`, of which `vs` are vectors. A unique_ptr is null after it, decision 0171, and a vector
+/// has any value, decisions 0185 and 0194.
+pub open spec fn spec_moved(d: DStmt, ns: Names, vs: Names) -> DStmt {
+    spec_gone_all(spec_nulled(d, spec_without(ns, vs)), vs)
+}
+
+pub fn moved(d: DStmt, ns: Names, vs: Names) -> (r: DStmt)
+    ensures
+        r == spec_moved(d, ns, vs),
+{
+    let w = without(&ns, &vs);
+    gone_all(nulled(d, w), &vs)
+}
+
+/// The names of the vectors that an expression moves, in the places that `spec_unmove` reads, decision 0194.
+pub open spec fn spec_vec_moves(e: Expr) -> Names
+    decreases e,
+{
+    match e {
+        Expr::Move(v, Ty::Vec(_)) => List::Cons(v, Box::new(List::Nil)),
+        Expr::Call(_, _, args, _) => spec_vec_moves_args(*args),
+        Expr::Construct(_, args) => spec_vec_moves_args(*args),
+        Expr::Wrap(a) => spec_vec_moves(*a),
+        Expr::Cast(_, a) => spec_vec_moves(*a),
+        Expr::Paren(a) => spec_vec_moves(*a),
+        _ => List::Nil,
+    }
+}
+
+pub open spec fn spec_vec_moves_args(args: Args) -> Names
+    decreases args,
+{
+    match args {
+        List::Nil => List::Nil,
+        List::Cons(a, rest) => spec_append(spec_vec_moves(*a), spec_vec_moves_args(*rest)),
+    }
+}
+
+pub fn vec_moves(e: &Expr) -> (r: Names)
+    ensures
+        r == spec_vec_moves(*e),
+    decreases e,
+{
+    match e {
+        Expr::Move(v, Ty::Vec(_)) => List::Cons(*v, Box::new(List::Nil)),
+        Expr::Call(_, _, args, _) => vec_moves_args(args),
+        Expr::Construct(_, args) => vec_moves_args(args),
+        Expr::Wrap(a) => vec_moves(a),
+        Expr::Cast(_, a) => vec_moves(a),
+        Expr::Paren(a) => vec_moves(a),
+        _ => List::Nil,
+    }
+}
+
+pub fn vec_moves_args(args: &Args) -> (r: Names)
+    ensures
+        r == spec_vec_moves_args(*args),
+    decreases args,
+{
+    match args {
+        List::Nil => List::Nil,
+        List::Cons(a, rest) => append(vec_moves(a), vec_moves_args(rest)),
     }
 }
 
@@ -2319,6 +2436,12 @@ pub open spec fn spec_param_ty(t: Ty, line: u32, sd: Structs) -> Result<DTy, Ref
         },
         // A vector by reference of a struct that holds a sequence, decision 0164.
         Ty::MutSeq(Scalar::Struct(k)) => if spec_holds(sd, k) {
+            Err(Refusal::HoldsSeq(line))
+        } else {
+            spec_ty(t, line)
+        },
+        // A vector by value of a struct that holds a sequence, decision 0194.
+        Ty::Vec(Scalar::Struct(k)) => if spec_holds(sd, k) {
             Err(Refusal::HoldsSeq(line))
         } else {
             spec_ty(t, line)

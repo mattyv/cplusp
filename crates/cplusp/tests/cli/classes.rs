@@ -819,8 +819,9 @@ fn a_vector_by_value_keeps_its_contract() {
     assert_eq!(failed, want, "{text}");
 }
 
-/// A team that loosens rvalue_references reads a vector after it gives it to a parameter by value. The model keeps no value for
-/// it, so the claim does not prove, decision 0194.
+/// A team that loosens rvalue_references reads a vector after it gives it to a parameter by value, in a constructor and in a call
+/// that stands alone. The model keeps no value for it, so the claim does not prove. A unique_ptr that the same call moves is null,
+/// decisions 0194 and 0195.
 #[test]
 fn a_vector_given_by_value_has_no_value_without_the_gate() {
     let Some(dafny) = dafny() else { return };
@@ -832,11 +833,12 @@ fn a_vector_given_by_value_has_no_value_without_the_gate() {
     let text = stdout(&o);
     assert_eq!(o.status.code(), Some(1), "stdout: {text} stderr: {}", stderr(&o));
     let failed: Vec<&str> = text.lines().filter(|l| l.starts_with("Not proved: ") || l.starts_with("Not provable: ")).map(|l| l.rsplit_once(".cpp:").unwrap().1).collect();
-    assert_eq!(failed, ["25: the ensures line may not hold on this return."], "{text}");
+    assert_eq!(failed, ["25: the ensures line may not hold on this return.", "35: the ensures line may not hold on this return."], "{text}");
 }
 
 /// A function with a vector parameter by value is no pure function, so a contract cannot call it. A vector of bool by value keeps
-/// its refusal, decision 0194.
+/// its refusal, and so does a vector of a struct that holds a sequence, decision 0194. A move of a vector in a place with no rule
+/// has its own sentence, decision 0195.
 #[test]
 fn a_vector_by_value_with_no_rule_is_refused() {
     let Some(dafny) = dafny() else { return };
@@ -847,9 +849,14 @@ fn a_vector_by_value_with_no_rule_is_refused() {
     let text = stdout(&o);
     assert_eq!(o.status.code(), Some(1), "stdout: {text} stderr: {}", stderr(&o));
     let refused: Vec<&str> = text.lines().filter(|l| l.starts_with("Not proved: ") || l.starts_with("Not provable: ")).map(|l| l.rsplit_once(".cpp:").unwrap().1).collect();
+    let moved = "a std::move of a std::vector has no rule here. It has a rule as the start value of a local vector and in the init list of a constructor. It also has a rule at a parameter by value of a call. That call stands alone, is the value of a return, or is the start value of a local that is no vector.";
     let want = [
-        "12: any is no pure function. A contract calls a function with one return and no write.",
-        "18: std::vector<bool>: the translator has no rule for it yet.",
+        "12: any is no pure function. A contract calls a function with one return and no write.".to_string(),
+        "18: std::vector<bool>: the translator has no rule for it yet.".to_string(),
+        format!("31: {moved}"),
+        format!("40: {moved}"),
+        format!("54: {moved}"),
+        "63: a struct that holds a sequence has no rule yet in an optional, a pointer, a unique_ptr, or a vector that the code makes or writes.".to_string(),
     ];
     assert_eq!(refused, want, "{text}");
 }

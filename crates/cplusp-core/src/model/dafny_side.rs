@@ -256,7 +256,7 @@ pub type Models = List<Model>;
 /// names of both functions and the line, decision 0166. `NoMethod` is an override that writes and has no method in the model, by
 /// the keys of the class and the interface, the id of the name of the function and the line of the class, decision 0169.
 /// `MoveRead` is a statement that moves a name and also reads it or moves it again, by the id of the name and the line, and `MovePlace` is a move in a place
-/// with no rule, by the line, decision 0171. `ReadsOnly` is a call that changes a global that the caller lists on its reads line only,
+/// with no rule, by the line, decision 0171. `VecMovePlace` is the same for a move of a vector, decision 0195. `ReadsOnly` is a call that changes a global that the caller lists on its reads line only,
 /// by the id of the name of the callee, the id of the global and the line of the call. `GlobalClash` is a global that the function
 /// lists with the name of a parameter or a local, by its id and the line. `MemberGlobal` is a member function that lists a global,
 /// and `GlobalType` is a listed global of a type with no rule, each by the line that lists it, decision 0173. `SignedBits` is a
@@ -306,6 +306,7 @@ pub enum Refusal {
     IndexWritten(u32),
     MoveRead(u32, u32),
     MovePlace(u32),
+    VecMovePlace(u32),
     ReadsOnly(u32, u32, u32),
     GlobalClash(u32, u32),
     MemberGlobal(u32),

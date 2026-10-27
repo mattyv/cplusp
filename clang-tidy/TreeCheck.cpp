@@ -697,6 +697,11 @@ private:
       for (const CXXCtorInitializer *Init : C->inits())
         if (Init->getMember() == F && Init->isWritten()) {
           Value = vecFill(Init->getInit(), At);
+          // `f(std::move(v))` of a vector field and a local vector or a vector parameter by value `v` is the start value `Move(v)`, decision 0194.
+          if (Value.getAsNull())
+            if (const auto *Construct = dyn_cast<CXXConstructExpr>(Init->getInit()->IgnoreParenImpCasts());
+                Construct && Construct->getNumArgs() == 1 && Construct->getConstructor()->isMoveConstructor() && !localVec(F->getType()).isNull())
+              Value = vecMoveOf(Construct->getArg(0), localVec(F->getType()));
           Seq = !Value.getAsNull();
           if (!Seq)
             Value = expr(Init->getInit(), At);
@@ -705,7 +710,7 @@ private:
         Value = "EmptyVec";
         Seq = true;
       }
-      // The core reads `Fill` and `EmptyVec` as the start of a local only.
+      // The core reads `Fill`, `EmptyVec` and `Move` as the start of a local only.
       Locals = Locals || Seq;
       Values.push_back(std::move(Value));
     }
@@ -1223,22 +1228,37 @@ private:
       return QualType();
     return vectorElement(Spec->getTemplateArgs()[0].getAsType());
   }
-  // Whether an expression names a vector that the function writes: a vector by reference, decision 0145, or a local vector, decision 0160.
+  // The element of a parameter `std::vector<T>` by value, with no qualifier, decision 0194, or null.
+  QualType paramVec(QualType T) const { return T.hasQualifiers() ? QualType() : localVec(T); }
+  // Whether an expression names a vector that the function writes: a vector by reference, decision 0145, a vector parameter by value, decision 0194,
+  // or a local vector, decision 0160.
   bool isMutSeq(const Expr *E) const {
     const auto *Ref = dyn_cast<DeclRefExpr>(E->IgnoreParenImpCasts());
     if (!Ref)
       return false;
     if (isa<ParmVarDecl>(Ref->getDecl()))
-      return !mutSeq(Ref->getDecl()->getType()).isNull();
+      return !mutSeq(Ref->getDecl()->getType()).isNull() || !paramVec(Ref->getDecl()->getType()).isNull();
     const auto *Var = dyn_cast<VarDecl>(Ref->getDecl());
     return Var && Var->hasLocalStorage() && (!localVec(Var->getType()).isNull() || !localArray(Var->getType()).isNull());
   }
-  // The element of a vector that a name holds and the function can write: a vector parameter by reference, or a local vector, decision 0185. Else null.
+  // The element of a vector that a name holds and the function can write: a vector parameter by reference, a vector parameter by value, decision 0194, or a local vector, decision 0185. Else null.
   QualType sourceVec(const ValueDecl *D) const {
     if (isa<ParmVarDecl>(D))
-      return mutSeq(D->getType());
+      return mutSeq(D->getType()).isNull() ? paramVec(D->getType()) : mutSeq(D->getType());
     const auto *Var = dyn_cast<VarDecl>(D);
     return Var && Var->hasLocalStorage() ? localVec(Var->getType()) : QualType();
+  }
+  // `std::move(v)` of a local vector or of a vector parameter by value `v`, of the element `Element`, as `Move(v, type)`, decision 0194. Null for any other form.
+  llvm::json::Value vecMoveOf(const Expr *E, QualType Element) const {
+    const auto *Move = dyn_cast<CallExpr>(E->IgnoreParenImpCasts());
+    if (!Move || Move->getNumArgs() != 1 || !Move->getDirectCallee() || !Move->getDirectCallee()->isInStdNamespace() || !Move->getDirectCallee()->getDeclName().isIdentifier() ||
+        Move->getDirectCallee()->getName() != "move")
+      return nullptr;
+    const auto *Ref = dyn_cast<DeclRefExpr>(Move->getArg(0)->IgnoreParenImpCasts());
+    const auto *Var = Ref ? dyn_cast<VarDecl>(Ref->getDecl()) : nullptr;
+    if (!Var || !(isa<ParmVarDecl>(Var) ? !paramVec(Var->getType()).isNull() : Var->hasLocalStorage()) || !sameElement(sourceVec(Var), Element))
+      return nullptr;
+    return tag("Move", llvm::json::Array{Var->getNameAsString(), tag("Vec", elementType(Element))});
   }
   // `std::move(v)` of a vector `v` that the function writes, as the start value of the local `Var`, of the same element: `Move(v, type)`, decision 0185. The core reads
   // the value of `v` as the body leaves it, then `v` with any value. Any other place of a move of a vector keeps its refusal. Null for any other form.
@@ -1283,6 +1303,9 @@ private:
       return tag("Ptr", type(Element));
     if (const QualType Element = mutSeq(T); !Element.isNull())
       return tag("MutSeq", elementType(Element));
+    // A vector by value is a copy that the function owns, decision 0194. The core makes it a local of the body.
+    if (const QualType Element = paramVec(T); !Element.isNull())
+      return tag("Vec", elementType(Element));
     // A `unique_ptr` parameter is read by const reference only, decision 0142. By value it has no rule: it moves.
     if (T->isLValueReferenceType() && T->getPointeeType().isConstQualified())
       if (const QualType Element = ownElement(T->getPointeeType()); !Element.isNull())
@@ -2326,6 +2349,24 @@ private:
   // The argument `std::move(x)` of a local or a parameter `x` of a plain struct, at a parameter `T&&` of a plain struct, is `x`: the callee writes it back,
   // decision 0179. The same holds for a vector `x` at a parameter `std::vector<T>&&`, decision 0185. Any other argument is its expression.
   llvm::json::Value callArg(const FunctionDecl *Callee, unsigned I, const Expr *Arg, unsigned Near) const {
+    // A vector at a parameter by value, decision 0194. `std::move(v)` of a local vector or a vector parameter by value is `Move(v, type)`: the core gives the argument
+    // the value, then `v` any value. A plain `v` is the variable: a copy, and `v` keeps its value.
+    if (Callee && I < Callee->getNumParams())
+      if (const QualType Element = paramVec(Callee->getParamDecl(I)->getType()); !Element.isNull()) {
+        const Expr *Source = Arg->IgnoreParenImpCasts();
+        if (const auto *Bound = dyn_cast<CXXBindTemporaryExpr>(Source))
+          Source = Bound->getSubExpr()->IgnoreParenImpCasts();
+        if (const auto *Construct = dyn_cast<CXXConstructExpr>(Source); Construct && Construct->getNumArgs() == 1 && !Construct->isListInitialization() &&
+                                                                         sameElement(localVec(Construct->getType()), Element)) {
+          const Expr *Inner = Construct->getArg(0)->IgnoreParenImpCasts();
+          if (Construct->getConstructor()->isMoveConstructor())
+            if (llvm::json::Value Moved = vecMoveOf(Inner, Element); !Moved.getAsNull())
+              return Moved;
+          if (Construct->getConstructor()->isCopyConstructor())
+            if (const auto *Ref = dyn_cast<DeclRefExpr>(Inner); Ref && sameElement(sourceVec(Ref->getDecl()), Element) && mutSeq(Ref->getDecl()->getType()).isNull())
+              return expr(Ref, Near);
+        }
+      }
     if (Callee && I < Callee->getNumParams() && Callee->getParamDecl(I)->getType()->isRValueReferenceType() &&
         (!mutRef(Callee->getParamDecl(I)->getType()).getAsNull() || !mutSeq(Callee->getParamDecl(I)->getType()).isNull()))
       if (const auto *Move = dyn_cast<CallExpr>(Arg->IgnoreParenImpCasts()); Move && Move->getNumArgs() == 1 && Move->getDirectCallee() &&
@@ -2651,7 +2692,7 @@ private:
       if (Named && (isSeq(Source->getType()) || isMutSeq(Source)) && (isa<ParmVarDecl>(Named) || Named->hasLocalStorage()))
       {
         // The core judges a copy of a sequence by two `Seq` types. A vector the function writes is a dynamic sequence of its element.
-        const QualType Written = isa<ParmVarDecl>(Named) ? mutSeq(Named->getType()) : localVec(Named->getType());
+        const QualType Written = isa<ParmVarDecl>(Named) ? sourceVec(Named) : localVec(Named->getType());
         llvm::json::Value From = !Written.isNull() ? tag("Seq", llvm::json::Array{elementType(Written), nullptr}) : type(Source->getType());
         return tag("Copy", llvm::json::Array{expr(Source, Near), std::move(From), tag("Seq", llvm::json::Array{elementType(localVec(Construct->getType())), nullptr})});
       }
