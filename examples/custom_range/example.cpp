@@ -16,13 +16,14 @@
 // the size by the prover.
 class Series {
  public:
-  //@ ensures size() == items.size() && forall i :: i < size() ==> at(i) == items[i]
+  //@ ensures length() == items.size() && forall i :: 0 <= i < length() ==> at(i) == items[i]
   explicit Series(std::vector<int32_t> items) : items_(std::move(items)) {}
 
+  // A contract reads `s.size()` as the size of a vector, so the member function has another name, decision 0191.
   //@ ensures result == items_.size()
-  size_t size() const { return items_.size(); }
+  size_t length() const { return items_.size(); }
 
-  //@ requires i < size()
+  //@ requires i < length()
   //@ ensures result == items_[i]
   int32_t at(size_t i) const { return items_.at(i); }
 
@@ -31,15 +32,15 @@ class Series {
 };
 
 // The walk. The contract says that the result is an element and that no element is larger.
-//@ requires s.size() > 0
-//@ ensures exists i :: i < s.size() && s.at(i) == result
-//@ ensures forall i :: i < s.size() ==> s.at(i) <= result
+//@ requires s.length() > 0
+//@ ensures exists i :: 0 <= i < s.length() && s.at(i) == result
+//@ ensures forall i :: 0 <= i < s.length() ==> s.at(i) <= result
 int32_t largest(const Series& s) {
   int32_t m = s.at(0);
-  //@ invariant 1 <= i <= s.size()
-  //@ invariant exists j :: j < i && s.at(j) == m
-  //@ invariant forall j :: j < i ==> s.at(j) <= m
-  for (size_t i = 1; i < s.size(); ++i) {
+  //@ invariant 1 <= i <= s.length()
+  //@ invariant exists j :: 0 <= j < i && s.at(j) == m
+  //@ invariant forall j :: 0 <= j < i ==> s.at(j) <= m
+  for (size_t i = 1; i < s.length(); ++i) {
     if (s.at(i) > m) {
       m = s.at(i);
     }

@@ -175,8 +175,8 @@ fn a_vector_of_copies_keeps_the_order_check() {
     assert!(text.lines().any(|l| l.starts_with("Not provable: ") && l.ends_with(want)), "{want}: {text}");
 }
 
-/// A vector by rvalue reference that the modifies line does not name, a vector parameter by value, `v(n)`, `v{a, b}`, and a move
-/// in a return or an assignment are refused, decision 0185.
+/// A vector by rvalue reference that the modifies line does not name, `v(n)`, `v{a, b}`, and a move in a return or an assignment
+/// are refused, decision 0185. A vector parameter by value proves since decision 0194.
 #[test]
 fn a_vector_that_the_code_gives_up_with_no_rule_is_refused() {
     let Some(dafny) = dafny() else { return };
@@ -190,7 +190,6 @@ fn a_vector_that_the_code_gives_up_with_no_rule_is_refused() {
     let local = "a local vector has a rule only as a copy of a vector in scope.";
     let want = [
         "9: v is a reference parameter that the modifies line does not name.".to_string(),
-        "15: std::vector<int32_t>: the translator has no rule for it yet.".to_string(),
         format!("22: {local}"),
         format!("28: {local}"),
         "36: CXXConstructExpr: the translator has no rule for it yet.".to_string(),
@@ -787,4 +786,70 @@ fn a_function_template_with_no_rule_is_refused() {
     let failed: Vec<&str> = text.lines().filter(|l| l.starts_with("Not proved: ")).map(|l| l.rsplit_once(".cpp:").unwrap().1).collect();
     assert_eq!(failed, ["22: the ensures line may not hold on this return."], "{text}");
     assert!(!text.contains("Dafny says"), "{text}");
+}
+
+/// A vector by value is a copy that the callee owns: it can add to it, write it and move it, and a constructor can move it into a
+/// field. A copy leaves the caller's vector as it was, and a move gives the value, decision 0194.
+#[test]
+fn a_vector_by_value_proves() {
+    let Some(dafny) = dafny() else { return };
+    if !clang_tidy_available() {
+        return;
+    }
+    for name in ["model-vec-value.cpp", "../../../../examples/custom_range/example.cpp"] {
+        let o = prove(name, &[], &dafny);
+        let text = stdout(&o);
+        assert_eq!(o.status.code(), Some(0), "{name}: stdout: {text} stderr: {}", stderr(&o));
+        assert_eq!(text.lines().last(), Some("ok: proved"), "{name}: {text}");
+    }
+}
+
+/// A write of the callee to its copy is no write of the caller, and a false claim about a vector by value fails, decision 0194.
+#[test]
+fn a_vector_by_value_keeps_its_contract() {
+    let Some(dafny) = dafny() else { return };
+    if !clang_tidy_available() {
+        return;
+    }
+    let o = prove("model-vec-value-wrong.cpp", &[], &dafny);
+    let text = stdout(&o);
+    assert_eq!(o.status.code(), Some(1), "stdout: {text} stderr: {}", stderr(&o));
+    let failed: Vec<&str> = text.lines().filter(|l| l.starts_with("Not proved: ") || l.starts_with("Not provable: ")).map(|l| l.rsplit_once(".cpp:").unwrap().1).collect();
+    let want = ["11", "17", "31"].map(|l| format!("{l}: the ensures line may not hold on this return."));
+    assert_eq!(failed, want, "{text}");
+}
+
+/// A team that loosens rvalue_references reads a vector after it gives it to a parameter by value. The model keeps no value for
+/// it, so the claim does not prove, decision 0194.
+#[test]
+fn a_vector_given_by_value_has_no_value_without_the_gate() {
+    let Some(dafny) = dafny() else { return };
+    if !clang_tidy_available() {
+        return;
+    }
+    let team = fixture("team-loosen-move.yaml");
+    let o = prove("model-vec-value-loose.cpp", &["--policy", team.to_str().unwrap()], &dafny);
+    let text = stdout(&o);
+    assert_eq!(o.status.code(), Some(1), "stdout: {text} stderr: {}", stderr(&o));
+    let failed: Vec<&str> = text.lines().filter(|l| l.starts_with("Not proved: ") || l.starts_with("Not provable: ")).map(|l| l.rsplit_once(".cpp:").unwrap().1).collect();
+    assert_eq!(failed, ["25: the ensures line may not hold on this return."], "{text}");
+}
+
+/// A function with a vector parameter by value is no pure function, so a contract cannot call it. A vector of bool by value keeps
+/// its refusal, decision 0194.
+#[test]
+fn a_vector_by_value_with_no_rule_is_refused() {
+    let Some(dafny) = dafny() else { return };
+    if !clang_tidy_available() {
+        return;
+    }
+    let o = prove("model-vec-value-refuse.cpp", &[], &dafny);
+    let text = stdout(&o);
+    assert_eq!(o.status.code(), Some(1), "stdout: {text} stderr: {}", stderr(&o));
+    let refused: Vec<&str> = text.lines().filter(|l| l.starts_with("Not proved: ") || l.starts_with("Not provable: ")).map(|l| l.rsplit_once(".cpp:").unwrap().1).collect();
+    let want = [
+        "12: any is no pure function. A contract calls a function with one return and no write.",
+        "18: std::vector<bool>: the translator has no rule for it yet.",
+    ];
+    assert_eq!(refused, want, "{text}");
 }

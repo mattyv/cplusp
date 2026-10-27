@@ -3,7 +3,7 @@
 #include <utility>
 #include <vector>
 
-// A vector by rvalue reference that the modifies line does not name, and a move out of a vector by value, decision 0185.
+// A vector by rvalue reference that the modifies line does not name, and a move out of a vector by value, decision 0185. by_value proves since 0194.
 //@ requires v.size() <= 0x7FFFFFFFFFFFFFFF
 //@ ensures result == old(v.size())
 size_t unlisted(std::vector<int32_t>&& v) {

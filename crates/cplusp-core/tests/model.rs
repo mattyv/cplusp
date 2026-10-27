@@ -4112,6 +4112,50 @@ fn a_field_write_through_a_unique_ptr_has_one_owner() {
     assert_eq!(bare_refusal(translate_function(&with(List::Nil, body), &List::Nil, &cell_table())), Refusal::NoField(475, 46));
 }
 
+/// A vector parameter by value is a local of the body that starts with the argument, so the body can add to it. The signature reads
+/// the parameter. A move of a local vector at a parameter by value gives the value, and then the local has any value. A copy
+/// keeps the value of the local, decision 0194.
+#[test]
+fn a_vector_by_value_is_a_local_of_the_body() {
+    let vec = Ty::Vec(Scalar::I32);
+    let body = List::Cons(Box::new(Stmt::PushBack(MP, Expr::Lit(1, Ty::I32), 51)), Box::new(one(Stmt::Return(Expr::Size(b(Expr::Var(MP, vec))), 52))));
+    let callee = || Function { name: 476, line: 50, params: List::Cons((MP, vec), Box::new(List::Nil)), ret: Ty::U64, trusted: false, conds: List::Nil, body: copy_stmts(&body) };
+    let Model::Full(m) = translate_function(&callee(), &List::Nil, &List::Nil) else { panic!("a full model") };
+    assert_eq!(m.params, List::Cons((MP, DTy::Seq(Scalar::I32)), Box::new(List::Nil)));
+    let List::Cons((block, _), rest) = strip(m.body) else { panic!("a body") };
+    assert_eq!(*rest, List::Nil);
+    let DStmt::Scope(inner) = *block else { panic!("a block: {block:?}") };
+    let List::Cons((local, _), rest) = *inner else { panic!("the local of the parameter") };
+    assert_eq!(*local, DStmt::Local(MP, DTy::Seq(Scalar::I32), DExpr::Var(MP)));
+    let List::Cons((push, _), _) = *rest else { panic!("the push") };
+    assert!(matches!(&*push, DStmt::Assign(v, DExpr::Append(_, _)) if *v == MP), "{push:?}");
+    // A caller gives a local vector to it, by a move and by a copy.
+    let all = List::Cons(Box::new(callee()), Box::new(List::Nil));
+    let caller = |arg: Expr| Function {
+        name: 477,
+        line: 60,
+        params: List::Nil,
+        ret: Ty::U64,
+        trusted: false,
+        conds: List::Nil,
+        body: List::Cons(
+            Box::new(Stmt::Local(MA, vec, Expr::EmptyVec, 61)),
+            Box::new(List::Cons(
+                Box::new(Stmt::Local(MB, Ty::U64, Expr::Call(476, 476, Box::new(List::Cons(b(arg), Box::new(List::Nil))), 62), 62)),
+                Box::new(one(Stmt::Return(Expr::Var(MB, Ty::U64), 63))),
+            )),
+        ),
+    };
+    let Model::Full(m) = translate_function(&caller(Expr::Move(MA, vec)), &all, &List::Nil) else { panic!("a full model of a move") };
+    let List::Cons(_, rest) = strip(m.body) else { panic!("a body") };
+    let List::Cons((call, _), _) = *rest else { panic!("the call") };
+    assert!(matches!(&*call, DStmt::Gone(_, w, false) if *w == MA), "{call:?}");
+    let Model::Full(m) = translate_function(&caller(Expr::Var(MA, vec)), &all, &List::Nil) else { panic!("a full model of a copy") };
+    let List::Cons(_, rest) = strip(m.body) else { panic!("a body") };
+    let List::Cons((call, _), _) = *rest else { panic!("the call") };
+    assert!(!matches!(&*call, DStmt::Gone(_, _, _) | DStmt::Moved(_, _)), "{call:?}");
+}
+
 /// A parameter by value that the body moves before its return is a local of the body. The body is a block that starts with the
 /// local, so the contract still reads the parameter. A parameter that moves only in a return needs no local, decision 0186.
 #[test]
