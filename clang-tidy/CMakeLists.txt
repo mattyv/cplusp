@@ -13,7 +13,7 @@ set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
-add_library(cplusp MODULE CplusPModule.cpp)
+add_library(cplusp MODULE CplusPModule.cpp SyntaxChecks.cpp RawCopyChecks.cpp StateChecks.cpp TreeCheck.cpp)
 # The clang-tidy headers have no CMake export. SYSTEM keeps the warnings of LLVM headers out of our build.
 target_include_directories(cplusp SYSTEM PRIVATE ${CLANG_INCLUDE_DIRS} ${LLVM_INCLUDE_DIRS} /usr/lib/llvm-18/include/clang-tidy)
 # LLVM is built without RTTI. A module with RTTI would not match.
