@@ -70,7 +70,7 @@ public:
                          : isa<CXXConstructorDecl>(FD) && !Constructor ? "CXXConstructorDecl"
                          : fluentSignature(FD) && FD->getBody() && !fluent(FD) ? "a reference result that is not `*this`"
                          : isa<CXXMethodDecl>(FD) && !Member && !Static && !Constructor ? "CXXMethodDecl"
-                         : !FD->getBody() && !Trusted && !Interface ? "FunctionDecl without body"
+                         : !FD->getBody() && !Trusted && !Interface && !outOfLineDefault(FD) ? "FunctionDecl without body"
                                                   : nullptr;
     const QualType ValueResult = valueResult(FD);
     llvm::json::Array Params, Conds;
@@ -115,7 +115,7 @@ public:
                               {"hidden", std::move(Hidden)},
                               {"conds", std::move(Conds)},
                               {"body", Opaque ? llvm::json::Array{tag("Unknown", llvm::json::Array{Opaque, number(line(FD->getLocation()))})}
-                                       : Trusted || Interface ? llvm::json::Array{}
+                                       : Trusted || Interface || outOfLineDefault(FD) ? llvm::json::Array{}
                                                  : stmts(FD->getBody())}};
     // The class of a static member function, as the contract of the function reads a bare call, decision 0174.
     if (Static)
@@ -681,14 +681,57 @@ private:
            plainStruct(Context.getRecordType(C->getParent()));
   }
 
+  // A move constructor `= default` of a plain struct with a destructor of the model, whose fields are each a scalar or a `std::unique_ptr`, decision 0197. It moves each
+  // `std::unique_ptr` field and copies each scalar field. A field of any other type has no rule.
+  bool defaultedMove(const CXXConstructorDecl *C) const {
+    if (!C->isDefaulted() || !C->isExplicitlyDefaulted() || C->isImplicit() || C->isDeleted() || !C->isMoveConstructor() || C->getNumParams() != 1 || C->isTemplated() || C->getDescribedFunctionTemplate())
+      return false;
+    const CXXRecordDecl *RD = C->getParent();
+    if (RD->getNumBases() != 0 || !plainStruct(Context.getRecordType(RD)))
+      return false;
+    const CXXDestructorDecl *D = RD->getDestructor();
+    if (!(D && member(D)))
+      return false;
+    for (const FieldDecl *F : RD->fields())
+      if (ownVecElement(F->getType()).isNull() && !scalar(F->getType()) && !smallScalar(F->getType()))
+        return false;
+    return true;
+  }
+  // `f(std::move(other.f))` of a move constructor: the field of the parameter `other` that the init moves into the `std::unique_ptr` field `F`, or null for any other form,
+  // decision 0197.
+  const FieldDecl *movedFrom(const Expr *Init, const FieldDecl *F, const CXXConstructorDecl *C) const {
+    const auto *Construct = dyn_cast<CXXConstructExpr>(Init->IgnoreParenImpCasts());
+    if (!C->isMoveConstructor() || C->getNumParams() != 1 || !Construct || Construct->getNumArgs() != 1 || !Construct->getConstructor()->isMoveConstructor() || ownVecElement(F->getType()).isNull())
+      return nullptr;
+    const auto *Move = dyn_cast<CallExpr>(Construct->getArg(0)->IgnoreParenImpCasts());
+    if (!Move || Move->getNumArgs() != 1 || !Move->getDirectCallee() || !Move->getDirectCallee()->isInStdNamespace() || !Move->getDirectCallee()->getDeclName().isIdentifier() ||
+        Move->getDirectCallee()->getName() != "move")
+      return nullptr;
+    const auto *Member = dyn_cast<MemberExpr>(Move->getArg(0)->IgnoreParenImpCasts());
+    const auto *Base = Member && !Member->isArrow() ? dyn_cast<DeclRefExpr>(Member->getBase()->IgnoreParenImpCasts()) : nullptr;
+    const auto *From = Member ? dyn_cast<FieldDecl>(Member->getMemberDecl()) : nullptr;
+    if (!Base || !From || Base->getDecl() != C->getParamDecl(0) || From->getParent() != C->getParent() ||
+        From->getType().getCanonicalType() != F->getType().getCanonicalType())
+      return nullptr;
+    return From;
+  }
+
   // A constructor that is written as a function, decision 0094: a constructor of a plain struct that is no copy constructor,
   // delegates to none, and gives each field exactly one value in its member init list. It can have a body and be a move constructor, decision 0179. A vector field that the
   // list leaves out, with no default member initializer, starts empty, decision 0187. Any other field that the list leaves out has no rule. Null for any other function. A constructor that is only declared is looked up by its definition.
   const CXXConstructorDecl *valueConstructor(const FunctionDecl *FD) const {
     const FunctionDecl *Def = nullptr;
-    if (!isa<CXXConstructorDecl>(FD) || !FD->hasBody(Def))
+    if (!isa<CXXConstructorDecl>(FD))
       return nullptr;
+    // A move constructor `= default` has a body only when the file uses it, so its definition is found by the declaration, decision 0197.
+    if (!FD->hasBody(Def)) {
+      Def = FD->getDefinition();
+      if (!Def || !Def->isDefaulted())
+        return nullptr;
+    }
     const auto *C = cast<CXXConstructorDecl>(Def);
+    if (C->isDefaulted())
+      return defaultedMove(C) ? C : nullptr;
     if (noDestructorMove(C))
       return nullptr;
     if (C->isTemplated() || C->getDescribedFunctionTemplate() || C->isDeleted() || C->isDefaulted() || C->isCopyConstructor() ||
@@ -747,12 +790,35 @@ private:
     // The list runs in the order of the fields. So when one field goes through a fresh local, every field does, decision 0187.
     std::vector<llvm::json::Value> Values;
     bool Locals = !Body->body_empty();
+    // A `std::unique_ptr` field of `other` that the init list moves is null right after the init of the field that moves it, decisions 0197 and 0198.
+    // `Nulled` holds the moved fields, and `After` holds, for each field of the struct in order, the moved field that is null after its init.
+    std::vector<const FieldDecl *> Nulled;
+    std::vector<const FieldDecl *> After;
+    const ParmVarDecl *Other = C->getNumParams() == 1 ? C->getParamDecl(0) : nullptr;
+    const auto readOther = [&](const FieldDecl *From) {
+      return tag("Field", llvm::json::Array{tag("Var", llvm::json::Array{nameOf(Other), varType(Other)}), From->getNameAsString()});
+    };
     for (const FieldDecl *F : C->getParent()->fields()) {
       // `f(n, x)` of a vector field is a vector of copies, and a vector field that the list does not name is empty, decision 0187.
       llvm::json::Value Value = nullptr;
       bool Seq = false;
-      for (const CXXCtorInitializer *Init : C->inits())
+      const FieldDecl *Moved = nullptr;
+      // A move constructor `= default` moves each `std::unique_ptr` field and copies each scalar field, decision 0197.
+      if (C->isDefaulted()) {
+        Value = readOther(F);
+        if (!ownVecElement(F->getType()).isNull()) {
+          Nulled.push_back(F);
+          Moved = F;
+        }
+      }
+      for (const CXXCtorInitializer *Init : C->isDefaulted() ? ArrayRef<CXXCtorInitializer *>() : ArrayRef<CXXCtorInitializer *>(C->init_begin(), C->getNumCtorInitializers()))
         if (Init->getMember() == F && Init->isWritten()) {
+          if (const FieldDecl *From = movedFrom(Init->getInit(), F, C); From && std::find(Nulled.begin(), Nulled.end(), From) == Nulled.end()) {
+            Nulled.push_back(From);
+            Moved = From;
+            Value = readOther(From);
+            continue;
+          }
           Value = vecFill(Init->getInit(), At);
           // `f(std::move(v))` of a vector field and a local vector or a vector parameter by value `v` is the start value `Move(v)`, decision 0194.
           if (Value.getAsNull())
@@ -775,13 +841,15 @@ private:
         Value = "EmptyVec";
         Seq = true;
       }
-      // The core reads `Fill`, `EmptyVec` and `Move` as the start of a local only.
-      Locals = Locals || Seq;
+      // The core reads `Fill`, `EmptyVec` and `Move` as the start of a local only. A moved field is null right after the init that moves it, decision 0198.
+      Locals = Locals || Seq || !Nulled.empty();
       Values.push_back(std::move(Value));
+      After.push_back(Moved);
     }
     size_t Next = 0;
     for (const FieldDecl *F : C->getParent()->fields()) {
       llvm::json::Value Value = std::move(Values[Next++]);
+      const FieldDecl *Moved = After[Next - 1];
       if (!Locals) {
         Args.push_back(std::move(Value));
         continue;
@@ -792,6 +860,8 @@ private:
       llvm::json::Value Kind = Element.isNull() ? type(F->getType(), true) : tag("Vec", elementType(Element));
       Out.push_back(tag("Local", llvm::json::Array{Fresh, Kind, std::move(Value), number(At)}));
       Args.push_back(tag("Var", llvm::json::Array{Fresh, std::move(Kind)}));
+      if (Moved)
+        Out.push_back(tag("SetRefField", llvm::json::Array{nameOf(Other), Moved->getNameAsString(), "Nullopt", number(At)}));
     }
     if (!Body->body_empty()) {
       InConstructorBody = true;
@@ -804,6 +874,11 @@ private:
   }
 
 public:
+  // A destructor that the class declares and the file defines `= default` out of line, `Box::~Box() = default;`. It is a destructor with an empty body, and its contract
+  // stands on the declaration in the class, decision 0197. A destructor `= default` in the class is none, decision 0179.
+  static bool outOfLineDefault(const FunctionDecl *FD) {
+    return isa<CXXDestructorDecl>(FD) && FD->isDefaulted() && !FD->isImplicit() && FD->isOutOfLine() && FD->isThisDeclarationADefinition();
+  }
   // A class template with type parameters only has instances that are structs of the model, decision 0188. Any other class template is refused.
   static bool typeOnlyClass(const ClassTemplateDecl *T) {
     if (!T)
@@ -1069,7 +1144,7 @@ private:
     if (M && ifaceMethod(M))
       return M;
     if (!M || M->isStatic() || (M->isVirtual() && !finalOverInterface(M->getParent())) || M->isVolatile() || M->isExplicitObjectMemberFunction() || M->getRefQualifier() != RQ_None || (M->isOverloadedOperator() && M->getOverloadedOperator() != OO_Call) ||
-        isa<CXXConversionDecl>(M) || isa<CXXConstructorDecl>(M) || (isa<CXXDestructorDecl>(M) && (M->isDefaulted() || M->isDeleted() || M->isImplicit())) || M->isTemplated() || M->getDescribedFunctionTemplate())
+        isa<CXXConversionDecl>(M) || isa<CXXConstructorDecl>(M) || (isa<CXXDestructorDecl>(M) && ((M->isDefaulted() && !outOfLineDefault(M)) || M->isDeleted() || M->isImplicit())) || M->isTemplated() || M->getDescribedFunctionTemplate())
       return nullptr;
     return plainStruct(Context.getRecordType(M->getParent())) ? M : nullptr;
   }
@@ -1743,6 +1818,9 @@ private:
         if (const FieldDecl *Field = objectField(Subscript->getArg(0)->IgnoreParenImpCasts()); Field && !fieldSeq(Field->getType()).isNull())
           return tag("SetFieldAt", llvm::json::Array{Field->getNameAsString(), expr(Subscript->getArg(1), line(S->getBeginLoc())), expr(Assign->getRHS(), line(S->getBeginLoc())),
                                                      number(line(S->getBeginLoc()))});
+      // `f->g = e` of a `std::unique_ptr` field `f` of the object, decision 0197.
+      if (const auto [Held, Field] = throughField(Assign->getLHS()); Held)
+        return tag("SetThroughField", llvm::json::Array{Held->getNameAsString(), Field->getNameAsString(), expr(Assign->getRHS(), line(S->getBeginLoc())), number(line(S->getBeginLoc()))});
       // A write of a field of the object, decision 0096.
       if (const FieldDecl *Field = objectField(Assign->getLHS()))
         return tag("SetField", llvm::json::Array{Field->getNameAsString(), expr(Assign->getRHS(), line(S->getBeginLoc())), number(line(S->getBeginLoc()))});
@@ -2003,7 +2081,8 @@ private:
     const auto *Name = dyn_cast<DeclRefExpr>(Left);
     const FieldDecl *Field = Name ? nullptr : objectField(Left);
     const auto [Param, RefField] = Name ? std::pair<const ParmVarDecl *, const FieldDecl *>{} : refField(Left);
-    if (!(Name && isTarget(Name->getDecl())) && !Field && !Param)
+    const auto [Held, Through] = Name ? std::pair<const FieldDecl *, const FieldDecl *>{} : throughField(Left);
+    if (!(Name && isTarget(Name->getDecl())) && !Field && !Param && !Held)
       return nullptr;
     const auto convert = [&](llvm::json::Value V, QualType From, QualType To) -> llvm::json::Value {
       if (Context.hasSameType(From, To))
@@ -2022,6 +2101,8 @@ private:
       return tag("SetRefField", llvm::json::Array{Param->getNameAsString(), RefField->getNameAsString(), std::move(Value), number(At)});
     if (Field)
       return tag("SetField", llvm::json::Array{Field->getNameAsString(), std::move(Value), number(At)});
+    if (Held)
+      return tag("SetThroughField", llvm::json::Array{Held->getNameAsString(), Through->getNameAsString(), std::move(Value), number(At)});
     return tag("Assign", llvm::json::Array{nameOf(Name->getDecl()), std::move(Value), number(At)});
   }
 
@@ -2214,6 +2295,22 @@ private:
       return {};
     return {Var, Field};
   }
+  // `f->g` where `f` is a `std::unique_ptr` field of the object that owns a plain struct: the pair (`f`, `g`). A pair of nulls for any other form, such as the field of a
+  // parameter, decision 0197.
+  std::pair<const FieldDecl *, const FieldDecl *> throughField(const Expr *E) const {
+    const auto *Member = dyn_cast<MemberExpr>(E->IgnoreParens());
+    const auto *Field = Member ? dyn_cast<FieldDecl>(Member->getMemberDecl()) : nullptr;
+    const auto *Arrow = Member && Member->isArrow() ? dyn_cast<CXXOperatorCallExpr>(Member->getBase()->IgnoreParenImpCasts()) : nullptr;
+    if (!Field || !Arrow || Arrow->getOperator() != OO_Arrow || Arrow->getNumArgs() != 1)
+      return {};
+    const FieldDecl *Held = objectField(Arrow->getArg(0)->IgnoreParenImpCasts());
+    if (!Held || !isUniquePtr(Held->getType()) || Held->getType().isConstQualified())
+      return {};
+    const QualType Owned = ownElement(Held->getType());
+    if (Owned.isNull() || !plainStruct(Owned))
+      return {};
+    return {Held, Field};
+  }
   // `std::make_unique<S>()` of a plain struct `S`: `Wrap(Construct(S, values))` with the start value of each field, decision 0186. An integer or bool field starts with its
   // default member initializer, which must be a constant expression. A `std::unique_ptr` field with no initializer, or with `nullptr`, starts null. Null for any other form.
   llvm::json::Value makeUniqueNew(const CallExpr *Make) const {
@@ -2281,6 +2378,42 @@ private:
       return nullptr;
     return tag("Move", llvm::json::Array{Var->getNameAsString(), tag("Own", ownScalar(ownElement(Held)))});
   }
+  // The call of the value constructor that `std::make_unique` makes, `Call(key, name, args, line)`, for `Constructed`, the construction in the body of the
+  // instance of `make_unique`. Each argument has exactly the type of its parameter, so the construction converts nothing. Null for any other form.
+  llvm::json::Value constructedCall(const CallExpr *Make, const CXXConstructExpr *Constructed, unsigned Near, unsigned At) const {
+    if (!Constructed || !valueConstructor(Constructed->getConstructor()) || Constructed->getConstructor()->getNumParams() != Make->getNumArgs())
+      return nullptr;
+    llvm::json::Array Args;
+    for (unsigned I = 0; I < Make->getNumArgs(); ++I) {
+      const Expr *A = Make->getArg(I);
+      if (const auto *Temporary = dyn_cast<MaterializeTemporaryExpr>(A))
+        A = Temporary->getSubExpr();
+      if (A->getType().getUnqualifiedType().getCanonicalType() != Constructed->getConstructor()->getParamDecl(I)->getType().getNonReferenceType().getUnqualifiedType().getCanonicalType())
+        return nullptr;
+      // An argument `std::move(x)` of a local at a parameter by value of its own unique_ptr type is a move, decision 0171.
+      // A parameter by reference binds the xvalue and moves nothing, so that `std::move` keeps its refusal.
+      const QualType ParamType = Constructed->getConstructor()->getParamDecl(I)->getType();
+      if (llvm::json::Value Moved = ParamType->isReferenceType() ? llvm::json::Value(nullptr) : moveOfLocal(A, ParamType); !Moved.getAsNull())
+        Args.push_back(std::move(Moved));
+      else
+        Args.push_back(expr(A, Near));
+    }
+    const CXXConstructorDecl *C = Constructed->getConstructor();
+    return tag("Call", llvm::json::Array{key(C), name(C), std::move(Args), number(At)});
+  }
+  // `std::make_unique<S>(args)` of a plain struct `S` with a value constructor, with arguments that have exactly the types of its parameters: `Wrap(Call(...))`,
+  // decision 0197. Null for any other form.
+  llvm::json::Value makeUniqueCall(const CallExpr *Make, unsigned Near) const {
+    const QualType Made = ownElement(Make->getType());
+    const CXXRecordDecl *RD = Made.isNull() ? nullptr : plainStruct(Made);
+    if (!RD || finalOverInterface(RD) || !SM.isInSystemHeader(Make->getDirectCallee()->getLocation()))
+      return nullptr;
+    llvm::json::Value Built = constructedCall(Make, constructedByNew(Make->getDirectCallee()->getBody()), Near, line(Make->getBeginLoc()));
+    if (Built.getAsNull())
+      return nullptr;
+    (void)type(Made);  // writes the struct
+    return tag("Wrap", std::move(Built));
+  }
   // `std::make_unique<D>(args)` of a final class over an interface, as a `std::unique_ptr<B>` of that interface: `Some(f_D'B(d))` where `d` is the value that the
   // constructor of D gives, or `S_D()` for a class with no field and no constructor, decision 0168. Null for any other form.
   llvm::json::Value makeUniqueUpcast(const CXXConstructExpr *Convert, unsigned Near) const {
@@ -2317,25 +2450,8 @@ private:
     const CXXConstructExpr *Constructed = constructedByNew(Callee->getBody());
     if (Derived->field_empty() && !Derived->hasUserDeclaredConstructor() && Make->getNumArgs() == 0) {
       Built = tag("Construct", llvm::json::Array{structKey(Derived->getDefinition()), llvm::json::Array{}});
-    } else if (Constructed && valueConstructor(Constructed->getConstructor()) && Constructed->getConstructor()->getNumParams() == Make->getNumArgs()) {
-      llvm::json::Array Args;
-      for (unsigned I = 0; I < Make->getNumArgs(); ++I) {
-        const Expr *A = Make->getArg(I);
-        if (const auto *Temporary = dyn_cast<MaterializeTemporaryExpr>(A))
-          A = Temporary->getSubExpr();
-        // The argument has exactly the type of the parameter, so the construction converts nothing.
-        if (A->getType().getUnqualifiedType().getCanonicalType() != Constructed->getConstructor()->getParamDecl(I)->getType().getNonReferenceType().getUnqualifiedType().getCanonicalType())
-          return nullptr;
-        // An argument `std::move(x)` of a local at a parameter by value of its own unique_ptr type is a move, decision 0171.
-        // A parameter by reference binds the xvalue and moves nothing, so that `std::move` keeps its refusal.
-        const QualType ParamType = Constructed->getConstructor()->getParamDecl(I)->getType();
-        if (llvm::json::Value Moved = ParamType->isReferenceType() ? llvm::json::Value(nullptr) : moveOfLocal(A, ParamType); !Moved.getAsNull())
-          Args.push_back(std::move(Moved));
-        else
-          Args.push_back(expr(A, Near));
-      }
-      const CXXConstructorDecl *C = Constructed->getConstructor();
-      Built = tag("Call", llvm::json::Array{key(C), name(C), std::move(Args), number(line(Convert->getBeginLoc()))});
+    } else {
+      Built = constructedCall(Make, Constructed, Near, line(Convert->getBeginLoc()));
     }
     if (Built.getAsNull())
       return nullptr;
@@ -2524,6 +2640,11 @@ private:
     if (const auto *Make = dyn_cast<CallExpr>(E); Make && Make->getNumArgs() == 0 && Make->getDirectCallee() && Make->getDirectCallee()->isInStdNamespace() &&
                                                   Make->getDirectCallee()->getDeclName().isIdentifier() && Make->getDirectCallee()->getName() == "make_unique")
       if (llvm::json::Value Made = makeUniqueNew(Make); !Made.getAsNull())
+        return Made;
+    // `std::make_unique<S>(args)` of a plain struct with a value constructor is the call of that constructor, decision 0197.
+    if (const auto *Make = dyn_cast<CallExpr>(E); Make && Make->getNumArgs() > 0 && Make->getDirectCallee() && Make->getDirectCallee()->isInStdNamespace() &&
+                                                  Make->getDirectCallee()->getDeclName().isIdentifier() && Make->getDirectCallee()->getName() == "make_unique")
+      if (llvm::json::Value Made = makeUniqueCall(Make, Near); !Made.getAsNull())
         return Made;
     // `std::make_unique<T>(x)` of a scalar, with an argument of exactly that type, is a value of `x`, decision 0142.
     if (const auto *Make = dyn_cast<CallExpr>(E); Make && Make->getNumArgs() == 1 && Make->getDirectCallee() && Make->getDirectCallee()->isInStdNamespace() &&
@@ -3001,7 +3122,7 @@ public:
     }
     const auto *FD = Result.Nodes.getNodeAs<FunctionDecl>("fn");
     // A defaulted destructor has no contract and no body, so it is no member of the model, decision 0178.
-    if (!FD || FD->isDeleted() || (isa<CXXDestructorDecl>(FD) && FD->isDefaulted()))
+    if (!FD || FD->isDeleted() || (isa<CXXDestructorDecl>(FD) && FD->isDefaulted() && !TreeWriter::outOfLineDefault(FD)))
       return;
     // The call operator of a lambda is no function of its own, decision 0149. The call that takes the lambda reads its body, or is refused.
     if (const auto *Method = dyn_cast<CXXMethodDecl>(FD); Method && Method->getParent()->isLambda())

@@ -206,7 +206,8 @@ pub type Args = List<Box<Expr>>;
 /// `Sort` is `std::sort(v.begin(), v.end())`, decision 0161, and `SortBy` is the same with a comparator lambda, by the names and the
 /// type of its two parameters and the expression of its one `return`, decision 0162. `Block` is a bare block `{ ... }`, a scope of
 /// its own, decision 0178. `SetOwnField` is `n->f = e` of a local `std::unique_ptr` of a plain struct, decision 0186. `SetFieldAt` is
-/// `f[i] = e` of a sequence field in a member function that writes its object, decision 0187.
+/// `f[i] = e` of a sequence field in a member function that writes its object, decision 0187. `SetThroughField` is `f->g = e` of a
+/// `std::unique_ptr` field `f` of the object, decision 0197.
 #[derive(PartialEq, Eq, Debug)]
 pub enum Stmt {
     Return(Expr, u32),
@@ -230,6 +231,7 @@ pub enum Stmt {
     PushBack(u32, Expr, u32),
     PushField(u32, Expr, u32),
     PopField(u32, u32),
+    SetThroughField(u32, u32, Expr, u32),
     Sort(u32, u32),
     SortBy(u32, u32, u32, Ty, Expr, u32),
     Block(Box<Stmts>, u32),

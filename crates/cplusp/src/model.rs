@@ -175,6 +175,8 @@ enum JStmt {
     SetRefField(String, String, JExpr, u32),
     /// `n->f = e` where `n` is a local `std::unique_ptr` of a plain struct, decision 0186.
     SetOwnField(String, String, JExpr, u32),
+    /// `f->g = e` where `f` is a `std::unique_ptr` field of the object, decision 0197.
+    SetThroughField(String, String, JExpr, u32),
     /// A switch over an enum, decision 0109: its condition, the key of the enum, the cases as (place of the enumerator, statements), and the line.
     Switch(JExpr, String, Vec<(u32, Vec<JStmt>)>, u32),
     Call(String, String, Vec<JExpr>, u32),
@@ -558,6 +560,7 @@ fn stmt(s: JStmt, names: &mut Names) -> Stmt {
         }
         JStmt::SetRefField(p, f, e, line) => Stmt::SetRefField(names.id(&p), names.id(&f), expr(e, names), names.here(line)),
         JStmt::SetOwnField(n, f, e, line) => Stmt::SetOwnField(names.id(&n), names.id(&f), expr(e, names), names.here(line)),
+        JStmt::SetThroughField(f, g, e, line) => Stmt::SetThroughField(names.id(&f), names.id(&g), expr(e, names), names.here(line)),
         JStmt::Call(key, name, args, line) => {
             let args: Vec<Expr> = args.into_iter().map(|a| expr(a, names)).collect();
             let args = args.into_iter().rev().fold(Args::Nil, |rest, a| Args::Cons(Box::new(a), Box::new(rest)));
@@ -1003,7 +1006,7 @@ fn stmt_names<'a>(s: &'a JStmt, out: &mut Vec<&'a str>) {
             expr_names(e, out);
         }
         JStmt::Step(n, ..) => out.push(n),
-        JStmt::SetField(_, e, _) => expr_names(e, out),
+        JStmt::SetField(_, e, _) | JStmt::SetThroughField(_, _, e, _) => expr_names(e, out),
         JStmt::Sort(v, _) | JStmt::PopField(v, _) => out.push(v),
         JStmt::SortBy(v, a, b, _, e, _) => {
             out.extend([v, a, b].map(String::as_str));
@@ -1737,6 +1740,11 @@ impl Printer<'_> {
             DStmt::SetOwnField(n, f, e) => {
                 let n = mangle(names.text(*n));
                 self.put(depth, format!("{n} := Some({n}.value.(f_{} := {}));", names.text(*f), dexpr(e, names)), place);
+            }
+            // Decision 0197: the field holds a pointer, and the write keeps the other fields of what it owns.
+            DStmt::SetThroughField(f, g, e) => {
+                let f = names.text(*f);
+                self.put(depth, format!("v_this' := v_this'.(f_{f} := Some(v_this'.f_{f}.value.(f_{} := {})));", names.text(*g), dexpr(e, names)), place);
             }
             DStmt::Update(objs, m, args) => {
                 let (object, call, before, after) = self.update(objs, *m, args);

@@ -937,7 +937,7 @@ fn the_pointer_to_implementation_proves() {
 }
 
 /// make_unique gives the value of the constructor, a move leaves the source null, and Dafny checks that the pointer holds a
-/// value at each write through it, decision 0197.
+/// value at each write through it, decision 0197. The source is null right after the init that moves it, decision 0198.
 #[test]
 fn the_pointer_to_implementation_keeps_its_contract() {
     let Some(dafny) = dafny() else { return };
@@ -950,15 +950,18 @@ fn the_pointer_to_implementation_keeps_its_contract() {
     let mut failed: Vec<&str> = text.lines().filter(|l| l.starts_with("Not proved: ") || l.starts_with("Not provable: ")).map(|l| l.rsplit_once(".cpp:").unwrap().1).collect();
     failed.sort_by_key(|l| l.split(':').next().unwrap().parse::<u32>().unwrap());
     let want = [
-        "13: the ensures line may not hold on this return.",
-        "19: the ensures line may not hold on this return.",
-        "33: the optional may be empty or the pointer may be null here.",
+        "14: the ensures line may not hold on this return.",
+        "20: the ensures line may not hold on this return.",
+        "34: the optional may be empty or the pointer may be null here.",
+        "51: the ensures line may not hold on this return.",
+        "74: the optional may be empty or the pointer may be null here.",
     ];
     assert_eq!(failed, want, "{text}");
 }
 
 /// A move constructor = default of a struct with a field that is no scalar and no unique_ptr, and a write through a unique_ptr
-/// field of a parameter, keep their sentences, decision 0197.
+/// field of a parameter, keep their sentences, decision 0197. So does a move in a move constructor with a second parameter,
+/// decision 0198.
 #[test]
 fn the_pointer_to_implementation_with_no_rule_is_refused() {
     let Some(dafny) = dafny() else { return };
@@ -969,6 +972,10 @@ fn the_pointer_to_implementation_with_no_rule_is_refused() {
     let text = stdout(&o);
     assert_eq!(o.status.code(), Some(1), "stdout: {text} stderr: {}", stderr(&o));
     let refused: Vec<&str> = text.lines().filter(|l| l.starts_with("Not proved: ") || l.starts_with("Not provable: ")).map(|l| l.rsplit_once(".cpp:").unwrap().1).collect();
-    let want = ["29: CXXConstructorDecl: the translator has no rule for it yet.", "41: BinaryOperator =: the translator has no rule for it yet."];
+    let want = [
+        "29: CXXConstructorDecl: the translator has no rule for it yet.",
+        "41: BinaryOperator =: the translator has no rule for it yet.",
+        "52: a call to std::move<std::unique_ptr<Cell> &>, which has no model in view.",
+    ];
     assert_eq!(refused, want, "{text}");
 }

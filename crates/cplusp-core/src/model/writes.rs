@@ -472,6 +472,7 @@ pub open spec fn spec_write_check(s: Stmt, all: Fns, ps: Params, sd: Structs) ->
             None => spec_check_expr(e, all, ps, sd, l),
         },
         Stmt::PushField(_, e, l) => spec_check_expr(e, all, ps, sd, l),
+        Stmt::SetThroughField(_, _, e, l) => spec_check_expr(e, all, ps, sd, l),
         Stmt::Call(_, _, args, l) => spec_check_args(*args, all, ps, sd, l),
         Stmt::While(c, _, _, l) => spec_loop_write(c, all, sd, l),
         Stmt::For(init, c, step, _, _, l) => match spec_write_check(*init, all, ps, sd) {
@@ -541,6 +542,7 @@ pub fn write_check(s: &Stmt, all: &Fns, ps: &Params, sd: &Structs) -> (r: Option
             None => check_expr(e, all, ps, sd, *l),
         },
         Stmt::PushField(_, e, l) => check_expr(e, all, ps, sd, *l),
+        Stmt::SetThroughField(_, _, e, l) => check_expr(e, all, ps, sd, *l),
         Stmt::Call(_, _, args, l) => check_args(args, all, ps, sd, *l),
         Stmt::While(c, _, _, l) => loop_write(c, all, sd, *l),
         Stmt::For(init, c, step, _, _, l) => match write_check(init, all, ps, sd) {

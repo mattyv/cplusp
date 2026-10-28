@@ -2505,6 +2505,7 @@ pub open spec fn spec_place(s: Stmt) -> u32 {
         Stmt::SetIndex(_, _, _, l) => l,
         Stmt::SetFieldAt(_, _, _, l) => l,
         Stmt::PushField(_, _, l) => l,
+        Stmt::SetThroughField(_, _, _, l) => l,
         Stmt::PopField(_, l) => l,
         Stmt::PushBack(_, _, l) => l,
         Stmt::Sort(_, l) => l,

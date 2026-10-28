@@ -137,7 +137,8 @@ pub type DArgs = List<DExpr>;
 /// arguments hold each argument of the call. `CallStmt` is `m(args);` of a method that gives no value, and `Exit` is `return;`, decision 0096. `Assert` is
 /// `assert e;` and `Apply` is `l(args);` of a lemma, decision 0099. `Sort` is `p := StdSort(p, (a: T, b: T) => a < b);` of a place
 /// and the type of its elements, decision 0161. `SortBy` is `p := StdSort(p, (a: T, b: T) => e);` with a comparator, decision 0162. `Match` is a match over the enum with the key, decision 0109. `Pre` is a statement with the calls that run before it, decision
-/// 0104. `SetOwnField` is `n := Some(n.value.(f := e));` of a local unique_ptr, decision 0186.
+/// 0104. `SetOwnField` is `n := Some(n.value.(f := e));` of a local unique_ptr, decision 0186. `SetThroughField` is
+/// `this' := this'.(f := Some(this'.f.value.(g := e)));`, decision 0197.
 #[derive(PartialEq, Eq, Debug)]
 pub enum DStmt {
     Return(DExpr),
@@ -154,6 +155,7 @@ pub enum DStmt {
     SetOut(u32, DExpr),
     SetOutField(u32, u32, DExpr),
     SetOwnField(u32, u32, DExpr),
+    SetThroughField(u32, u32, DExpr),
     Update(Objs, u32, DArgs),
     UpdateAt(Obj, Box<DExpr>, Objs, u32, DArgs),
     LocalUpdate(u32, DTy, Objs, u32, DArgs),

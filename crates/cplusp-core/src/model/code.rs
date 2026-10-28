@@ -1650,6 +1650,7 @@ pub fn place(s: &Stmt) -> (r: u32)
         Stmt::SetIndex(_, _, _, l) => *l,
         Stmt::SetFieldAt(_, _, _, l) => *l,
         Stmt::PushField(_, _, l) => *l,
+        Stmt::SetThroughField(_, _, _, l) => *l,
         Stmt::PopField(_, l) => *l,
         Stmt::PushBack(_, _, l) => *l,
         Stmt::Sort(_, l) => *l,
@@ -2466,6 +2467,24 @@ pub fn translate_stmt(s: &Stmt, all: &Fns, env: &Params, ps: &Params, sd: &Struc
                             Err(r) => Err(r),
                         },
                         Err(r) => Err(r),
+                    },
+                    Some(_) => Err(Refusal::Syntax(*l)),
+                    None => Err(Refusal::NoField(*f, *l)),
+                },
+                _ => Err(Refusal::WriteParam(p, *l)),
+            },
+            None => Err(Refusal::Syntax(*l)),
+        },
+        Stmt::SetThroughField(f, g, e, l) => match self_param(ps) {
+            Some((p, t)) => match t {
+                Ty::ThisMut(k) => match field_ty(sd, k, *f) {
+                    Some(Ty::Own(Scalar::Struct(k2))) => match field_ty(sd, k2, *g) {
+                        Some(Ty::Seq(_, _)) => Err(Refusal::SeqParam(*l)),
+                        Some(_) => match translate_code(e, *l) {
+                            Ok(de) => Ok(DStmt::SetThroughField(*f, *g, de)),
+                            Err(r) => Err(r),
+                        },
+                        None => Err(Refusal::NoField(*g, *l)),
                     },
                     Some(_) => Err(Refusal::Syntax(*l)),
                     None => Err(Refusal::NoField(*f, *l)),

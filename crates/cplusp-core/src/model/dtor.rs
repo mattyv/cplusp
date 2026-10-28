@@ -986,6 +986,27 @@ pub open spec fn spec_stmt(s: Stmt, all: Fns, env: Params, ps: Params, sd: Struc
         // `f.push_back(e)` and `f.pop_back()` of a sequence field in a member function that writes its object are new values of the
         // field, decision 0191. A pop is PopBack of the prelude, whose requires line Dafny checks.
         // ponytail: the value of a push is code with no call. Upgrade: run its calls before it, as PushBack does, decision 0170.
+        // `f->g = e` writes the field `g` of the struct that the unique_ptr field `f` of the object owns, decision 0197. Dafny proves
+        // that `f` holds a value.
+        // ponytail: the value is code with no call. Upgrade: run its calls before it, as for SetOwnField, decision 0186.
+        Stmt::SetThroughField(f, g, e, l) => match spec_self(ps) {
+            Some((p, t)) => match t {
+                Ty::ThisMut(k) => match spec_field_ty(sd, k, f) {
+                    Some(Ty::Own(Scalar::Struct(k2))) => match spec_field_ty(sd, k2, g) {
+                        Some(Ty::Seq(_, _)) => Err(Refusal::SeqParam(l)),
+                        Some(_) => match spec_code(e, l) {
+                            Ok(de) => Ok(DStmt::SetThroughField(f, g, de)),
+                            Err(r) => Err(r),
+                        },
+                        None => Err(Refusal::NoField(g, l)),
+                    },
+                    Some(_) => Err(Refusal::Syntax(l)),
+                    None => Err(Refusal::NoField(f, l)),
+                },
+                _ => Err(Refusal::WriteParam(p, l)),
+            },
+            None => Err(Refusal::Syntax(l)),
+        },
         Stmt::PushField(f, e, l) => match spec_self(ps) {
             Some((p, t)) => match t {
                 Ty::ThisMut(k) => match spec_field_ty(sd, k, f) {

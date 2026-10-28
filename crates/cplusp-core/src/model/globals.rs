@@ -563,6 +563,7 @@ pub open spec fn spec_gstmt(s: Stmt, gs: Params, gps: Params, hide: Names, fs: F
         Stmt::SetIndex(v, i, e, l) => Stmt::SetIndex(v, spec_gexpr(i, gs, gps, hide, fs), spec_gexpr(e, gs, gps, hide, fs), l),
         Stmt::SetFieldAt(f, i, e, l) => Stmt::SetFieldAt(f, spec_gexpr(i, gs, gps, hide, fs), spec_gexpr(e, gs, gps, hide, fs), l),
         Stmt::PushField(f, e, l) => Stmt::PushField(f, spec_gexpr(e, gs, gps, hide, fs), l),
+        Stmt::SetThroughField(f, g, e, l) => Stmt::SetThroughField(f, g, spec_gexpr(e, gs, gps, hide, fs), l),
         Stmt::PushBack(v, e, l) => Stmt::PushBack(v, spec_gexpr(e, gs, gps, hide, fs), l),
         // The comparator reads a listed global as the function does. Its two parameters hide globals of their names.
         Stmt::SortBy(v, a, b, t, e, l) => Stmt::SortBy(v, a, b, t, spec_gexpr(e, gs, gps, List::Cons(a, Box::new(List::Cons(b, Box::new(hide)))), fs), l),
@@ -632,6 +633,7 @@ pub fn copy_stmt(s: &Stmt) -> (r: Stmt)
         Stmt::SetIndex(v, i, e, l) => Stmt::SetIndex(*v, copy_expr(i), copy_expr(e), *l),
         Stmt::SetFieldAt(f, i, e, l) => Stmt::SetFieldAt(*f, copy_expr(i), copy_expr(e), *l),
         Stmt::PushField(f, e, l) => Stmt::PushField(*f, copy_expr(e), *l),
+        Stmt::SetThroughField(f, g, e, l) => Stmt::SetThroughField(*f, *g, copy_expr(e), *l),
         Stmt::PopField(f, l) => Stmt::PopField(*f, *l),
         Stmt::PushBack(v, e, l) => Stmt::PushBack(*v, copy_expr(e), *l),
         Stmt::Sort(v, l) => Stmt::Sort(*v, *l),
@@ -700,6 +702,7 @@ pub fn gstmt(s: &Stmt, gs: &Params, gps: &Params, hide: &Names, fs: &Fns) -> (r:
         Stmt::SetIndex(v, i, e, l) => Stmt::SetIndex(*v, gexpr(i, gs, gps, hide, fs), gexpr(e, gs, gps, hide, fs), *l),
         Stmt::SetFieldAt(f, i, e, l) => Stmt::SetFieldAt(*f, gexpr(i, gs, gps, hide, fs), gexpr(e, gs, gps, hide, fs), *l),
         Stmt::PushField(f, e, l) => Stmt::PushField(*f, gexpr(e, gs, gps, hide, fs), *l),
+        Stmt::SetThroughField(f, g, e, l) => Stmt::SetThroughField(*f, *g, gexpr(e, gs, gps, hide, fs), *l),
         Stmt::PushBack(v, e, l) => Stmt::PushBack(*v, gexpr(e, gs, gps, hide, fs), *l),
         Stmt::SortBy(v, a, b, t, e, l) => Stmt::SortBy(*v, *a, *b, *t, gexpr(e, gs, gps, &List::Cons(*a, Box::new(List::Cons(*b, Box::new(copy(hide))))), fs), *l),
         _ => copy_stmt(s),
@@ -828,6 +831,7 @@ pub open spec fn spec_gcalls_stmt(s: Stmt) -> List<(u32, u32, u32)>
         Stmt::SetIndex(_, i, e, _) => spec_append(spec_gcalls(i), spec_gcalls(e)),
         Stmt::SetFieldAt(_, i, e, _) => spec_append(spec_gcalls(i), spec_gcalls(e)),
         Stmt::PushField(_, e, _) => spec_gcalls(e),
+        Stmt::SetThroughField(_, _, e, _) => spec_gcalls(e),
         Stmt::PushBack(_, e, _) => spec_gcalls(e),
         _ => List::Nil,
     }
@@ -874,6 +878,7 @@ pub fn gcalls_stmt(s: &Stmt) -> (r: List<(u32, u32, u32)>)
         Stmt::SetIndex(_, i, e, _) => append(gcalls(i), gcalls(e)),
         Stmt::SetFieldAt(_, i, e, _) => append(gcalls(i), gcalls(e)),
         Stmt::PushField(_, e, _) => gcalls(e),
+        Stmt::SetThroughField(_, _, e, _) => gcalls(e),
         Stmt::PushBack(_, e, _) => gcalls(e),
         _ => List::Nil,
     }

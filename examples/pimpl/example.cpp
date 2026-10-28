@@ -49,6 +49,7 @@ class Account {
 struct Account::Impl {
   int32_t balance;
 
+  //@ ensures balance == b
   explicit Impl(int32_t b) : balance(b) {}
 };
 

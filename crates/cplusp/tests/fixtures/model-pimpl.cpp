@@ -4,6 +4,7 @@
 // The pointer to implementation, decision 0197.
 struct Cell {
   int32_t v;
+  //@ ensures v == b
   explicit Cell(int32_t b) : v(b) {}
 };
 

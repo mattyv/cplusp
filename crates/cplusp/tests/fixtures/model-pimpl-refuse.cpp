@@ -12,7 +12,7 @@ struct Cell {
 class Bag {
  public:
   //@ ensures true
-  Bag() : c_(std::make_unique<Cell>(1)), items_() {}
+  Bag() : c_(std::make_unique<Cell>(1)) {}
 
   //@ modifies other
   //@ ensures true
@@ -40,3 +40,22 @@ struct Holder {
 void poke(Holder& h) {
   h.c->v = 1;
 }
+
+// A move constructor with a second parameter, decision 0198.
+class Two {
+ public:
+  //@ ensures true
+  Two() : c_(std::make_unique<Cell>(1)) {}
+
+  //@ modifies other
+  //@ ensures true
+  Two(Two&& other, int32_t z = 0) noexcept : c_(std::move(other.c_)) {}
+
+  //@ ensures true
+  ~Two();
+
+ private:
+  std::unique_ptr<Cell> c_;
+};
+
+Two::~Two() = default;

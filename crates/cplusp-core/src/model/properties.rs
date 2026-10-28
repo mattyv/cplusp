@@ -83,6 +83,7 @@ pub open spec fn unknown_stmt(s: Stmt) -> bool
         Stmt::SetIndex(_, i, e, _) => unknown_expr(i) || unknown_expr(e),
         Stmt::SetFieldAt(_, i, e, _) => unknown_expr(i) || unknown_expr(e),
         Stmt::PushField(_, e, _) => unknown_expr(e),
+        Stmt::SetThroughField(_, _, e, _) => unknown_expr(e),
         Stmt::PopField(_, _) => false,
         Stmt::PushBack(_, e, _) => unknown_expr(e),
         Stmt::Sort(_, _) => false,
@@ -342,6 +343,7 @@ pub proof fn lemma_unknown_stmt_is_refused(s: Stmt, all: Fns, env: Params, ps: P
             }
         },
         Stmt::PushField(_, e, l) => lemma_unknown_code_is_refused(e, l),
+        Stmt::SetThroughField(_, _, e, l) => lemma_unknown_code_is_refused(e, l),
         Stmt::PushBack(_, e, l) => {
             lemma_unknown_code_is_refused(e, l);
             lemma_unknown_lift_is_refused(e, all, l, sd, 0, true);
@@ -638,7 +640,7 @@ pub proof fn lemma_kept_assign(s: Stmt, all: Fns, env: Params, ps: Params, sd: S
 pub proof fn lemma_kept_set_field(s: Stmt, all: Fns, env: Params, ps: Params, sd: Structs)
     requires
         spec_stmt(s, all, env, ps, sd).is_ok(),
-        s is SetField || s is SetRefField || s is SetFieldAt || s is PushField || s is PopField || s is PushBack,
+        s is SetField || s is SetRefField || s is SetFieldAt || s is PushField || s is PopField || s is SetThroughField || s is PushBack,
     ensures
         count_dstmt(spec_stmt(s, all, env, ps, sd).unwrap()) == 1,
 {
@@ -821,6 +823,7 @@ pub proof fn lemma_stmt_kept(s: Stmt, all: Fns, env: Params, ps: Params, sd: Str
         Stmt::PushBack(_, _, _) => lemma_kept_set_field(s, all, env, ps, sd),
         Stmt::SetFieldAt(_, _, _, _) => lemma_kept_set_field(s, all, env, ps, sd),
         Stmt::PushField(_, _, _) => lemma_kept_set_field(s, all, env, ps, sd),
+        Stmt::SetThroughField(_, _, _, _) => lemma_kept_set_field(s, all, env, ps, sd),
         Stmt::PopField(_, _) => lemma_kept_set_field(s, all, env, ps, sd),
         Stmt::Switch(e, k, cs, l) => {
             lemma_cases_kept(*cs, all, env, ps, sd);
@@ -1508,7 +1511,8 @@ pub proof fn lemma_resolves_set_own_field(s: Stmt, all: Fns, env: Params, ps: Pa
 pub proof fn lemma_resolves_plain(s: Stmt, all: Fns, env: Params, ps: Params, sd: Structs)
     requires
         spec_stmt(s, all, env, ps, sd).is_ok(),
-        s is Step || s is Assert || s is Apply || s is Unknown || s is SetIndex || s is SetFieldAt || s is PushField || s is PopField || s is Sort
+        s is Step || s is Assert || s is Apply || s is Unknown || s is SetIndex || s is SetFieldAt || s is PushField || s is PopField || s is SetThroughField
+            || s is Sort
             || s is SortBy,
     ensures
         calls_resolve_stmt(spec_stmt(s, all, env, ps, sd).unwrap(), all, sd),
@@ -1653,6 +1657,7 @@ pub proof fn lemma_stmt_calls_resolve(s: Stmt, all: Fns, env: Params, ps: Params
         Stmt::SetIndex(_, _, _, _) => lemma_resolves_plain(s, all, env, ps, sd),
         Stmt::SetFieldAt(_, _, _, _) => lemma_resolves_plain(s, all, env, ps, sd),
         Stmt::PushField(_, _, _) => lemma_resolves_plain(s, all, env, ps, sd),
+        Stmt::SetThroughField(_, _, _, _) => lemma_resolves_plain(s, all, env, ps, sd),
         Stmt::PopField(_, _) => lemma_resolves_plain(s, all, env, ps, sd),
         Stmt::PushBack(_, _, _) => lemma_resolves_push(s, all, env, ps, sd),
         Stmt::Sort(_, _) => lemma_resolves_plain(s, all, env, ps, sd),
