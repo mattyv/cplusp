@@ -4120,6 +4120,22 @@ fn a_field_write_through_a_local_unique_ptr_writes_the_value_it_owns() {
     assert_eq!(*moved, DStmt::Moved(Box::new(DStmt::SetOwnField(MA, TCN, DExpr::Var(MB))), names(&[MB])));
 }
 
+/// `f->g = e` in a member function that writes its object writes the field `g` of the struct that the unique_ptr field `f` owns.
+/// A field that is no unique_ptr of a struct, a field that the owned struct does not have, and a member function that does not write
+/// its object are refused, decision 0197.
+#[test]
+fn a_member_function_writes_through_a_unique_ptr_field() {
+    let with = |t: Ty, s: Stmt| Function { name: 476, line: 50, params: List::Cons((THIS, t), Box::new(List::Nil)), ret: Ty::Void, trusted: false, conds: List::Nil, body: one(s) };
+    let write = |f: u32, g: u32| Stmt::SetThroughField(f, g, Expr::Lit(1, Ty::I32), 51);
+    let Model::Full(m) = translate_function(&with(Ty::ThisMut(CELL), write(TCN, TCV)), &List::Nil, &cell_table()) else { panic!("a full model") };
+    let List::Cons((s, _), rest) = strip(m.body) else { panic!("a body") };
+    assert_eq!(*rest, List::Nil);
+    assert_eq!(*s, DStmt::SetThroughField(TCN, TCV, lit32(1)));
+    assert_eq!(bare_refusal(translate_function(&with(Ty::ThisMut(CELL), write(TCV, TCV)), &List::Nil, &cell_table())), Refusal::Syntax(51));
+    assert_eq!(bare_refusal(translate_function(&with(Ty::ThisMut(CELL), write(TCN, 478)), &List::Nil, &cell_table())), Refusal::NoField(478, 51));
+    assert_eq!(bare_refusal(translate_function(&with(Ty::This(CELL), write(TCN, TCV)), &List::Nil, &cell_table())), Refusal::WriteParam(THIS, 51));
+}
+
 /// A write through a parameter that the body does not move, a write that moves its own target, and a write to no field are
 /// refused, decision 0186.
 #[test]

@@ -918,3 +918,57 @@ fn a_std_array_field_with_no_start_value_is_refused() {
     let want = [format!("8: {none}"), "19: CXXConstructorDecl: the translator has no rule for it yet.".to_string(), format!("31: {none}")];
     assert_eq!(refused, want, "{text}");
 }
+
+/// A class keeps its data in a struct behind a unique_ptr field. It makes the struct with make_unique of its constructor, writes
+/// through the pointer, defines its destructor = default out of line, and moves the pointer in a move constructor, written or
+/// = default, decision 0197.
+#[test]
+fn the_pointer_to_implementation_proves() {
+    let Some(dafny) = dafny() else { return };
+    if !clang_tidy_available() {
+        return;
+    }
+    for name in ["model-pimpl.cpp", "../../../../examples/pimpl/example.cpp"] {
+        let o = prove(name, &[], &dafny);
+        let text = stdout(&o);
+        assert_eq!(o.status.code(), Some(0), "{name}: stdout: {text} stderr: {}", stderr(&o));
+        assert_eq!(text.lines().last(), Some("ok: proved"), "{name}: {text}");
+    }
+}
+
+/// make_unique gives the value of the constructor, a move leaves the source null, and Dafny checks that the pointer holds a
+/// value at each write through it, decision 0197.
+#[test]
+fn the_pointer_to_implementation_keeps_its_contract() {
+    let Some(dafny) = dafny() else { return };
+    if !clang_tidy_available() {
+        return;
+    }
+    let o = prove("model-pimpl-wrong.cpp", &[], &dafny);
+    let text = stdout(&o);
+    assert_eq!(o.status.code(), Some(1), "stdout: {text} stderr: {}", stderr(&o));
+    let mut failed: Vec<&str> = text.lines().filter(|l| l.starts_with("Not proved: ") || l.starts_with("Not provable: ")).map(|l| l.rsplit_once(".cpp:").unwrap().1).collect();
+    failed.sort_by_key(|l| l.split(':').next().unwrap().parse::<u32>().unwrap());
+    let want = [
+        "13: the ensures line may not hold on this return.",
+        "19: the ensures line may not hold on this return.",
+        "33: the optional may be empty or the pointer may be null here.",
+    ];
+    assert_eq!(failed, want, "{text}");
+}
+
+/// A move constructor = default of a struct with a field that is no scalar and no unique_ptr, and a write through a unique_ptr
+/// field of a parameter, keep their sentences, decision 0197.
+#[test]
+fn the_pointer_to_implementation_with_no_rule_is_refused() {
+    let Some(dafny) = dafny() else { return };
+    if !clang_tidy_available() {
+        return;
+    }
+    let o = prove("model-pimpl-refuse.cpp", &[], &dafny);
+    let text = stdout(&o);
+    assert_eq!(o.status.code(), Some(1), "stdout: {text} stderr: {}", stderr(&o));
+    let refused: Vec<&str> = text.lines().filter(|l| l.starts_with("Not proved: ") || l.starts_with("Not provable: ")).map(|l| l.rsplit_once(".cpp:").unwrap().1).collect();
+    let want = ["29: CXXConstructorDecl: the translator has no rule for it yet.", "41: BinaryOperator =: the translator has no rule for it yet."];
+    assert_eq!(refused, want, "{text}");
+}

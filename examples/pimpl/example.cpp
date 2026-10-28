@@ -21,10 +21,13 @@ class Account {
   Account& operator=(const Account&) = delete;
 
   //@ requires other.valid()
+  //@ modifies other
   //@ ensures valid() && balance() == old(other.balance()) && !other.valid()
   Account(Account&& other) noexcept;
   Account& operator=(Account&&) = delete;
 
+  // The destructor frees the Impl, which the model does not see, decision 0197.
+  //@ ensures true
   ~Account();
 
   //@ ensures result == (impl_ != nullptr && 0 <= impl_->balance && impl_->balance <= 1000000)
