@@ -4262,6 +4262,37 @@ fn a_virtual_call_in_code_is_its_function() {
     assert_eq!(strip(m.body), List::Cons((Box::new(DStmt::Return(want)), 0), Box::new(List::Nil)));
 }
 
+/// A pure body can return early: `if (c) { return a; }` before the rest, or an `if` whose two branches each return. Its function is
+/// `if c then a else b`. A body that writes a local before the return is no pure body, decision 0199.
+#[test]
+fn a_pure_body_returns_early() {
+    let this = Ty::This(CELL);
+    let field = || Expr::Field(b(Expr::Var(THIS, this)), TCV);
+    let test = || Expr::Bin(BinOp::Lt, b(field()), b(Expr::Lit(0, Ty::I32)));
+    let early = |body: Stmts| Function { name: 479, line: 60, params: List::Cons((THIS, this), Box::new(List::Nil)), ret: Ty::I32, trusted: false, conds: List::Nil, body };
+    let zero = || Box::new(one(Stmt::Return(Expr::Lit(0, Ty::I32), 62)));
+    let want = DExpr::Ite(
+        Box::new(DExpr::Bin(BinOp::Lt, Box::new(DExpr::Field(Box::new(DExpr::Var(THIS)), TCV)), Box::new(lit32(0)))),
+        Box::new(lit32(0)),
+        Box::new(DExpr::Field(Box::new(DExpr::Var(THIS)), TCV)),
+    );
+    // if (v < 0) { return 0; } return v;
+    let body = List::Cons(Box::new(Stmt::If(test(), zero(), Box::new(List::Nil), 61)), Box::new(one(Stmt::Return(field(), 63))));
+    let Model::Full(m) = translate_function(&early(body), &List::Nil, &cell_table()) else { panic!("a full model") };
+    assert_eq!(m.function, Some(want));
+    // if (v < 0) { return 0; } else { return v; }
+    let body = one(Stmt::If(test(), zero(), Box::new(one(Stmt::Return(field(), 63))), 61));
+    let Model::Full(m) = translate_function(&early(body), &List::Nil, &cell_table()) else { panic!("a full model of an else") };
+    assert!(matches!(m.function, Some(DExpr::Ite(_, _, _))), "{:?}", m.function);
+    // A local that the body writes before the return.
+    let write = List::Cons(
+        Box::new(Stmt::Local(LX, Ty::I32, field(), 61)),
+        Box::new(List::Cons(Box::new(Stmt::Assign(LX, Expr::Lit(1, Ty::I32), 62)), Box::new(List::Cons(Box::new(Stmt::If(test(), zero(), Box::new(List::Nil), 63)), Box::new(one(Stmt::Return(Expr::Var(LX, Ty::I32), 64))))))),
+    );
+    let Model::Full(m) = translate_function(&early(write), &List::Nil, &cell_table()) else { panic!("a full model of a write") };
+    assert_eq!(m.function, None);
+}
+
 /// A pure member function can hold a local before its return, and can call a const virtual function of an interface as the start
 /// value of the local or as the value of the return. Its function in the model holds the local and the call, decision 0172.
 #[test]

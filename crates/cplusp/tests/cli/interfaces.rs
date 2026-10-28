@@ -634,3 +634,55 @@ fn the_decorator_example_proves() {
     assert_eq!(o.status.code(), Some(0), "stdout: {text} stderr: {}", stderr(&o));
     assert_eq!(text.lines().last(), Some("ok: proved"), "{text}");
 }
+
+/// A const virtual function of an interface gives back a unique_ptr of the interface, and each override checks against its
+/// contract. A context replaces the state that it owns with the next one and proves from the interface alone. A pure body can
+/// return early, decision 0199.
+#[test]
+fn a_state_that_gives_the_next_state_proves() {
+    let Some(dafny) = dafny() else { return };
+    if !clang_tidy_available() {
+        return;
+    }
+    for name in ["model-next-state.cpp", "../../../../examples/state_object/example.cpp"] {
+        let o = prove(name, &[], &dafny);
+        let text = stdout(&o);
+        assert_eq!(o.status.code(), Some(0), "{name}: stdout: {text} stderr: {}", stderr(&o));
+        assert_eq!(text.lines().last(), Some("ok: proved"), "{name}: {text}");
+    }
+}
+
+/// An override that gives the wrong next state breaks the promise of the interface, and a pure body with an early return keeps
+/// its contract, decision 0199.
+#[test]
+fn a_state_that_gives_the_next_state_keeps_its_contract() {
+    let Some(dafny) = dafny() else { return };
+    if !clang_tidy_available() {
+        return;
+    }
+    let o = prove("model-next-state-wrong.cpp", &[], &dafny);
+    let text = stdout(&o);
+    assert_eq!(o.status.code(), Some(1), "stdout: {text} stderr: {}", stderr(&o));
+    let mut failed: Vec<&str> = text.lines().filter(|l| l.starts_with("Not proved: ") || l.starts_with("Not provable: ")).map(|l| l.rsplit_once(".cpp:").unwrap().1).collect();
+    failed.sort_by_key(|l| l.split(':').next().unwrap().parse::<u32>().unwrap());
+    assert_eq!(failed, ["22: the override may not keep the promise of Signal::next.", "36: the ensures line may not hold on this return."], "{text}");
+}
+
+/// An early return in a body that writes a local is no pure body, and a write of a unique_ptr field from a move of a local keeps
+/// its sentence, decision 0199.
+#[test]
+fn a_state_that_gives_the_next_state_with_no_rule_is_refused() {
+    let Some(dafny) = dafny() else { return };
+    if !clang_tidy_available() {
+        return;
+    }
+    let o = prove("model-next-state-refuse.cpp", &[], &dafny);
+    let text = stdout(&o);
+    assert_eq!(o.status.code(), Some(1), "stdout: {text} stderr: {}", stderr(&o));
+    let refused: Vec<&str> = text.lines().filter(|l| l.starts_with("Not proved: ") || l.starts_with("Not provable: ")).map(|l| l.rsplit_once(".cpp:").unwrap().1).collect();
+    let want = [
+        "19: step is no pure function. A contract calls a function with one return and no write.",
+        "36: CXXOperatorCallExpr: the translator has no rule for it yet.",
+    ];
+    assert_eq!(refused, want, "{text}");
+}

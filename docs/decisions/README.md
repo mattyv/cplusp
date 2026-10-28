@@ -203,3 +203,4 @@ Status is `decided`, `proposed` (the default until someone objects or the thin s
 | [0196](0196-a-class-that-holds-a-std-array.md) | A class that holds a std::array | decided |
 | [0197](0197-the-pointer-to-implementation.md) | The pointer to implementation | decided |
 | [0198](0198-a-moved-field-is-null-at-once.md) | A moved field is null at once | decided |
+| [0199](0199-a-state-that-gives-the-next-state.md) | A state that gives the next state | decided |
