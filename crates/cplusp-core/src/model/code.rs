@@ -2187,6 +2187,20 @@ pub fn translate_stmt(s: &Stmt, all: &Fns, env: &Params, ps: &Params, sd: &Struc
                     },
                 }
             },
+            Expr::Fill(c, x) => match &**c {
+                Expr::Lit(m, _) => if *m == *k {
+                    match translate_ty(Ty::Seq(*s, Extent::Fixed(*k)), *l) {
+                        Err(r) => Err(r),
+                        Ok(dt) => match lift(x, all, *l, sd, 0, true) {
+                            Ok((cx, dx, _)) => Ok(pre(cx, DStmt::Local(*n, dt, DExpr::SeqFill(Box::new(DExpr::Conv(DTy::UInt64, Box::new(DExpr::Lit(*m)))), Box::new(dx))))),
+                            Err(r) => Err(r),
+                        },
+                    }
+                } else {
+                    Err(Refusal::SeqParam(*l))
+                },
+                _ => Err(Refusal::SeqParam(*l)),
+            },
             _ => Err(Refusal::SeqParam(*l)),
         } },
         Stmt::Local(n, t, e, l) => match translate_value_ty(*t, *l, sd) {
@@ -3545,7 +3559,7 @@ fn translate_fields(ps: &Params, line: u32) -> (r: Result<DParams, Refusal>)
 {
     match ps {
         List::Nil => Ok(List::Nil),
-        List::Cons((n, t), rest) => match if matches!(t, Ty::Opt(Scalar::Struct(_)) | Ty::Ptr(_) | Ty::F64) || (matches!(t, Ty::Own(_)) && !matches!(t, Ty::Own(Scalar::Struct(_)))) { Err(Refusal::Element(line)) } else { translate_ty(*t, line) } {
+        List::Cons((n, t), rest) => match if matches!(t, Ty::Opt(Scalar::Struct(_)) | Ty::Ptr(_) | Ty::F64) || (matches!(t, Ty::Own(_)) && !matches!(t, Ty::Own(Scalar::Struct(_)))) { Err(Refusal::Element(line)) } else { field_dty(*t, line) } {
             Ok(dt) => match translate_fields(rest, line) {
                 Ok(dr) => Ok(List::Cons((*n, dt), Box::new(dr))),
                 Err(r) => Err(r),

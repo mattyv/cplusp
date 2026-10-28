@@ -912,13 +912,14 @@ fn a_std_array_field_keeps_its_length() {
         trusted: false,
         conds: List::Nil,
         body: List::Cons(
-            Box::new(Stmt::Local(B, Ty::Seq(Scalar::I32, Extent::Fixed(8)), Expr::Fill(b(Expr::Lit(count, Ty::U64)), b(Expr::Lit(0, Ty::I32))), 15)),
+            Box::new(Stmt::Local(B, Ty::Seq(Scalar::I32, Extent::Fixed(8)), Expr::Fill(b(Expr::Lit(count, Ty::U64)), b(Expr::Lit(5, Ty::I32))), 15)),
             Box::new(one(Stmt::Return(Expr::Lit(0, Ty::I32), 16))),
         ),
     };
     let Model::Full(m) = translate_function(&start(8), &List::Nil, &List::Nil) else { panic!("a full model") };
     let List::Cons((local, _), _) = strip(m.body) else { panic!("a body") };
-    assert!(matches!(&*local, DStmt::Local(n, DTy::Seq(Scalar::I32), DExpr::SeqFill(_, _)) if *n == B), "{local:?}");
+    let count = DExpr::Conv(DTy::UInt64, Box::new(DExpr::Lit(8)));
+    assert_eq!(*local, DStmt::Local(B, DTy::Seq(Scalar::I32), DExpr::SeqFill(Box::new(count), Box::new(lit32(5)))));
     assert_eq!(bare_refusal(translate_function(&start(7), &List::Nil, &List::Nil)), Refusal::SeqParam(15));
 }
 

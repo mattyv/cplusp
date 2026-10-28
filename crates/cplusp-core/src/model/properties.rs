@@ -248,7 +248,8 @@ pub proof fn lemma_unknown_fill_local_is_refused(n: u32, t: Ty, e: Expr, l: u32,
     }
 }
 
-/// A local std::array from a brace list that holds a node with no rule is refused, decision 0184.
+/// A local std::array from a brace list that holds a node with no rule is refused, decision 0184, and so is one from `k` copies of
+/// a value, decision 0196.
 pub proof fn lemma_unknown_array_local_is_refused(n: u32, t: Ty, e: Expr, l: u32, all: Fns, env: Params, ps: Params, sd: Structs)
     requires
         t is Seq && t->Seq_1 is Fixed,
@@ -259,6 +260,12 @@ pub proof fn lemma_unknown_array_local_is_refused(n: u32, t: Ty, e: Expr, l: u32
     reveal(spec_local_stmt);
     if let Expr::List(args) = e {
         lemma_unknown_lift_args_is_refused(*args, all, l, sd, 0, true);
+    }
+    // `k` copies of a value, decision 0196: an unknown count is no literal, and an unknown value does not lift.
+    if let Expr::Fill(c, x) = e {
+        if !unknown_expr(*c) {
+            lemma_unknown_lift_is_refused(*x, all, l, sd, 0, true);
+        }
     }
 }
 
@@ -1524,6 +1531,7 @@ pub proof fn lemma_resolves_exit(s: Stmt, all: Fns, env: Params, ps: Params, sd:
     }
 }
 
+#[verifier::rlimit(30)]
 pub proof fn lemma_resolves_local(s: Stmt, all: Fns, env: Params, ps: Params, sd: Structs)
     requires
         spec_stmt(s, all, env, ps, sd).is_ok(),
@@ -1537,6 +1545,12 @@ pub proof fn lemma_resolves_local(s: Stmt, all: Fns, env: Params, ps: Params, sd
     // The vector arm reads the start value as it is, and the other arm with its moves taken out, decision 0171.
     let e1 = s->Local_2;
     let e2 = spec_unmove(s->Local_2).0;
+    // `k` copies of a value start an array of length `k`, and the value lifts alone, decision 0196.
+    if let Expr::Fill(_, x) = e1 {
+        if spec_lift(*x, all, l, sd, 0, true).is_ok() {
+            lemma_lift_resolves(*x, all, l, sd, 0, true);
+        }
+    }
     // `v(n, x)` lifts its count, then its value, decision 0185.
     if let Expr::Fill(c, x) = e1 {
         if spec_lift(*c, all, l, sd, 0, true).is_ok() {

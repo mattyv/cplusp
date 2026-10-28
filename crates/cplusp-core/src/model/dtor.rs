@@ -667,6 +667,21 @@ pub open spec fn spec_local_stmt(n: u32, t: Ty, e: Expr, l: u32, all: Fns, env: 
                     },
                 }
             },
+            // `k` copies of a value start an array of length `k`, as the value-initialized field of 0196.
+            Expr::Fill(c, x) => match *c {
+                Expr::Lit(m, _) => if m == k {
+                    match spec_ty(t, l) {
+                        Err(r) => Err(r),
+                        Ok(dt) => match spec_lift(*x, all, l, sd, 0, true) {
+                            Ok((cx, dx, _)) => Ok(spec_pre(cx, DStmt::Local(n, dt, DExpr::SeqFill(Box::new(DExpr::Conv(DTy::UInt64, Box::new(DExpr::Lit(m)))), Box::new(dx))))),
+                            Err(r) => Err(r),
+                        },
+                    }
+                } else {
+                    Err(Refusal::SeqParam(l))
+                },
+                _ => Err(Refusal::SeqParam(l)),
+            },
             _ => Err(Refusal::SeqParam(l)),
         } },
         // The start value of a local can move a local, decision 0171.

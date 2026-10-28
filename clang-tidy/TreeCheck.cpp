@@ -66,6 +66,7 @@ public:
                          : noInstance(FD)                            ? "a function template with no instance"
                          : FD->isTemplated()                         ? "FunctionTemplateDecl"
                          : !Constructor && noDestructorMove(FD)       ? "a move constructor in a struct with no destructor"
+                         : !Constructor && arrayNoStart(FD)            ? "a std::array field with no start value"
                          : isa<CXXConstructorDecl>(FD) && !Constructor ? "CXXConstructorDecl"
                          : fluentSignature(FD) && FD->getBody() && !fluent(FD) ? "a reference result that is not `*this`"
                          : isa<CXXMethodDecl>(FD) && !Member && !Static && !Constructor ? "CXXMethodDecl"
@@ -486,6 +487,9 @@ private:
         return Elem;
       return (S ? StringRef(S) != "Bool" : plainStruct(Elem) != nullptr) ? Elem : QualType();
     }
+    // A `std::array<T, N>` field of a scalar other than bool is a sequence of length N, decision 0196.
+    if (Field && Spec->getName() == "array")
+      return fieldArray(T);
     if (!Field && Spec->getName() == "span" && Elem.isConstQualified()) {
       Elem.removeLocalConst();
       return scalar(Elem) || (!Elem.getCanonicalType().hasQualifiers() && plainStruct(Elem)) ? Elem : QualType();
@@ -498,10 +502,39 @@ private:
     return QualType();
   }
   bool isSeq(QualType T) const { return !seqElement(T).isNull(); }
+  // The element of a `std::array<T, N>` field, or null: a scalar `T` other than bool, no qualifier, and a length that fits, decision 0196.
+  QualType fieldArray(QualType T) const {
+    const auto *Spec = dyn_cast_or_null<ClassTemplateSpecializationDecl>(T->getAsCXXRecordDecl());
+    if (T->isReferenceType() || T.hasQualifiers() || !Spec || !Spec->isInStdNamespace() || Spec->getName() != "array" || Spec->getTemplateArgs().size() != 2 ||
+        Spec->getTemplateArgs()[0].getKind() != TemplateArgument::Type || seqExtent(T).getAsNull())
+      return QualType();
+    const QualType Elem = Spec->getTemplateArgs()[0].getAsType();
+    const char *S = scalar(Elem);
+    return !Elem.getCanonicalType().hasQualifiers() && S && StringRef(S) != "Bool" ? Elem : QualType();
+  }
+  // The element of a sequence field that a member function reads and writes: a vector, decision 0187, or a `std::array`, decision 0196.
+  QualType fieldSeq(QualType T) const { return localVec(T).isNull() ? fieldArray(T) : localVec(T); }
+  // Whether an initializer is the zeros of a value-initialized `std::array`: `f()`, `f{}`, `{}`, `{{}}`, and a value-initialized temporary `std::array<T, N>()`, also as a default member initializer, decision 0196.
+  static bool arrayZeros(const Expr *E) {
+    E = E->IgnoreParenImpCasts();
+    if (const auto *Default = dyn_cast<CXXDefaultInitExpr>(E))
+      return arrayZeros(Default->getExpr());
+    if (const auto *Construct = dyn_cast<CXXConstructExpr>(E))
+      return Construct->getNumArgs() == 0 && Construct->requiresZeroInitialization();
+    if (isa<ImplicitValueInitExpr>(E))
+      return true;
+    if (const auto *List = dyn_cast<InitListExpr>(E)) {
+      for (const Expr *One : List->inits())
+        if (!arrayZeros(One))
+          return false;
+      return true;
+    }
+    return false;
+  }
   // A vector field of the object that a member function writes: a read of it is a read of the sequence, as in a const member, decision 0187.
   bool isFieldVec(const Expr *E) const {
     const FieldDecl *Field = objectField(E->IgnoreParenImpCasts());
-    return Field && !localVec(Field->getType()).isNull();
+    return Field && !fieldSeq(Field->getType()).isNull();
   }
 
   // The fixed extent of a read-only sequence, decisions 0070 and 0132, or null: a vector, and a span of `std::dynamic_extent`. A std::array has its length.
@@ -671,6 +704,15 @@ private:
       // A vector field that the list does not name starts empty, decision 0187. Clang may list it as an implicit initializer.
       if (!Init->isWritten() && Init->isMemberInitializer() && !Init->getMember()->hasInClassInitializer() && !localVec(Init->getMember()->getType()).isNull())
         continue;
+      // A `std::array` field starts as zeros, from `f()`, `f{}` or a default member initializer `{}`. Any other start has no rule, decision 0196.
+      if (Init->isMemberInitializer() && !fieldArray(Init->getMember()->getType()).isNull()) {
+        if (!arrayZeros(Init->getInit()))
+          return nullptr;
+        if (!Init->isWritten()) {
+          Given.insert(Init->getMember());
+          continue;
+        }
+      }
       if (!Init->isWritten() || !Init->isMemberInitializer() || !Given.insert(Init->getMember()).second || readsObject(Init->getInit()))
         return nullptr;
     }
@@ -678,6 +720,21 @@ private:
       if (!Given.count(F) && (F->hasInClassInitializer() || localVec(F->getType()).isNull()))
         return nullptr;
     return C;
+  }
+
+  // Whether a constructor that would be a value constructor leaves a `std::array` field with no start value, decision 0196. C++ leaves the elements without a value.
+  bool arrayNoStart(const FunctionDecl *FD) const {
+    const FunctionDecl *Def = nullptr;
+    if (!isa<CXXConstructorDecl>(FD) || !FD->hasBody(Def))
+      return false;
+    const auto *C = cast<CXXConstructorDecl>(Def);
+    if (C->isTemplated() || C->isDeleted() || C->isDefaulted() || C->isCopyConstructor() || C->isMoveConstructor() || C->isDelegatingConstructor() ||
+        !plainStruct(Context.getRecordType(C->getParent())))
+      return false;
+    for (const CXXCtorInitializer *Init : C->inits())
+      if (Init->isMemberInitializer() && !Init->isWritten() && !Init->getMember()->hasInClassInitializer() && !fieldArray(Init->getMember()->getType()).isNull() && !arrayZeros(Init->getInit()))
+        return true;
+    return false;
   }
 
   // The body of a value constructor: it returns the struct, built from the values of its init list in the order of the fields.
@@ -706,6 +763,14 @@ private:
           if (!Seq)
             Value = expr(Init->getInit(), At);
         }
+      // `f()` and `f{}` of a `std::array` field, and its default member initializer `{}`, are N zeros, decision 0196.
+      if (const QualType Element = fieldArray(F->getType()); !Element.isNull())
+        for (const CXXCtorInitializer *Init : C->inits())
+          if (Init->getMember() == F && arrayZeros(Init->getInit())) {
+            Value = tag("Fill", llvm::json::Array{tag("Lit", llvm::json::Array{seqExtent(F->getType()), type(Context.getSizeType())}),
+                                                  tag("Lit", llvm::json::Array{number(0), type(Element)})});
+            Seq = true;
+          }
       if (Value.getAsNull()) {
         Value = "EmptyVec";
         Seq = true;
@@ -1673,9 +1738,9 @@ private:
       // A write of a field of a reference parameter, decision 0108.
       if (const auto [Param, Field] = refField(Assign->getLHS()); Param)
         return tag("SetRefField", llvm::json::Array{Param->getNameAsString(), Field->getNameAsString(), expr(Assign->getRHS(), line(S->getBeginLoc())), number(line(S->getBeginLoc()))});
-      // `f[i] = e` where `f` is a vector field of the object, decision 0187. A plain struct has no `std::array` field.
+      // `f[i] = e` where `f` is a vector field of the object, decisions 0187 and 0196.
       if (const auto *Subscript = dyn_cast<CXXOperatorCallExpr>(Assign->getLHS()->IgnoreParens()); Subscript && Subscript->getOperator() == OO_Subscript && Subscript->getNumArgs() == 2)
-        if (const FieldDecl *Field = objectField(Subscript->getArg(0)->IgnoreParenImpCasts()); Field && !localVec(Field->getType()).isNull())
+        if (const FieldDecl *Field = objectField(Subscript->getArg(0)->IgnoreParenImpCasts()); Field && !fieldSeq(Field->getType()).isNull())
           return tag("SetFieldAt", llvm::json::Array{Field->getNameAsString(), expr(Subscript->getArg(1), line(S->getBeginLoc())), expr(Assign->getRHS(), line(S->getBeginLoc())),
                                                      number(line(S->getBeginLoc()))});
       // A write of a field of the object, decision 0096.

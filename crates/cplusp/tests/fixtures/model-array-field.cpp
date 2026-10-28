@@ -27,7 +27,7 @@ class Slots {
 // A default member initializer gives the zeros too. The length holds in an object that a caller gives.
 class Pair {
  public:
-  //@ ensures first() == a
+  //@ ensures first() == a && second() == 0
   explicit Pair(int32_t a) : w_(a) {}
 
   //@ ensures result == w_

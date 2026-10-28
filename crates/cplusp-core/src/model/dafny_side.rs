@@ -7,6 +7,7 @@ verus! {
 
 // ------------------------------------------------------------------ the Dafny side
 
+/// A Dafny type. `Arr` is a sequence that holds its length, `Arr'N<T>`: the type of a `std::array` field, decision 0196.
 #[derive(Structural, PartialEq, Eq, Clone, Copy, Debug)]
 pub enum DTy {
     Int32,
@@ -20,6 +21,7 @@ pub enum DTy {
     Real,
     Bool,
     Seq(Scalar),
+    Arr(Scalar, u64),
     Struct(u32),
     Opt(Scalar),
     Enum(u32),

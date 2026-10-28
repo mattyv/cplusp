@@ -1354,6 +1354,7 @@ fn dty(t: DTy, names: &Names) -> String {
         DTy::Bool => "bool".to_string(),
         DTy::Real => "real".to_string(),
         DTy::Seq(s) => format!("Vec<{}>", dscalar(s, names)),
+        DTy::Arr(s, k) => format!("Arr'{k}<{}>", dscalar(s, names)),
         DTy::Struct(k) | DTy::Enum(k) | DTy::Iface(k) => names.datatypes[&k].clone(),
         DTy::Opt(s) => format!("Option<{}>", dscalar(s, names)),
         // A method that gives no value has no `result`, so no caller prints this type.
@@ -1364,7 +1365,7 @@ fn dty(t: DTy, names: &Names) -> String {
 /// The type of a local. A local sequence is a plain `seq`, because `push_back` may grow it past the bound of `Vec`, decision 0160.
 fn local_ty(t: DTy, names: &Names) -> String {
     match t {
-        DTy::Seq(s) => format!("seq<{}>", dscalar(s, names)),
+        DTy::Seq(s) | DTy::Arr(s, _) => format!("seq<{}>", dscalar(s, names)),
         _ => dty(t, names),
     }
 }
@@ -2638,6 +2639,25 @@ pub fn translate(lines: &str, companion: Option<(&str, &str)>) -> Result<Transla
         let name = &names.datatypes[&key];
         let constructors: Vec<String> = en.enumerators.iter().map(|e| format!("{name}'{e}")).collect();
         p.put(0, format!("datatype {name} = {}", constructors.join(" | ")), place);
+    }
+    // A `std::array` field has the type `Arr'k<T>`, one declaration for each length k, decision 0196.
+    let mut lengths = std::collections::BTreeMap::new();
+    let mut seen_structs = &smodels;
+    for (place, _) in &struct_places {
+        let List::Cons(model, rest) = seen_structs else { break };
+        if let Ok((_, fields)) = model {
+            let mut fields = fields;
+            while let List::Cons((_, t), next) = fields {
+                if let DTy::Arr(_, k) = t {
+                    lengths.entry(*k).or_insert(*place);
+                }
+                fields = next;
+            }
+        }
+        seen_structs = rest;
+    }
+    for (k, place) in lengths {
+        p.put(0, format!("type Arr'{k}<T> = s: seq<T> | |s| == {k} witness *"), place);
     }
     for (((place, unreadable), interface), open) in struct_places.into_iter().zip(interface_flags).zip(open_flags) {
         let List::Cons(model, rest) = smodels else { unreachable!("one model for each struct") };

@@ -877,7 +877,8 @@ fn a_class_that_holds_a_std_array_proves() {
     }
 }
 
-/// The start value of a std::array field is zeros, Dafny checks each index, and a false claim fails, decision 0196.
+/// The start value of a std::array field is zeros, Dafny checks each index in code and in a contract, and a false claim fails,
+/// decision 0196.
 #[test]
 fn a_class_that_holds_a_std_array_keeps_its_contract() {
     let Some(dafny) = dafny() else { return };
@@ -891,6 +892,7 @@ fn a_class_that_holds_a_std_array_keeps_its_contract() {
     failed.sort_by_key(|l| (l.split(':').next().unwrap().parse::<u32>().unwrap(), l.to_string()));
     let want = [
         "9: the ensures line may not hold on this return.",
+        "12: the index may be out of range.",
         "13: the index may be out of range.",
         "17: the ensures line may not hold on this return.",
         "17: the index may be out of range.",
@@ -900,16 +902,19 @@ fn a_class_that_holds_a_std_array_keeps_its_contract() {
 }
 
 /// A std::array field with no start value is refused at its constructor, because C++ leaves its elements without a value,
-/// decision 0196.
+/// decision 0196. The gate refuses it first under the row uninitialised_variables, but not in a class template, so the test reads
+/// the model alone. A default member initializer with values keeps the sentence of today.
 #[test]
 fn a_std_array_field_with_no_start_value_is_refused() {
-    let Some(dafny) = dafny() else { return };
     if !clang_tidy_available() {
         return;
     }
-    let o = prove("model-array-field-refuse.cpp", &[], &dafny);
+    let dir = tempfile::tempdir().unwrap();
+    let (o, _) = model("model-array-field-refuse.cpp", dir.path());
     let text = stdout(&o);
     assert_eq!(o.status.code(), Some(1), "stdout: {text} stderr: {}", stderr(&o));
-    let refused: Vec<&str> = text.lines().filter(|l| l.starts_with("Not proved: ") || l.starts_with("Not provable: ")).map(|l| l.rsplit_once(".cpp:").unwrap().1).collect();
-    assert_eq!(refused, ["8: a std::array field with no start value: the translator has no rule for it yet."], "{text}");
+    let refused: Vec<&str> = text.lines().filter(|l| l.starts_with("Not provable: ")).map(|l| l.rsplit_once(".cpp:").unwrap().1).collect();
+    let none = "a std::array field with no start value: the translator has no rule for it yet.";
+    let want = [format!("8: {none}"), "19: CXXConstructorDecl: the translator has no rule for it yet.".to_string(), format!("31: {none}")];
+    assert_eq!(refused, want, "{text}");
 }

@@ -581,6 +581,30 @@ pub fn says_result_finite(e: &Expr) -> (r: bool)
     }
 }
 
+/// The type of a field: a type of the subset, and a `std::array` as a sequence that holds its length, decision 0196.
+pub open spec fn spec_field_dty(t: Ty, line: u32) -> Result<DTy, Refusal> {
+    match t {
+        Ty::Seq(s, Extent::Fixed(k)) => match spec_ty(t, line) {
+            Ok(_) => Ok(DTy::Arr(s, k)),
+            Err(r) => Err(r),
+        },
+        _ => spec_ty(t, line),
+    }
+}
+
+pub fn field_dty(t: Ty, line: u32) -> (r: Result<DTy, Refusal>)
+    ensures
+        r == spec_field_dty(t, line),
+{
+    match t {
+        Ty::Seq(s, Extent::Fixed(k)) => match translate_ty(t, line) {
+            Ok(_) => Ok(DTy::Arr(s, k)),
+            Err(r) => Err(r),
+        },
+        _ => translate_ty(t, line),
+    }
+}
+
 /// The model of a struct: each field a type of the subset, decision 0073. A field can be a sequence, decision 0076.
 pub open spec fn spec_fields(ps: Params, line: u32) -> Result<DParams, Refusal>
     decreases ps,
@@ -588,7 +612,7 @@ pub open spec fn spec_fields(ps: Params, line: u32) -> Result<DParams, Refusal>
     match ps {
         List::Nil => Ok(List::Nil),
         // An optional of a struct is no field yet, decision 0137. A unique_ptr of a struct or an interface is a field, decision 0171.
-        List::Cons((n, t), rest) => match (if (t is Opt && t->Opt_0 is Struct) || t is Ptr || (t is Own && !(t->Own_0 is Struct)) || t is F64 { Err(Refusal::Element(line)) } else { spec_ty(t, line) }) {
+        List::Cons((n, t), rest) => match (if (t is Opt && t->Opt_0 is Struct) || t is Ptr || (t is Own && !(t->Own_0 is Struct)) || t is F64 { Err(Refusal::Element(line)) } else { spec_field_dty(t, line) }) {
             Ok(dt) => match spec_fields(*rest, line) {
                 Ok(dr) => Ok(List::Cons((n, dt), Box::new(dr))),
                 Err(r) => Err(r),
