@@ -1373,6 +1373,11 @@ fn local_ty(t: DTy, names: &Names) -> String {
     }
 }
 
+/// Whether a result type is a `std::unique_ptr` of the interface `base`, decision 0199. The plugin writes it as `Struct`. An interface by value is refused.
+fn holds_interface(t: DTy, base: u32) -> bool {
+    matches!(t, DTy::Opt(Scalar::Struct(k)) if k == base)
+}
+
 /// The Dafny name of the upcast from the class `d` to its interface `b`, `f_D'B`, decision 0166. The names of the model are the names of the datatypes, without
 /// `S_`, so two classes of one plain name stay apart.
 fn upcast_name(d: u32, b: u32, names: &Names) -> String {
@@ -2157,7 +2162,8 @@ impl Printer<'_> {
 
     /// The upcast from a final class to its interface, decision 0166: a function of the model with no body, which Dafny takes as given. For each virtual function
     /// of the interface, in its order, the interface function on the upcast of an object is the function of the override on the object, when the requires lines of
-    /// both hold. The lemmas of the checks show that those lines are consistent.
+    /// both hold. The lemmas of the checks show that those lines are consistent. Two kinds of function have no equation: a function that writes, decision 0169,
+    /// and a function whose result holds the interface, decision 0199.
     fn upcast_function(&mut self, up: &DUpcast, place: u32) {
         let names = self.names;
         let f = upcast_name(up.derived, up.base, names);
@@ -2169,6 +2175,12 @@ impl Printer<'_> {
         while let List::Cons(o, next) = os {
             // A virtual function that writes has no function in the model, so the upcast says nothing of it, decision 0169.
             if self.writing.contains(&o.base) {
+                os = next;
+                continue;
+            }
+            // A result that holds the interface holds this upcast, so the fact would define the upcast by itself and Dafny could not show that it ends.
+            // A call through the interface keeps the contract of the interface, decision 0199.
+            if holds_interface(o.ret, up.base) {
                 os = next;
                 continue;
             }
@@ -2199,7 +2211,7 @@ impl Printer<'_> {
         let mut originals = Vec::new();
         let mut os = &up.overrides;
         while let List::Cons(o, next) = os {
-            if !self.writing.contains(&o.base) {
+            if !self.writing.contains(&o.base) && !holds_interface(o.ret, up.base) {
                 originals.extend(self.method_lines.get(&o.base).cloned());
             }
             os = next;

@@ -1838,6 +1838,22 @@ private:
             Value = expr(Assign->getArg(1), line(S->getBeginLoc()));
           return tag("SetOwnField", llvm::json::Array{nameOf(Own), Field->getNameAsString(), std::move(Value), number(line(S->getBeginLoc()))});
         }
+      // `f = e` of a `std::unique_ptr` field `f` of the object, where `e` is a call that gives a new `std::unique_ptr` of the type of `f`, decision 0199.
+      // `std::move(x)` is an xvalue and a field of a parameter is no field of the object, so both keep their sentence.
+      if (const auto *Assign = dyn_cast<CXXOperatorCallExpr>(Plain); Assign && Assign->getOperator() == OO_Equal && Assign->getNumArgs() == 2)
+        if (const FieldDecl *Field = objectField(Assign->getArg(0)); Field && isUniquePtr(Field->getType())) {
+          const Expr *Value = Assign->getArg(1)->IgnoreParenImpCasts();
+          while (true) {
+            if (const auto *Temporary = dyn_cast<MaterializeTemporaryExpr>(Value))
+              Value = Temporary->getSubExpr()->IgnoreParenImpCasts();
+            else if (const auto *Bound = dyn_cast<CXXBindTemporaryExpr>(Value))
+              Value = Bound->getSubExpr()->IgnoreParenImpCasts();
+            else
+              break;
+          }
+          if (isa<CallExpr>(Value) && Value->isPRValue() && Value->getType().getUnqualifiedType().getCanonicalType() == Field->getType().getUnqualifiedType().getCanonicalType())
+            return tag("SetField", llvm::json::Array{Field->getNameAsString(), expr(Value, line(S->getBeginLoc())), number(line(S->getBeginLoc()))});
+        }
       if (const auto *Assign = dyn_cast<CXXOperatorCallExpr>(Plain); Assign && Assign->getOperator() == OO_Equal && Assign->getNumArgs() == 2 && isUniquePtr(Assign->getArg(0)->getType()))
         if (const auto *Element = dyn_cast<CXXOperatorCallExpr>(Assign->getArg(0)->IgnoreParenImpCasts()); Element && Element->getOperator() == OO_Subscript)
           return unknown(S, "an assignment to a unique_ptr element", line(S->getBeginLoc()));

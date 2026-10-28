@@ -1577,6 +1577,15 @@ pub open spec fn spec_pure_value(body: DStmts, all: Fns, sd: Structs) -> Option<
             } else {
                 None
             },
+            // An early return: `if (c) { return a; }` before the rest of the body, or an `if` whose two branches each return,
+            // decision 0199. The value is `if c then a else b`.
+            DStmt::If(c, t, f) => match spec_pure_value(*t, all, sd) {
+                Some(a) => match (if *f == List::<(Box<DStmt>, u32)>::Nil { spec_pure_value(*rest, all, sd) } else if *rest == List::<(Box<DStmt>, u32)>::Nil { spec_pure_value(*f, all, sd) } else { None }) {
+                    Some(b) => Some(DExpr::Ite(Box::new(c), Box::new(a), Box::new(b))),
+                    None => None,
+                },
+                None => None,
+            },
             _ => None,
         },
         List::Nil => None,

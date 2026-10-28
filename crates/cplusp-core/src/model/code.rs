@@ -3148,6 +3148,22 @@ pub fn pure_value(body: &DStmts, all: &Fns, sd: &Structs) -> (r: Option<DExpr>)
             } else {
                 None
             },
+            DStmt::If(c, t, f) => match pure_value(t, all, sd) {
+                Some(a) => {
+                    let b = match &**f {
+                        List::Nil => pure_value(rest, all, sd),
+                        _ => match &**rest {
+                            List::Nil => pure_value(f, all, sd),
+                            _ => None,
+                        },
+                    };
+                    match b {
+                        Some(b) => Some(DExpr::Ite(Box::new(copy_dexpr(c)), Box::new(a), Box::new(b))),
+                        None => None,
+                    }
+                },
+                None => None,
+            },
             _ => None,
         },
         List::Nil => None,
