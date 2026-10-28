@@ -860,3 +860,56 @@ fn a_vector_by_value_with_no_rule_is_refused() {
     ];
     assert_eq!(refused, want, "{text}");
 }
+
+/// A std::array field of a scalar is a sequence of its length in each object. The init list or a default member initializer gives
+/// it zeros, a member function writes one element, and a caller reads it, decision 0196.
+#[test]
+fn a_class_that_holds_a_std_array_proves() {
+    let Some(dafny) = dafny() else { return };
+    if !clang_tidy_available() {
+        return;
+    }
+    for name in ["model-array-field.cpp", "../../../../examples/small_vector/example.cpp"] {
+        let o = prove(name, &[], &dafny);
+        let text = stdout(&o);
+        assert_eq!(o.status.code(), Some(0), "{name}: stdout: {text} stderr: {}", stderr(&o));
+        assert_eq!(text.lines().last(), Some("ok: proved"), "{name}: {text}");
+    }
+}
+
+/// The start value of a std::array field is zeros, Dafny checks each index, and a false claim fails, decision 0196.
+#[test]
+fn a_class_that_holds_a_std_array_keeps_its_contract() {
+    let Some(dafny) = dafny() else { return };
+    if !clang_tidy_available() {
+        return;
+    }
+    let o = prove("model-array-field-wrong.cpp", &[], &dafny);
+    let text = stdout(&o);
+    assert_eq!(o.status.code(), Some(1), "stdout: {text} stderr: {}", stderr(&o));
+    let mut failed: Vec<&str> = text.lines().filter(|l| l.starts_with("Not proved: ") || l.starts_with("Not provable: ")).map(|l| l.rsplit_once(".cpp:").unwrap().1).collect();
+    failed.sort_by_key(|l| (l.split(':').next().unwrap().parse::<u32>().unwrap(), l.to_string()));
+    let want = [
+        "9: the ensures line may not hold on this return.",
+        "13: the index may be out of range.",
+        "17: the ensures line may not hold on this return.",
+        "17: the index may be out of range.",
+        "27: the ensures line may not hold on this return.",
+    ];
+    assert_eq!(failed, want, "{text}");
+}
+
+/// A std::array field with no start value is refused at its constructor, because C++ leaves its elements without a value,
+/// decision 0196.
+#[test]
+fn a_std_array_field_with_no_start_value_is_refused() {
+    let Some(dafny) = dafny() else { return };
+    if !clang_tidy_available() {
+        return;
+    }
+    let o = prove("model-array-field-refuse.cpp", &[], &dafny);
+    let text = stdout(&o);
+    assert_eq!(o.status.code(), Some(1), "stdout: {text} stderr: {}", stderr(&o));
+    let refused: Vec<&str> = text.lines().filter(|l| l.starts_with("Not proved: ") || l.starts_with("Not provable: ")).map(|l| l.rsplit_once(".cpp:").unwrap().1).collect();
+    assert_eq!(refused, ["8: a std::array field with no start value: the translator has no rule for it yet."], "{text}");
+}

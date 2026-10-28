@@ -1,7 +1,7 @@
 #include <array>
 #include <cstdint>
 
-// An array with no const, an array in a field, and an array of bool stay out of the subset, decisions 0132 and 0136.
+// An array with no const, an array in a field, and an array of bool stay out of the subset, decisions 0132 and 0136. An array in a field has a rule since 0196.
 //@ modifies a
 int32_t first(std::array<int32_t, 4>& a) {
   return a[0];

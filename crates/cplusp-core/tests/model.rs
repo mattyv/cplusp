@@ -896,6 +896,32 @@ fn a_struct_may_hold_sequences_and_a_sequence_of_itself() {
     assert_eq!(translate_structs(&node_table()), want);
 }
 
+/// A std::array field of a scalar has a Dafny type that holds its length, and `N` copies of a value start a local array of length
+/// `N`. Another count is refused, decision 0196.
+#[test]
+fn a_std_array_field_keeps_its_length() {
+    let fields = List::Cons((PRE, Ty::Seq(Scalar::I32, Extent::Fixed(8))), Box::new(List::Nil));
+    let table = List::Cons((NODE, (7, fields, List::Nil)), Box::new(List::Nil));
+    let want = List::Cons(Ok((NODE, List::Cons((PRE, DTy::Arr(Scalar::I32, 8)), Box::new(List::Nil)))), Box::new(List::Nil));
+    assert_eq!(translate_structs(&table), want);
+    let start = |count: u64| Function {
+        name: SAT,
+        line: 14,
+        params: List::Nil,
+        ret: Ty::I32,
+        trusted: false,
+        conds: List::Nil,
+        body: List::Cons(
+            Box::new(Stmt::Local(B, Ty::Seq(Scalar::I32, Extent::Fixed(8)), Expr::Fill(b(Expr::Lit(count, Ty::U64)), b(Expr::Lit(0, Ty::I32))), 15)),
+            Box::new(one(Stmt::Return(Expr::Lit(0, Ty::I32), 16))),
+        ),
+    };
+    let Model::Full(m) = translate_function(&start(8), &List::Nil, &List::Nil) else { panic!("a full model") };
+    let List::Cons((local, _), _) = strip(m.body) else { panic!("a body") };
+    assert!(matches!(&*local, DStmt::Local(n, DTy::Seq(Scalar::I32), DExpr::SeqFill(_, _)) if *n == B), "{local:?}");
+    assert_eq!(bare_refusal(translate_function(&start(7), &List::Nil, &List::Nil)), Refusal::SeqParam(15));
+}
+
 /// A struct that holds a sequence is a value: a local of Node, a local of Wrapper, which holds a Node by value, and a result of
 /// Node translate, decision 0187.
 #[test]

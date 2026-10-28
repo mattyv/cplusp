@@ -391,7 +391,6 @@ fn an_array_with_no_const_and_an_array_field_are_refused() {
         text.lines().filter(|l| l.starts_with("Not provable: ")).map(|l| l.rsplit_once(".cpp:").unwrap().1).collect::<Vec<_>>(),
         vec![
             "6: std::array<int32_t, 4> &: the translator has no rule for it yet.",
-            "18: Pair: the translator has no rule for it yet.",
             "23: an optional of a struct or a sequence of bool has no rule yet.",
         ],
         "{text}"

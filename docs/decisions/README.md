@@ -200,3 +200,4 @@ Status is `decided`, `proposed` (the default until someone objects or the thin s
 | [0193](0193-files-by-topic.md) | Files by topic | decided |
 | [0194](0194-a-vector-by-value.md) | A vector by value | decided |
 | [0195](0195-the-sentence-of-a-vector-move.md) | The sentence of a vector move | decided |
+| [0196](0196-a-class-that-holds-a-std-array.md) | A class that holds a std::array | decided |
