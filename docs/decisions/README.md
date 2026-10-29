@@ -215,3 +215,4 @@ Status is `decided`, `proposed` (the default until someone objects or the thin s
 | [0212](0212-a-move-of-a-value-and-a-constructor-template.md) | A move of a value and a constructor template | decided |
 | [0213](0213-a-function-keeps-its-ensures-lines.md) | A function keeps its ensures lines | decided |
 | [0215](0215-a-member-template-name-and-an-ensures-line-that-calls.md) | A member template name and an ensures line that calls | decided |
+| [0216](0216-a-static-and-a-member-function-of-one-name.md) | A static and a member function of one name | decided |
