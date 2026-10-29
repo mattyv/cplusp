@@ -17,8 +17,8 @@ class Eye final : public Look {
  public:
   //@ ensures result == a.x
   int32_t see(const A& a) const override { return a.x; }
-  //@ ensures result == b.y + 1
-  int32_t see(const B& b) const override { return b.y + 1; }
+  //@ ensures result == 0
+  int32_t see(const B& b) const override { return 0; }
 };
 
 //@ ensures result == a.x + b.y

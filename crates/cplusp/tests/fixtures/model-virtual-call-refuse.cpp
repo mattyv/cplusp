@@ -15,7 +15,7 @@ class Soon final : public Late {
   bool ready() const override { return true; }
 };
 
-// A pure virtual function that gives no value has no rule yet.
+// A const pure virtual function that gives no value is a method, decision 0209.
 struct Quiet {
   virtual ~Quiet() = default;
   virtual void drop() const = 0;

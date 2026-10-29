@@ -82,7 +82,7 @@ fn a_class_over_an_interface_with_no_rule_is_refused_at_its_line() {
             "18: Half has no override of Shape::corners.",
             "23: the override of Shape::corners in Two has no function in the model, so the translator cannot check it.",
             "38: const Shape *: the translator has no rule for it yet.",
-            "43: Sound has two virtual functions of one name. The translator has no rule for it yet.",
+            "52: Bell has no override of Sound::pitch.",
             "62: const Open &: the translator has no rule for it yet.",
             "69: a qualified call of a virtual function: the translator has no rule for it yet.",
             "73: a body of a pure virtual function: the translator has no rule for it yet.",
@@ -162,7 +162,6 @@ fn a_contract_of_an_interface_reads_only_the_functions_above_it() {
         refusals,
         [
             "6: the contract of Late::apply reads Late::ready, which comes later in Late. Declare Late::ready first.",
-            "21: a pure virtual function that gives no value: the translator has no rule for it yet.",
             "26: the contract of Loop::size reads Loop::size itself. The translator has no rule for it yet.",
         ],
         "{text}"
@@ -854,4 +853,26 @@ fn two_virtual_functions_of_one_name_prove() {
     let text = stdout(&o);
     assert_eq!(o.status.code(), Some(1), "stdout: {text} stderr: {}", stderr(&o));
     assert_eq!(failures(&text), ["29: see is no pure function. A contract calls a function with one return and no write."], "{text}");
+}
+
+/// `*this` is the object, as an argument for a const reference or a value, and as a reference that is not const it has no rule,
+/// decision 0214.
+#[test]
+fn the_object_as_an_argument_proves() {
+    let Some(dafny) = dafny() else { return };
+    if !clang_tidy_available() {
+        return;
+    }
+    let o = prove("model-this-arg.cpp", &[], &dafny);
+    let text = stdout(&o);
+    assert_eq!(o.status.code(), Some(0), "stdout: {text} stderr: {}", stderr(&o));
+    assert_eq!(text.lines().last(), Some("ok: proved"), "{text}");
+    let o = prove("model-this-arg-wrong.cpp", &[], &dafny);
+    let text = stdout(&o);
+    assert_eq!(o.status.code(), Some(1), "stdout: {text} stderr: {}", stderr(&o));
+    assert_eq!(failures(&text), ["30: the ensures line may not hold on this return."], "{text}");
+    let o = prove("model-this-arg-refuse.cpp", &[], &dafny);
+    let text = stdout(&o);
+    assert_eq!(o.status.code(), Some(1), "stdout: {text} stderr: {}", stderr(&o));
+    assert_eq!(failures(&text), ["18: `*this` as a reference that is not const: the translator has no rule for it yet."], "{text}");
 }

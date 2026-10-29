@@ -39,7 +39,7 @@ int32_t via(const Shape* p) {
   return p->corners();
 }
 
-// Two virtual functions of one name have no rule yet.
+// Two virtual functions of one name, decision 0210. One has a body below with no rule, so Bell has no override of it.
 class Sound {
  public:
   virtual ~Sound() = default;

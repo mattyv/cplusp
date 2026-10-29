@@ -214,3 +214,4 @@ Status is `decided`, `proposed` (the default until someone objects or the thin s
 | [0208](0208-a-local-through-a-reference-to-its-interface.md) | A local through a reference to its interface | decided |
 | [0209](0209-a-const-virtual-function-that-writes-a-parameter.md) | A const virtual function that writes a parameter | decided |
 | [0210](0210-two-virtual-functions-of-one-name.md) | Two virtual functions of one name | decided |
+| [0214](0214-the-object-as-an-argument.md) | The object as an argument | decided |
