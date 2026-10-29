@@ -119,11 +119,13 @@ class Subject {
   //@ ensures forall i :: 0 <= i < observer_count() ==> count_of(i) == old(count_of(i)) + 1
   void set(int32_t v) {
     value_ = v;
-    //@ invariant 0 <= i <= observers_.size() && observers_.size() == old(observers_.size())
+    //@ invariant 0 <= i <= observers_.size() && observers_.size() == old(observers_.size()) && value_ == v
     //@ invariant forall j :: 0 <= j < observers_.size() ==> observers_[j] != nullptr && observers_[j]->valid()
     //@ invariant forall j :: 0 <= j < i ==> count_of(j) == old(count_of(j)) + 1
     //@ invariant forall j :: i <= j < observers_.size() ==> count_of(j) == old(count_of(j)) && count_of(j) < 1000
     for (size_t i = 0; i < observers_.size(); ++i) {
+      // The prover needs the invariant of the subject at this place to read count_of(i), so the line says it.
+      //@ assert valid() && count_of(i) < 1000
       observers_[i]->on_change(v);
     }
   }

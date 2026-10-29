@@ -979,3 +979,173 @@ fn the_pointer_to_implementation_with_no_rule_is_refused() {
     ];
     assert_eq!(refused, want, "{text}");
 }
+
+/// A plain member function can hold apply lines, so a member function that calls it has a function in the model, decision 0211.
+#[test]
+fn a_plain_member_function_with_apply_lines_proves() {
+    let Some(dafny) = dafny() else { return };
+    if !clang_tidy_available() {
+        return;
+    }
+    let o = prove("model-plain-apply.cpp", &[], &dafny);
+    let text = stdout(&o);
+    assert_eq!(o.status.code(), Some(0), "stdout: {text} stderr: {}", stderr(&o));
+    assert_eq!(text.lines().last(), Some("ok: proved"), "{text}");
+    let o = prove("model-plain-apply-wrong.cpp", &[], &dafny);
+    let text = stdout(&o);
+    assert_eq!(o.status.code(), Some(1), "stdout: {text} stderr: {}", stderr(&o));
+    let failed: Vec<&str> = text.lines().filter(|l| l.starts_with("Not proved: ") || l.starts_with("Not provable: ")).map(|l| l.rsplit_once(".cpp:").unwrap().1).collect();
+    assert_eq!(failed, ["29: the ensures line may not hold on this return."], "{text}");
+}
+
+/// A std::move of a trivially copyable value is the value, and a constructor template has an instance for each type, decision 0212.
+#[test]
+fn a_move_of_a_value_and_a_constructor_template_prove() {
+    let Some(dafny) = dafny() else { return };
+    if !clang_tidy_available() {
+        return;
+    }
+    let o = prove("model-move-value.cpp", &[], &dafny);
+    let text = stdout(&o);
+    assert_eq!(o.status.code(), Some(0), "stdout: {text} stderr: {}", stderr(&o));
+    assert_eq!(text.lines().last(), Some("ok: proved"), "{text}");
+    let o = prove("model-move-value-wrong.cpp", &[], &dafny);
+    let text = stdout(&o);
+    assert_eq!(o.status.code(), Some(1), "stdout: {text} stderr: {}", stderr(&o));
+    let failed: Vec<&str> = text.lines().filter(|l| l.starts_with("Not proved: ") || l.starts_with("Not provable: ")).map(|l| l.rsplit_once(".cpp:").unwrap().1).collect();
+    assert_eq!(failed, ["49: the ensures line may not hold on this return.", "56: the ensures line may not hold on this return."], "{text}");
+}
+
+/// A std::move of a value that is not trivially copyable keeps its sentence, decision 0212.
+#[test]
+fn a_move_of_a_value_that_is_not_trivially_copyable_is_refused() {
+    let Some(dafny) = dafny() else { return };
+    if !clang_tidy_available() {
+        return;
+    }
+    let o = prove("model-move-value-refuse.cpp", &[], &dafny);
+    let text = stdout(&o);
+    assert_eq!(o.status.code(), Some(1), "stdout: {text} stderr: {}", stderr(&o));
+    let refused: Vec<&str> = text.lines().filter(|l| l.starts_with("Not proved: ") || l.starts_with("Not provable: ")).map(|l| l.rsplit_once(".cpp:").unwrap().1).collect();
+    assert_eq!(refused, ["13: a call to std::move<Bag &>, which has no model in view."], "{text}");
+}
+
+/// The function of a pure member function keeps its ensures lines, so the check of an override two calls from the bound proves,
+/// decision 0213.
+#[test]
+fn a_function_keeps_its_ensures_lines() {
+    let Some(dafny) = dafny() else { return };
+    if !clang_tidy_available() {
+        return;
+    }
+    let o = prove("model-function-ensures.cpp", &[], &dafny);
+    let text = stdout(&o);
+    assert_eq!(o.status.code(), Some(0), "stdout: {text} stderr: {}", stderr(&o));
+    assert_eq!(text.lines().last(), Some("ok: proved"), "{text}");
+}
+
+/// A member function template counts as an overload of its name, so a contract that calls the name is refused, decision 0215.
+#[test]
+fn a_contract_that_calls_a_name_of_a_member_template_is_refused() {
+    let Some(dafny) = dafny() else { return };
+    if !clang_tidy_available() {
+        return;
+    }
+    let o = prove("model-member-template-overload.cpp", &[], &dafny);
+    let text = stdout(&o);
+    assert_eq!(o.status.code(), Some(1), "stdout: {text} stderr: {}", stderr(&o));
+    let refused: Vec<&str> = text.lines().filter(|l| l.starts_with("Not proved: ") || l.starts_with("Not provable: ")).map(|l| l.rsplit_once(".cpp:").unwrap().1).collect();
+    assert_eq!(refused, ["16: get is no pure function. A contract calls a function with one return and no write."], "{text}");
+}
+
+/// An ensures line that calls a function stays on the method, so two functions whose ensures lines call each other prove,
+/// decision 0215.
+#[test]
+fn an_ensures_line_that_calls_a_function_stays_on_the_method() {
+    let Some(dafny) = dafny() else { return };
+    if !clang_tidy_available() {
+        return;
+    }
+    let o = prove("model-function-ensures-cycle.cpp", &[], &dafny);
+    let text = stdout(&o);
+    assert_eq!(o.status.code(), Some(0), "stdout: {text} stderr: {}", stderr(&o));
+    assert_eq!(text.lines().last(), Some("ok: proved"), "{text}");
+}
+
+/// A static member function template has no rule yet, and its sentence says so, decision 0215.
+#[test]
+fn a_static_member_template_is_refused() {
+    let Some(dafny) = dafny() else { return };
+    if !clang_tidy_available() {
+        return;
+    }
+    let o = prove("model-member-template-static.cpp", &[], &dafny);
+    let text = stdout(&o);
+    assert_eq!(o.status.code(), Some(1), "stdout: {text} stderr: {}", stderr(&o));
+    let refused: Vec<&str> = text.lines().filter(|l| l.starts_with("Not proved: ") || l.starts_with("Not provable: ")).map(|l| l.rsplit_once(".cpp:").unwrap().1).collect();
+    assert!(refused.contains(&"13: a member function template: the translator has no rule for it yet."), "{text}");
+    assert!(!text.contains("a name with a character Dafny cannot read"), "{text}");
+}
+
+/// A static member function and a member function template of one name are overloads, so a contract that calls the name is
+/// refused, decision 0215.
+#[test]
+fn a_contract_that_calls_a_static_name_of_a_member_template_is_refused() {
+    let Some(dafny) = dafny() else { return };
+    if !clang_tidy_available() {
+        return;
+    }
+    let o = prove("model-member-template-static-name.cpp", &[], &dafny);
+    let text = stdout(&o);
+    assert_eq!(o.status.code(), Some(1), "stdout: {text} stderr: {}", stderr(&o));
+    let refused: Vec<&str> = text.lines().filter(|l| l.starts_with("Not proved: ") || l.starts_with("Not provable: ")).map(|l| l.rsplit_once(".cpp:").unwrap().1).collect();
+    assert_eq!(refused, ["19: S::get is no pure function. A contract calls a function with one return and no write."], "{text}");
+}
+
+/// Two static member functions of one name are overloads, so a contract that calls the name is refused, decision 0215.
+#[test]
+fn a_contract_that_calls_an_overloaded_static_name_is_refused() {
+    let Some(dafny) = dafny() else { return };
+    if !clang_tidy_available() {
+        return;
+    }
+    let o = prove("model-static-overload-contract.cpp", &[], &dafny);
+    let text = stdout(&o);
+    assert_eq!(o.status.code(), Some(1), "stdout: {text} stderr: {}", stderr(&o));
+    let refused: Vec<&str> = text.lines().filter(|l| l.starts_with("Not proved: ") || l.starts_with("Not provable: ")).map(|l| l.rsplit_once(".cpp:").unwrap().1).collect();
+    assert_eq!(refused, ["18: S::get is no pure function. A contract calls a function with one return and no write."], "{text}");
+}
+
+/// A static member function and a member function of one name are two functions of that name, so a contract that calls it in either
+/// form is refused, decision 0216.
+#[test]
+fn a_contract_that_calls_a_name_of_a_static_and_a_member_is_refused() {
+    let Some(dafny) = dafny() else { return };
+    if !clang_tidy_available() {
+        return;
+    }
+    let o = prove("model-static-member-same-name.cpp", &[], &dafny);
+    let text = stdout(&o);
+    assert_eq!(o.status.code(), Some(1), "stdout: {text} stderr: {}", stderr(&o));
+    let refused: Vec<&str> = text.lines().filter(|l| l.starts_with("Not proved: ") || l.starts_with("Not provable: ")).map(|l| l.rsplit_once(".cpp:").unwrap().1).collect();
+    let want = [
+        "18: get is no pure function. A contract calls a function with one return and no write.",
+        "25: S::get is no pure function. A contract calls a function with one return and no write.",
+    ];
+    assert_eq!(refused, want, "{text}");
+}
+
+/// A static member function and a member function that writes its object, of one name, are two functions of that name, so a
+/// contract that calls it is refused, decision 0216.
+#[test]
+fn a_contract_that_calls_a_name_of_a_static_and_a_member_that_writes_is_refused() {
+    let Some(dafny) = dafny() else { return };
+    if !clang_tidy_available() {
+        return;
+    }
+    let o = prove("model-static-member-writes-same-name.cpp", &[], &dafny);
+    let text = stdout(&o);
+    assert_eq!(o.status.code(), Some(1), "stdout: {text} stderr: {}", stderr(&o));
+    let refused: Vec<&str> = text.lines().filter(|l| l.starts_with("Not proved: ") || l.starts_with("Not provable: ")).map(|l| l.rsplit_once(".cpp:").unwrap().1).collect();
+    assert_eq!(refused, ["19: S::get is no pure function. A contract calls a function with one return and no write."], "{text}");
+}

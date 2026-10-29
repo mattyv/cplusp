@@ -732,6 +732,61 @@ pub open spec fn spec_assign_stmt(n: u32, e: Expr, l: u32, all: Fns, ps: Params,
     }
 }
 
+/// `f.push_back(e)` of a sequence field in a member function that writes its object, decision 0191. A push of `std::move(o)` adds
+/// the value of `o`, and then `o` is null, decision 0204.
+pub open spec fn spec_push_field(f: u32, e: Expr, l: u32, ps: Params, sd: Structs) -> Result<DStmt, Refusal> {
+    match spec_self(ps) {
+        Some((p, t)) => match t {
+            Ty::ThisMut(k) => match spec_field_ty(sd, k, f) {
+                Some(Ty::Seq(_, _)) => match spec_move_check(spec_unmove(e).1, spec_var_names(e), ps, false, l) {
+                    Some(r) => Err(r),
+                    None => match spec_code(spec_unmove(e).0, l) {
+                        Ok(de) => Ok(spec_moved(
+                            DStmt::SetField(f, DExpr::Append(Box::new(DExpr::Field(Box::new(DExpr::After), f)), Box::new(de))),
+                            spec_unmove(e).1,
+                            spec_vec_moves(e),
+                        )),
+                        Err(r) => Err(r),
+                    },
+                },
+                Some(_) => Err(Refusal::Syntax(l)),
+                None => Err(Refusal::NoField(f, l)),
+            },
+            _ => Err(Refusal::WriteParam(p, l)),
+        },
+        None => Err(Refusal::Syntax(l)),
+    }
+}
+
+/// `v.push_back(e)` of a local vector or a vector by reference, decisions 0148 and 0170, and of `std::move(o)`, decision 0204.
+pub open spec fn spec_push_back(v: u32, e: Expr, l: u32, all: Fns, env: Params, ps: Params, sd: Structs) -> Result<DStmt, Refusal> {
+    match spec_move_check(spec_unmove(e).1, List::Cons(v, Box::new(spec_var_names(e))), ps, false, l) {
+        Some(r) => Err(r),
+        None => match spec_get(ps, v) {
+            Some(Ty::MutSeq(_)) => match spec_push_value(spec_unmove(e).0, all, l, sd) {
+                Ok((c, de)) => Ok(spec_moved(
+                    spec_pre(c, DStmt::SetOut(v, DExpr::Append(Box::new(DExpr::Out(v)), Box::new(de)))),
+                    spec_unmove(e).1,
+                    spec_vec_moves(e),
+                )),
+                Err(r) => Err(r),
+            },
+            Some(_) => Err(Refusal::WriteParam(v, l)),
+            None => match spec_get(env, v) {
+                Some(Ty::Vec(_)) => match spec_push_value(spec_unmove(e).0, all, l, sd) {
+                    Ok((c, de)) => Ok(spec_moved(
+                        spec_pre(c, DStmt::Assign(v, DExpr::Append(Box::new(DExpr::Var(v)), Box::new(de)))),
+                        spec_unmove(e).1,
+                        spec_vec_moves(e),
+                    )),
+                    Err(r) => Err(r),
+                },
+                _ => Err(Refusal::Syntax(l)),
+            },
+        },
+    }
+}
+
 /// A statement of the body, and a list of them. `env` is the variables in scope, and `ps` the parameters. A call runs before its
 /// statement where C++ runs it once, decision 0104, and a call of a function that writes its object or gives no value stands
 /// alone. A write is to a local, never to a parameter, or to a field of the object of a member function that writes it, decision
@@ -1007,20 +1062,7 @@ pub open spec fn spec_stmt(s: Stmt, all: Fns, env: Params, ps: Params, sd: Struc
             },
             None => Err(Refusal::Syntax(l)),
         },
-        Stmt::PushField(f, e, l) => match spec_self(ps) {
-            Some((p, t)) => match t {
-                Ty::ThisMut(k) => match spec_field_ty(sd, k, f) {
-                    Some(Ty::Seq(_, _)) => match spec_code(e, l) {
-                        Ok(de) => Ok(DStmt::SetField(f, DExpr::Append(Box::new(DExpr::Field(Box::new(DExpr::After), f)), Box::new(de)))),
-                        Err(r) => Err(r),
-                    },
-                    Some(_) => Err(Refusal::Syntax(l)),
-                    None => Err(Refusal::NoField(f, l)),
-                },
-                _ => Err(Refusal::WriteParam(p, l)),
-            },
-            None => Err(Refusal::Syntax(l)),
-        },
+        Stmt::PushField(f, e, l) => spec_push_field(f, e, l, ps, sd),
         Stmt::PopField(f, l) => match spec_self(ps) {
             Some((p, t)) => match t {
                 Ty::ThisMut(k) => match spec_field_ty(sd, k, f) {
@@ -1035,20 +1077,7 @@ pub open spec fn spec_stmt(s: Stmt, all: Fns, env: Params, ps: Params, sd: Struc
         // `v.push_back(e)` appends one element, decision 0148. A failed push_back throws and never returns to verified code.
         // ponytail: a call in the value is refused as out of place, as for SetIndex. Upgrade: lift the calls, decision 0104.
         // `v.push_back(std::make_unique<D>(a))` runs the constructor of `D` before it, decision 0170.
-        Stmt::PushBack(v, e, l) => match spec_get(ps, v) {
-            Some(Ty::MutSeq(_)) => match spec_push_value(e, all, l, sd) {
-                Ok((c, de)) => Ok(spec_pre(c, DStmt::SetOut(v, DExpr::Append(Box::new(DExpr::Out(v)), Box::new(de))))),
-                Err(r) => Err(r),
-            },
-            Some(_) => Err(Refusal::WriteParam(v, l)),
-            None => match spec_get(env, v) {
-                Some(Ty::Vec(_)) => match spec_push_value(e, all, l, sd) {
-                    Ok((c, de)) => Ok(spec_pre(c, DStmt::Assign(v, DExpr::Append(Box::new(DExpr::Var(v)), Box::new(de))))),
-                    Err(r) => Err(r),
-                },
-                _ => Err(Refusal::Syntax(l)),
-            },
-        },
+        Stmt::PushBack(v, e, l) => spec_push_back(v, e, l, all, env, ps, sd),
         // `std::sort(v.begin(), v.end())` of a vector of integers, decision 0161.
         Stmt::Sort(v, l) => match spec_get(ps, v) {
             Some(Ty::MutSeq(s)) => spec_sort(DExpr::Out(v), s, l),
@@ -1424,6 +1453,9 @@ pub open spec fn spec_moves_stmt(s: Stmt) -> Names
         Stmt::Local(_, _, e, _) => spec_unmove(e).1,
         Stmt::Call(_, _, args, _) => spec_unmove_args(*args).1,
         Stmt::SetOwnField(_, _, e, _) => spec_unmove(e).1,
+        // `v.push_back(std::move(o))` moves `o`, decision 0204.
+        Stmt::PushBack(_, e, _) => spec_unmove(e).1,
+        Stmt::PushField(_, e, _) => spec_unmove(e).1,
         Stmt::If(_, t, f, _) => spec_append(spec_moves_stmts(*t), spec_moves_stmts(*f)),
         Stmt::While(_, _, body, _) => spec_moves_stmts(*body),
         Stmt::For(init, _, step, _, body, _) => spec_append(spec_moves_stmt(*init), spec_append(spec_moves_stmt(*step), spec_moves_stmts(*body))),

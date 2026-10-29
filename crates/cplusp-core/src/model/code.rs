@@ -2073,6 +2073,58 @@ pub fn elem_object(o: &Expr) -> (r: Option<(u32, Ty, &Expr)>)
     }
 }
 
+pub fn field_elem<'a>(o: &'a Expr, ps: &Params, sd: &Structs) -> (r: Option<(u32, &'a Expr)>)
+    ensures
+        match r {
+            Some((f, i)) => spec_field_elem(*o, *ps, *sd) == Some((f, *i)),
+            None => spec_field_elem(*o, *ps, *sd) is None,
+        },
+    decreases o,
+{
+    match o {
+        Expr::Value(a) => match &**a {
+            Expr::Index(v, i) => match &**v {
+                Expr::Field(t, f) => match &**t {
+                    Expr::Var(p, Ty::ThisMut(k)) => if self_param(ps) == Some((*p, Ty::ThisMut(*k))) {
+                        match field_ty(sd, *k, *f) {
+                            Some(Ty::Seq(Scalar::Own(_), Extent::Dynamic)) => Some((*f, &**i)),
+                            _ => None,
+                        }
+                    } else {
+                        None
+                    },
+                    _ => None,
+                },
+                _ => None,
+            },
+            _ => None,
+        },
+        Expr::Cast(c, a) => if *c == CastKind::Read || *c == CastKind::NoOp {
+            field_elem(a, ps, sd)
+        } else {
+            None
+        },
+        Expr::Paren(a) => field_elem(a, ps, sd),
+        _ => None,
+    }
+}
+
+pub fn elem_place<'a>(o: &'a Expr, ps: &Params, line: u32, sd: &Structs) -> (r: Option<(Result<Obj, Refusal>, &'a Expr, Option<u32>)>)
+    ensures
+        match r {
+            Some((p, i, v)) => spec_elem_place(*o, *ps, line, *sd) == Some((p, *i, v)),
+            None => spec_elem_place(*o, *ps, line, *sd) is None,
+        },
+{
+    match elem_object(o) {
+        Some((v, t, i)) => Some((vec_obj(v, t, ps, line), i, Some(v))),
+        None => match field_elem(o, ps, sd) {
+            Some((f, i)) => Some((Ok(Obj::Field(f)), i, None)),
+            None => None,
+        },
+    }
+}
+
 pub fn vec_obj(v: u32, t: Ty, ps: &Params, line: u32) -> (r: Result<Obj, Refusal>)
     ensures
         r == spec_vec_obj(v, t, *ps, line),
@@ -2124,6 +2176,7 @@ pub fn obj_named(o: Obj, ns: &Names) -> (r: bool)
         Obj::Out(n) => has(ns, n),
         Obj::Owned(n) => has(ns, n),
         Obj::Down(n, _, _) => has(ns, n),
+        Obj::Field(_) => false,
         Obj::Object => false,
     }
 }
@@ -2146,14 +2199,14 @@ pub fn call_elem(key: u32, name: u32, args: &Args, line: u32, all: &Fns, ps: &Pa
     match find(all, key) {
         Some(f) => if matches!(head_ty(&f.params), Some(Ty::IfaceMut(_))) {
             match args {
-                List::Cons(a, rest) => match elem_object(a) {
-                    Some((v, t, i)) => Some(match vec_obj(v, t, ps, line) {
+                List::Cons(a, rest) => match elem_place(a, ps, line, sd) {
+                    Some((place, i, vn)) => Some(match place {
                         Err(r) => Err(r),
                         Ok(vo) => match writebacks(rest, &tail(&f.params), ps, line) {
                             Err(r) => Err(r),
                             Ok(os) => match index_vars(i) {
                                 None => Err(Refusal::IndexWritten(line)),
-                                Some(ns) => if has(&ns, v) || writes_name(&os, &ns) {
+                                Some(ns) => if (match vn { Some(v) => has(&ns, v), None => false }) || writes_name(&os, &ns) {
                                     Err(Refusal::IndexWritten(line))
                                 } else {
                                     match translate_code(i, line) {
@@ -2249,6 +2302,60 @@ pub fn step(n: u32, dt: DTy, up: bool, out: bool) -> (r: DStmt)
         DStmt::SetOut(n, DExpr::Bin(op, Box::new(DExpr::Out(n)), one))
     } else {
         DStmt::Assign(n, DExpr::Bin(op, Box::new(DExpr::Var(n)), one))
+    }
+}
+
+pub fn push_field(f: u32, e: &Expr, l: u32, ps: &Params, sd: &Structs) -> (r: Result<DStmt, Refusal>)
+    ensures
+        r == spec_push_field(f, *e, l, *ps, *sd),
+{
+    match self_param(ps) {
+        Some((p, t)) => match t {
+            Ty::ThisMut(k) => match field_ty(sd, k, f) {
+                Some(Ty::Seq(_, _)) => {
+                    let (ue, ns) = unmove(e);
+                    match move_check(&ns, &var_names(e), ps, false, l) {
+                        Some(r) => Err(r),
+                        None => match translate_code(&ue, l) {
+                            Ok(de) => Ok(moved(
+                                DStmt::SetField(f, DExpr::Append(Box::new(DExpr::Field(Box::new(DExpr::After), f)), Box::new(de))),
+                                ns,
+                                vec_moves(e),
+                            )),
+                            Err(r) => Err(r),
+                        },
+                    }
+                },
+                Some(_) => Err(Refusal::Syntax(l)),
+                None => Err(Refusal::NoField(f, l)),
+            },
+            _ => Err(Refusal::WriteParam(p, l)),
+        },
+        None => Err(Refusal::Syntax(l)),
+    }
+}
+
+pub fn push_back(v: u32, e: &Expr, l: u32, all: &Fns, env: &Params, ps: &Params, sd: &Structs) -> (r: Result<DStmt, Refusal>)
+    ensures
+        r == spec_push_back(v, *e, l, *all, *env, *ps, *sd),
+{
+    let (ue, ns) = unmove(e);
+    match move_check(&ns, &List::Cons(v, Box::new(var_names(e))), ps, false, l) {
+        Some(r) => Err(r),
+        None => match get(ps, v) {
+            Some(Ty::MutSeq(_)) => match push_value(&ue, all, l, sd) {
+                Ok((c, de)) => Ok(moved(pre(c, DStmt::SetOut(v, DExpr::Append(Box::new(DExpr::Out(v)), Box::new(de)))), ns, vec_moves(e))),
+                Err(r) => Err(r),
+            },
+            Some(_) => Err(Refusal::WriteParam(v, l)),
+            None => match get(env, v) {
+                Some(Ty::Vec(_)) => match push_value(&ue, all, l, sd) {
+                    Ok((c, de)) => Ok(moved(pre(c, DStmt::Assign(v, DExpr::Append(Box::new(DExpr::Var(v)), Box::new(de)))), ns, vec_moves(e))),
+                    Err(r) => Err(r),
+                },
+                _ => Err(Refusal::Syntax(l)),
+            },
+        },
     }
 }
 
@@ -2645,20 +2752,7 @@ pub fn translate_stmt(s: &Stmt, all: &Fns, env: &Params, ps: &Params, sd: &Struc
             },
             None => Err(Refusal::Syntax(*l)),
         },
-        Stmt::PushField(f, e, l) => match self_param(ps) {
-            Some((p, t)) => match t {
-                Ty::ThisMut(k) => match field_ty(sd, k, *f) {
-                    Some(Ty::Seq(_, _)) => match translate_code(e, *l) {
-                        Ok(de) => Ok(DStmt::SetField(*f, DExpr::Append(Box::new(DExpr::Field(Box::new(DExpr::After), *f)), Box::new(de)))),
-                        Err(r) => Err(r),
-                    },
-                    Some(_) => Err(Refusal::Syntax(*l)),
-                    None => Err(Refusal::NoField(*f, *l)),
-                },
-                _ => Err(Refusal::WriteParam(p, *l)),
-            },
-            None => Err(Refusal::Syntax(*l)),
-        },
+        Stmt::PushField(f, e, l) => push_field(*f, e, *l, ps, sd),
         Stmt::PopField(f, l) => match self_param(ps) {
             Some((p, t)) => match t {
                 Ty::ThisMut(k) => match field_ty(sd, k, *f) {
@@ -2670,20 +2764,7 @@ pub fn translate_stmt(s: &Stmt, all: &Fns, env: &Params, ps: &Params, sd: &Struc
             },
             None => Err(Refusal::Syntax(*l)),
         },
-        Stmt::PushBack(v, e, l) => match get(ps, *v) {
-            Some(Ty::MutSeq(_)) => match push_value(e, all, *l, sd) {
-                Ok((c, de)) => Ok(pre(c, DStmt::SetOut(*v, DExpr::Append(Box::new(DExpr::Out(*v)), Box::new(de))))),
-                Err(r) => Err(r),
-            },
-            Some(_) => Err(Refusal::WriteParam(*v, *l)),
-            None => match get(env, *v) {
-                Some(Ty::Vec(_)) => match push_value(e, all, *l, sd) {
-                    Ok((c, de)) => Ok(pre(c, DStmt::Assign(*v, DExpr::Append(Box::new(DExpr::Var(*v)), Box::new(de))))),
-                    Err(r) => Err(r),
-                },
-                _ => Err(Refusal::Syntax(*l)),
-            },
-        },
+        Stmt::PushBack(v, e, l) => push_back(*v, e, *l, all, env, ps, sd),
         Stmt::Sort(v, l) => match get(ps, *v) {
             Some(Ty::MutSeq(s)) => sort(DExpr::Out(*v), s, *l),
             Some(_) => Err(Refusal::WriteParam(*v, *l)),
@@ -3066,6 +3147,8 @@ pub fn moves_stmt(s: &Stmt) -> (r: Names)
         Stmt::Local(_, _, e, _) => unmove(e).1,
         Stmt::Call(_, _, args, _) => unmove_args(args).1,
         Stmt::SetOwnField(_, _, e, _) => unmove(e).1,
+        Stmt::PushBack(_, e, _) => unmove(e).1,
+        Stmt::PushField(_, e, _) => unmove(e).1,
         Stmt::If(_, t, f, _) => append(moves_stmts(t), moves_stmts(f)),
         Stmt::While(_, _, body, _) => moves_stmts(body),
         Stmt::For(init, _, step, _, body, _) => append(moves_stmt(init), append(moves_stmt(step), moves_stmts(body))),
@@ -3760,6 +3843,99 @@ pub fn convert(da: DArgs, ps: &Params) -> (r: DArgs)
     }
 }
 
+pub fn calls(d: &DExpr) -> (r: bool)
+    ensures
+        r == spec_calls(*d),
+    decreases d,
+{
+    match d {
+        DExpr::Lit(_) => false,
+        DExpr::Bool(_) => false,
+        DExpr::Var(_) => false,
+        DExpr::Result => false,
+        DExpr::Bin(_, x1, x2) => calls(x1) || calls(x2),
+        DExpr::Not(x0) => calls(x0),
+        DExpr::Neg(x0) => calls(x0),
+        DExpr::AsInt(x0) => calls(x0),
+        DExpr::Conv(_, x1) => calls(x1),
+        DExpr::Len(x0) => calls(x0),
+        DExpr::Index(x0, x1) => calls(x0) || calls(x1),
+        DExpr::Forall(_, x1) => calls(x1),
+        DExpr::Exists(_, x1) => calls(x1),
+        DExpr::Bound(_) => false,
+        DExpr::Chain(_, _, x2, x3, x4) => calls(x2) || calls(x3) || calls(x4),
+        DExpr::Field(x0, _) => calls(x0),
+        DExpr::Ctor(_, x1) => calls_any(x1),
+        DExpr::IsSome(x0) => calls(x0),
+        DExpr::Get(x0) => calls(x0),
+        DExpr::Is(_, x1) => calls(x1),
+        DExpr::Alt(_, x1) => calls(x1),
+        DExpr::Nothing => false,
+        DExpr::Just(x0) => calls(x0),
+        DExpr::Drop(x0, x1) => calls(x0) || calls(x1),
+        DExpr::Apply(_, x1) => calls_any(x1),
+        DExpr::Take(x0, x1) => calls(x0) || calls(x1),
+        DExpr::Slice(x0, x1, x2) => calls(x0) || calls(x1) || calls(x2),
+        DExpr::TDiv(x0, x1) => calls(x0) || calls(x1),
+        DExpr::TRem(x0, x1) => calls(x0) || calls(x1),
+        DExpr::DivIn(x0, x1, _) => calls(x0) || calls(x1),
+        DExpr::RemIn(x0, x1, _) => calls(x0) || calls(x1),
+        DExpr::FCall(_, _) => true,
+        DExpr::After => false,
+        DExpr::Out(_) => false,
+        DExpr::Enumerator(_, _) => false,
+        DExpr::Ite(x0, x1, x2) => calls(x0) || calls(x1) || calls(x2),
+        DExpr::Temp(_) => false,
+        DExpr::ShrIn(x0, x1, _, _) => calls(x0) || calls(x1),
+        DExpr::SetAt(x0, x1, x2) => calls(x0) || calls(x1) || calls(x2),
+        DExpr::Append(x0, x1) => calls(x0) || calls(x1),
+        DExpr::CountIf(x0, _, _, x3) => calls(x0) || calls(x3),
+        DExpr::RealLit(_, _) => false,
+        DExpr::FOp(_, x1, x2) => calls(x1) || calls(x2),
+        DExpr::Abs(x0) => calls(x0),
+        DExpr::FromInt(x0) => calls(x0),
+        DExpr::Upcast(_, _, x2) => calls(x2),
+        DExpr::Lemma(_, x1, x2) => calls(x2) || calls_any(x1),
+        DExpr::Let(_, _, x2, x3) => calls(x2) || calls(x3),
+        DExpr::BitOp(_, x1, x2) => calls(x1) || calls(x2),
+        DExpr::SeqLit(x0) => calls_any(x0),
+        DExpr::EmptySeq => false,
+        DExpr::SeqFill(x0, x1) => calls(x0) || calls(x1),
+        DExpr::Back(x0) => calls(x0),
+        DExpr::PopBack(x0) => calls(x0),
+        DExpr::IntAbs(x0) => calls(x0),
+        DExpr::Eps => false,
+        DExpr::Eta => false,
+        DExpr::DblMax => false,
+    }
+}
+
+pub fn calls_any(a: &DArgs) -> (r: bool)
+    ensures
+        r == spec_calls_any(*a),
+    decreases a,
+{
+    match a {
+        List::Nil => false,
+        List::Cons(d, rest) => calls(d) || calls_any(rest),
+    }
+}
+
+pub fn no_calls(cs: &DConds) -> (r: DConds)
+    ensures
+        r == spec_no_calls(*cs),
+    decreases cs,
+{
+    match cs {
+        List::Nil => List::Nil,
+        List::Cons((d, l), rest) => if calls(d) {
+            no_calls(rest)
+        } else {
+            List::Cons((copy_dexpr(d), *l), Box::new(no_calls(rest)))
+        },
+    }
+}
+
 pub fn translate_function(f: &Function, all: &Fns, sd: &Structs) -> (r: Model)
     ensures
         r == spec_function(*f, *all, *sd),
@@ -3776,6 +3952,11 @@ pub fn translate_function(f: &Function, all: &Fns, sd: &Structs) -> (r: Model)
                     Err(r) => Model::Bare(f.name, ps, ret, r),
                     Ok((req, ens, dec, body)) => {
                         let pure = member_fn(f, &ens, &body, all, sd);
+                        let fensures = if pure_body(&f.params, &body, all, sd, static_key(sd, f.name)).is_some() {
+                            no_calls(&ens)
+                        } else {
+                            List::Nil
+                        };
                         let ensures = ret_len(f.ret, f.line, linked(f, ens, &pure));
                         Model::Full(
                             Method {
@@ -3787,6 +3968,7 @@ pub fn translate_function(f: &Function, all: &Fns, sd: &Structs) -> (r: Model)
                                 decreases: dec,
                                 body,
                                 function: pure,
+                                fensures,
                                 writes: writes(&f.params),
                                 outs: outs(&f.params),
                                 trusted: f.trusted,

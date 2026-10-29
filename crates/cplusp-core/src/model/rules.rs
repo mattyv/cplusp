@@ -575,12 +575,21 @@ pub fn inline(all: &Fns, key: u32, sd: &Structs) -> (r: bool)
     }
 }
 
-/// A plain member function: a const member function with no reference parameter that it writes, whose body is one return of an
-/// expression with no call, decision 0189. It calls nothing, so a call of it can never be part of a cycle.
+/// A plain member function: a const member function with no reference parameter that it writes, whose body is a plain body,
+/// decisions 0189 and 0211. It calls no function, so a call of it can never be part of a cycle.
 pub open spec fn spec_plain(f: Function) -> bool {
-    !f.trusted && (spec_head_ty(f.params) matches Some(Ty::This(_))) && !spec_mutates(f.params) && match f.body {
-        List::Cons(st, rest) => *rest == List::Nil && match *st {
-            Stmt::Return(e, _) => spec_gcalls(e) == List::<(u32, u32, u32)>::Nil,
+    !f.trusted && (spec_head_ty(f.params) matches Some(Ty::This(_))) && !spec_mutates(f.params) && spec_plain_body(f.body)
+}
+
+/// A plain body: apply lines, then one `return` of an expression with no call, decisions 0189 and 0211. An apply line calls a lemma,
+/// which changes no value.
+pub open spec fn spec_plain_body(ss: Stmts) -> bool
+    decreases ss,
+{
+    match ss {
+        List::Cons(st, rest) => match *st {
+            Stmt::Return(e, _) => *rest == List::Nil && spec_gcalls(e) == List::<(u32, u32, u32)>::Nil,
+            Stmt::Apply(_, _, _) => spec_plain_body(*rest),
             _ => false,
         },
         List::Nil => false,
@@ -591,9 +600,18 @@ pub fn plain(f: &Function) -> (r: bool)
     ensures
         r == spec_plain(*f),
 {
-    !f.trusted && matches!(head_ty(&f.params), Some(Ty::This(_))) && !mutates(&f.params) && match &f.body {
-        List::Cons(st, rest) => matches!(&**rest, List::Nil) && match &**st {
-            Stmt::Return(e, _) => matches!(gcalls(e), List::Nil),
+    !f.trusted && matches!(head_ty(&f.params), Some(Ty::This(_))) && !mutates(&f.params) && plain_body(&f.body)
+}
+
+pub fn plain_body(ss: &Stmts) -> (r: bool)
+    ensures
+        r == spec_plain_body(*ss),
+    decreases ss,
+{
+    match ss {
+        List::Cons(st, rest) => match &**st {
+            Stmt::Return(e, _) => matches!(&**rest, List::Nil) && matches!(gcalls(e), List::Nil),
+            Stmt::Apply(_, _, _) => plain_body(rest),
             _ => false,
         },
         List::Nil => false,
@@ -2980,6 +2998,52 @@ pub open spec fn spec_elem_object(o: Expr) -> Option<(u32, Ty, Expr)>
     }
 }
 
+/// The element `f[i]` of a vector field `f` of unique_ptr of the object, read as the object of a call, in a member function that
+/// writes its object, decision 0204.
+pub open spec fn spec_field_elem(o: Expr, ps: Params, sd: Structs) -> Option<(u32, Expr)>
+    decreases o,
+{
+    match o {
+        Expr::Value(a) => match *a {
+            Expr::Index(v, i) => match *v {
+                Expr::Field(t, f) => match *t {
+                    Expr::Var(p, Ty::ThisMut(k)) => if spec_self(ps) == Some((p, Ty::ThisMut(k))) {
+                        match spec_field_ty(sd, k, f) {
+                            Some(Ty::Seq(Scalar::Own(_), Extent::Dynamic)) => Some((f, *i)),
+                            _ => None,
+                        }
+                    } else {
+                        None
+                    },
+                    _ => None,
+                },
+                _ => None,
+            },
+            _ => None,
+        },
+        Expr::Cast(c, a) => if c == CastKind::Read || c == CastKind::NoOp {
+            spec_field_elem(*a, ps, sd)
+        } else {
+            None
+        },
+        Expr::Paren(a) => spec_field_elem(*a, ps, sd),
+        _ => None,
+    }
+}
+
+/// The element of a vector of unique_ptr that is the object of a call: the place of the vector, the index, and the name of the vector
+/// when it has one, which the index may not read. A local vector, a vector by reference, or a vector field of the object, decisions
+/// 0170 and 0204.
+pub open spec fn spec_elem_place(o: Expr, ps: Params, line: u32, sd: Structs) -> Option<(Result<Obj, Refusal>, Expr, Option<u32>)> {
+    match spec_elem_object(o) {
+        Some((v, t, i)) => Some((spec_vec_obj(v, t, ps, line), i, Some(v))),
+        None => match spec_field_elem(o, ps, sd) {
+            Some((f, i)) => Some((Ok(Obj::Field(f)), i, None)),
+            None => None,
+        },
+    }
+}
+
 /// The place of a vector whose element a call writes back: a local vector, or a vector by reference on the modifies line.
 pub open spec fn spec_vec_obj(v: u32, t: Ty, ps: Params, line: u32) -> Result<Obj, Refusal> {
     match t {
@@ -3027,6 +3091,7 @@ pub open spec fn spec_obj_named(o: Obj, ns: Names) -> bool {
         Obj::Owned(n) => spec_has(ns, n),
         Obj::Down(n, _, _) => spec_has(ns, n),
         Obj::Object => false,
+        Obj::Field(_) => false,
     }
 }
 
@@ -3046,14 +3111,14 @@ pub open spec fn spec_call_elem(key: u32, name: u32, args: Args, line: u32, all:
     match spec_find(all, key) {
         Some(f) => if spec_head_ty(f.params) is Some && spec_head_ty(f.params)->Some_0 is IfaceMut {
             match args {
-                List::Cons(a, rest) => match spec_elem_object(*a) {
-                    Some((v, t, i)) => Some(match spec_vec_obj(v, t, ps, line) {
+                List::Cons(a, rest) => match spec_elem_place(*a, ps, line, sd) {
+                    Some((place, i, vn)) => Some(match place {
                         Err(r) => Err(r),
                         Ok(vo) => match spec_writebacks(*rest, spec_tail(f.params), ps, line) {
                             Err(r) => Err(r),
                             Ok(os) => match spec_index_vars(i) {
                                 None => Err(Refusal::IndexWritten(line)),
-                                Some(ns) => if spec_has(ns, v) || spec_writes_name(os, ns) {
+                                Some(ns) => if (match vn { Some(v) => spec_has(ns, v), None => false }) || spec_writes_name(os, ns) {
                                     Err(Refusal::IndexWritten(line))
                                 } else {
                                     match spec_code(i, line) {

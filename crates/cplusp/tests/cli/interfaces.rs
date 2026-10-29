@@ -983,3 +983,52 @@ fn an_unbacked_write_back_is_refused_in_each_place_of_a_body() {
     ];
     assert_eq!(failures(&text), want, "{text}");
 }
+
+/// A class can hold a vector of unique_ptr of an interface, add to it with push_back of a move, and call each element, decision
+/// 0204.
+#[test]
+fn a_list_of_owned_objects_as_a_field_proves() {
+    let Some(dafny) = dafny() else { return };
+    if !clang_tidy_available() {
+        return;
+    }
+    for file in ["model-owned-list.cpp", "../../../../examples/observer/example.cpp"] {
+        let o = prove(file, &[], &dafny);
+        let text = stdout(&o);
+        assert_eq!(o.status.code(), Some(0), "{file}: stdout: {text} stderr: {}", stderr(&o));
+        assert_eq!(text.lines().last(), Some("ok: proved"), "{file}: {text}");
+    }
+}
+
+/// A false claim through a vector of unique_ptr of an interface in a field fails, decision 0204.
+#[test]
+fn a_list_of_owned_objects_as_a_field_keeps_its_contract() {
+    let Some(dafny) = dafny() else { return };
+    if !clang_tidy_available() {
+        return;
+    }
+    let o = prove("model-owned-list-wrong.cpp", &[], &dafny);
+    let text = stdout(&o);
+    assert_eq!(o.status.code(), Some(1), "stdout: {text} stderr: {}", stderr(&o));
+    let failed: Vec<&str> = text.lines().filter(|l| l.starts_with("Not proved: ") || l.starts_with("Not provable: ")).map(|l| l.rsplit_once(".cpp:").unwrap().1).collect();
+    assert_eq!(failed, ["50: the ensures line may not hold on this return.", "61: the ensures line may not hold on this return."], "{text}");
+}
+
+/// A push of `std::move(o)` leaves `o` null, in a field, in a vector by reference and in a local vector, decision 0204.
+#[test]
+fn a_push_of_a_move_leaves_the_name_null() {
+    let Some(dafny) = dafny() else { return };
+    if !clang_tidy_available() {
+        return;
+    }
+    let o = prove("model-owned-push.cpp", &[], &dafny);
+    let text = stdout(&o);
+    assert_eq!(o.status.code(), Some(0), "stdout: {text} stderr: {}", stderr(&o));
+    assert_eq!(text.lines().last(), Some("ok: proved"), "{text}");
+    let o = prove("model-owned-push-wrong.cpp", &[], &dafny);
+    let text = stdout(&o);
+    assert_eq!(o.status.code(), Some(1), "stdout: {text} stderr: {}", stderr(&o));
+    let failed: Vec<&str> = text.lines().filter(|l| l.starts_with("Not proved: ") || l.starts_with("Not provable: ")).map(|l| l.rsplit_once(".cpp:").unwrap().1).collect();
+    let sentence = "the ensures line may not hold on this return.";
+    assert_eq!(failed, [format!("20: {sentence}"), format!("32: {sentence}"), format!("43: {sentence}")], "{text}");
+}

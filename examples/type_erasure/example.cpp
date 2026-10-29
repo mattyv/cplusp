@@ -64,7 +64,10 @@ struct Square {
 
   //@ requires valid()
   //@ ensures 0 <= result <= 1000000 && result == side * side
-  int32_t area() const { return side * side; }
+  int32_t area() const {
+    //@ apply MulBound(side, side, 1000, 1000)
+    return side * side;
+  }
 };
 
 struct Rect {
@@ -76,7 +79,10 @@ struct Rect {
 
   //@ requires valid()
   //@ ensures 0 <= result <= 1000000 && result == w * h
-  int32_t area() const { return w * h; }
+  int32_t area() const {
+    //@ apply MulBound(w, h, 1000, 1000)
+    return w * h;
+  }
 };
 
 //@ requires 0 <= side <= 1000 && 0 <= w <= 1000 && 0 <= h <= 1000

@@ -324,6 +324,96 @@ pub open spec fn spec_convert(da: DArgs, ps: Params) -> DArgs
     }
 }
 
+/// True when a Dafny expression calls the function of a pure member function, decision 0215.
+pub open spec fn spec_calls(d: DExpr) -> bool
+    decreases d,
+{
+    match d {
+        DExpr::Lit(_) => false,
+        DExpr::Bool(_) => false,
+        DExpr::Var(_) => false,
+        DExpr::Result => false,
+        DExpr::Bin(_, x1, x2) => spec_calls(*x1) || spec_calls(*x2),
+        DExpr::Not(x0) => spec_calls(*x0),
+        DExpr::Neg(x0) => spec_calls(*x0),
+        DExpr::AsInt(x0) => spec_calls(*x0),
+        DExpr::Conv(_, x1) => spec_calls(*x1),
+        DExpr::Len(x0) => spec_calls(*x0),
+        DExpr::Index(x0, x1) => spec_calls(*x0) || spec_calls(*x1),
+        DExpr::Forall(_, x1) => spec_calls(*x1),
+        DExpr::Exists(_, x1) => spec_calls(*x1),
+        DExpr::Bound(_) => false,
+        DExpr::Chain(_, _, x2, x3, x4) => spec_calls(*x2) || spec_calls(*x3) || spec_calls(*x4),
+        DExpr::Field(x0, _) => spec_calls(*x0),
+        DExpr::Ctor(_, x1) => spec_calls_any(*x1),
+        DExpr::IsSome(x0) => spec_calls(*x0),
+        DExpr::Get(x0) => spec_calls(*x0),
+        DExpr::Is(_, x1) => spec_calls(*x1),
+        DExpr::Alt(_, x1) => spec_calls(*x1),
+        DExpr::Nothing => false,
+        DExpr::Just(x0) => spec_calls(*x0),
+        DExpr::Drop(x0, x1) => spec_calls(*x0) || spec_calls(*x1),
+        DExpr::Apply(_, x1) => spec_calls_any(*x1),
+        DExpr::Take(x0, x1) => spec_calls(*x0) || spec_calls(*x1),
+        DExpr::Slice(x0, x1, x2) => spec_calls(*x0) || spec_calls(*x1) || spec_calls(*x2),
+        DExpr::TDiv(x0, x1) => spec_calls(*x0) || spec_calls(*x1),
+        DExpr::TRem(x0, x1) => spec_calls(*x0) || spec_calls(*x1),
+        DExpr::DivIn(x0, x1, _) => spec_calls(*x0) || spec_calls(*x1),
+        DExpr::RemIn(x0, x1, _) => spec_calls(*x0) || spec_calls(*x1),
+        DExpr::FCall(_, _) => true,
+        DExpr::After => false,
+        DExpr::Out(_) => false,
+        DExpr::Enumerator(_, _) => false,
+        DExpr::Ite(x0, x1, x2) => spec_calls(*x0) || spec_calls(*x1) || spec_calls(*x2),
+        DExpr::Temp(_) => false,
+        DExpr::ShrIn(x0, x1, _, _) => spec_calls(*x0) || spec_calls(*x1),
+        DExpr::SetAt(x0, x1, x2) => spec_calls(*x0) || spec_calls(*x1) || spec_calls(*x2),
+        DExpr::Append(x0, x1) => spec_calls(*x0) || spec_calls(*x1),
+        DExpr::CountIf(x0, _, _, x3) => spec_calls(*x0) || spec_calls(*x3),
+        DExpr::RealLit(_, _) => false,
+        DExpr::FOp(_, x1, x2) => spec_calls(*x1) || spec_calls(*x2),
+        DExpr::Abs(x0) => spec_calls(*x0),
+        DExpr::FromInt(x0) => spec_calls(*x0),
+        DExpr::Upcast(_, _, x2) => spec_calls(*x2),
+        DExpr::Lemma(_, x1, x2) => spec_calls(*x2) || spec_calls_any(*x1),
+        DExpr::Let(_, _, x2, x3) => spec_calls(*x2) || spec_calls(*x3),
+        DExpr::BitOp(_, x1, x2) => spec_calls(*x1) || spec_calls(*x2),
+        DExpr::SeqLit(x0) => spec_calls_any(*x0),
+        DExpr::EmptySeq => false,
+        DExpr::SeqFill(x0, x1) => spec_calls(*x0) || spec_calls(*x1),
+        DExpr::Back(x0) => spec_calls(*x0),
+        DExpr::PopBack(x0) => spec_calls(*x0),
+        DExpr::IntAbs(x0) => spec_calls(*x0),
+        DExpr::Eps => false,
+        DExpr::Eta => false,
+        DExpr::DblMax => false,
+    }
+}
+
+pub open spec fn spec_calls_any(a: DArgs) -> bool
+    decreases a,
+{
+    match a {
+        List::Nil => false,
+        List::Cons(d, rest) => spec_calls(d) || spec_calls_any(*rest),
+    }
+}
+
+/// The ensures lines that call no function of a pure member function. They go on the function of a pure body, decisions 0213
+/// and 0215. A line that calls one stays on the method, so two functions whose lines call each other make no cycle in Dafny.
+pub open spec fn spec_no_calls(cs: DConds) -> DConds
+    decreases cs,
+{
+    match cs {
+        List::Nil => List::Nil,
+        List::Cons((d, l), rest) => if spec_calls(d) {
+            spec_no_calls(*rest)
+        } else {
+            List::Cons((d, l), Box::new(spec_no_calls(*rest)))
+        },
+    }
+}
+
 /// The model of a function among the functions `all` of its file, decision 0058.
 pub open spec fn spec_function(f: Function, all: Fns, sd: Structs) -> Model {
     match spec_params(f.params, f.line, sd) {
@@ -346,6 +436,11 @@ pub open spec fn spec_function(f: Function, all: Fns, sd: Structs) -> Model {
                             decreases: dec,
                             body,
                             function: spec_member_fn(f, ens, body, all, sd),
+                            fensures: if spec_pure_body(f.params, body, all, sd, spec_static_key(sd, f.name)) is Some {
+                                spec_no_calls(ens)
+                            } else {
+                                List::Nil
+                            },
                             writes: spec_writes(f.params),
                             outs: spec_outs(f.params),
                             trusted: f.trusted,

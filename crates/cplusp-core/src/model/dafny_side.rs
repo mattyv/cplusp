@@ -184,7 +184,8 @@ pub enum DStmt {
 /// A place that a call writes back: a local by its name, the object of the member function that makes the call, or a reference
 /// parameter of that function, decision 0108. `Owned` is the value of a local unique_ptr, which a virtual function writes, decision
 /// 0169. `Down` is a local of a final class `D`, by its name and the keys of `D` and of its interface `B`, that a call writes through a
-/// reference to `B`. The local takes a value of `D` whose upcast is the value that the call gives back, decision 0208.
+/// reference to `B`. The local takes a value of `D` whose upcast is the value that the call gives back, decision 0208. `Field` is a
+/// vector field of the object of the member function, whose element a call writes, decision 0204.
 #[derive(Structural, PartialEq, Eq, Clone, Copy, Debug)]
 pub enum Obj {
     Local(u32),
@@ -192,6 +193,7 @@ pub enum Obj {
     Out(u32),
     Owned(u32),
     Down(u32, u32, u32),
+    Field(u32),
 }
 
 /// The places that a call writes back, in the order of the results of its method after `result`: the object, then each reference
@@ -212,7 +214,8 @@ pub type DConds = List<(DExpr, u32)>;
 /// A Dafny method. `function` is the body of the Dafny function of a pure member function, decision 0090. `writes` holds when the
 /// method takes its object in and gives it back as `this'`, decision 0096. `outs` are the reference parameters that it gives back,
 /// decision 0108. `trusted` holds for the method of a trusted function: it has
-/// no body, and Dafny takes its contract as given, decision 0102.
+/// no body, and Dafny takes its contract as given, decision 0102. `fensures` are the ensures lines of the function of a pure body
+/// that call no function, which Dafny proves on the function, decisions 0213 and 0215.
 #[derive(PartialEq, Eq, Debug)]
 pub struct Method {
     pub name: u32,
@@ -223,6 +226,7 @@ pub struct Method {
     pub decreases: DConds,
     pub body: DStmts,
     pub function: Option<DExpr>,
+    pub fensures: DConds,
     pub writes: bool,
     pub outs: DParams,
     pub trusted: bool,

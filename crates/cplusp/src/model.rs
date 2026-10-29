@@ -350,8 +350,9 @@ struct Names {
     /// The sentence of a body line that the core refuses as `Syntax`, by the place of the line.
     said: HashMap<u32, String>,
     /// The first call to an undeclared name in a contract line, by the place of the line.
-    /// With `true` when the name is a function of the file and of the companion file, decision 0176.
-    bad_calls: HashMap<u32, (String, bool)>,
+    /// With 0 when the name is no function of the companion file, 1 when it is a function of the file and of the companion file, decision 0176, and 2 when it is a
+    /// static member function that two functions share, decision 0215.
+    bad_calls: HashMap<u32, (String, u8)>,
     /// The lines of `bad_calls` whose name is a virtual function of the struct that shares its name with another, decision 0217.
     shared_calls: std::collections::HashSet<u32>,
     /// The plain names of the free functions that the table of structs lists under the file, decision 0176. A contract calls them.
@@ -696,17 +697,24 @@ fn lex(text: &str, line: u32, names: &mut Names) -> Vec<Tok> {
                     // the member, and the core decides, decision 0090. A member of two virtual functions of one name has the plain name before the `'`, decision 0217.
                     let listed = names.file_fns.iter().any(|d| d == word);
                     if call && !member && !static_call && !listed && !names.declared.iter().any(|d| d == word) && !names.this_members.iter().any(|d| d == word) && !names.functors.iter().any(|d| d == word) {
-                        names.bad_calls.entry(line).or_insert_with(|| (word.to_string(), false));
+                        names.bad_calls.entry(line).or_insert_with(|| (word.to_string(), 0));
                     }
                     // A name that two virtual functions of the struct share is no function of a contract. Its members are in the table by the name and the
                     // parameter types, so the sentence is the one of a function that is not pure, decision 0217.
                     if call && !member && !static_call && !names.this_members.iter().any(|d| d == word) && names.this_members.iter().any(|d| plain_member(d) == word) {
-                        names.bad_calls.entry(line).or_insert_with(|| (word.to_string(), false));
+                        names.bad_calls.entry(line).or_insert_with(|| (word.to_string(), 0));
                         names.shared_calls.insert(line);
                     }
                     // A name of the file and of the companion file is two functions in a contract, decision 0176.
                     if call && !member && listed && names.declared.iter().any(|d| d == word) {
-                        names.bad_calls.entry(line).or_insert_with(|| (word.to_string(), true));
+                        names.bad_calls.entry(line).or_insert_with(|| (word.to_string(), 1));
+                    }
+                    // A static member function that the table of members leaves out has a name that two functions share, so a contract cannot call it, decision 0215.
+                    if call && !member && static_call {
+                        let qualified = if chain == word { names.class.as_ref().map(|c| format!("{c}::{word}")).unwrap_or_default() } else { chain.clone() };
+                        if !names.members.values().any(|list| list.contains(&qualified)) {
+                            names.bad_calls.entry(line).or_insert_with(|| (qualified, 2));
+                        }
                     }
                     Tok::Ident(names.id(word))
                 }
@@ -1696,6 +1704,8 @@ impl Printer<'_> {
                 Obj::Local(n) => mangle(self.names.text(*n)),
                 Obj::Object => "v_this'".to_string(),
                 Obj::Out(x) => format!("{}'", mangle(self.names.text(*x))),
+                // The vector place of an `UpdateAt` only. It is never one of the places of the results.
+                Obj::Field(_) => "v_this'".to_string(),
                 Obj::Owned(v) => {
                     self.fresh += 1;
                     let temp = format!("v_'o{}", self.fresh);
@@ -1827,6 +1837,8 @@ impl Printer<'_> {
                     Obj::Object => (0, "v_this'".to_string()),
                     // The core never takes a class through its interface as the vector of an element write, decisions 0208 and 0217.
                     Obj::Down(..) => unreachable!("decision 0217: the core makes Down only for an argument"),
+                    // The element of a vector field of the new object, decision 0204. The field keeps the type of its elements in `owned`.
+                    Obj::Field(f) => (*f, format!("v_this'.f_{}", names.text(*f))),
                 };
                 let pointed = self.owned.get(&name).cloned().unwrap_or_default();
                 let mut gives = vec![temp.clone()];
@@ -1842,9 +1854,14 @@ impl Printer<'_> {
                         format!("var {r}: {}; ", dty(*t, names))
                     }
                 };
+                let element = format!("{written}[{} := Some({temp})]", dexpr(index, names));
+                let update = match vec {
+                    Obj::Field(f) => format!("v_this'.(f_{} := {element})", names.text(*f)),
+                    _ => element,
+                };
                 self.put(
                     depth,
-                    format!("{before}{result}var {temp}: {pointed}; {} := {call}; {written} := {written}[{} := Some({temp})];{after}", gives.join(", "), dexpr(index, names)),
+                    format!("{before}{result}var {temp}: {pointed}; {} := {call}; {} := {update};{after}", gives.join(", "), if matches!(vec, Obj::Field(_)) { "v_this'" } else { &written }),
                     place,
                 );
             }
@@ -2079,11 +2096,17 @@ impl Printer<'_> {
         self.out.push('\n');
         self.lines.push(None);
         let start = self.lines.len() + 1;
-        self.put(0, format!("function {}({}): {}", self.names.functions[&m.name], shown.join(", "), dty(m.ret, self.names)), place);
+        self.put(0, format!("function {}({}): (result: {})", self.names.functions[&m.name], shown.join(", "), dty(m.ret, self.names)), place);
         let mut cs = &m.requires;
         while let List::Cons((e, line), next) = cs {
             self.put(1, format!("requires {}", dexpr(e, self.names)), *line);
             self.scope.push(*line);
+            cs = next;
+        }
+        // The ensures lines of the member function, which Dafny proves on the body, decision 0213.
+        let mut cs = &m.fensures;
+        while let List::Cons((e, line), next) = cs {
+            self.put(1, format!("ensures {}", dexpr(e, self.names)), *line);
             cs = next;
         }
         self.put(0, "{".to_string(), place);
@@ -2361,7 +2384,10 @@ fn sentence(r: Refusal, names: &Names) -> (u32, String) {
         Refusal::Unbacked(line) => (line, "a class as a reference to its interface: the translator has no rule for it yet.".to_string()),
         Refusal::NotPure(n, line) => (line, format!("{} is no pure function. A contract calls a function with one return and no write.", names.text(n))),
         Refusal::Syntax(line) if names.shared_calls.contains(&line) => (line, format!("{} is no pure function. A contract calls a function with one return and no write.", names.bad_calls[&line].0)),
-        Refusal::Syntax(line) if names.bad_calls.get(&line).is_some_and(|c| c.1) => (line, format!("{} is a function of the file and of the companion file. Rename one.", names.bad_calls[&line].0)),
+        Refusal::Syntax(line) if names.bad_calls.get(&line).is_some_and(|c| c.1 == 2) => {
+            (line, format!("{} is no pure function. A contract calls a function with one return and no write.", names.bad_calls[&line].0))
+        }
+        Refusal::Syntax(line) if names.bad_calls.get(&line).is_some_and(|c| c.1 == 1) => (line, format!("{} is a function of the file and of the companion file. Rename one.", names.bad_calls[&line].0)),
         Refusal::Syntax(line) if names.bad_calls.contains_key(&line) => (line, format!("{} is no function of the companion file.", names.bad_calls[&line].0)),
         Refusal::Syntax(line) if names.said.contains_key(&line) => (line, names.said[&line].clone()),
         Refusal::Syntax(line) => (line, "the contract line has a form the translator cannot read.".to_string()),
@@ -2769,6 +2795,10 @@ pub fn translate(lines: &str, companion: Option<(&str, &str)>) -> Result<Transla
             Ok((key, mut fields)) => {
                 let mut shown = Vec::new();
                 while let List::Cons((n, t), next) = fields {
+                    // ponytail: the type of the elements is keyed by the field name. Two structs with one field name and two element types clash. Upgrade: key it by the struct.
+                    if matches!(t, DTy::Seq(Scalar::Own(_))) {
+                        p.note(n, t);
+                    }
                     shown.push(format!("f_{}: {}", names.text(n), dty(t, &names)));
                     fields = *next;
                 }
