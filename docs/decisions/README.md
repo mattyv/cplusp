@@ -207,3 +207,4 @@ Status is `decided`, `proposed` (the default until someone objects or the thin s
 | [0200](0200-a-member-function-named-size.md) | A member function named size | decided |
 | [0201](0201-a-base-class-with-data.md) | A base class with data | decided |
 | [0203](0203-a-field-of-the-base-and-a-call-of-the-base.md) | A field of the base and a call of the base | decided |
+| [0204](0204-a-list-of-owned-objects-as-a-field.md) | A list of owned objects as a field | decided |

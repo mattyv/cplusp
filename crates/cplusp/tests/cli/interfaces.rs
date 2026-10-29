@@ -778,3 +778,31 @@ fn a_call_of_the_base_keeps_its_contract() {
     let failed: Vec<&str> = text.lines().filter(|l| l.starts_with("Not proved: ") || l.starts_with("Not provable: ")).map(|l| l.rsplit_once(".cpp:").unwrap().1).collect();
     assert_eq!(failed, ["21: the ensures line may not hold on this return.", "27: a requires line of the callee may not hold."], "{text}");
 }
+
+/// A class can hold a vector of unique_ptr of an interface, add to it with push_back of a move, and call each element, decision
+/// 0204.
+#[test]
+fn a_list_of_owned_objects_as_a_field_proves() {
+    let Some(dafny) = dafny() else { return };
+    if !clang_tidy_available() {
+        return;
+    }
+    let o = prove("model-owned-list.cpp", &[], &dafny);
+    let text = stdout(&o);
+    assert_eq!(o.status.code(), Some(0), "stdout: {text} stderr: {}", stderr(&o));
+    assert_eq!(text.lines().last(), Some("ok: proved"), "{text}");
+}
+
+/// A false claim through a vector of unique_ptr of an interface in a field fails, decision 0204.
+#[test]
+fn a_list_of_owned_objects_as_a_field_keeps_its_contract() {
+    let Some(dafny) = dafny() else { return };
+    if !clang_tidy_available() {
+        return;
+    }
+    let o = prove("model-owned-list-wrong.cpp", &[], &dafny);
+    let text = stdout(&o);
+    assert_eq!(o.status.code(), Some(1), "stdout: {text} stderr: {}", stderr(&o));
+    let failed: Vec<&str> = text.lines().filter(|l| l.starts_with("Not proved: ") || l.starts_with("Not provable: ")).map(|l| l.rsplit_once(".cpp:").unwrap().1).collect();
+    assert_eq!(failed, ["50: the ensures line may not hold on this return.", "61: the ensures line may not hold on this return."], "{text}");
+}
