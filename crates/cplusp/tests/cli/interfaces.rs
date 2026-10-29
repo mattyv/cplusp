@@ -778,3 +778,80 @@ fn a_call_of_the_base_keeps_its_contract() {
     let failed: Vec<&str> = text.lines().filter(|l| l.starts_with("Not proved: ") || l.starts_with("Not provable: ")).map(|l| l.rsplit_once(".cpp:").unwrap().1).collect();
     assert_eq!(failed, ["21: the ensures line may not hold on this return.", "27: a requires line of the callee may not hold."], "{text}");
 }
+
+/// The failures of a fixture, each as `LINE: sentence`.
+fn failures(text: &str) -> Vec<&str> {
+    text.lines().filter(|l| l.starts_with("Not proved: ") || l.starts_with("Not provable: ")).map(|l| l.rsplit_once(".cpp:").unwrap().1).collect()
+}
+
+/// A local of a final class can be the argument for a reference to its interface, and the caller reads it after the call. `prove`
+/// names the assumption on an Axiom line, decision 0208.
+#[test]
+fn a_local_through_a_reference_to_its_interface_proves() {
+    let Some(dafny) = dafny() else { return };
+    if !clang_tidy_available() {
+        return;
+    }
+    let o = prove("model-iface-local.cpp", &[], &dafny);
+    let text = stdout(&o);
+    assert_eq!(o.status.code(), Some(0), "stdout: {text} stderr: {}", stderr(&o));
+    assert!(text.lines().any(|l| l == "Axiom: model: Total: a call through a reference to Sink leaves an object of Total, C++23 [class.virtual]."), "{text}");
+    assert_eq!(text.lines().last(), Some("ok: proved"), "{text}");
+    let o = prove("model-iface-local-wrong.cpp", &[], &dafny);
+    let text = stdout(&o);
+    assert_eq!(o.status.code(), Some(1), "stdout: {text} stderr: {}", stderr(&o));
+    assert_eq!(failures(&text), ["43: the ensures line may not hold on this return."], "{text}");
+}
+
+/// A field and a parameter of the class as the argument for a reference to the interface have no rule yet, decision 0208.
+#[test]
+fn a_field_through_a_reference_to_its_interface_is_refused() {
+    let Some(dafny) = dafny() else { return };
+    if !clang_tidy_available() {
+        return;
+    }
+    let o = prove("model-iface-local-refuse.cpp", &[], &dafny);
+    let text = stdout(&o);
+    assert_eq!(o.status.code(), Some(1), "stdout: {text} stderr: {}", stderr(&o));
+    let sentence = "a class as a reference to its interface: the translator has no rule for it yet.";
+    assert_eq!(failures(&text), [format!("43: {sentence}"), format!("50: {sentence}")], "{text}");
+}
+
+/// A const virtual function that gives no value writes its reference parameter, and its override is checked, decision 0209.
+#[test]
+fn a_const_virtual_function_that_writes_a_parameter_proves() {
+    let Some(dafny) = dafny() else { return };
+    if !clang_tidy_available() {
+        return;
+    }
+    let o = prove("model-const-void.cpp", &[], &dafny);
+    let text = stdout(&o);
+    assert_eq!(o.status.code(), Some(0), "stdout: {text} stderr: {}", stderr(&o));
+    assert_eq!(text.lines().last(), Some("ok: proved"), "{text}");
+    let o = prove("model-const-void-wrong.cpp", &[], &dafny);
+    let text = stdout(&o);
+    assert_eq!(o.status.code(), Some(1), "stdout: {text} stderr: {}", stderr(&o));
+    assert_eq!(failures(&text), ["29: the override may not keep the promise of Source::give."], "{text}");
+}
+
+/// Two virtual functions of one name each have their override, and each is checked, decision 0210. A contract cannot call one
+/// by its name yet.
+#[test]
+fn two_virtual_functions_of_one_name_prove() {
+    let Some(dafny) = dafny() else { return };
+    if !clang_tidy_available() {
+        return;
+    }
+    let o = prove("model-overload.cpp", &[], &dafny);
+    let text = stdout(&o);
+    assert_eq!(o.status.code(), Some(0), "stdout: {text} stderr: {}", stderr(&o));
+    assert_eq!(text.lines().last(), Some("ok: proved"), "{text}");
+    let o = prove("model-overload-wrong.cpp", &[], &dafny);
+    let text = stdout(&o);
+    assert_eq!(o.status.code(), Some(1), "stdout: {text} stderr: {}", stderr(&o));
+    assert_eq!(failures(&text), ["21: the override may not keep the promise of Look::see."], "{text}");
+    let o = prove("model-overload-refuse.cpp", &[], &dafny);
+    let text = stdout(&o);
+    assert_eq!(o.status.code(), Some(1), "stdout: {text} stderr: {}", stderr(&o));
+    assert_eq!(failures(&text), ["29: see is no pure function. A contract calls a function with one return and no write."], "{text}");
+}

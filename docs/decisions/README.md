@@ -211,3 +211,6 @@ Status is `decided`, `proposed` (the default until someone objects or the thin s
 | [0205](0205-a-function-from-its-ensures-line.md) | A function from its ensures line | decided |
 | [0206](0206-a-variant-that-can-lose-its-value.md) | A variant that can lose its value | decided |
 | [0207](0207-a-variant-whose-alternative-cannot-be-assigned.md) | A variant whose alternative cannot be assigned | decided |
+| [0208](0208-a-local-through-a-reference-to-its-interface.md) | A local through a reference to its interface | decided |
+| [0209](0209-a-const-virtual-function-that-writes-a-parameter.md) | A const virtual function that writes a parameter | decided |
+| [0210](0210-two-virtual-functions-of-one-name.md) | Two virtual functions of one name | decided |
