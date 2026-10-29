@@ -48,6 +48,8 @@ pub open spec fn unknown_expr(e: Expr) -> bool
         Expr::Bits(_, a, b, _) => unknown_expr(*a) || unknown_expr(*b),
         Expr::Fill(a, b) => unknown_expr(*a) || unknown_expr(*b),
         Expr::StaticCast(_, a) => unknown_expr(*a),
+        Expr::Holds(_, a) => unknown_expr(*a),
+        Expr::GetAlt(_, a) => unknown_expr(*a),
         Expr::List(args) => unknown_args(*args),
         Expr::Step(_, _, _, _) => false,
         Expr::Old(a) => unknown_expr(*a),
@@ -1186,6 +1188,18 @@ pub proof fn lemma_unknown_lift_is_refused(e: Expr, all: Fns, line: u32, sd: Str
         Expr::Copy(a, _, _) => lemma_unknown_lift_is_refused(*a, all, line, sd, n, open),
         Expr::Field(a, _) => lemma_unknown_lift_is_refused(*a, all, line, sd, n, open),
         Expr::HasValue(a) => lemma_unknown_lift_is_refused(*a, all, line, sd, n, open),
+        Expr::Holds(t, o) => {
+            assert(!(*o is Var)) by {
+                reveal_with_fuel(unknown_expr, 2);
+            }
+            assert(spec_code_alt(false, t, *o, line).is_err());
+        },
+        Expr::GetAlt(t, o) => {
+            assert(!(*o is Var)) by {
+                reveal_with_fuel(unknown_expr, 2);
+            }
+            assert(spec_code_alt(true, t, *o, line).is_err());
+        },
         Expr::Value(a) => lemma_unknown_lift_is_refused(*a, all, line, sd, n, open),
         Expr::Wrap(a) => lemma_unknown_lift_is_refused(*a, all, line, sd, n, open),
         Expr::Empty(a) => lemma_unknown_lift_is_refused(*a, all, line, sd, n, open),

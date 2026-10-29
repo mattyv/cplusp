@@ -66,6 +66,9 @@ pub fn translate_ty(t: Ty, line: u32) -> (r: Result<DTy, Refusal>)
         Ty::Vec(Scalar::Bool) => Err(Refusal::Element(line)),
         Ty::Vec(s) => Ok(DTy::Seq(s)),
         Ty::Enum(k) => Ok(DTy::Enum(k)),
+        Ty::Variant(Scalar::Own(_), _) => Err(Refusal::Element(line)),
+        Ty::Variant(_, Scalar::Own(_)) => Err(Refusal::Element(line)),
+        Ty::Variant(a, b) => if a != b { Ok(DTy::Variant(a, b)) } else { Err(Refusal::Element(line)) },
         // An interface is a type with no value that the model can see, decision 0165.
         Ty::Iface(k) => Ok(DTy::Iface(k)),
         Ty::IfaceRef(k) => Ok(DTy::Iface(k)),
@@ -495,6 +498,14 @@ pub fn lift(e: &Expr, all: &Fns, line: u32, sd: &Structs, n: u32, open: bool) ->
             Err(r) => Err(r),
             Ok((c, d, n1)) => Ok((c, DExpr::IsSome(Box::new(d)), n1)),
         },
+        Expr::Holds(t, o) => match code_alt(false, *t, o, line) {
+            Ok(d) => Ok((List::Nil, d, n)),
+            Err(r) => Err(r),
+        },
+        Expr::GetAlt(t, o) => match code_alt(true, *t, o, line) {
+            Ok(d) => Ok((List::Nil, d, n)),
+            Err(r) => Err(r),
+        },
         Expr::Value(o) => match lift(o, all, line, sd, n, open) {
             Err(r) => Err(r),
             Ok((c, d, n1)) => Ok((c, DExpr::Get(Box::new(d)), n1)),
@@ -729,6 +740,36 @@ pub fn translate_leaf(d: DExpr, t: Ty, line: u32) -> (r: Result<DExpr, Refusal>)
     }
 }
 
+pub fn alt_index(t: Ty, a: Scalar, b: Scalar) -> (r: Option<bool>)
+    ensures
+        r == spec_alt_index(t, a, b),
+{
+    if elem(a) == t {
+        Some(false)
+    } else if elem(b) == t {
+        Some(true)
+    } else {
+        None
+    }
+}
+
+pub fn code_alt(get: bool, t: Ty, o: &Expr, line: u32) -> (r: Result<DExpr, Refusal>)
+    ensures
+        r == spec_code_alt(get, t, *o, line),
+{
+    match o {
+        Expr::Var(v, Ty::Variant(a, b)) => match alt_index(t, *a, *b) {
+            Some(i) => Ok(if get {
+                DExpr::Alt(i, Box::new(code_var(*v, Ty::Variant(*a, *b))))
+            } else {
+                DExpr::Is(i, Box::new(code_var(*v, Ty::Variant(*a, *b))))
+            }),
+            None => Err(Refusal::Syntax(line)),
+        },
+        _ => Err(Refusal::Syntax(line)),
+    }
+}
+
 pub fn member_of(t: Ty, f: u32, line: u32, sd: &Structs) -> (r: Result<(u32, Ty, Params), Refusal>)
     ensures
         r == spec_member_of(t, f, line, *sd),
@@ -910,7 +951,15 @@ pub fn translate_contract(e: &Expr, decl: &Names, ps: &Params, ret: Option<Ty>, 
         },
         // `o.size()`, `o.empty()` and `o.back()` read a sequence, and call the member of that name of any other type, decision 0200.
         Expr::Either(s, id) => translate_either(s, *id, decl, ps, ret, bound, line, sd),
-        Expr::Index(_, _) | Expr::Back(_) | Expr::Suffix(_, _) | Expr::Prefix(_, _) | Expr::Slice(_, _, _) => match path(e, decl, ps, ret, bound, line, sd) {
+        Expr::Holds(t, o) => match path(o, decl, ps, ret, bound, line, sd) {
+            Ok((d, Ty::Variant(a, b))) => match alt_index(*t, a, b) {
+                Some(i) => Ok(DExpr::Is(i, Box::new(d))),
+                None => Err(Refusal::Syntax(line)),
+            },
+            Ok(_) => Err(Refusal::Syntax(line)),
+            Err(r) => Err(r),
+        },
+        Expr::Index(_, _) | Expr::Back(_) | Expr::Suffix(_, _) | Expr::Prefix(_, _) | Expr::Slice(_, _, _) | Expr::GetAlt(_, _) => match path(e, decl, ps, ret, bound, line, sd) {
             Ok((d, t)) => translate_leaf(d, t, line),
             Err(r) => Err(r),
         },
@@ -1097,6 +1146,7 @@ pub fn enum_operand(e: &Expr, decl: &Names, ps: &Params, ret: Option<Ty>, bound:
         },
         _ => match path(e, decl, ps, ret, bound, line, sd) {
             Ok((_, Ty::Enum(_))) => true,
+            Ok((_, Ty::Variant(_, _))) => true,
             _ => false,
         },
     }
@@ -1216,6 +1266,14 @@ pub fn path(e: &Expr, decl: &Names, ps: &Params, ret: Option<Ty>, bound: &Names,
                 Err(r) => Err(r),
             },
             _ => Err(Refusal::Syntax(line)),
+        },
+        Expr::GetAlt(t, o) => match path(o, decl, ps, ret, bound, line, sd) {
+            Ok((d, Ty::Variant(a, b))) => match alt_index(*t, a, b) {
+                Some(i) => Ok((DExpr::Alt(i, Box::new(d)), *t)),
+                None => Err(Refusal::Syntax(line)),
+            },
+            Ok(_) => Err(Refusal::Syntax(line)),
+            Err(r) => Err(r),
         },
         Expr::Back(o) => match path(o, decl, ps, ret, bound, line, sd) {
             Ok((d, Ty::Seq(s, _))) => Ok((DExpr::Back(Box::new(d)), elem(s))),
@@ -3118,6 +3176,8 @@ pub fn copy_dexpr(d: &DExpr) -> (r: DExpr)
         DExpr::Ctor(x0, x1) => DExpr::Ctor(*x0, Box::new(copy_dargs(x1))),
         DExpr::IsSome(x0) => DExpr::IsSome(Box::new(copy_dexpr(x0))),
         DExpr::Get(x0) => DExpr::Get(Box::new(copy_dexpr(x0))),
+        DExpr::Is(x0, x1) => DExpr::Is(*x0, Box::new(copy_dexpr(x1))),
+        DExpr::Alt(x0, x1) => DExpr::Alt(*x0, Box::new(copy_dexpr(x1))),
         DExpr::Nothing => DExpr::Nothing,
         DExpr::Just(x0) => DExpr::Just(Box::new(copy_dexpr(x0))),
         DExpr::Drop(x0, x1) => DExpr::Drop(Box::new(copy_dexpr(x0)), Box::new(copy_dexpr(x1))),

@@ -565,6 +565,53 @@ private:
     return scalar(Elem) || (!Elem.getCanonicalType().hasQualifiers() && plainStruct(Elem)) ? Elem : QualType();
   }
 
+  // Whether a type can be move-constructed and move-assigned, decision 0207. A type that is no record can. A record can when the function that overload
+  // resolution picks for an rvalue is public and not deleted: the move function when the record declares one, else the copy function. A function that the
+  // compiler has not declared is the implicit one, which a plain struct that is trivially copyable has and which works.
+  static bool movable(QualType T) {
+    const CXXRecordDecl *RD = T->getAsCXXRecordDecl();
+    if (!RD)
+      return true;
+    const CXXMethodDecl *MoveAssign = nullptr, *CopyAssign = nullptr;
+    const CXXConstructorDecl *MoveConstruct = nullptr, *CopyConstruct = nullptr;
+    for (const CXXMethodDecl *M : RD->methods()) {
+      if (M->isMoveAssignmentOperator())
+        MoveAssign = M;
+      else if (M->isCopyAssignmentOperator())
+        CopyAssign = M;
+      else if (const auto *C = dyn_cast<CXXConstructorDecl>(M); C && C->isMoveConstructor())
+        MoveConstruct = C;
+      else if (const auto *C = dyn_cast<CXXConstructorDecl>(M); C && C->isCopyConstructor())
+        CopyConstruct = C;
+    }
+    const auto Usable = [](const CXXMethodDecl *M) { return !M || (!M->isDeleted() && M->getAccess() != AS_private && M->getAccess() != AS_protected); };
+    return Usable(MoveAssign ? MoveAssign : CopyAssign) && Usable(MoveConstruct ? MoveConstruct : CopyConstruct);
+  }
+
+  // The two alternatives of a `std::variant<A, B>`, decision 0202, or two nulls: by value, or by const lvalue reference. A and B are element types
+  // of an optional (scalar or plain struct, no qualifier). Three alternatives and a volatile variant are none. Two equal alternatives pass here, and the core refuses them.
+  std::pair<QualType, QualType> variantAlts(QualType T) const {
+    if (T->isReferenceType()) {
+      if (!T->isLValueReferenceType() || !T->getPointeeType().isConstQualified())
+        return {};
+      T = T->getPointeeType();
+    }
+    const auto *Spec = dyn_cast_or_null<ClassTemplateSpecializationDecl>(T->getAsCXXRecordDecl());
+    if (T.isVolatileQualified() || !Spec || !Spec->isInStdNamespace() || Spec->getName() != "variant" || Spec->getTemplateArgs().size() != 1 ||
+        Spec->getTemplateArgs()[0].getKind() != TemplateArgument::Pack || Spec->getTemplateArgs()[0].pack_size() != 2)
+      return {};
+    const auto Args = Spec->getTemplateArgs()[0].pack_elements();
+    if (Args[0].getKind() != TemplateArgument::Type || Args[1].getKind() != TemplateArgument::Type)
+      return {};
+    const QualType A = Args[0].getAsType(), B = Args[1].getAsType();
+    // ponytail: libstdc++ never leaves a variant without a value when each alternative is trivially copyable, at most 256 bytes (decision 0206), move-constructible
+    // and move-assignable (decision 0207). Ceiling: libstdc++. Upgrade: a third constructor of the datatype for the state with no value.
+    for (const QualType Elem : {A, B})
+      if (!(scalar(Elem) || (!Elem.getCanonicalType().hasQualifiers() && plainStruct(Elem))) || !Elem.isTriviallyCopyableType(Context) || Context.getTypeSize(Elem) > 256 * 8 || !movable(Elem))
+        return {};
+    return {A, B};
+  }
+
   // The scalar of an optional of a scalar, or null. A field of a struct may hold such an optional, and no other.
   const char *optElement(QualType T) const {
     const QualType Elem = optType(T);
@@ -1467,6 +1514,9 @@ private:
       if (scalar(Pointee) || smallScalar(Pointee))
         return type(Pointee);
     }
+    // A variant of two types, decision 0202. A local, a result and a field of one stay `Other`.
+    if (const auto [A, B] = variantAlts(T); !A.isNull())
+      return tag("Variant", llvm::json::Array{type(A), type(B)});
     return type(T);
   }
   // The type of a result. A `std::vector<T>` by value with no qualifier is a `Vec`, decision 0163: the function gives a copy. A span stays `Other`.
@@ -2916,6 +2966,11 @@ private:
     if (const auto *Construct = dyn_cast<CXXConstructExpr>(E); Construct && Construct->getNumArgs() == 1 && plainStruct(Construct->getType()) &&
                                                                Construct->getConstructor()->isCopyOrMoveConstructor() && Construct->getConstructor()->isUserProvided())
       return unknown(E, "a copy or a move by a constructor that the model cannot call", Near);
+    // A variant parameter as the argument for a variant by value is a copy of its value, decision 0206.
+    if (const auto *Construct = dyn_cast<CXXConstructExpr>(E); Construct && Construct->getNumArgs() == 1 && Construct->getConstructor()->isCopyOrMoveConstructor() &&
+                                                               !variantAlts(Construct->getType()).first.isNull())
+      if (const auto *Ref = dyn_cast<DeclRefExpr>(Construct->getArg(0)->IgnoreParenImpCasts()); Ref && isa<ParmVarDecl>(Ref->getDecl()) && !variantAlts(Ref->getDecl()->getType()).first.isNull())
+        return expr(Ref, Near);
     // A sequence made from one sequence, decision 0070, or a struct made from one struct, decision 0073. The core judges the two types.
     if (const auto *Construct = dyn_cast<CXXConstructExpr>(E);
         Construct && Construct->getNumArgs() == 1 &&
@@ -2960,6 +3015,15 @@ private:
         if (Method == "value")
           return tag("Value", expr(optObject(Object), Near));
       }
+    // `std::holds_alternative<T>(v)` and `std::get<T>(v)` of a variant parameter, decision 0202. `std::get<I>`, `get_if` and `visit` stay unknown.
+    if (const auto *Call = dyn_cast<CallExpr>(E); Call && Call->getNumArgs() == 1 && Call->getDirectCallee() && Call->getDirectCallee()->isInStdNamespace() &&
+                                                  Call->getDirectCallee()->getDeclName().isIdentifier())
+      if (const StringRef Name = Call->getDirectCallee()->getName(); Name == "holds_alternative" || Name == "get")
+        if (const auto *Args = Call->getDirectCallee()->getTemplateSpecializationArgs(); Args && Args->size() > 0 && Args->get(0).getKind() == TemplateArgument::Type)
+          if (const auto *Ref = dyn_cast<DeclRefExpr>(Call->getArg(0)->IgnoreParenImpCasts());
+              Ref && isa<ParmVarDecl>(Ref->getDecl()) && !variantAlts(Ref->getDecl()->getType()).first.isNull()) {
+            return tag(Name == "get" ? "GetAlt" : "Holds", llvm::json::Array{type(Args->get(0).getAsType()), expr(Ref, Near)});
+          }
     // `*o`, and `*p` of a `unique_ptr`, decision 0142.
     if (const auto *Operator = dyn_cast<CXXOperatorCallExpr>(E); Operator && Operator->getOperator() == OO_Star && Operator->getNumArgs() == 1 &&
                                                                   (isOpt(Operator->getArg(0)->getType()) || isOwn(Operator->getArg(0)->getType())))
@@ -3049,6 +3113,13 @@ private:
         return tag("Call", llvm::json::Array{key(Call->getDirectCallee()), name(Call->getDirectCallee()), std::move(Args), number(line(E->getBeginLoc()))});
       }
     }
+    // `v.index()` and any other member of a variant parameter is a call with no model, so the core names it, decision 0202.
+    if (const auto *Call = dyn_cast<CXXMemberCallExpr>(E); Call && Call->getNumArgs() == 0 && Call->getDirectCallee())
+      if (const auto *Ref = dyn_cast<DeclRefExpr>(Call->getImplicitObjectArgument()->IgnoreParenImpCasts()); Ref && isa<ParmVarDecl>(Ref->getDecl()) && !variantAlts(Ref->getDecl()->getType()).first.isNull())
+        // The name keeps the spelling of the type in the source, as the sentence of a type does.
+        return tag("Call", llvm::json::Array{key(Call->getDirectCallee()),
+                                             Ref->getDecl()->getType().getNonReferenceType().getUnqualifiedType().getAsString(Context.getPrintingPolicy()) + "::" + Call->getDirectCallee()->getNameAsString(),
+                                             llvm::json::Array{expr(Ref, Near)}, number(line(E->getBeginLoc()))});
     // A call of an object, `c(x)`, is a call of its `operator()` with the object first, decision 0098.
     if (const auto *Call = dyn_cast<CXXOperatorCallExpr>(E); Call && Call->getOperator() == OO_Call && Call->getNumArgs() >= 1 && Call->getDirectCallee() &&
                                                              member(Call->getDirectCallee())) {

@@ -260,6 +260,8 @@ pub open spec fn spec_gexpr(e: Expr, gs: Params, gps: Params, hide: Names, fs: F
         Expr::Shr(f0, f1, f2) => Expr::Shr(Box::new(spec_gexpr(*f0, gs, gps, hide, fs)), Box::new(spec_gexpr(*f1, gs, gps, hide, fs)), f2),
         Expr::Bits(f0, f1, f2, f3) => Expr::Bits(f0, Box::new(spec_gexpr(*f1, gs, gps, hide, fs)), Box::new(spec_gexpr(*f2, gs, gps, hide, fs)), f3),
         Expr::StaticCast(f0, f1) => Expr::StaticCast(f0, Box::new(spec_gexpr(*f1, gs, gps, hide, fs))),
+        Expr::Holds(f0, f1) => Expr::Holds(f0, Box::new(spec_gexpr(*f1, gs, gps, hide, fs))),
+        Expr::GetAlt(f0, f1) => Expr::GetAlt(f0, Box::new(spec_gexpr(*f1, gs, gps, hide, fs))),
         Expr::List(f0) => Expr::List(Box::new(spec_gargs(*f0, gs, gps, hide, fs))),
         // A write of a global writes the parameter that it becomes, decision 0177.
         Expr::Step(f0, f1, f2, f3) => match spec_gvar(f0, f1, gs, gps, hide) {
@@ -338,6 +340,8 @@ pub fn gexpr(e: &Expr, gs: &Params, gps: &Params, hide: &Names, fs: &Fns) -> (r:
         Expr::Shr(f0, f1, f2) => Expr::Shr(Box::new(gexpr(f0, gs, gps, hide, fs)), Box::new(gexpr(f1, gs, gps, hide, fs)), *f2),
         Expr::Bits(f0, f1, f2, f3) => Expr::Bits(*f0, Box::new(gexpr(f1, gs, gps, hide, fs)), Box::new(gexpr(f2, gs, gps, hide, fs)), *f3),
         Expr::StaticCast(f0, f1) => Expr::StaticCast(*f0, Box::new(gexpr(f1, gs, gps, hide, fs))),
+        Expr::Holds(f0, f1) => Expr::Holds(*f0, Box::new(gexpr(f1, gs, gps, hide, fs))),
+        Expr::GetAlt(f0, f1) => Expr::GetAlt(*f0, Box::new(gexpr(f1, gs, gps, hide, fs))),
         Expr::List(f0) => Expr::List(Box::new(gargs(f0, gs, gps, hide, fs))),
         Expr::Step(f0, f1, f2, f3) => match gvar(*f0, *f1, gs, gps, hide) {
             Expr::Var(v, t) => Expr::Step(v, t, *f2, *f3),
@@ -415,6 +419,8 @@ pub open spec fn spec_gcalls(e: Expr) -> List<(u32, u32, u32)>
         Expr::Shr(f0, f1, _) => spec_append(spec_gcalls(*f0), spec_gcalls(*f1)),
         Expr::Bits(_, f1, f2, _) => spec_append(spec_gcalls(*f1), spec_gcalls(*f2)),
         Expr::StaticCast(_, f1) => spec_gcalls(*f1),
+        Expr::Holds(_, f1) => spec_gcalls(*f1),
+        Expr::GetAlt(_, f1) => spec_gcalls(*f1),
         Expr::List(f0) => spec_gcalls_args(*f0),
         Expr::Step(_, _, _, _) => List::Nil,
         Expr::Enumerator(_, _) => List::Nil,
@@ -488,6 +494,8 @@ pub fn gcalls(e: &Expr) -> (r: List<(u32, u32, u32)>)
         Expr::Shr(f0, f1, _) => append(gcalls(f0), gcalls(f1)),
         Expr::Bits(_, f1, f2, _) => append(gcalls(f1), gcalls(f2)),
         Expr::StaticCast(_, f1) => gcalls(f1),
+        Expr::Holds(_, f1) => gcalls(f1),
+        Expr::GetAlt(_, f1) => gcalls(f1),
         Expr::List(f0) => gcalls_args(f0),
         Expr::Step(_, _, _, _) => List::Nil,
         Expr::Enumerator(_, _) => List::Nil,

@@ -288,26 +288,77 @@ pub open spec fn spec_op(t: Seq<u8>, i: int) -> Option<(int, BinOp)> {
     }
 }
 
+/// A type name of 0064 at `i`, by its length and its type. `static_cast`, `std::get` and `std::holds_alternative` read it alike,
+/// decision 0206.
+pub open spec fn spec_type_name(t: Seq<u8>, i: int) -> Option<(int, Ty)> {
+    if at(t, i, b"int8_t"@) {
+        Some((6, Ty::I8))
+    } else if at(t, i, b"int16_t"@) {
+        Some((7, Ty::I16))
+    } else if at(t, i, b"int32_t"@) {
+        Some((7, Ty::I32))
+    } else if at(t, i, b"int64_t"@) {
+        Some((7, Ty::I64))
+    } else if at(t, i, b"uint8_t"@) {
+        Some((7, Ty::U8))
+    } else if at(t, i, b"uint16_t"@) {
+        Some((8, Ty::U16))
+    } else if at(t, i, b"uint32_t"@) {
+        Some((8, Ty::U32))
+    } else if at(t, i, b"uint64_t"@) {
+        Some((8, Ty::U64))
+    } else if at(t, i, b"size_t"@) {
+        Some((6, Ty::U64))
+    } else {
+        None
+    }
+}
+
+/// A type name of 0064 or `bool` at `i`, as an alternative of a variant names it.
+pub open spec fn spec_alt_type(t: Seq<u8>, i: int) -> Option<(int, Ty)> {
+    if at(t, i, b"bool"@) {
+        Some((4, Ty::Bool))
+    } else {
+        spec_type_name(t, i)
+    }
+}
+
 /// `static_cast<T>` of an integer type `T` of the subset, and its length, decision 0175. Any other type is no cast token.
 pub open spec fn spec_cast(t: Seq<u8>, i: int) -> Option<(int, Ty)> {
-    if at(t, i, b"static_cast<int8_t>"@) {
-        Some((19, Ty::I8))
-    } else if at(t, i, b"static_cast<int16_t>"@) {
-        Some((20, Ty::I16))
-    } else if at(t, i, b"static_cast<int32_t>"@) {
-        Some((20, Ty::I32))
-    } else if at(t, i, b"static_cast<int64_t>"@) {
-        Some((20, Ty::I64))
-    } else if at(t, i, b"static_cast<uint8_t>"@) {
-        Some((20, Ty::U8))
-    } else if at(t, i, b"static_cast<uint16_t>"@) {
-        Some((21, Ty::U16))
-    } else if at(t, i, b"static_cast<uint32_t>"@) {
-        Some((21, Ty::U32))
-    } else if at(t, i, b"static_cast<uint64_t>"@) {
-        Some((21, Ty::U64))
-    } else if at(t, i, b"static_cast<size_t>"@) {
-        Some((19, Ty::U64))
+    if at(t, i, b"static_cast<"@) {
+        match spec_type_name(t, i + 12) {
+            Some((n, ty)) => if at(t, i + 12 + n, b">"@) {
+                Some((13 + n, ty))
+            } else {
+                None
+            },
+            None => None,
+        }
+    } else {
+        None
+    }
+}
+
+/// `std::holds_alternative<T>` or `std::get<T>` with a type name of 0064, by its length and its token, decision 0202.
+pub open spec fn spec_alt(t: Seq<u8>, i: int) -> Option<(int, Tok)> {
+    if at(t, i, b"std::holds_alternative<"@) {
+        match spec_alt_type(t, i + 23) {
+            Some((n, ty)) => if at(t, i + 23 + n, b">"@) {
+                Some((24 + n, Tok::Holds(ty)))
+            } else {
+                None
+            },
+            None => None,
+        }
+    } else if at(t, i, b"std::get<"@) {
+        match spec_alt_type(t, i + 9) {
+            Some((n, ty)) => if at(t, i + 9 + n, b">"@) {
+                Some((10 + n, Tok::Alt(ty)))
+            } else {
+                None
+            },
+            None => None,
+        }
     } else {
         None
     }
@@ -375,6 +426,8 @@ pub open spec fn spec_token(t: Seq<u8>, i: int) -> (int, LexKind) {
         (i + 13, LexKind::Fixed(Tok::IsFinite))
     } else if let Some((n, ty)) = spec_cast(t, i) {
         (i + n, LexKind::Fixed(Tok::Cast(ty)))
+    } else if let Some((n, tok)) = spec_alt(t, i) {
+        (i + n, LexKind::Fixed(tok))
     } else if name_start(c) {
         let e = name_end(t, i + 1);
         (e, spec_word(t, i, e))
@@ -432,6 +485,9 @@ proof fn lemma_token(t: Seq<u8>, i: int)
     if let Some((n, ty)) = spec_cast(t, i) {
         assert(18 <= n <= 21 && i + n <= t.len());
     }
+    if let Some((n, tok)) = spec_alt(t, i) {
+        assert(14 <= n <= 33 && i + n <= t.len());
+    }
 }
 
 // ------------------------------------------------------------------ the line
@@ -476,7 +532,7 @@ pub open spec fn covers(t: Seq<u8>, toks: Seq<Lexeme>, from: int) -> bool
     }
 }
 
-#[verifier::rlimit(20)]
+#[verifier::rlimit(40)]
 proof fn lemma_covers(t: Seq<u8>, i: int)
     requires
         0 <= i <= t.len(),
@@ -991,6 +1047,89 @@ fn op_exec(t: &Vec<u8>, i: usize) -> (r: Option<(usize, BinOp)>)
     }
 }
 
+fn type_name_exec(t: &Vec<u8>, i: usize) -> (r: Option<(usize, Ty)>)
+    requires
+        i <= t.len(),
+    ensures
+        match (r, spec_type_name(t@, i as int)) {
+            (Some((n, a)), Some((m, b))) => n == m && a == b,
+            (None, None) => true,
+            _ => false,
+        },
+{
+    if at_exec(t, i, b"int8_t") {
+        Some((6, Ty::I8))
+    } else if at_exec(t, i, b"int16_t") {
+        Some((7, Ty::I16))
+    } else if at_exec(t, i, b"int32_t") {
+        Some((7, Ty::I32))
+    } else if at_exec(t, i, b"int64_t") {
+        Some((7, Ty::I64))
+    } else if at_exec(t, i, b"uint8_t") {
+        Some((7, Ty::U8))
+    } else if at_exec(t, i, b"uint16_t") {
+        Some((8, Ty::U16))
+    } else if at_exec(t, i, b"uint32_t") {
+        Some((8, Ty::U32))
+    } else if at_exec(t, i, b"uint64_t") {
+        Some((8, Ty::U64))
+    } else if at_exec(t, i, b"size_t") {
+        Some((6, Ty::U64))
+    } else {
+        None
+    }
+}
+
+fn alt_type_exec(t: &Vec<u8>, i: usize) -> (r: Option<(usize, Ty)>)
+    requires
+        i <= t.len(),
+    ensures
+        match (r, spec_alt_type(t@, i as int)) {
+            (Some((n, a)), Some((m, b))) => n == m && a == b,
+            (None, None) => true,
+            _ => false,
+        },
+{
+    if at_exec(t, i, b"bool") {
+        Some((4, Ty::Bool))
+    } else {
+        type_name_exec(t, i)
+    }
+}
+
+fn alt_exec(t: &Vec<u8>, i: usize) -> (r: Option<(usize, Tok)>)
+    requires
+        i <= t.len(),
+    ensures
+        match (r, spec_alt(t@, i as int)) {
+            (Some((n, a)), Some((m, b))) => n == m && a == b,
+            (None, None) => true,
+            _ => false,
+        },
+{
+    if at_exec(t, i, b"std::holds_alternative<") {
+        match alt_type_exec(t, i + 23) {
+            Some((n, ty)) => if at_exec(t, i + 23 + n, b">") {
+                Some((24 + n, Tok::Holds(ty)))
+            } else {
+                None
+            },
+            None => None,
+        }
+    } else if at_exec(t, i, b"std::get<") {
+        match alt_type_exec(t, i + 9) {
+            Some((n, ty)) => if at_exec(t, i + 9 + n, b">") {
+                Some((10 + n, Tok::Alt(ty)))
+            } else {
+                None
+            },
+            None => None,
+        }
+    } else {
+        None
+    }
+}
+
 fn cast_exec(t: &Vec<u8>, i: usize) -> (r: Option<(usize, Ty)>)
     requires
         i <= t.len(),
@@ -1001,24 +1140,15 @@ fn cast_exec(t: &Vec<u8>, i: usize) -> (r: Option<(usize, Ty)>)
             _ => false,
         },
 {
-    if at_exec(t, i, b"static_cast<int8_t>") {
-        Some((19, Ty::I8))
-    } else if at_exec(t, i, b"static_cast<int16_t>") {
-        Some((20, Ty::I16))
-    } else if at_exec(t, i, b"static_cast<int32_t>") {
-        Some((20, Ty::I32))
-    } else if at_exec(t, i, b"static_cast<int64_t>") {
-        Some((20, Ty::I64))
-    } else if at_exec(t, i, b"static_cast<uint8_t>") {
-        Some((20, Ty::U8))
-    } else if at_exec(t, i, b"static_cast<uint16_t>") {
-        Some((21, Ty::U16))
-    } else if at_exec(t, i, b"static_cast<uint32_t>") {
-        Some((21, Ty::U32))
-    } else if at_exec(t, i, b"static_cast<uint64_t>") {
-        Some((21, Ty::U64))
-    } else if at_exec(t, i, b"static_cast<size_t>") {
-        Some((19, Ty::U64))
+    if at_exec(t, i, b"static_cast<") {
+        match type_name_exec(t, i + 12) {
+            Some((n, ty)) => if at_exec(t, i + 12 + n, b">") {
+                Some((13 + n, ty))
+            } else {
+                None
+            },
+            None => None,
+        }
     } else {
         None
     }
@@ -1102,6 +1232,8 @@ fn token(t: &Vec<u8>, i: usize) -> (r: (usize, LexKind))
         (i + 13, LexKind::Fixed(Tok::IsFinite))
     } else if let Some((n, ty)) = cast_exec(t, i) {
         (i + n, LexKind::Fixed(Tok::Cast(ty)))
+    } else if let Some((n, tok)) = alt_exec(t, i) {
+        (i + n, LexKind::Fixed(tok))
     } else if (0x41 <= c && c <= 0x5a) || (0x61 <= c && c <= 0x7a) || c == 0x5f {
         let e = name_end_exec(t, i + 1);
         (e, word_exec(t, i, e))

@@ -58,6 +58,8 @@ enum JTy {
     /// An enum class of the file by its key, decision 0109.
     Enum(String),
     Opt(JScalar),
+    /// A `std::variant` of two different element types, decision 0202.
+    Variant(JScalar, JScalar),
     /// A pointer to const that is a parameter, decision 0141.
     Ptr(JScalar),
     /// A unique_ptr that the code only reads, decision 0142.
@@ -134,6 +136,9 @@ enum JExpr {
     Field(Box<JExpr>, String),
     HasValue(Box<JExpr>),
     Value(Box<JExpr>),
+    /// `std::holds_alternative<T>(v)` and `std::get<T>(v)`, by the type `T`, decision 0202.
+    Holds(JTy, Box<JExpr>),
+    GetAlt(JTy, Box<JExpr>),
     Nullopt,
     Wrap(Box<JExpr>),
     Construct(String, Vec<JExpr>),
@@ -435,6 +440,7 @@ fn ty(t: JTy, names: &mut Names) -> Ty {
         JTy::Bool => Ty::Bool,
         JTy::Seq(s, extent) => Ty::Seq(scalar(s, names), extent.map_or(Extent::Dynamic, Extent::Fixed)),
         JTy::Opt(s) => Ty::Opt(scalar(s, names)),
+        JTy::Variant(a, b) => Ty::Variant(scalar(a, names), scalar(b, names)),
         JTy::Ptr(s) => Ty::Ptr(scalar(s, names)),
         JTy::Own(s) => Ty::Own(scalar(s, names)),
         JTy::Struct(k) => Ty::Struct(names.id(&k)),
@@ -515,6 +521,8 @@ fn expr(e: JExpr, names: &mut Names) -> Expr {
         JExpr::Field(a, f) => Expr::Field(Box::new(expr(*a, names)), names.id(&f)),
         JExpr::HasValue(a) => Expr::HasValue(Box::new(expr(*a, names))),
         JExpr::Value(a) => Expr::Value(Box::new(expr(*a, names))),
+        JExpr::Holds(t, a) => Expr::Holds(ty(t, names), Box::new(expr(*a, names))),
+        JExpr::GetAlt(t, a) => Expr::GetAlt(ty(t, names), Box::new(expr(*a, names))),
         JExpr::Nullopt => Expr::Nullopt,
         JExpr::Wrap(a) => Expr::Wrap(Box::new(expr(*a, names))),
         JExpr::Construct(k, args) => {
@@ -968,7 +976,7 @@ fn expr_names<'a>(e: &'a JExpr, out: &mut Vec<&'a str>) {
             expr_names(a, out);
             expr_names(b, out);
         }
-        JExpr::Not(a) | JExpr::Neg(a) | JExpr::Cast(_, a) | JExpr::Paren(a) | JExpr::Brace(a) | JExpr::Size(a) | JExpr::Back(a) | JExpr::Empty(a) | JExpr::Copy(a, ..) | JExpr::Field(a, _) | JExpr::HasValue(a) | JExpr::Value(a) | JExpr::Wrap(a) => expr_names(a, out),
+        JExpr::Not(a) | JExpr::Neg(a) | JExpr::Cast(_, a) | JExpr::Paren(a) | JExpr::Brace(a) | JExpr::Size(a) | JExpr::Back(a) | JExpr::Empty(a) | JExpr::Copy(a, ..) | JExpr::Field(a, _) | JExpr::HasValue(a) | JExpr::Value(a) | JExpr::Holds(_, a) | JExpr::GetAlt(_, a) | JExpr::Wrap(a) => expr_names(a, out),
         JExpr::Call(_, _, args, _) | JExpr::Construct(_, args) | JExpr::List(args) => args.iter().for_each(|a| expr_names(a, out)),
         JExpr::Lit(..) | JExpr::Bool(_) | JExpr::RealLit(..) | JExpr::Ratio(..) | JExpr::Nullopt | JExpr::EmptyVec | JExpr::Enumerator(..) | JExpr::Unknown(..) => {}
     }
@@ -1216,6 +1224,7 @@ newtype uint8 = x: int | 0 <= x < 0x100
 newtype uint32 = x: int | 0 <= x < 0x1_0000_0000
 newtype uint64 = x: int | 0 <= x < 0x1_0000_0000_0000_0000
 datatype Option<T> = None | Some(value: T)
+datatype Variant<A, B> = Alt0(alt0: A) | Alt1(alt1: B)
 type Vec<T> = s: seq<T> | |s| < 0x1_0000_0000_0000_0000 witness []
 function trunc_size(x: int): nat { if x < 0 then -x else x }
 lemma MulNonneg(a: int, b: int)
@@ -1366,6 +1375,7 @@ fn dty(t: DTy, names: &Names) -> String {
         DTy::Arr(s, k) => format!("Arr'{k}<{}>", dscalar(s, names)),
         DTy::Struct(k) | DTy::Enum(k) | DTy::Iface(k) => names.datatypes[&k].clone(),
         DTy::Opt(s) => format!("Option<{}>", dscalar(s, names)),
+        DTy::Variant(a, b) => format!("Variant<{}, {}>", dscalar(a, names), dscalar(b, names)),
         // A method that gives no value has no `result`, so no caller prints this type.
         DTy::Void => String::new(),
     }
@@ -1447,6 +1457,8 @@ fn dexpr(e: &DExpr, names: &Names) -> String {
         DExpr::Field(a, f) => format!("{}.f_{}", dexpr(a, names), names.text(*f)),
         DExpr::IsSome(a) => format!("{}.Some?", dexpr(a, names)),
         DExpr::Get(a) => format!("{}.value", dexpr(a, names)),
+        DExpr::Is(second, a) => format!("{}.Alt{}?", dexpr(a, names), u8::from(*second)),
+        DExpr::Alt(second, a) => format!("{}.alt{}", dexpr(a, names), u8::from(*second)),
         DExpr::Nothing => "None".to_string(),
         DExpr::EmptySeq => "[]".to_string(),
         DExpr::Just(a) => format!("Some({})", dexpr(a, names)),
@@ -2320,7 +2332,7 @@ fn sentence(r: Refusal, names: &Names) -> (u32, String) {
         Refusal::NoVar(n, line) => (line, format!("{} in the {} line is no variable.", names.text(n), names.contracts.get(&line).map_or("contract", |c| c.0.as_str()))),
         Refusal::SeqParam(line) => (line, "a sequence is in the subset only as a parameter.".to_string()),
         Refusal::HoldsSeq(line) => (line, "a struct that holds a sequence has no rule yet in an optional, a pointer, a unique_ptr, or a vector that the code makes or writes.".to_string()),
-        Refusal::Element(line) => (line, "an optional of a struct or a sequence of bool has no rule yet.".to_string()),
+        Refusal::Element(line) => (line, "an optional of a struct, a sequence of bool or a variant of one type twice has no rule yet.".to_string()),
         Refusal::Extent(line) => (line, "a sequence or an optional made from one of another type or length.".to_string()),
         Refusal::MoveRead(n, line) => (line, format!("{} moves and is read in one statement. C++ does not fix the order.", names.text(n))),
         Refusal::VecMovePlace(line) => (

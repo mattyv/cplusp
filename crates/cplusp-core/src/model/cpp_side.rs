@@ -40,7 +40,7 @@ pub enum Extent {
 /// `std::vector` that the function owns, a copy, decision 0160. `Enum` is an enum class of
 /// the file by its key, decision 0109. `Iface` is `this` of a virtual function of the interface `k`, and `IfaceRef` is a parameter
 /// `const B&` of it, through which a call runs an override, decision 0165. `IfaceMut` is `this` of a virtual function that writes
-/// its object, decision 0169. `Void` is the result type
+/// its object, decision 0169. `Variant` is a `std::variant` of two different element types, decision 0202. `Void` is the result type
 /// of a function that gives no value. `Other` is a type the translator has no rule for, by the id of its name.
 #[derive(Structural, PartialEq, Eq, Clone, Copy, Debug)]
 pub enum Ty {
@@ -72,6 +72,7 @@ pub enum Ty {
     Iface(u32),
     IfaceRef(u32),
     IfaceMut(u32),
+    Variant(Scalar, Scalar),
     Void,
     Other(u32),
 }
@@ -133,7 +134,8 @@ pub enum CastKind {
 /// contract, and `List` is a braced list `{a, b, c}` in code, decision 0175. `Step` is `x++`, `x--`, `++x` or `--x` inside an
 /// expression, by the name and type of `x`, whether it adds one, and whether it is a prefix, decision 0177. `Fill` is the start
 /// value `v(n, x)` of a local vector, by the count and the value, decision 0185. `Either` is `o.size()`, `o.empty()` or `o.back()` in a contract, as the form of a sequence and the id of the name of a
-/// member, and the translator picks one by the type of `o`, decision 0200. `Unknown` is a construct with no rule, by the id of
+/// member, and the translator picks one by the type of `o`, decision 0200. `Holds`
+/// is `std::holds_alternative<T>(v)` and `GetAlt` is `std::get<T>(v)` of a variant, by the type `T`, decision 0202. `Unknown` is a construct with no rule, by the id of
 /// its kind and its line.
 #[derive(PartialEq, Eq, Debug)]
 pub enum Expr {
@@ -186,6 +188,8 @@ pub enum Expr {
     Fill(Box<Expr>, Box<Expr>),
     Back(Box<Expr>),
     Either(Box<Expr>, u32),
+    Holds(Ty, Box<Expr>),
+    GetAlt(Ty, Box<Expr>),
     Move(u32, Ty),
     Bits(BinOp, Box<Expr>, Box<Expr>, Ty),
     Step(u32, Ty, bool, bool),
