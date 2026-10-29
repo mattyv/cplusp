@@ -25,7 +25,7 @@ class Weighed {
   virtual uint32_t weight() const = 0;
 };
 
-class Crate : public Item, public Sized, public Weighed {
+class Crate final : public Item, public Sized, public Weighed {
  public:
   //@ ensures this->id() == id && size_ == size && weight_ == weight
   Crate(uint32_t id, uint32_t size, uint32_t weight) : Item(id), size_(size), weight_(weight) {}
