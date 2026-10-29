@@ -131,9 +131,18 @@ public:
   }
 
   // A free function template with type parameters only has instances that are functions of the model, decision 0180. Any other template is refused.
+  // A member function template of a class that is no template and sits in no class template has instances that are members of the class, decision 0212.
   static bool typeOnlyTemplate(const FunctionTemplateDecl *T) {
-    if (!T || isa<CXXMethodDecl>(T->getTemplatedDecl()))
+    if (!T)
       return false;
+    if (const auto *M = dyn_cast<CXXMethodDecl>(T->getTemplatedDecl())) {
+      const CXXRecordDecl *Parent = M->getParent();
+      if (Parent->getDescribedClassTemplate() || isa<ClassTemplateSpecializationDecl>(Parent) || Parent->isDependentContext())
+        return false;
+      // ponytail: a static member function template has no rule, decision 0215. Upgrade: an instance as a static member function, as in 0174.
+      if (M->isStatic())
+        return false;
+    }
     for (const NamedDecl *P : *T->getTemplateParameters())
       if (!isa<TemplateTypeParmDecl>(P) || cast<TemplateTypeParmDecl>(P)->isParameterPack())
         return false;
@@ -684,8 +693,9 @@ private:
       return nullptr;
     // A member function, a static member and a private field do not change the value of the struct, decision 0089. A member template still has no rule, decision 0089.
     // An instance of a class template keeps its member template, which is refused at the template, decision 0188.
+    // A member template that the file makes an instance of is no obstacle: each instance is a member function of the struct, decision 0212.
     for (const Decl *D : RD->decls())
-      if (isa<FunctionTemplateDecl>(D) && !isa<ClassTemplateSpecializationDecl>(RD))
+      if (const auto *T = dyn_cast<FunctionTemplateDecl>(D); T && !isa<ClassTemplateSpecializationDecl>(RD) && !(typeOnlyTemplate(T) && !noInstance(T->getTemplatedDecl())))
         return nullptr;
     // A struct that holds a sequence of itself is in its own fields: assume it is plain there, decision 0076.
     if (!Visiting.insert(RD).second)
@@ -1739,6 +1749,13 @@ public:
         for (const Decl *D : RD->decls())
           if (const auto *M = dyn_cast<CXXMethodDecl>(D); M && listedStatic(M))
             Named[name(M)].push_back(key(M));
+        // A member function template counts as one more function of its name, so a name that a member function and a template share is an overload, decision 0215.
+        for (const Decl *D : RD->decls())
+          if (const auto *T = dyn_cast<FunctionTemplateDecl>(D); T && isa<CXXMethodDecl>(T->getTemplatedDecl()))
+            // The plain name, and the qualified name that a static member function of the same name has, decision 0215.
+            for (const std::string &Under : {T->getNameAsString(), name(T->getTemplatedDecl())})
+              if (auto At = Named.find(Under); At != Named.end())
+                At->second.push_back(key(T->getTemplatedDecl()));
         llvm::json::Array Members;
         for (const auto &[Name, Keys] : Named)
           if (Keys.size() == 1)
@@ -3327,6 +3344,16 @@ private:
     // A count_if that misses a limit names it, decision 0157.
     if (!Limit.empty())
       return unknown(E, Limit, Near);
+    // `std::move(x)` of a local or a parameter `x` of a trivially copyable type copies it, so it is the value of `x`, decision 0212.
+    // ponytail: a field or any other place keeps its refusal. Upgrade: the same rule for a member access.
+    if (const auto *Call = dyn_cast<CallExpr>(E); Call && E->getStmtClass() == Stmt::CallExprClass && Call->getNumArgs() == 1 && Call->getDirectCallee()) {
+      const FunctionDecl *Callee = Call->getDirectCallee();
+      const auto *Ref = dyn_cast<DeclRefExpr>(Call->getArg(0)->IgnoreParenImpCasts());
+      const auto *Var = Ref ? dyn_cast<VarDecl>(Ref->getDecl()) : nullptr;
+      if (Callee->isInStdNamespace() && Callee->getDeclName().isIdentifier() && Callee->getName() == "move" && Var && Var->hasLocalStorage() &&
+          !Var->getType()->isReferenceType() && Var->getType().isTriviallyCopyableType(Context))
+        return expr(Ref, Near);
+    }
     // Only a plain call by name. A member call, an operator call and the rest of the call classes stay unknown.
     if (E->getStmtClass() == Stmt::CallExprClass)
       if (const FunctionDecl *Callee = cast<CallExpr>(E)->getDirectCallee()) {

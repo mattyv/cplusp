@@ -210,7 +210,8 @@ pub type DConds = List<(DExpr, u32)>;
 /// A Dafny method. `function` is the body of the Dafny function of a pure member function, decision 0090. `writes` holds when the
 /// method takes its object in and gives it back as `this'`, decision 0096. `outs` are the reference parameters that it gives back,
 /// decision 0108. `trusted` holds for the method of a trusted function: it has
-/// no body, and Dafny takes its contract as given, decision 0102.
+/// no body, and Dafny takes its contract as given, decision 0102. `fensures` are the ensures lines of the function of a pure body
+/// that call no function, which Dafny proves on the function, decisions 0213 and 0215.
 #[derive(PartialEq, Eq, Debug)]
 pub struct Method {
     pub name: u32,
@@ -221,6 +222,7 @@ pub struct Method {
     pub decreases: DConds,
     pub body: DStmts,
     pub function: Option<DExpr>,
+    pub fensures: DConds,
     pub writes: bool,
     pub outs: DParams,
     pub trusted: bool,

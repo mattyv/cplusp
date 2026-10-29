@@ -4,7 +4,7 @@ Date: 2026-10-29. Status: decided. Amends 0090 and 0165. The example `type_erasu
 
 ## Decision
 
-Take the function in the model of a pure member function, decision 0090. It has the ensures lines of the member function, as Dafny reads them in its method. Dafny proves each line on the function from its body. The line `result == F(params)` of 0090 stays on the method only. The function of 0205, which is the value of an ensures line, has that line only.
+Take the function in the model of a pure member function, decision 0090. It has the ensures lines of the member function, as Dafny reads them in its method. Dafny proves each line on the function from its body. The line `result == F(params)` of 0090 stays on the method only. The function of 0205 is the value of an ensures line, so it has no ensures line of its own.
 
 ## Why
 

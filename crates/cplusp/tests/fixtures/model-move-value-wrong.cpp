@@ -46,7 +46,7 @@ class Any {
 int32_t held() {
   Square s{7};
   const Holder h(std::move(s));
-  return h.value() + s.side - 7;
+  return h.value();
 }
 
 //@ ensures result == 6

@@ -3721,6 +3721,99 @@ pub fn convert(da: DArgs, ps: &Params) -> (r: DArgs)
     }
 }
 
+pub fn calls(d: &DExpr) -> (r: bool)
+    ensures
+        r == spec_calls(*d),
+    decreases d,
+{
+    match d {
+        DExpr::Lit(_) => false,
+        DExpr::Bool(_) => false,
+        DExpr::Var(_) => false,
+        DExpr::Result => false,
+        DExpr::Bin(_, x1, x2) => calls(x1) || calls(x2),
+        DExpr::Not(x0) => calls(x0),
+        DExpr::Neg(x0) => calls(x0),
+        DExpr::AsInt(x0) => calls(x0),
+        DExpr::Conv(_, x1) => calls(x1),
+        DExpr::Len(x0) => calls(x0),
+        DExpr::Index(x0, x1) => calls(x0) || calls(x1),
+        DExpr::Forall(_, x1) => calls(x1),
+        DExpr::Exists(_, x1) => calls(x1),
+        DExpr::Bound(_) => false,
+        DExpr::Chain(_, _, x2, x3, x4) => calls(x2) || calls(x3) || calls(x4),
+        DExpr::Field(x0, _) => calls(x0),
+        DExpr::Ctor(_, x1) => calls_any(x1),
+        DExpr::IsSome(x0) => calls(x0),
+        DExpr::Get(x0) => calls(x0),
+        DExpr::Is(_, x1) => calls(x1),
+        DExpr::Alt(_, x1) => calls(x1),
+        DExpr::Nothing => false,
+        DExpr::Just(x0) => calls(x0),
+        DExpr::Drop(x0, x1) => calls(x0) || calls(x1),
+        DExpr::Apply(_, x1) => calls_any(x1),
+        DExpr::Take(x0, x1) => calls(x0) || calls(x1),
+        DExpr::Slice(x0, x1, x2) => calls(x0) || calls(x1) || calls(x2),
+        DExpr::TDiv(x0, x1) => calls(x0) || calls(x1),
+        DExpr::TRem(x0, x1) => calls(x0) || calls(x1),
+        DExpr::DivIn(x0, x1, _) => calls(x0) || calls(x1),
+        DExpr::RemIn(x0, x1, _) => calls(x0) || calls(x1),
+        DExpr::FCall(_, _) => true,
+        DExpr::After => false,
+        DExpr::Out(_) => false,
+        DExpr::Enumerator(_, _) => false,
+        DExpr::Ite(x0, x1, x2) => calls(x0) || calls(x1) || calls(x2),
+        DExpr::Temp(_) => false,
+        DExpr::ShrIn(x0, x1, _, _) => calls(x0) || calls(x1),
+        DExpr::SetAt(x0, x1, x2) => calls(x0) || calls(x1) || calls(x2),
+        DExpr::Append(x0, x1) => calls(x0) || calls(x1),
+        DExpr::CountIf(x0, _, _, x3) => calls(x0) || calls(x3),
+        DExpr::RealLit(_, _) => false,
+        DExpr::FOp(_, x1, x2) => calls(x1) || calls(x2),
+        DExpr::Abs(x0) => calls(x0),
+        DExpr::FromInt(x0) => calls(x0),
+        DExpr::Upcast(_, _, x2) => calls(x2),
+        DExpr::Lemma(_, x1, x2) => calls(x2) || calls_any(x1),
+        DExpr::Let(_, _, x2, x3) => calls(x2) || calls(x3),
+        DExpr::BitOp(_, x1, x2) => calls(x1) || calls(x2),
+        DExpr::SeqLit(x0) => calls_any(x0),
+        DExpr::EmptySeq => false,
+        DExpr::SeqFill(x0, x1) => calls(x0) || calls(x1),
+        DExpr::Back(x0) => calls(x0),
+        DExpr::PopBack(x0) => calls(x0),
+        DExpr::IntAbs(x0) => calls(x0),
+        DExpr::Eps => false,
+        DExpr::Eta => false,
+        DExpr::DblMax => false,
+    }
+}
+
+pub fn calls_any(a: &DArgs) -> (r: bool)
+    ensures
+        r == spec_calls_any(*a),
+    decreases a,
+{
+    match a {
+        List::Nil => false,
+        List::Cons(d, rest) => calls(d) || calls_any(rest),
+    }
+}
+
+pub fn no_calls(cs: &DConds) -> (r: DConds)
+    ensures
+        r == spec_no_calls(*cs),
+    decreases cs,
+{
+    match cs {
+        List::Nil => List::Nil,
+        List::Cons((d, l), rest) => if calls(d) {
+            no_calls(rest)
+        } else {
+            List::Cons((copy_dexpr(d), *l), Box::new(no_calls(rest)))
+        },
+    }
+}
+
 pub fn translate_function(f: &Function, all: &Fns, sd: &Structs) -> (r: Model)
     ensures
         r == spec_function(*f, *all, *sd),
@@ -3737,6 +3830,11 @@ pub fn translate_function(f: &Function, all: &Fns, sd: &Structs) -> (r: Model)
                     Err(r) => Model::Bare(f.name, ps, ret, r),
                     Ok((req, ens, dec, body)) => {
                         let pure = member_fn(f, &ens, &body, all, sd);
+                        let fensures = if pure_body(&f.params, &body, all, sd, static_key(sd, f.name)).is_some() {
+                            no_calls(&ens)
+                        } else {
+                            List::Nil
+                        };
                         let ensures = ret_len(f.ret, f.line, linked(f, ens, &pure));
                         Model::Full(
                             Method {
@@ -3748,6 +3846,7 @@ pub fn translate_function(f: &Function, all: &Fns, sd: &Structs) -> (r: Model)
                                 decreases: dec,
                                 body,
                                 function: pure,
+                                fensures,
                                 writes: writes(&f.params),
                                 outs: outs(&f.params),
                                 trusted: f.trusted,

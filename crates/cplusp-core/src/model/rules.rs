@@ -575,8 +575,8 @@ pub fn inline(all: &Fns, key: u32, sd: &Structs) -> (r: bool)
     }
 }
 
-/// A plain member function: a const member function with no reference parameter that it writes, whose body is one return of an
-/// expression with no call, decision 0189. It calls nothing, so a call of it can never be part of a cycle.
+/// A plain member function: a const member function with no reference parameter that it writes, whose body is a plain body,
+/// decisions 0189 and 0211. It calls no function, so a call of it can never be part of a cycle.
 pub open spec fn spec_plain(f: Function) -> bool {
     !f.trusted && (spec_head_ty(f.params) matches Some(Ty::This(_))) && !spec_mutates(f.params) && spec_plain_body(f.body)
 }
