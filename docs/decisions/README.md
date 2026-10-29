@@ -211,3 +211,5 @@ Status is `decided`, `proposed` (the default until someone objects or the thin s
 | [0205](0205-a-function-from-its-ensures-line.md) | A function from its ensures line | decided |
 | [0206](0206-a-variant-that-can-lose-its-value.md) | A variant that can lose its value | decided |
 | [0207](0207-a-variant-whose-alternative-cannot-be-assigned.md) | A variant whose alternative cannot be assigned | decided |
+| [0211](0211-a-plain-member-function-with-apply-lines.md) | A plain member function with apply lines | decided |
+| [0212](0212-a-move-of-a-value-and-a-constructor-template.md) | A move of a value and a constructor template | decided |
