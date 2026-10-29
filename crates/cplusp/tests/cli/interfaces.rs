@@ -934,3 +934,50 @@ fn a_const_and_a_non_const_virtual_function_of_one_name_are_two_overloads() {
     assert_eq!(o.status.code(), Some(1), "stdout: {text} stderr: {}", stderr(&o));
     assert_eq!(failures(&text), ["18: the override may not keep the promise of Look::see."], "{text}");
 }
+
+/// A call through an interface that can run an override of it again before it returns is refused, in each form that reaches the
+/// override: through `*this`, through a write-back of a local, and through a chain of calls, decision 0218.
+#[test]
+fn a_call_through_an_interface_that_can_come_back_is_refused() {
+    let Some(dafny) = dafny() else { return };
+    if !clang_tidy_available() {
+        return;
+    }
+    let fill = "the call of Filler::fill can run Filler::fill again before it returns: the translator has no rule for it yet.";
+    let poke = "the call of Poker::poke can run Poker::poke again before it returns: the translator has no rule for it yet.";
+    for (name, want) in [
+        ("model-iface-recursion-refuse.cpp", format!("51: {fill}")),
+        ("model-iface-recursion-down.cpp", format!("50: {poke}")),
+        ("model-iface-recursion-chain.cpp", format!("51: {fill}")),
+    ] {
+        let o = prove(name, &[], &dafny);
+        let text = stdout(&o);
+        assert_eq!(o.status.code(), Some(1), "{name}: stdout: {text} stderr: {}", stderr(&o));
+        assert_eq!(failures(&text), [want.as_str()], "{name}: {text}");
+    }
+}
+
+/// A write-back through an interface in a file where an interface has no final class is refused in each place of a body, so the
+/// walker of 0217 finds each one, decision 0218.
+#[test]
+fn an_unbacked_write_back_is_refused_in_each_place_of_a_body() {
+    let Some(dafny) = dafny() else { return };
+    if !clang_tidy_available() {
+        return;
+    }
+    let o = prove("model-iface-local-unbacked-places.cpp", &[], &dafny);
+    let text = stdout(&o);
+    assert_eq!(o.status.code(), Some(1), "stdout: {text} stderr: {}", stderr(&o));
+    let iface = "a class as a reference to its interface: the translator has no rule for it yet.";
+    let want = [
+        format!("62: {iface}"),
+        format!("74: {iface}"),
+        format!("86: {iface}"),
+        format!("96: {iface}"),
+        format!("107: {iface}"),
+        format!("114: {iface}"),
+        "121: a call out of place. The translator takes a call when C++ runs it once and the statement uses its value. It takes a call that gives no value only alone.".to_string(),
+        "128: the call writes a value back, and the translator writes back only to a local or a reference parameter.".to_string(),
+    ];
+    assert_eq!(failures(&text), want, "{text}");
+}

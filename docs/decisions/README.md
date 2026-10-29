@@ -216,3 +216,4 @@ Status is `decided`, `proposed` (the default until someone objects or the thin s
 | [0210](0210-two-virtual-functions-of-one-name.md) | Two virtual functions of one name | decided |
 | [0214](0214-the-object-as-an-argument.md) | The object as an argument | decided |
 | [0217](0217-a-local-through-its-interface-needs-a-final-class-over-each-interface.md) | A local through its interface needs a final class over each interface | decided |
+| [0218](0218-a-call-through-an-interface-that-can-come-back.md) | A call through an interface that can come back | decided |
