@@ -1032,3 +1032,18 @@ fn a_push_of_a_move_leaves_the_name_null() {
     let sentence = "the ensures line may not hold on this return.";
     assert_eq!(failed, [format!("20: {sentence}"), format!("32: {sentence}"), format!("43: {sentence}")], "{text}");
 }
+
+/// The example `visitor` proves: a double dispatch through two interfaces, with a local visitor written back through its interface,
+/// decisions 0208 and 0218.
+#[test]
+fn the_visitor_example_proves() {
+    let Some(dafny) = dafny() else { return };
+    if !clang_tidy_available() {
+        return;
+    }
+    let o = prove("../../../../examples/visitor/example.cpp", &[], &dafny);
+    let text = stdout(&o);
+    assert_eq!(o.status.code(), Some(0), "stdout: {text} stderr: {}", stderr(&o));
+    assert!(text.lines().any(|l| l == "Axiom: model: AreaSum: a call through a reference to Visitor leaves an object of AreaSum, C++23 [class.virtual]."), "{text}");
+    assert_eq!(text.lines().last(), Some("ok: proved"), "{text}");
+}
