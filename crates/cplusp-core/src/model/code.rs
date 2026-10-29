@@ -3297,6 +3297,71 @@ pub fn pure_body(ps: &Params, body: &DStmts, all: &Fns, sd: &Structs, stat: bool
     }
 }
 
+pub fn result_line(cs: &Conds) -> (r: Option<u32>)
+    ensures
+        r == spec_result_line(*cs),
+    decreases cs,
+{
+    match cs {
+        List::Nil => None,
+        List::Cons((k, e, l, _), rest) => match e {
+            Expr::Bin(BinOp::Eq, a, b) => if *k == CondKind::Ensures && matches!(**a, Expr::Result) && !has_result(b) {
+                Some(*l)
+            } else {
+                result_line(rest)
+            },
+            _ => result_line(rest),
+        },
+    }
+}
+
+pub fn ens_kind(f: &Function) -> (r: bool)
+    ensures
+        r == spec_ens_kind(*f),
+{
+    f.ret == Ty::Bool && this_param(&f.params).is_some() && !mutates(&f.params) && !f.trusted && !const_virtual(f)
+        && result_line(&f.conds).is_some()
+}
+
+pub fn eq_result_at(ens: &DConds, l: u32) -> (r: Option<DExpr>)
+    ensures
+        r == spec_eq_result_at(*ens, l),
+    decreases ens,
+{
+    match ens {
+        List::Nil => None,
+        List::Cons((d, dl), rest) => if *dl == l {
+            match d {
+                DExpr::Bin(BinOp::Eq, a, b) => if matches!(**a, DExpr::Result) {
+                    Some(copy_dexpr(b))
+                } else {
+                    None
+                },
+                _ => None,
+            }
+        } else {
+            eq_result_at(rest, l)
+        },
+    }
+}
+
+pub fn member_fn(f: &Function, ens: &DConds, body: &DStmts, all: &Fns, sd: &Structs) -> (r: Option<DExpr>)
+    ensures
+        r == spec_member_fn(*f, *ens, *body, *all, *sd),
+{
+    match pure_body(&f.params, body, all, sd, static_key(sd, f.name)) {
+        Some(d) => Some(d),
+        None => if ens_kind(f) {
+            match result_line(&f.conds) {
+                Some(l) => eq_result_at(ens, l),
+                None => None,
+            }
+        } else {
+            None
+        },
+    }
+}
+
 pub fn param_args(ps: &Params) -> (r: DArgs)
     ensures
         r == spec_param_args(*ps),
@@ -3554,7 +3619,7 @@ pub fn pure_ret(all: &Fns, key: u32, sd: &Structs, strict: bool) -> (r: Option<(
             None
         } else if strict {
             match translate_inside(f, all, sd) {
-                Ok((_, _, _, body)) => match pure_body(&f.params, &body, all, sd, static_key(sd, f.name)) {
+                Ok((_, ens, _, body)) => match member_fn(f, &ens, &body, all, sd) {
                     Some(_) => Some((f.ret, copy(&f.params))),
                     None => None,
                 },
@@ -3564,7 +3629,11 @@ pub fn pure_ret(all: &Fns, key: u32, sd: &Structs, strict: bool) -> (r: Option<(
             match translate_stmts(&f.body, all, &f.params, &f.params, sd) {
                 Ok(body) => match pure_body(&f.params, &body, all, sd, static_key(sd, f.name)) {
                     Some(_) => Some((f.ret, copy(&f.params))),
-                    None => None,
+                    None => if ens_kind(f) {
+                        Some((f.ret, copy(&f.params)))
+                    } else {
+                        None
+                    },
                 },
                 Err(_) => None,
             }
@@ -3667,7 +3736,7 @@ pub fn translate_function(f: &Function, all: &Fns, sd: &Structs) -> (r: Model)
                 None => match translate_inside_of(f, all, sd) {
                     Err(r) => Model::Bare(f.name, ps, ret, r),
                     Ok((req, ens, dec, body)) => {
-                        let pure = pure_body(&f.params, &body, all, sd, static_key(sd, f.name));
+                        let pure = member_fn(f, &ens, &body, all, sd);
                         let ensures = ret_len(f.ret, f.line, linked(f, ens, &pure));
                         Model::Full(
                             Method {

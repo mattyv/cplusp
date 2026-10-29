@@ -733,3 +733,48 @@ fn a_base_class_with_data_with_no_rule_is_refused() {
     ];
     assert_eq!(refused, want, "{text}");
 }
+
+/// A field of a base with data through the class has no rule, in each form of a write and a read, and each sentence names the
+/// classes by their plain names, decision 0203.
+#[test]
+fn a_field_of_the_base_is_refused_in_each_form() {
+    let Some(dafny) = dafny() else { return };
+    if !clang_tidy_available() {
+        return;
+    }
+    let o = prove("model-data-base-field.cpp", &[], &dafny);
+    let text = stdout(&o);
+    assert_eq!(o.status.code(), Some(1), "stdout: {text} stderr: {}", stderr(&o));
+    let refused: Vec<&str> = text.lines().filter(|l| l.starts_with("Not proved: ") || l.starts_with("Not provable: ")).map(|l| l.rsplit_once(".cpp:").unwrap().1).collect();
+    let field = "a field of the base P: the translator has no rule for it yet.";
+    let want = [
+        format!("12: {field}"),
+        format!("14: {field}"),
+        format!("20: {field}"),
+        format!("26: {field}"),
+        format!("34: {field}"),
+        format!("40: {field}"),
+        "52: a change of R into its base P, which has data: the translator has no rule for it yet.".to_string(),
+        "66: a field of the base P2: the translator has no rule for it yet.".to_string(),
+    ];
+    assert_eq!(refused, want, "{text}");
+}
+
+/// A call in code of a member function of the base keeps its contract, with a requires line, an overload and a trusted
+/// member, decision 0203.
+#[test]
+fn a_call_of_the_base_keeps_its_contract() {
+    let Some(dafny) = dafny() else { return };
+    if !clang_tidy_available() {
+        return;
+    }
+    let o = prove("model-data-base-calls.cpp", &[], &dafny);
+    let text = stdout(&o);
+    assert_eq!(o.status.code(), Some(0), "stdout: {text} stderr: {}", stderr(&o));
+    assert_eq!(text.lines().last(), Some("ok: proved"), "{text}");
+    let o = prove("model-data-base-calls-wrong.cpp", &[], &dafny);
+    let text = stdout(&o);
+    assert_eq!(o.status.code(), Some(1), "stdout: {text} stderr: {}", stderr(&o));
+    let failed: Vec<&str> = text.lines().filter(|l| l.starts_with("Not proved: ") || l.starts_with("Not provable: ")).map(|l| l.rsplit_once(".cpp:").unwrap().1).collect();
+    assert_eq!(failed, ["21: the ensures line may not hold on this return.", "27: a requires line of the callee may not hold."], "{text}");
+}

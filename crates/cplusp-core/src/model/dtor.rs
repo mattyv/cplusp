@@ -1603,6 +1603,63 @@ pub open spec fn spec_pure_body(ps: Params, body: DStmts, all: Fns, sd: Structs,
     }
 }
 
+/// The line of the first ensures line `result == e` with no `result` in `e`, decision 0205.
+pub open spec fn spec_result_line(cs: Conds) -> Option<u32>
+    decreases cs,
+{
+    match cs {
+        List::Nil => None,
+        List::Cons((k, e, l, _), rest) => match e {
+            Expr::Bin(BinOp::Eq, a, b) => if k == CondKind::Ensures && *a == Expr::Result && !spec_has_result(*b) {
+                Some(l)
+            } else {
+                spec_result_line(*rest)
+            },
+            _ => spec_result_line(*rest),
+        },
+    }
+}
+
+/// A `const` member function that gives bool, with an ensures line `result == e`, takes its function from that line when its body
+/// is no pure body, decision 0205. A trusted function and a virtual function keep their rules.
+pub open spec fn spec_ens_kind(f: Function) -> bool {
+    f.ret == Ty::Bool && spec_this(f.params) is Some && !spec_mutates(f.params) && !f.trusted && !spec_const_virtual(f)
+        && spec_result_line(f.conds) is Some
+}
+
+/// The value `e` of the contract line `result == e` at the line `l`, as Dafny reads it.
+pub open spec fn spec_eq_result_at(ens: DConds, l: u32) -> Option<DExpr>
+    decreases ens,
+{
+    match ens {
+        List::Nil => None,
+        List::Cons((d, dl), rest) => if dl == l {
+            match d {
+                DExpr::Bin(BinOp::Eq, a, b) => if *a == DExpr::Result {
+                    Some(*b)
+                } else {
+                    None
+                },
+                _ => None,
+            }
+        } else {
+            spec_eq_result_at(*rest, l)
+        },
+    }
+}
+
+/// The function of a member function: the value of its pure body, or else the value of its ensures line, decisions 0090 and 0205.
+pub open spec fn spec_member_fn(f: Function, ens: DConds, body: DStmts, all: Fns, sd: Structs) -> Option<DExpr> {
+    match spec_pure_body(f.params, body, all, sd, spec_static_key(sd, f.name)) {
+        Some(d) => Some(d),
+        None => if spec_ens_kind(f) {
+            spec_eq_result_at(ens, spec_result_line(f.conds)->Some_0)
+        } else {
+            None
+        },
+    }
+}
+
 /// The function with the key `k` is a member of a struct of the file and has no object, so it is a static member function,
 /// decision 0174.
 pub open spec fn spec_static_key(sd: Structs, k: u32) -> bool
@@ -1923,7 +1980,7 @@ pub open spec fn spec_pure_ret(all: Fns, key: u32, sd: Structs, strict: bool) ->
             None
         } else if strict {
             match spec_inside(f, all, sd) {
-                Ok((_, _, _, body)) => match spec_pure_body(f.params, body, all, sd, spec_static_key(sd, f.name)) {
+                Ok((_, ens, _, body)) => match spec_member_fn(f, ens, body, all, sd) {
                     Some(_) => Some((f.ret, f.params)),
                     None => None,
                 },
@@ -1933,7 +1990,11 @@ pub open spec fn spec_pure_ret(all: Fns, key: u32, sd: Structs, strict: bool) ->
             match spec_stmts(f.body, all, f.params, f.params, sd) {
                 Ok(body) => match spec_pure_body(f.params, body, all, sd, spec_static_key(sd, f.name)) {
                     Some(_) => Some((f.ret, f.params)),
-                    None => None,
+                    None => if spec_ens_kind(f) {
+                        Some((f.ret, f.params))
+                    } else {
+                        None
+                    },
                 },
                 Err(_) => None,
             }

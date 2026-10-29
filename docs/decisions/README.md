@@ -207,5 +207,7 @@ Status is `decided`, `proposed` (the default until someone objects or the thin s
 | [0200](0200-a-member-function-named-size.md) | A member function named size | decided |
 | [0201](0201-a-base-class-with-data.md) | A base class with data | decided |
 | [0202](0202-a-variant-of-two-types.md) | A variant of two types | decided |
+| [0203](0203-a-field-of-the-base-and-a-call-of-the-base.md) | A field of the base and a call of the base | decided |
+| [0205](0205-a-function-from-its-ensures-line.md) | A function from its ensures line | decided |
 | [0206](0206-a-variant-that-can-lose-its-value.md) | A variant that can lose its value | decided |
 | [0207](0207-a-variant-whose-alternative-cannot-be-assigned.md) | A variant whose alternative cannot be assigned | decided |

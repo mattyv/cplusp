@@ -1114,7 +1114,8 @@ fn dafny_word(name: &str) -> &str {
 }
 
 fn readable(name: &str) -> bool {
-    name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
+    // The field of the base with data is `'B`, and C++ cannot write a `'`, decision 0201.
+    name.strip_prefix('\'').unwrap_or(name).chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
 }
 
 /// The Dafny word for a type argument: `int32` for `int32_t`, `S_Box'of'int32` for a struct, decision 0180. A type with no word is `other`.
