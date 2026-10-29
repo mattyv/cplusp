@@ -1134,3 +1134,18 @@ fn a_contract_that_calls_a_name_of_a_static_and_a_member_is_refused() {
     ];
     assert_eq!(refused, want, "{text}");
 }
+
+/// A static member function and a member function that writes its object, of one name, are two functions of that name, so a
+/// contract that calls it is refused, decision 0216.
+#[test]
+fn a_contract_that_calls_a_name_of_a_static_and_a_member_that_writes_is_refused() {
+    let Some(dafny) = dafny() else { return };
+    if !clang_tidy_available() {
+        return;
+    }
+    let o = prove("model-static-member-writes-same-name.cpp", &[], &dafny);
+    let text = stdout(&o);
+    assert_eq!(o.status.code(), Some(1), "stdout: {text} stderr: {}", stderr(&o));
+    let refused: Vec<&str> = text.lines().filter(|l| l.starts_with("Not proved: ") || l.starts_with("Not provable: ")).map(|l| l.rsplit_once(".cpp:").unwrap().1).collect();
+    assert_eq!(refused, ["19: S::get is no pure function. A contract calls a function with one return and no write."], "{text}");
+}
