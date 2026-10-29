@@ -17,6 +17,7 @@ struct Shape {
   //@ ensures 0 <= result <= 1000000
   virtual int32_t area() const = 0;
   //@ requires valid() && v.valid() && v.seen() <= 1000000000
+  //@ modifies v
   //@ ensures v.valid() && v.seen() == old(v.seen()) + area()
   virtual void accept(Visitor& v) const = 0;
 };
@@ -35,6 +36,7 @@ class Square final : public Shape {
   int32_t area() const override { return side_ * side_; }
 
   //@ requires valid() && v.valid() && v.seen() <= 1000000000
+  //@ modifies v
   //@ ensures v.valid() && v.seen() == old(v.seen()) + area()
   void accept(Visitor& v) const override;
 
@@ -56,6 +58,7 @@ class Rect final : public Shape {
   int32_t area() const override { return w_ * h_; }
 
   //@ requires valid() && v.valid() && v.seen() <= 1000000000
+  //@ modifies v
   //@ ensures v.valid() && v.seen() == old(v.seen()) + area()
   void accept(Visitor& v) const override;
 
@@ -119,6 +122,7 @@ class AreaSum final : public Visitor {
 //@ requires forall i :: 0 <= i < shapes.size() ==> shapes[i] != nullptr
 //@ requires forall i :: 0 <= i < shapes.size() ==> shapes[i]->valid()
 //@ requires v.valid() && v.seen() == 0
+//@ modifies v
 //@ ensures v.valid() && 0 <= v.seen() <= 1000000 * shapes.size()
 void visit_all(const std::vector<std::unique_ptr<Shape>>& shapes, Visitor& v) {
   //@ invariant 0 <= i <= shapes.size()

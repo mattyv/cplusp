@@ -936,7 +936,8 @@ fn a_const_and_a_non_const_virtual_function_of_one_name_are_two_overloads() {
 }
 
 /// A call through an interface that can run an override of it again before it returns is refused, in each form that reaches the
-/// override: through `*this`, through a write-back of a local, and through a chain of calls, decision 0218.
+/// override: through `*this`, through a write-back of a local, and through a chain of calls, decision 0218. The refused function has
+/// no contract in the model, so the override that calls it is not proved either.
 #[test]
 fn a_call_through_an_interface_that_can_come_back_is_refused() {
     let Some(dafny) = dafny() else { return };
@@ -945,15 +946,16 @@ fn a_call_through_an_interface_that_can_come_back_is_refused() {
     }
     let fill = "the call of Filler::fill can run Filler::fill again before it returns: the translator has no rule for it yet.";
     let poke = "the call of Poker::poke can run Poker::poke again before it returns: the translator has no rule for it yet.";
+    let ret = "the ensures line may not hold on this return.";
     for (name, want) in [
-        ("model-iface-recursion-refuse.cpp", format!("51: {fill}")),
-        ("model-iface-recursion-down.cpp", format!("50: {poke}")),
-        ("model-iface-recursion-chain.cpp", format!("51: {fill}")),
+        ("model-iface-recursion-refuse.cpp", [format!("51: {fill}"), format!("54: {ret}")]),
+        ("model-iface-recursion-down.cpp", [format!("50: {poke}"), format!("53: {ret}")]),
+        ("model-iface-recursion-chain.cpp", [format!("51: {fill}"), format!("57: {ret}")]),
     ] {
         let o = prove(name, &[], &dafny);
         let text = stdout(&o);
         assert_eq!(o.status.code(), Some(1), "{name}: stdout: {text} stderr: {}", stderr(&o));
-        assert_eq!(failures(&text), [want.as_str()], "{name}: {text}");
+        assert_eq!(failures(&text), want, "{name}: {text}");
     }
 }
 

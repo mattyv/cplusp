@@ -9,7 +9,7 @@ use anyhow::{Context, Result};
 use cplusp_core::companion::CompanionRefusal;
 use cplusp_core::contract::{LexKind, NumberFault};
 use cplusp_core::model::{
-    globalize, parse_contract, translate_overrides, translate_structs, translate_unit, Args, BinOp, CastKind, CondKind, Conds, DArgs, DConds, DExpr, DOverride, DParams, DPre, DStmt, DStmts, DTy, DUpcast, Expr, Extent, Fns,
+    globalize, parse_contract, translate_overrides, translate_file, translate_structs, Args, BinOp, CastKind, CondKind, Conds, DArgs, DConds, DExpr, DOverride, DParams, DPre, DStmt, DStmts, DTy, DUpcast, Expr, Extent, Fns,
     Function, List, Members, Method, Model, Names as CNames, Obj, Objs, Params, Refusal, Scalar, Stmt, Stmts, Structs, Tok, Ty,
 };
 use serde::Deserialize;
@@ -341,6 +341,8 @@ struct Names {
     /// The plain name of each class of the table of structs by the id of its key, and of each function by the id of its key, for the sentences of decision 0165.
     class_names: HashMap<u32, String>,
     fn_names: HashMap<u32, String>,
+    /// The id of the key of the class of `this` of each member function, by the id of its key, for the sentence of decision 0218.
+    fn_classes: HashMap<u32, u32>,
     /// The functions that the companion file declares. Empty when there is no file or the scan refused it, decision 0079.
     declared: Vec<String>,
     /// The lemmas that the companion file declares, apart from the functions, decision 0099.
@@ -350,6 +352,8 @@ struct Names {
     /// The first call to an undeclared name in a contract line, by the place of the line.
     /// With `true` when the name is a function of the file and of the companion file, decision 0176.
     bad_calls: HashMap<u32, (String, bool)>,
+    /// The lines of `bad_calls` whose name is a virtual function of the struct that shares its name with another, decision 0217.
+    shared_calls: std::collections::HashSet<u32>,
     /// The plain names of the free functions that the table of structs lists under the file, decision 0176. A contract calls them.
     file_fns: Vec<String>,
     /// The member names of each struct by its key, for the contracts of its member functions, decision 0090.
@@ -689,10 +693,16 @@ fn lex(text: &str, line: u32, names: &mut Names) -> Vec<Tok> {
                         _ => false,
                     };
                     // A name followed by `(` is a call, and the companion file must declare it. A member name in a member function may be a call of
-                    // the member, and the core decides, decision 0090.
+                    // the member, and the core decides, decision 0090. A member of two virtual functions of one name has the plain name before the `'`, decision 0217.
                     let listed = names.file_fns.iter().any(|d| d == word);
                     if call && !member && !static_call && !listed && !names.declared.iter().any(|d| d == word) && !names.this_members.iter().any(|d| d == word) && !names.functors.iter().any(|d| d == word) {
                         names.bad_calls.entry(line).or_insert_with(|| (word.to_string(), false));
+                    }
+                    // A name that two virtual functions of the struct share is no function of a contract. Its members are in the table by the name and the
+                    // parameter types, so the sentence is the one of a function that is not pure, decision 0217.
+                    if call && !member && !static_call && !names.this_members.iter().any(|d| d == word) && names.this_members.iter().any(|d| plain_member(d) == word) {
+                        names.bad_calls.entry(line).or_insert_with(|| (word.to_string(), false));
+                        names.shared_calls.insert(line);
                     }
                     // A name of the file and of the companion file is two functions in a contract, decision 0176.
                     if call && !member && listed && names.declared.iter().any(|d| d == word) {
@@ -1395,6 +1405,11 @@ fn holds_interface(t: DTy, base: u32) -> bool {
     matches!(t, DTy::Opt(Scalar::Struct(k)) if k == base)
 }
 
+/// The name of a member in C++. A virtual function whose name two share has the name, `'` and its parameter types in the table, decision 0210.
+fn plain_member(n: &str) -> &str {
+    n.split('\'').next().unwrap_or(n)
+}
+
 /// The Dafny name of the upcast from the class `d` to its interface `b`, `f_D'B`, decision 0166. The names of the model are the names of the datatypes, without
 /// `S_`, so two classes of one plain name stay apart.
 fn upcast_name(d: u32, b: u32, names: &Names) -> String {
@@ -1611,6 +1626,8 @@ pub struct Translation {
     pub sorted: bool,
     /// The plain name of each interface in the model, decision 0165.
     pub interfaces: Vec<String>,
+    /// The plain names of each final class and interface that a local is written through, decision 0208.
+    pub downs: Vec<(String, String)>,
     pub map: Map,
 }
 
@@ -1629,8 +1646,12 @@ struct Printer<'a> {
     owned: HashMap<u32, String>,
     /// The virtual functions that write their object, by the id of their keys. They have no function and no line in the upcast, decision 0169.
     writing: std::collections::HashSet<u32>,
+    /// The const virtual functions that give no value, by the id of their keys. They write their reference parameters only, decision 0209.
+    const_void: std::collections::HashSet<u32>,
     /// The names of the reference parameters of each function, by the id of its key, for the lemma that checks an override that writes.
     refs: HashMap<u32, Vec<u32>>,
+    /// The pairs of a final class and its interface that a call writes a local through, by key, for the Axiom line of decision 0208.
+    downs: std::collections::BTreeSet<(u32, u32)>,
     methods: &'a Methods,
     /// The result type of each method by the id of its key, for the call that drops a value, decision 0096.
     rets: &'a HashMap<u32, DTy>,
@@ -1681,6 +1702,18 @@ impl Printer<'_> {
                     let pointed = self.owned.get(v).cloned().unwrap_or_default();
                     before.push_str(&format!("var {temp}: {pointed}; "));
                     after.push_str(&format!(" {} := Some({temp});", mangle(self.names.text(*v))));
+                    temp
+                }
+                // A local of a final class through a reference to its interface comes back as a value of the interface. The local takes a value of its
+                // class whose upcast is that value, decision 0208. Dafny cannot find it, so the model assumes it exists: the Axiom line of `prove`.
+                // ponytail: one assume for each call. Upgrade: a lemma for each pair of classes.
+                Obj::Down(v, dk, bk) => {
+                    self.fresh += 1;
+                    let temp = format!("v_'d{}", self.fresh);
+                    let (local, up) = (mangle(self.names.text(*v)), upcast_name(*dk, *bk, self.names));
+                    before.push_str(&format!("var {temp}: {}; ", self.names.datatypes[bk]));
+                    after.push_str(&format!(" assume {{:axiom}} exists v_'q: {} :: {up}(v_'q) == {temp}; {local} :| {up}({local}) == {temp};", self.names.datatypes[dk]));
+                    self.downs.insert((*dk, *bk));
                     temp
                 }
             });
@@ -1792,6 +1825,8 @@ impl Printer<'_> {
                     Obj::Local(v) => (*v, mangle(names.text(*v))),
                     Obj::Out(v) | Obj::Owned(v) => (*v, format!("{}'", mangle(names.text(*v)))),
                     Obj::Object => (0, "v_this'".to_string()),
+                    // The core never takes a class through its interface as the vector of an element write, decisions 0208 and 0217.
+                    Obj::Down(..) => unreachable!("decision 0217: the core makes Down only for an argument"),
                 };
                 let pointed = self.owned.get(&name).cloned().unwrap_or_default();
                 let mut gives = vec![temp.clone()];
@@ -2077,7 +2112,9 @@ impl Printer<'_> {
         // proves that the promise of the override gives each ensures line of the interface, decision 0169.
         let writes = self.writing.contains(&o.base);
         if writes {
-            ps.push(format!("v_this': {}", names.datatypes[&up.derived]));
+            if !self.const_void.contains(&o.base) {
+                ps.push(format!("v_this': {}", names.datatypes[&up.derived]));
+            }
             let mut rest = &o.params;
             while let List::Cons((n, t), next) = rest {
                 if self.refs[&o.derived].contains(n) {
@@ -2244,7 +2281,7 @@ impl Printer<'_> {
         }
         // A pure virtual function of an interface is also a function of the model, with its contract and no body, which Dafny takes as given, decision 0166. The
         // method says that its result is the value of the function, and that link is the last ensures line.
-        if m.trusted && !m.writes && matches!(m.params, List::Cons((n, DTy::Iface(_)), _) if self.names.text(n) == "this") {
+        if m.trusted && !m.writes && m.ret != DTy::Void && matches!(m.params, List::Cons((n, DTy::Iface(_)), _) if self.names.text(n) == "this") {
             self.axiom_function(m, place);
         }
         let outs = dparams(&m.outs);
@@ -2312,7 +2349,18 @@ fn sentence(r: Refusal, names: &Names) -> (u32, String) {
         Refusal::Construct(k, line) => (line, format!("{}: the translator has no rule for it yet.", names.text(k))),
         Refusal::Name(n, line) => (line, format!("{} in the contract is no parameter.", names.text(n))),
         Refusal::NoField(f, line) => (line, format!("{} in the contract is no field of the struct.", names.text(f))),
+        // A call through an interface that can come back, decision 0218. The name is the plain name of the class and of the function.
+        Refusal::Loop(k, line) => (
+            line,
+            format!(
+                "the call of {0} can run {0} again before it returns: the translator has no rule for it yet.",
+                names.fn_classes.get(&k).map_or_else(|| names.fn_names[&k].clone(), |c| format!("{}::{}", names.class_names[c], names.fn_names[&k]))
+            ),
+        ),
+        // A local through its interface, in a file where an interface has no final class, decision 0217.
+        Refusal::Unbacked(line) => (line, "a class as a reference to its interface: the translator has no rule for it yet.".to_string()),
         Refusal::NotPure(n, line) => (line, format!("{} is no pure function. A contract calls a function with one return and no write.", names.text(n))),
+        Refusal::Syntax(line) if names.shared_calls.contains(&line) => (line, format!("{} is no pure function. A contract calls a function with one return and no write.", names.bad_calls[&line].0)),
         Refusal::Syntax(line) if names.bad_calls.get(&line).is_some_and(|c| c.1) => (line, format!("{} is a function of the file and of the companion file. Rename one.", names.bad_calls[&line].0)),
         Refusal::Syntax(line) if names.bad_calls.contains_key(&line) => (line, format!("{} is no function of the companion file.", names.bad_calls[&line].0)),
         Refusal::Syntax(line) if names.said.contains_key(&line) => (line, names.said[&line].clone()),
@@ -2351,17 +2399,17 @@ fn sentence(r: Refusal, names: &Names) -> (u32, String) {
         Refusal::IndexWritten(line) => (line, "the index reads a value that the call writes: the translator has no rule for it yet.".to_string()),
         Refusal::NoMethod(d, b, n, line) => (
             line,
-            format!("the override of {}::{} in {} has no method in the model, so the translator cannot check it.", names.class_names[&b], names.text(n), names.class_names[&d]),
+            format!("the override of {}::{} in {} has no method in the model, so the translator cannot check it.", names.class_names[&b], plain_member(names.text(n)), names.class_names[&d]),
         ),
-        Refusal::Later(b, f, g, line) if f == g => (line, format!("the contract of {0}::{1} reads {0}::{1} itself. The translator has no rule for it yet.", names.class_names[&b], names.text(f))),
+        Refusal::Later(b, f, g, line) if f == g => (line, format!("the contract of {0}::{1} reads {0}::{1} itself. The translator has no rule for it yet.", names.class_names[&b], plain_member(names.text(f)))),
         Refusal::Later(b, f, g, line) => {
-            let (b, f, g) = (&names.class_names[&b], names.text(f), names.text(g));
+            let (b, f, g) = (&names.class_names[&b], plain_member(names.text(f)), plain_member(names.text(g)));
             (line, format!("the contract of {b}::{f} reads {b}::{g}, which comes later in {b}. Declare {b}::{g} first."))
         }
-        Refusal::NoOverride(d, b, n, line) => (line, format!("{} has no override of {}::{}.", names.class_names[&d], names.class_names[&b], names.text(n))),
+        Refusal::NoOverride(d, b, n, line) => (line, format!("{} has no override of {}::{}.", names.class_names[&d], names.class_names[&b], plain_member(names.text(n)))),
         Refusal::Unchecked(d, b, n, line) => (
             line,
-            format!("the override of {}::{} in {} has no function in the model, so the translator cannot check it.", names.class_names[&b], names.text(n), names.class_names[&d]),
+            format!("the override of {}::{} in {} has no function in the model, so the translator cannot check it.", names.class_names[&b], plain_member(names.text(n)), names.class_names[&d]),
         ),
         Refusal::NotFinal(d, line) => (line, format!("{} derives from an interface and is not final. Mark it final.", names.class_names[&d])),
         Refusal::Overload(b, line) => (line, format!("{} has two virtual functions of one name. The translator has no rule for it yet.", names.class_names[&b])),
@@ -2515,6 +2563,7 @@ pub fn translate(lines: &str, companion: Option<(&str, &str)>) -> Result<Transla
     // The functions that write their object, by the id of their keys, for the header of a method with no body.
     let mut writing = std::collections::HashSet::new();
     let mut writing_virtual = std::collections::HashSet::new();
+    let mut const_void = std::collections::HashSet::new();
     // The names of the reference parameters of each function, by the id of its key, for the header of a method with no body, decision 0108.
     let mut refs: HashMap<u32, Vec<u32>> = HashMap::new();
     // The place of each function, by the id of its key, for its method header.
@@ -2546,12 +2595,22 @@ pub fn translate(lines: &str, companion: Option<(&str, &str)>) -> Result<Transla
         }
         names.functions.insert(key, format!("{dafny}'"));
         names.fn_names.insert(key, f.name.clone());
+        if let Some((_, JTy::This(k) | JTy::ThisMut(k) | JTy::Iface(k) | JTy::IfaceMut(k))) = f.params.first() {
+            let class = names.id(k);
+            names.fn_classes.insert(key, class);
+        }
         methods.insert(key, dafny);
         if matches!(f.params.first(), Some((_, JTy::ThisMut(_) | JTy::IfaceMut(_)))) {
             writing.insert(key);
         }
         if matches!(f.params.first(), Some((_, JTy::IfaceMut(_)))) {
             writing_virtual.insert(key);
+        }
+        // A const virtual function that gives no value has no function and no upcast line, as one that writes its object has none, decision 0209.
+        // It does not give its object back.
+        if matches!(f.params.first(), Some((_, JTy::Iface(_)))) && matches!(f.ret, JTy::Void) {
+            writing_virtual.insert(key);
+            const_void.insert(key);
         }
         at.insert(key, names.place(&f.file, f.line));
         if let Some((reason, file, line)) = &f.trusted {
@@ -2642,11 +2701,11 @@ pub fn translate(lines: &str, companion: Option<(&str, &str)>) -> Result<Transla
         refs.insert(f.name, mutable);
         seen_fns = next;
     }
-    let mut models = translate_unit(&fns, &table);
     let bases = base_rows
         .iter()
         .rev()
         .fold(List::Nil, |rest, (d, bs, fin)| List::Cons((*d, (bs.iter().rev().fold(List::Nil, |r, b| List::Cons(*b, Box::new(r))), *fin)), Box::new(rest)));
+    let mut models = translate_file(&fns, &table, &bases);
     let overrides = translate_overrides(&bases, &fns, &table);
     let mut smodels = translate_structs(&table);
     // The entry of the file is no datatype, decision 0176.
@@ -2671,7 +2730,7 @@ pub fn translate(lines: &str, companion: Option<(&str, &str)>) -> Result<Transla
         };
         seen = next;
     }
-    let mut p = Printer { copies: Vec::new(), pending: Vec::new(), method_lines: HashMap::new(), calls: HashMap::new(), owned: HashMap::new(), writing: writing_virtual, refs: refs.clone(), names: &names, methods: &methods, rets: &rets, out: PRELUDE.to_string(), lines: Vec::new(), scope: Vec::new(), own: Vec::new(), writes: false, fresh: 0, temps: 0, in_block: false, laws: format!("{models:?}").contains("BitOp(") };
+    let mut p = Printer { copies: Vec::new(), pending: Vec::new(), method_lines: HashMap::new(), calls: HashMap::new(), owned: HashMap::new(), writing: writing_virtual, const_void, refs: refs.clone(), downs: Default::default(), names: &names, methods: &methods, rets: &rets, out: PRELUDE.to_string(), lines: Vec::new(), scope: Vec::new(), own: Vec::new(), writes: false, fresh: 0, temps: 0, in_block: false, laws: format!("{models:?}").contains("BitOp(") };
     p.lines.extend(PRELUDE.lines().map(|_| None));
     let mut refused_at = Vec::new();
     for (en, (place, key)) in enums.iter().zip(enum_places) {
@@ -2705,7 +2764,7 @@ pub fn translate(lines: &str, companion: Option<(&str, &str)>) -> Result<Transla
             Ok(_) if unreadable.is_some() => refused_at.push((place, format!("{}: a name with a character Dafny cannot read.", unreadable.unwrap_or_default()))),
             Ok(_) if open => {}
             // An interface is a type with no value that the model can see, decision 0165.
-            Ok((key, List::Nil)) if interface => p.put(0, format!("type {}", names.datatypes[&key]), place),
+            Ok((key, List::Nil)) if interface => p.put(0, format!("type {}(==)", names.datatypes[&key]), place),
             Ok((key, List::Nil)) => p.put(0, format!("datatype {0} = {0}()", names.datatypes[&key]), place),
             Ok((key, mut fields)) => {
                 let mut shown = Vec::new();
@@ -2807,6 +2866,7 @@ pub fn translate(lines: &str, companion: Option<(&str, &str)>) -> Result<Transla
     let companion_lines = start..p.lines.len();
     // The lines of the file are those of the Dafny text from `start + 1`. Nothing is printed when the scan refused the file.
     let decls = if companion_ok { decls.into_iter().map(|(n, lemma)| (start + n, lemma)).collect() } else { Vec::new() };
+    let downs: Vec<(String, String)> = p.downs.iter().map(|(d, b)| (names.class_names[d].clone(), names.class_names[b].clone())).collect();
     let (dafny, lines, copies) = (p.out, p.lines, p.copies);
     for (place, sentence) in refused_at {
         let (file, line) = names.places[place as usize].clone();
@@ -2819,5 +2879,5 @@ pub fn translate(lines: &str, companion: Option<(&str, &str)>) -> Result<Transla
     }
     refusals.sort();
     refusals.dedup();
-    Ok(Translation { dafny, methods: printed, trusted, refusals, rounds, exact: names.exact.get(), sorted: names.sorted.get(), interfaces: interface_names, map: Map { lines, companion: companion_lines, decls, places: names.places, contracts: names.contracts, lemmas, copies } })
+    Ok(Translation { dafny, methods: printed, trusted, refusals, rounds, exact: names.exact.get(), sorted: names.sorted.get(), interfaces: interface_names, downs, map: Map { lines, companion: companion_lines, decls, places: names.places, contracts: names.contracts, lemmas, copies } })
 }

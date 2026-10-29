@@ -56,12 +56,10 @@ public:
     const CXXMethodDecl *Static = listedStatic(FD) ? cast<CXXMethodDecl>(FD) : nullptr;
     // An interface method is written at its declaration only. A pure virtual function that has a body is none: the body has no rule, decision 0165.
     const bool PureBody = ifaceMethod(FD) && FD->isThisDeclarationADefinition();
-    // A const pure virtual function that gives no value has no rule yet, decision 0166. One that writes its object gives its object back, decision 0169.
-    const bool NoValue = ifaceMethod(FD) && !PureBody && FD->getReturnType()->isVoidType() && cast<CXXMethodDecl>(FD)->isConst();
-    const bool Interface = ifaceMethod(FD) && !PureBody && !NoValue;
+    // A const pure virtual function that gives no value is a method of the interface, as one that writes its object is, decisions 0169 and 0209.
+    const bool Interface = ifaceMethod(FD) && !PureBody;
     const CXXConstructorDecl *Constructor = valueConstructor(FD);
     const char *Opaque = PureBody                                  ? "a body of a pure virtual function"
-                         : NoValue                                   ? "a pure virtual function that gives no value"
                          : FD->isTemplated() && isa<CXXMethodDecl>(FD) && FD->getDescribedFunctionTemplate() ? "a member function template"
                          : noInstance(FD)                            ? "a function template with no instance"
                          : FD->isTemplated()                         ? "FunctionTemplateDecl"
@@ -1164,6 +1162,35 @@ public:
       return true;
     return !interfaceBases(Parent).empty() && !finalOverInterface(Parent);
   }
+  // Whether an interface has two virtual functions of the name, decision 0210.
+  bool overloaded(const CXXRecordDecl *RD, const std::string &Name) const {
+    unsigned N = 0;
+    for (const Decl *D : RD->getDefinition()->decls())
+      if (const auto *M = dyn_cast<CXXMethodDecl>(D); M && ifaceMethod(M) && M->getNameAsString() == Name)
+        ++N;
+    return N > 1;
+  }
+  // The name of a virtual function in a table of members, decision 0210: its name, or when its name is shared, its name, `'` and its parameter types. The
+  // override of a final class has the parameter types of the virtual function, so both get the same name and the check of the override finds it. The shell
+  // shows the part before the `'`.
+  std::string memberName(const CXXMethodDecl *M, bool Shared) const {
+    std::string Out = M->getNameAsString();
+    if (!Shared)
+      return Out;
+    Out += M->isConst() ? "'const'" : "'";
+    for (const ParmVarDecl *P : M->parameters())
+      Out += P->getType().getCanonicalType().getAsString(Context.getPrintingPolicy()) + ",";
+    return Out;
+  }
+  // Whether a virtual function of a final class over interfaces overrides a function whose name an interface shares, decision 0210.
+  bool sharedOverride(const CXXMethodDecl *M) const {
+    if (!M->isVirtual() || !finalOverInterface(M->getParent()))
+      return false;
+    for (const CXXRecordDecl *B : interfaceBases(M->getParent()))
+      if (overloaded(B, M->getNameAsString()))
+        return true;
+    return false;
+  }
   // Writes the entry of an interface in the table of structs: no field, and the member table of its virtual functions, decision 0165.
   void interfaceEntry(const CXXRecordDecl *RD) const {
     RD = RD->getDefinition();
@@ -1171,20 +1198,12 @@ public:
     if (Structs.count(Key))
       return;
     Structs.emplace(Key, nullptr);
-    // The members are in the order of the declarations, decision 0166: a contract reads only the functions above it.
-    std::vector<std::pair<std::string, std::vector<std::string>>> Named;
-    for (const Decl *D : RD->decls())
-      if (const auto *M = dyn_cast<CXXMethodDecl>(D); M && ifaceMethod(M)) {
-        const std::string Name = M->getNameAsString();
-        auto At = std::find_if(Named.begin(), Named.end(), [&](const auto &N) { return N.first == Name; });
-        if (At == Named.end())
-          At = Named.insert(Named.end(), {Name, {}});
-        At->second.push_back(this->key(M));
-      }
+    // The members are in the order of the declarations, decision 0166: a contract reads only the functions above it. A name that two functions share
+    // is the name with the parameter types for each of them, decision 0210, so a contract cannot call one by its name.
     llvm::json::Array Members;
-    for (const auto &[Name, Keys] : Named)
-      if (Keys.size() == 1)
-        Members.push_back(llvm::json::Array{Name, Keys.front()});
+    for (const Decl *D : RD->decls())
+      if (const auto *M = dyn_cast<CXXMethodDecl>(D); M && ifaceMethod(M))
+        Members.push_back(llvm::json::Array{memberName(M, overloaded(RD, M->getNameAsString())), this->key(M)});
     const SourceLocation Loc = SM.getFileLoc(RD->getLocation());
     Structs.at(Key) = llvm::json::Object{{"struct", Key}, {"name", RD->getNameAsString()}, {"file", file(Loc)}, {"line", number(line(Loc))},
                                              {"fields", llvm::json::Array{}}, {"members", std::move(Members)}, {"interface", true},
@@ -1730,7 +1749,7 @@ public:
           if (const auto *M = dyn_cast<CXXMethodDecl>(D); M && (constMember(M) || (M->isVirtual() && member(M)) || (isa<CXXDestructorDecl>(M) && member(M))))
             // A const member function that has no body here has no function of the model. Its key is its display name, which the core
             // prints in the sentence of a contract that calls it, decision 0188.
-            Named[isa<CXXDestructorDecl>(M) ? "~" : M->getNameAsString()].push_back(
+            Named[isa<CXXDestructorDecl>(M) ? "~" : memberName(M, sharedOverride(M))].push_back(
                 constMember(M) && !M->isDefined() && !trustedReason(M) ? name(M) : key(M));
         // The member functions that the class takes from its base with data, decision 0201.
         for (const CXXMethodDecl *M : baseMembers(RD))
@@ -2144,6 +2163,7 @@ private:
       // The call with a class at a reference of its interface says why, decision 0169.
       else if (const llvm::json::Array *Why = Written.getAsObject() ? Written.getAsObject()->getArray("Unknown") : nullptr;
                Why && !Why->empty() && ((*Why)[0].getAsString() == StringRef("a class as a reference to its interface") ||
+                                         (*Why)[0].getAsString() == StringRef("`*this` as a reference that is not const") ||
                                          StringRef((*Why)[0].getAsString().value_or("")).starts_with("a call of a member function of the base ") ||
                                          StringRef((*Why)[0].getAsString().value_or("")).starts_with("a change of ")))
         return Written;
@@ -2469,6 +2489,13 @@ private:
     const CXXRecordDecl *Data = dataBase(From);
     return Data && To && To->getDefinition() == Data ? Cast : nullptr;
   }
+  // Whether the cast takes a local variable of a class: not a field, a parameter or a reference. The model writes a call that changes it through its
+  // interface back into the local, decision 0208.
+  static bool localClass(const CastExpr *Cast) {
+    const auto *Ref = dyn_cast<DeclRefExpr>(Cast->getSubExpr()->IgnoreParens());
+    const auto *Var = Ref ? dyn_cast<VarDecl>(Ref->getDecl()) : nullptr;
+    return Var && !isa<ParmVarDecl>(Var) && Var->hasLocalStorage() && Var->getType()->isRecordType();
+  }
   // The kind of a cast of a final class over an interface to one of its interfaces, or null, decision 0166.
   llvm::json::Value upcastKind(const CastExpr *Cast) const {
     const CXXRecordDecl *To = Cast->getType()->getAsCXXRecordDecl();
@@ -2751,6 +2778,26 @@ private:
 
   // The argument `std::move(x)` of a local or a parameter `x` of a plain struct, at a parameter `T&&` of a plain struct, is `x`: the callee writes it back,
   // decision 0179. The same holds for a vector `x` at a parameter `std::vector<T>&&`, decision 0185. Any other argument is its expression.
+  // Whether an expression is an argument of a call, with only a cast, a parenthesis, a copy or a temporary between them. ponytail: `return *this` by value and the
+  // rest of the uses of `*this` stay refused. Upgrade: a rule for each.
+  bool isCallArgument(const Expr *E) const {
+    for (DynTypedNode Node = DynTypedNode::create(*E);;) {
+      const auto Parents = Context.getParents(Node);
+      if (Parents.size() != 1)
+        return false;
+      Node = Parents[0];
+      if (Node.get<CallExpr>())
+        return true;
+      if (!Node.get<ImplicitCastExpr>() && !Node.get<ParenExpr>() && !Node.get<CXXConstructExpr>() && !Node.get<MaterializeTemporaryExpr>() && !Node.get<CXXBindTemporaryExpr>())
+        return false;
+    }
+  }
+  // Whether the argument is `*this` for a parameter that is a reference and not const, decisions 0214 and 0217.
+  static bool thisAsMutRef(const FunctionDecl *Callee, unsigned I, const Expr *Arg) {
+    const auto *Deref = dyn_cast<UnaryOperator>(Arg->IgnoreParenImpCasts());
+    return Deref && Deref->getOpcode() == UO_Deref && isa<CXXThisExpr>(Deref->getSubExpr()->IgnoreParenImpCasts()) && I < Callee->getNumParams() &&
+           Callee->getParamDecl(I)->getType()->isLValueReferenceType() && !Callee->getParamDecl(I)->getType()->getPointeeType().isConstQualified();
+  }
   llvm::json::Value callArg(const FunctionDecl *Callee, unsigned I, const Expr *Arg, unsigned Near) const {
     // A vector at a parameter by value, decision 0194. `std::move(v)` of a local vector or a vector parameter by value is `Move(v, type)`: the core gives the argument
     // the value, then `v` any value. A plain `v` is the variable: a copy, and `v` keeps its value.
@@ -3002,6 +3049,9 @@ private:
       if (Unary->getOpcode() == UO_Deref)
         if (const Expr *Sub = Unary->getSubExpr()->IgnoreParenImpCasts(); !isa<CXXThisExpr>(Sub) && !constPointee(Sub->getType()).isNull())
           return tag("Value", expr(Sub, Near));
+      // `*this` is the object, decision 0214. The call that takes it by a reference that is not const is refused where the arguments are written.
+      if (Unary->getOpcode() == UO_Deref && isa<CXXThisExpr>(Unary->getSubExpr()->IgnoreParenImpCasts()) && isCallArgument(Unary))
+        return expr(Unary->getSubExpr()->IgnoreParenImpCasts(), Near);
       if (Unary->getOpcode() == UO_AddrOf)
         if (const auto *Ref = dyn_cast<DeclRefExpr>(Unary->getSubExpr()->IgnoreParens()); Ref && isVariable(Ref->getDecl()) && mutRef(Ref->getDecl()->getType()).getAsNull() &&
                                                                                           !Ref->getDecl()->getType()->isReferenceType() &&
@@ -3077,7 +3127,8 @@ private:
       if (Cast->getCastKind() == CK_DerivedToBase && toDataBase(Cast))
         return unknown(E, changeIntoBase(Cast), Near);
       // A final class at a reference of its interface that is not const has no rule: the model has no way back from a value of the interface, decision 0169.
-      if (Cast->getCastKind() == CK_DerivedToBase && !Cast->getType().isConstQualified() && Cast->getValueKind() == VK_LValue && !upcastKind(Cast).getAsNull())
+      // A local of a final class is the exception: the core writes it back through its interface, decision 0208.
+      if (Cast->getCastKind() == CK_DerivedToBase && !Cast->getType().isConstQualified() && Cast->getValueKind() == VK_LValue && !upcastKind(Cast).getAsNull() && !localClass(Cast))
         return unknown(E, "a class as a reference to its interface", Near);
       llvm::json::Value Kind = Cast->getCastKind() == CK_LValueToRValue ? llvm::json::Value("Read")
                                : Cast->getCastKind() == CK_NoOp         ? llvm::json::Value("NoOp")
@@ -3299,8 +3350,11 @@ private:
         // The object can be a chain of calls that give back their object, decision 0183.
         const CXXMemberCallExpr *Chain = fluentCall(Object);
         llvm::json::Array Args{Chain ? (E == HoistOk ? chain(Chain, line(HoistFor->getBeginLoc()), false) : nested(Chain, line(E->getBeginLoc()))) : expr(Object, line(E->getBeginLoc()))};
-        for (unsigned I = 0; I < Call->getNumArgs(); ++I)
+        for (unsigned I = 0; I < Call->getNumArgs(); ++I) {
+          if (thisAsMutRef(Call->getDirectCallee(), I, Call->getArg(I)))
+            return unknown(E, "`*this` as a reference that is not const", Near);
           Args.push_back(callArg(Call->getDirectCallee(), I, Call->getArg(I), line(E->getBeginLoc())));
+        }
         return tag("Call", llvm::json::Array{key(Call->getDirectCallee()), name(Call->getDirectCallee()), std::move(Args), number(line(E->getBeginLoc()))});
       }
     }
@@ -3315,8 +3369,11 @@ private:
     if (const auto *Call = dyn_cast<CXXOperatorCallExpr>(E); Call && Call->getOperator() == OO_Call && Call->getNumArgs() >= 1 && Call->getDirectCallee() &&
                                                              member(Call->getDirectCallee())) {
       llvm::json::Array Args{expr(Call->getArg(0)->IgnoreParenImpCasts(), line(E->getBeginLoc()))};
-      for (unsigned I = 1; I < Call->getNumArgs(); ++I)
+      for (unsigned I = 1; I < Call->getNumArgs(); ++I) {
+        if (thisAsMutRef(Call->getDirectCallee(), I - 1, Call->getArg(I)))
+          return unknown(E, "`*this` as a reference that is not const", Near);
         Args.push_back(expr(Call->getArg(I), line(E->getBeginLoc())));
+      }
       return tag("Call", llvm::json::Array{key(Call->getDirectCallee()), name(Call->getDirectCallee()), std::move(Args), number(line(E->getBeginLoc()))});
     }
     // `std::count_if(v.begin(), v.end(), [captures](T x) { return e; })` over a sequence parameter, decision 0149. The captures are by copy and the
@@ -3338,8 +3395,11 @@ private:
           if (const CastExpr *Up = toDataBase(Arg); Up && Up->getCastKind() == CK_DerivedToBase && !Up->getType().isConstQualified() && Up->getValueKind() == VK_LValue)
             return unknown(E, changeIntoBase(Up), Near);
           if (const auto *Up = dyn_cast<ImplicitCastExpr>(Arg->IgnoreParens()); Up && Up->getCastKind() == CK_DerivedToBase && !Up->getType().isConstQualified() &&
-                                                                              Up->getValueKind() == VK_LValue && !upcastKind(Up).getAsNull())
+                                                                              Up->getValueKind() == VK_LValue && !upcastKind(Up).getAsNull() && !localClass(Up))
             return unknown(E, "a class as a reference to its interface", Near);
+          // `*this` for a reference that is not const would be a second name for the object, decision 0214.
+          if (thisAsMutRef(Callee, I, Arg))
+            return unknown(E, "`*this` as a reference that is not const", Near);
           Args.push_back(callArg(Callee, I, Arg, line(E->getBeginLoc())));
         }
         return tag("Call", llvm::json::Array{key(Callee), name(Callee), std::move(Args), number(line(E->getBeginLoc()))});

@@ -845,6 +845,8 @@ pub open spec fn spec_gcalls_stmt(s: Stmt) -> List<(u32, u32, u32)>
         Stmt::PushField(_, e, _) => spec_gcalls(e),
         Stmt::SetThroughField(_, _, e, _) => spec_gcalls(e),
         Stmt::PushBack(_, e, _) => spec_gcalls(e),
+        Stmt::SortBy(_, _, _, _, e, _) => spec_gcalls(e),
+        Stmt::Block(b, _) => spec_gcalls_stmts(*b),
         _ => List::Nil,
     }
 }
@@ -892,6 +894,8 @@ pub fn gcalls_stmt(s: &Stmt) -> (r: List<(u32, u32, u32)>)
         Stmt::PushField(_, e, _) => gcalls(e),
         Stmt::SetThroughField(_, _, e, _) => gcalls(e),
         Stmt::PushBack(_, e, _) => gcalls(e),
+        Stmt::SortBy(_, _, _, _, e, _) => gcalls(e),
+        Stmt::Block(b, _) => gcalls_stmts(b),
         _ => List::Nil,
     }
 }

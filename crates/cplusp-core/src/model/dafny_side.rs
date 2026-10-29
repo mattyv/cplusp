@@ -183,13 +183,15 @@ pub enum DStmt {
 
 /// A place that a call writes back: a local by its name, the object of the member function that makes the call, or a reference
 /// parameter of that function, decision 0108. `Owned` is the value of a local unique_ptr, which a virtual function writes, decision
-/// 0169.
+/// 0169. `Down` is a local of a final class `D`, by its name and the keys of `D` and of its interface `B`, that a call writes through a
+/// reference to `B`. The local takes a value of `D` whose upcast is the value that the call gives back, decision 0208.
 #[derive(Structural, PartialEq, Eq, Clone, Copy, Debug)]
 pub enum Obj {
     Local(u32),
     Object,
     Out(u32),
     Owned(u32),
+    Down(u32, u32, u32),
 }
 
 /// The places that a call writes back, in the order of the results of its method after `result`: the object, then each reference
@@ -273,7 +275,9 @@ pub type Models = List<Model>;
 /// expression with two writes where C++ fixes no order, by the line, `WriteRead` is one that writes a name and reads it elsewhere,
 /// by the id of the name and the line, and `LoopWrite` is a write in the condition of a loop, by the line, decision 0177. `Copy`
 /// is a copy of a struct with a destructor, and `NoDtorContract` is a local of a struct whose destructor has no contract, each by
-/// the line, decision 0178.
+/// the line, decision 0178. `Unbacked` is a call that writes a local back through its interface in a file where an interface has no
+/// final class over it, by the line of the call, decision 0217. `Loop` is a call through an interface that can run an override of
+/// it again before it returns, by the key of the callee and the line, decision 0218.
 #[derive(Structural, PartialEq, Eq, Clone, Copy, Debug)]
 pub enum Refusal {
     Construct(u32, u32),
@@ -327,6 +331,8 @@ pub enum Refusal {
     LoopWrite(u32),
     Copy(u32),
     NoDtorContract(u32),
+    Unbacked(u32),
+    Loop(u32, u32),
 }
 
 } // verus!

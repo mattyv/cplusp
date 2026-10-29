@@ -350,6 +350,10 @@ pub fn run(t: &Translation, limit: u32, refused: bool, source: &str, shown: &dyn
     for interface in &t.interfaces {
         println!("Axiom: model: {interface}: a call through {interface} runs an override that keeps the contract of {interface}, C++23 [class.virtual]. Each override of {interface} in this file is checked against that contract.");
     }
+    // A call through a reference to an interface leaves a local of its class, decision 0208.
+    for (class, interface) in &t.downs {
+        println!("Axiom: model: {class}: a call through a reference to {interface} leaves an object of {class}, C++23 [class.virtual].");
+    }
     if t.sorted {
         println!("Axiom: Algorithm.dfy: StdSort: std::sort with a strict weak order gives a permutation of its range, and no later element compares less than an earlier one, C++23 [sort] and [alg.sorting.general].");
     }

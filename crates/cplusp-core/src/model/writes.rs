@@ -109,6 +109,7 @@ pub open spec fn spec_obj_names(os: Objs) -> Names
             Obj::Local(v) => List::Cons(v, Box::new(spec_obj_names(*rest))),
             Obj::Out(v) => List::Cons(v, Box::new(spec_obj_names(*rest))),
             Obj::Owned(v) => List::Cons(v, Box::new(spec_obj_names(*rest))),
+            Obj::Down(v, _, _) => List::Cons(v, Box::new(spec_obj_names(*rest))),
             Obj::Object => spec_obj_names(*rest),
         },
     }
@@ -125,6 +126,7 @@ pub fn obj_names(os: &Objs) -> (r: Names)
             Obj::Local(v) => List::Cons(*v, Box::new(obj_names(rest))),
             Obj::Out(v) => List::Cons(*v, Box::new(obj_names(rest))),
             Obj::Owned(v) => List::Cons(*v, Box::new(obj_names(rest))),
+            Obj::Down(v, _, _) => List::Cons(*v, Box::new(obj_names(rest))),
             Obj::Object => obj_names(rest),
         },
     }
@@ -223,6 +225,7 @@ pub open spec fn spec_bad_obj(o: Obj, ps: Params, line: u32) -> Option<Refusal> 
         Obj::Local(v) => if spec_get(ps, v) is Some { Some(Refusal::WriteParam(v, line)) } else { None },
         Obj::Object => if spec_writes(ps) { None } else { Some(Refusal::Syntax(line)) },
         Obj::Owned(v) => if spec_get(ps, v) is Some { Some(Refusal::NoTarget(line)) } else { None },
+        Obj::Down(v, _, _) => if spec_get(ps, v) is Some { Some(Refusal::NoTarget(line)) } else { None },
     }
 }
 
@@ -235,6 +238,7 @@ pub fn bad_obj(o: Obj, ps: &Params, line: u32) -> (r: Option<Refusal>)
         Obj::Local(v) => if get(ps, v).is_some() { Some(Refusal::WriteParam(v, line)) } else { None },
         Obj::Object => if writes(ps) { None } else { Some(Refusal::Syntax(line)) },
         Obj::Owned(v) => if get(ps, v).is_some() { Some(Refusal::NoTarget(line)) } else { None },
+        Obj::Down(v, _, _) => if get(ps, v).is_some() { Some(Refusal::NoTarget(line)) } else { None },
     }
 }
 

@@ -2793,8 +2793,31 @@ pub open spec fn spec_owned(o: Expr) -> Option<u32>
     }
 }
 
+/// A local `v` of the final class `D` as a value of its interface `B`, by `v` and the keys of `D` and `B`, decision 0208.
+pub open spec fn spec_down(o: Expr) -> Option<(u32, u32, u32)>
+    decreases o,
+{
+    match o {
+        Expr::Cast(c, a) => match c {
+            CastKind::Upcast(dk, bk) => match *a {
+                Expr::Var(v, Ty::Struct(k)) => if k == dk {
+                    Some((v, dk, bk))
+                } else {
+                    None
+                },
+                _ => None,
+            },
+            CastKind::NoOp => spec_down(*a),
+            _ => None,
+        },
+        Expr::Paren(a) => spec_down(*a),
+        _ => None,
+    }
+}
+
 /// The place that a call of a virtual function that writes its object writes back. It is a place of 0108, or the value of a local
-/// unique_ptr of the interface, which takes the new value, decision 0169.
+/// unique_ptr of the interface, which takes the new value, decision 0169. The object is never a local through its interface,
+/// decision 0217.
 pub open spec fn spec_object_target(o: Expr, ps: Params, line: u32) -> Result<Obj, Refusal> {
     match spec_owned(o) {
         Some(v) => if spec_get(ps, v) is Some {
@@ -2803,6 +2826,25 @@ pub open spec fn spec_object_target(o: Expr, ps: Params, line: u32) -> Result<Ob
             Ok(Obj::Owned(v))
         },
         None => spec_target(o, ps, line),
+    }
+}
+
+/// The place that a call writes back at a parameter of type `t`. The object of a virtual function that writes it is the place of
+/// `spec_object_target`, and a local of a final class as the argument for a reference to its interface is that local, decision 0208.
+pub open spec fn spec_param_target(a: Expr, t: Ty, ps: Params, line: u32) -> Result<Obj, Refusal> {
+    if t is IfaceMut {
+        spec_object_target(a, ps, line)
+    } else {
+        match (t, spec_down(a)) {
+            (Ty::Mut(Scalar::Struct(b)), Some((v, dk, bk))) => if b != bk {
+                spec_target(a, ps, line)
+            } else if spec_get(ps, v) is Some {
+                Err(Refusal::NoTarget(line))
+            } else {
+                Ok(Obj::Down(v, dk, bk))
+            },
+            _ => spec_target(a, ps, line),
+        }
     }
 }
 
@@ -2816,7 +2858,7 @@ pub open spec fn spec_writebacks(args: Args, cps: Params, ps: Params, line: u32)
         List::Cons(a, rest) => match cps {
             List::Nil => Err(Refusal::Syntax(line)),
             List::Cons((_, t), crest) => if spec_written(t) {
-                match (if t is IfaceMut { spec_object_target(*a, ps, line) } else { spec_target(*a, ps, line) }) {
+                match spec_param_target(*a, t, ps, line) {
                     Err(r) => Err(r),
                     Ok(o) => match spec_writebacks(*rest, *crest, ps, line) {
                         Err(r) => Err(r),
@@ -2983,6 +3025,7 @@ pub open spec fn spec_obj_named(o: Obj, ns: Names) -> bool {
         Obj::Local(n) => spec_has(ns, n),
         Obj::Out(n) => spec_has(ns, n),
         Obj::Owned(n) => spec_has(ns, n),
+        Obj::Down(n, _, _) => spec_has(ns, n),
         Obj::Object => false,
     }
 }

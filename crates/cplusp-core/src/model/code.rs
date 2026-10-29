@@ -1966,6 +1966,49 @@ pub fn object_target(o: &Expr, ps: &Params, line: u32) -> (r: Result<Obj, Refusa
     }
 }
 
+pub fn down(o: &Expr) -> (r: Option<(u32, u32, u32)>)
+    ensures
+        r == spec_down(*o),
+    decreases o,
+{
+    match o {
+        Expr::Cast(c, a) => match c {
+            CastKind::Upcast(dk, bk) => match &**a {
+                Expr::Var(v, Ty::Struct(k)) => if *k == *dk {
+                    Some((*v, *dk, *bk))
+                } else {
+                    None
+                },
+                _ => None,
+            },
+            CastKind::NoOp => down(a),
+            _ => None,
+        },
+        Expr::Paren(a) => down(a),
+        _ => None,
+    }
+}
+
+pub fn param_target(a: &Expr, t: Ty, ps: &Params, line: u32) -> (r: Result<Obj, Refusal>)
+    ensures
+        r == spec_param_target(*a, t, *ps, line),
+{
+    if matches!(t, Ty::IfaceMut(_)) {
+        object_target(a, ps, line)
+    } else {
+        match (t, down(a)) {
+            (Ty::Mut(Scalar::Struct(b)), Some((v, dk, bk))) => if b != bk {
+                target(a, ps, line)
+            } else if get_ref(ps, v).is_some() {
+                Err(Refusal::NoTarget(line))
+            } else {
+                Ok(Obj::Down(v, dk, bk))
+            },
+            _ => target(a, ps, line),
+        }
+    }
+}
+
 pub fn writebacks(args: &Args, cps: &Params, ps: &Params, line: u32) -> (r: Result<Objs, Refusal>)
     ensures
         r == spec_writebacks(*args, *cps, *ps, line),
@@ -1976,12 +2019,7 @@ pub fn writebacks(args: &Args, cps: &Params, ps: &Params, line: u32) -> (r: Resu
         List::Cons(a, rest) => match cps {
             List::Nil => Err(Refusal::Syntax(line)),
             List::Cons((_, t), crest) => if written(*t) {
-                let o = if matches!(t, Ty::IfaceMut(_)) {
-                    object_target(a, ps, line)
-                } else {
-                    target(a, ps, line)
-                };
-                match o {
+                match param_target(a, *t, ps, line) {
                     Err(r) => Err(r),
                     Ok(o) => match writebacks(rest, crest, ps, line) {
                         Err(r) => Err(r),
@@ -2085,6 +2123,7 @@ pub fn obj_named(o: Obj, ns: &Names) -> (r: bool)
         Obj::Local(n) => has(ns, n),
         Obj::Out(n) => has(ns, n),
         Obj::Owned(n) => has(ns, n),
+        Obj::Down(n, _, _) => has(ns, n),
         Obj::Object => false,
     }
 }
@@ -3402,7 +3441,7 @@ pub fn const_virtual(f: &Function) -> (r: bool)
     ensures
         r == spec_const_virtual(*f),
 {
-    matches!(head_ty(&f.params), Some(Ty::Iface(_)))
+    matches!(head_ty(&f.params), Some(Ty::Iface(_))) && f.ret != Ty::Void
 }
 
 pub fn unmark(ms: &Members) -> (r: Members)
@@ -3919,6 +3958,202 @@ pub fn translate_unit(all: &Fns, sd: &Structs) -> (r: Models)
     translate_each(all, all, &marked)
 }
 
+pub fn iface_of(f: &Function) -> (r: Option<u32>)
+    ensures
+        r == spec_iface_of(*f),
+{
+    match head_ty(&f.params) {
+        Some(Ty::Iface(k)) => Some(k),
+        Some(Ty::IfaceMut(k)) => Some(k),
+        _ => None,
+    }
+}
+
+pub fn over(bases: &Bases, k: u32) -> (r: bool)
+    ensures
+        r == spec_over(*bases, k),
+    decreases bases,
+{
+    match bases {
+        List::Nil => false,
+        List::Cons((_, (bs, fin)), rest) => (*fin && has(bs, k)) || over(rest, k),
+    }
+}
+
+pub fn backed(fs: &Fns, bases: &Bases) -> (r: bool)
+    ensures
+        r == spec_backed(*fs, *bases),
+    decreases fs,
+{
+    match fs {
+        List::Nil => true,
+        List::Cons(f, rest) => match iface_of(f) {
+            Some(k) => over(bases, k) && backed(rest, bases),
+            None => backed(rest, bases),
+        },
+    }
+}
+
+pub fn objs_down(os: &Objs) -> (r: bool)
+    ensures
+        r == spec_objs_down(*os),
+    decreases os,
+{
+    match os {
+        List::Nil => false,
+        List::Cons(o, rest) => matches!(o, Obj::Down(_, _, _)) || objs_down(rest),
+    }
+}
+
+pub fn calls_down(cs: &DCalls) -> (r: bool)
+    ensures
+        r == spec_calls_down(*cs),
+    decreases cs,
+{
+    match cs {
+        List::Nil => false,
+        List::Cons(p, rest) => match p {
+            DPre::Update(_, _, os, _, _) => objs_down(os) || calls_down(rest),
+            _ => calls_down(rest),
+        },
+    }
+}
+
+pub fn down_line(ss: &DStmts) -> (r: Option<u32>)
+    ensures
+        r == spec_down_line(*ss),
+    decreases ss,
+{
+    match ss {
+        List::Nil => None,
+        List::Cons((s, l), rest) => match stmt_down(s, *l) {
+            Some(x) => Some(x),
+            None => down_line(rest),
+        },
+    }
+}
+
+pub fn cases_down(cs: &DCases) -> (r: Option<u32>)
+    ensures
+        r == spec_cases_down(*cs),
+    decreases cs,
+{
+    match cs {
+        List::Nil => None,
+        List::Cons((_, b), rest) => match down_line(b) {
+            Some(x) => Some(x),
+            None => cases_down(rest),
+        },
+    }
+}
+
+pub fn stmt_down(s: &DStmt, l: u32) -> (r: Option<u32>)
+    ensures
+        r == spec_stmt_down(*s, l),
+    decreases s,
+{
+    match s {
+        DStmt::ReturnUpdate(os, _, _) => if objs_down(os) { Some(l) } else { None },
+        DStmt::Update(os, _, _) => if objs_down(os) { Some(l) } else { None },
+        DStmt::UpdateAt(o, _, os, _, _) => if matches!(o, Obj::Down(_, _, _)) || objs_down(os) { Some(l) } else { None },
+        DStmt::LocalUpdate(_, _, os, _, _) => if objs_down(os) { Some(l) } else { None },
+        DStmt::If(_, a, b) => match down_line(a) {
+            Some(x) => Some(x),
+            None => down_line(b),
+        },
+        DStmt::While(_, _, _, b) => down_line(b),
+        DStmt::For(i, _, _, _, _, b, st, _) => match stmt_down(i, l) {
+            Some(x) => Some(x),
+            None => match down_line(b) {
+                Some(x) => Some(x),
+                None => stmt_down(st, l),
+            },
+        },
+        DStmt::Match(_, _, cs) => cases_down(cs),
+        DStmt::Pre(cs, st) => if calls_down(cs) { Some(l) } else { stmt_down(st, l) },
+        DStmt::Moved(st, _) => stmt_down(st, l),
+        DStmt::Gone(st, _, _) => stmt_down(st, l),
+        DStmt::Block(b) => down_line(b),
+        DStmt::Scope(b) => down_line(b),
+        DStmt::Dtors(b) => down_line(b),
+        DStmt::Return(_) => None,
+        DStmt::Local(_, _, _) => None,
+        DStmt::LocalCall(_, _, _, _) => None,
+        DStmt::ReturnCall(_, _) => None,
+        DStmt::Assign(_, _) => None,
+        DStmt::AssignCall(_, _, _) => None,
+        DStmt::SetField(_, _) => None,
+        DStmt::SetOut(_, _) => None,
+        DStmt::SetOutField(_, _, _) => None,
+        DStmt::SetOwnField(_, _, _) => None,
+        DStmt::SetThroughField(_, _, _) => None,
+        DStmt::CallStmt(_, _) => None,
+        DStmt::Exit => None,
+        DStmt::Assert(_) => None,
+        DStmt::Apply(_, _) => None,
+        DStmt::Sort(_, _) => None,
+        DStmt::SortBy(_, _, _, _, _) => None,
+        DStmt::DeclTemp(_, _) => None,
+        DStmt::AssignTemp(_, _) => None,
+        DStmt::SetResult(_) => None,
+    }
+}
+
+pub fn backed_model(m: Model, ok: bool) -> (r: Model)
+    ensures
+        r == spec_backed_model(m, ok),
+{
+    if ok {
+        m
+    } else {
+        match m {
+            Model::Full(f) => match down_line(&f.body) {
+                Some(l) => Model::Bare(f.name, f.params, f.ret, Refusal::Unbacked(l)),
+                None => Model::Full(f),
+            },
+            _ => m,
+        }
+    }
+}
+
+pub fn backed_models(ms: Models, ok: bool) -> (r: Models)
+    ensures
+        r == spec_backed_models(ms, ok),
+    decreases ms,
+{
+    match ms {
+        List::Nil => List::Nil,
+        List::Cons(m, rest) => List::Cons(backed_model(m, ok), Box::new(backed_models(*rest, ok))),
+    }
+}
+
+/// The models of the functions of a file, with the checks of 0217 and 0218. In a file with an interface that no final class backs,
+/// no method writes a local back through its interface. No call in a method can come back to it through an override of its callee.
+/// Each key keeps its method.
+pub fn translate_file(all: &Fns, sd: &Structs, bases: &Bases) -> (r: Models)
+    ensures
+        r == spec_file(*all, *sd, *bases),
+        spec_no_loop(r, *all, *all, spec_file_pairs(*all, *sd, *bases), spec_file_dtors(*all, *sd)),
+        forall|k: u32| #[trigger] has_method(r, k) == has_method(spec_unit(*all, *all, spec_marked(*sd, *all)), k),
+{
+    let ms = translate_unit(all, sd);
+    let ok = backed(all, bases);
+    let marked = marked(sd, all);
+    let prs = pairs(&upcasts(bases, all, &marked));
+    let ds = dtors(&marked, &marked);
+    let n = fuel(all);
+    proof {
+        lemma_backed_models(ms, ok);
+        assert forall|k: u32| #[trigger] has_method(spec_backed_models(ms, ok), k) == has_method(ms, k) by {
+            lemma_backed_keeps_methods(ms, ok, k);
+        }
+        lemma_unit_len(*all, *all, spec_marked(*sd, *all));
+        lemma_backed_len(ms, *all, ok);
+        lemma_loop_models(spec_backed_models(ms, ok), *all, *all, prs, ds, n);
+    }
+    loop_models(backed_models(ms, ok), all, all, &prs, &ds, n)
+}
+
 pub fn same_tys(a: &Params, b: &Params) -> (r: bool)
     ensures
         r == spec_same_tys(*a, *b),
@@ -4096,6 +4331,234 @@ pub fn translate_overrides(bases: &List<(u32, (Names, bool))>, all: &Fns, sd: &S
 {
     let marked = marked(sd, all);
     upcasts(bases, all, &marked)
+}
+pub fn pairs_of(os: &DOverrides) -> (r: Pairs)
+    ensures
+        r == spec_pairs_of(*os),
+    decreases os,
+{
+    match os {
+        List::Nil => List::Nil,
+        List::Cons(o, rest) => List::Cons((o.base, o.derived), Box::new(pairs_of(rest))),
+    }
+}
+
+pub fn pairs(ups: &List<Result<DUpcast, Refusal>>) -> (r: Pairs)
+    ensures
+        r == spec_pairs(*ups),
+    decreases ups,
+{
+    match ups {
+        List::Nil => List::Nil,
+        List::Cons(u, rest) => match u {
+            Ok(up) => append(pairs_of(&up.overrides), pairs(rest)),
+            Err(_) => pairs(rest),
+        },
+    }
+}
+
+pub fn dtors(rows: &Structs, sd: &Structs) -> (r: Names)
+    ensures
+        r == spec_dtors(*rows, *sd),
+    decreases rows,
+{
+    match rows {
+        List::Nil => List::Nil,
+        List::Cons((k, _), rest) => match member(sd, *k, DTOR_NAME) {
+            Some((key, _)) => List::Cons(key, Box::new(dtors(rest, sd))),
+            None => dtors(rest, sd),
+        },
+    }
+}
+
+pub fn overs(prs: &Pairs, k: u32) -> (r: Names)
+    ensures
+        r == spec_overs(*prs, k),
+    decreases prs,
+{
+    match prs {
+        List::Nil => List::Nil,
+        List::Cons((b, d), rest) => if *b == k {
+            List::Cons(*d, Box::new(overs(rest, k)))
+        } else {
+            overs(rest, k)
+        },
+    }
+}
+
+pub fn succ_calls(cs: &List<(u32, bool, u32)>, prs: &Pairs) -> (r: Names)
+    ensures
+        r == spec_succ_calls(*cs, *prs),
+    decreases cs,
+{
+    match cs {
+        List::Nil => List::Nil,
+        List::Cons((k, _, _), rest) => List::Cons(*k, Box::new(append(overs(prs, *k), succ_calls(rest, prs)))),
+    }
+}
+
+pub fn succ_flat_calls(cs: &List<(u32, bool, u32)>, prs: &Pairs) -> (r: Names)
+    ensures
+        r == spec_succ_flat_calls(*cs, *prs),
+    decreases cs,
+{
+    match cs {
+        List::Nil => List::Nil,
+        List::Cons((k, down, _), rest) => if *down {
+            List::Cons(*k, Box::new(succ_flat_calls(rest, prs)))
+        } else {
+            List::Cons(*k, Box::new(append(overs(prs, *k), succ_flat_calls(rest, prs))))
+        },
+    }
+}
+
+pub fn succ(all: &Fns, prs: &Pairs, ds: &Names, flat: bool, k: u32) -> (r: Names)
+    ensures
+        r == spec_succ(*all, *prs, *ds, flat, k),
+{
+    match find(all, k) {
+        Some(f) => {
+            let cs = ocalls_stmts(&f.body);
+            append(if flat { succ_flat_calls(&cs, prs) } else { succ_calls(&cs, prs) }, copy(ds))
+        },
+        None => List::Nil,
+    }
+}
+
+pub fn succs(all: &Fns, prs: &Pairs, ds: &Names, flat: bool, ks: &Names) -> (r: Names)
+    ensures
+        r == spec_succs(*all, *prs, *ds, flat, *ks),
+    decreases ks,
+{
+    match ks {
+        List::Nil => List::Nil,
+        List::Cons(k, rest) => append(succ(all, prs, ds, flat, *k), succs(all, prs, ds, flat, rest)),
+    }
+}
+
+pub fn is_new(r: &Names, xs: &Names) -> (b: bool)
+    ensures
+        b == spec_new(*r, *xs),
+    decreases xs,
+{
+    match xs {
+        List::Nil => false,
+        List::Cons(x, rest) => (has(r, *x) == false) || is_new(r, rest),
+    }
+}
+
+pub fn add(r: Names, xs: &Names) -> (o: Names)
+    ensures
+        o == spec_add(r, *xs),
+    decreases xs,
+{
+    match xs {
+        List::Nil => r,
+        List::Cons(x, rest) => if has(&r, *x) {
+            add(r, rest)
+        } else {
+            add(List::Cons(*x, Box::new(r)), rest)
+        },
+    }
+}
+
+pub fn close(all: &Fns, prs: &Pairs, ds: &Names, r: Names, fuel: u64) -> (o: Option<Names>)
+    ensures
+        o == spec_close(*all, *prs, *ds, r, fuel),
+    decreases fuel,
+{
+    let next = succs(all, prs, ds, false, &r);
+    if !is_new(&r, &next) {
+        Some(r)
+    } else if fuel == 0 {
+        None
+    } else {
+        close(all, prs, ds, add(r, &next), fuel - 1)
+    }
+}
+
+pub fn comes_back(d: u32, g: u32, down: bool, all: &Fns, prs: &Pairs, ds: &Names, fuel: u64) -> (r: bool)
+    ensures
+        r == spec_comes_back(d, g, down, *all, *prs, *ds, fuel),
+{
+    match close(all, prs, ds, List::Cons(d, Box::new(List::Nil)), fuel) {
+        None => true,
+        Some(c) => if !down {
+            has(&c, g)
+        } else {
+            match close(all, prs, ds, succs(all, prs, ds, true, &c), fuel) {
+                None => true,
+                Some(c2) => has(&c2, g),
+            }
+        },
+    }
+}
+
+pub fn loops_over(os: &Names, g: u32, down: bool, all: &Fns, prs: &Pairs, ds: &Names, fuel: u64) -> (r: bool)
+    ensures
+        r == spec_loops_over(*os, g, down, *all, *prs, *ds, fuel),
+    decreases os,
+{
+    match os {
+        List::Nil => false,
+        List::Cons(d, rest) => comes_back(*d, g, down, all, prs, ds, fuel) || loops_over(rest, g, down, all, prs, ds, fuel),
+    }
+}
+
+pub fn loop_calls(cs: &List<(u32, bool, u32)>, g: u32, all: &Fns, prs: &Pairs, ds: &Names, fuel: u64) -> (r: Option<(u32, u32)>)
+    ensures
+        r == spec_loop_calls(*cs, g, *all, *prs, *ds, fuel),
+    decreases cs,
+{
+    match cs {
+        List::Nil => None,
+        List::Cons((k, down, l), rest) => if loops_over(&overs(prs, *k), g, *down, all, prs, ds, fuel) {
+            Some((*k, *l))
+        } else {
+            loop_calls(rest, g, all, prs, ds, fuel)
+        },
+    }
+}
+
+pub fn loop_model(m: Model, f: &Function, all: &Fns, prs: &Pairs, ds: &Names, fuel: u64) -> (r: Model)
+    ensures
+        r == spec_loop_model(m, *f, *all, *prs, *ds, fuel),
+{
+    match m {
+        Model::Full(meth) => match loop_calls(&ocalls_stmts(&f.body), f.name, all, prs, ds, fuel) {
+            Some((k, l)) => Model::Bare(meth.name, meth.params, meth.ret, Refusal::Loop(k, l)),
+            None => Model::Full(meth),
+        },
+        _ => m,
+    }
+}
+
+pub fn loop_models(ms: Models, fs: &Fns, all: &Fns, prs: &Pairs, ds: &Names, fuel: u64) -> (r: Models)
+    ensures
+        r == spec_loop_models(ms, *fs, *all, *prs, *ds, fuel),
+    decreases ms,
+{
+    match ms {
+        List::Cons(m, mrest) => match fs {
+            List::Cons(f, frest) => List::Cons(loop_model(m, f, all, prs, ds, fuel), Box::new(loop_models(*mrest, frest, all, prs, ds, fuel))),
+            List::Nil => List::Cons(m, mrest),
+        },
+        List::Nil => List::Nil,
+    }
+}
+
+pub fn fuel(fs: &Fns) -> (r: u64)
+    ensures
+        r == spec_fuel(*fs),
+    decreases fs,
+{
+    match fs {
+        List::Nil => 1,
+        List::Cons(_, rest) => {
+            let n = fuel(rest);
+            if n < u64::MAX { n + 1 } else { u64::MAX }
+        },
+    }
 }
 
 } // verus!

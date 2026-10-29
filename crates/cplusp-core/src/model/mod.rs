@@ -4,6 +4,9 @@
 //! rule of the translation is a spec function here, and each exec function is proved to compute exactly its spec. The proofs say:
 //!
 //! - `translate_unit` and `translate_function`: the result is the spec model, `spec_unit` and `spec_function`.
+//! - `translate_file`: the models of `translate_unit`, where no method writes a local back through its interface when an interface of
+//!   the file has no final class over it, decision 0217, no call in a method can come back to it through an override of its callee
+//!   on a path of any length, `lemma_safe_calls`, decision 0218, and each key keeps its method.
 //! - a node that the translator does not know is refused, never skipped: `lemma_unknown_is_refused`.
 //! - a translated body has one Dafny statement for each C++ statement: `lemma_statements_kept`.
 //! - each call in a method names a function that has a method in the model: `lemma_calls_resolve`.
@@ -25,6 +28,7 @@ mod code;
 mod parser;
 mod globals;
 mod statics;
+mod calls;
 
 pub use lists::*;
 pub use cpp_side::*;
@@ -39,3 +43,4 @@ pub use code::*;
 pub use parser::*;
 pub use globals::*;
 pub use statics::*;
+pub use calls::*;

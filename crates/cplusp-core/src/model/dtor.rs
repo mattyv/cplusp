@@ -1734,9 +1734,10 @@ pub open spec fn spec_virtual(f: Function) -> Option<u32> {
     }
 }
 
-/// A virtual function that does not write its object: a function of the model, decision 0166.
+/// A virtual function that does not write its object and gives a value: a function of the model, decision 0166. One that gives no
+/// value is a method, as one that writes its object is, decision 0209.
 pub open spec fn spec_const_virtual(f: Function) -> bool {
-    spec_head_ty(f.params) is Some && spec_head_ty(f.params)->Some_0 is Iface
+    spec_head_ty(f.params) is Some && spec_head_ty(f.params)->Some_0 is Iface && f.ret != Ty::Void
 }
 
 /// Each member marked as no function in the model.
