@@ -1746,9 +1746,25 @@ public:
         for (const CXXMethodDecl *M : baseMembers(RD))
           Named[M->getNameAsString()].push_back(baseKey(RD, M));
         // The static member functions with a contract, under their qualified names, decision 0174.
+        // A static and a member function of one name are two functions of that name, so each one counts under both names, decision 0216. The member can be
+        // one that writes its object, a template, or one with no function in the model, so every non-static member function of the class counts.
+        // The key of the static function stands twice for the other function: only the count of keys matters, since a name with two keys is left out.
         for (const Decl *D : RD->decls())
-          if (const auto *M = dyn_cast<CXXMethodDecl>(D); M && listedStatic(M))
+          if (const auto *M = dyn_cast<CXXMethodDecl>(D); M && listedStatic(M)) {
             Named[name(M)].push_back(key(M));
+            bool Shared = false;
+            for (const Decl *Other : RD->decls()) {
+              const auto *O = dyn_cast<CXXMethodDecl>(Other);
+              if (const auto *T = dyn_cast<FunctionTemplateDecl>(Other))
+                O = dyn_cast<CXXMethodDecl>(T->getTemplatedDecl());
+              Shared |= O && !O->isStatic() && !isa<CXXConstructorDecl>(O) && !isa<CXXDestructorDecl>(O) && O->getDeclName() == M->getDeclName();
+            }
+            if (Shared) {
+              Named[M->getNameAsString()].push_back(key(M));
+              Named[M->getNameAsString()].push_back(key(M));
+              Named[name(M)].push_back(key(M));
+            }
+          }
         // A member function template counts as one more function of its name, so a name that a member function and a template share is an overload, decision 0215.
         for (const Decl *D : RD->decls())
           if (const auto *T = dyn_cast<FunctionTemplateDecl>(D); T && isa<CXXMethodDecl>(T->getTemplatedDecl()))
