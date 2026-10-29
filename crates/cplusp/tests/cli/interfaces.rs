@@ -686,3 +686,50 @@ fn a_state_that_gives_the_next_state_with_no_rule_is_refused() {
     ];
     assert_eq!(refused, want, "{text}");
 }
+
+/// A final class over a base with data and an interface proves, and a call of a `const` member function of the base reads in code and
+/// in a contract, decision 0201.
+#[test]
+fn a_base_class_with_data_proves() {
+    let Some(dafny) = dafny() else { return };
+    if !clang_tidy_available() {
+        return;
+    }
+    let o = prove("model-data-base.cpp", &[], &dafny);
+    let text = stdout(&o);
+    assert_eq!(o.status.code(), Some(0), "stdout: {text} stderr: {}", stderr(&o));
+    assert_eq!(text.lines().last(), Some("ok: proved"), "{text}");
+}
+
+/// A false claim through a member function of the base fails, decision 0201.
+#[test]
+fn a_base_class_with_data_keeps_its_contract() {
+    let Some(dafny) = dafny() else { return };
+    if !clang_tidy_available() {
+        return;
+    }
+    let o = prove("model-data-base-wrong.cpp", &[], &dafny);
+    let text = stdout(&o);
+    assert_eq!(o.status.code(), Some(1), "stdout: {text} stderr: {}", stderr(&o));
+    let failed: Vec<&str> = text.lines().filter(|l| l.starts_with("Not proved: ") || l.starts_with("Not provable: ")).map(|l| l.rsplit_once(".cpp:").unwrap().1).collect();
+    assert_eq!(failed, ["20: the ensures line may not hold on this return.", "26: the ensures line may not hold on this return."], "{text}");
+}
+
+/// A field of the base, a change into the base and a call of a member function of the base that is not const have no rule yet, decision 0201.
+#[test]
+fn a_base_class_with_data_with_no_rule_is_refused() {
+    let Some(dafny) = dafny() else { return };
+    if !clang_tidy_available() {
+        return;
+    }
+    let o = prove("model-data-base-refuse.cpp", &[], &dafny);
+    let text = stdout(&o);
+    assert_eq!(o.status.code(), Some(1), "stdout: {text} stderr: {}", stderr(&o));
+    let refused: Vec<&str> = text.lines().filter(|l| l.starts_with("Not proved: ") || l.starts_with("Not provable: ")).map(|l| l.rsplit_once(".cpp:").unwrap().1).collect();
+    let want = [
+        "29: a field of the base Spot: the translator has no rule for it yet.",
+        "40: a change of Box into its base Tag, which has data: the translator has no rule for it yet.",
+        "46: a call of a member function of the base Tag that is not const: the translator has no rule for it yet.",
+    ];
+    assert_eq!(refused, want, "{text}");
+}
