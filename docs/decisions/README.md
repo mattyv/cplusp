@@ -214,3 +214,4 @@ Status is `decided`, `proposed` (the default until someone objects or the thin s
 | [0211](0211-a-plain-member-function-with-apply-lines.md) | A plain member function with apply lines | decided |
 | [0212](0212-a-move-of-a-value-and-a-constructor-template.md) | A move of a value and a constructor template | decided |
 | [0213](0213-a-function-keeps-its-ensures-lines.md) | A function keeps its ensures lines | decided |
+| [0215](0215-a-member-template-name-and-an-ensures-line-that-calls.md) | A member template name and an ensures line that calls | decided |

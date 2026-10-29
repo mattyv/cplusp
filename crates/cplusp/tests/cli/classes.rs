@@ -1043,3 +1043,46 @@ fn a_function_keeps_its_ensures_lines() {
     assert_eq!(o.status.code(), Some(0), "stdout: {text} stderr: {}", stderr(&o));
     assert_eq!(text.lines().last(), Some("ok: proved"), "{text}");
 }
+
+/// A member function template counts as an overload of its name, so a contract that calls the name is refused, decision 0215.
+#[test]
+fn a_contract_that_calls_a_name_of_a_member_template_is_refused() {
+    let Some(dafny) = dafny() else { return };
+    if !clang_tidy_available() {
+        return;
+    }
+    let o = prove("model-member-template-overload.cpp", &[], &dafny);
+    let text = stdout(&o);
+    assert_eq!(o.status.code(), Some(1), "stdout: {text} stderr: {}", stderr(&o));
+    let refused: Vec<&str> = text.lines().filter(|l| l.starts_with("Not proved: ") || l.starts_with("Not provable: ")).map(|l| l.rsplit_once(".cpp:").unwrap().1).collect();
+    assert_eq!(refused, ["16: get is no pure function. A contract calls a function with one return and no write."], "{text}");
+}
+
+/// An ensures line that calls a function stays on the method, so two functions whose ensures lines call each other prove,
+/// decision 0215.
+#[test]
+fn an_ensures_line_that_calls_a_function_stays_on_the_method() {
+    let Some(dafny) = dafny() else { return };
+    if !clang_tidy_available() {
+        return;
+    }
+    let o = prove("model-function-ensures-cycle.cpp", &[], &dafny);
+    let text = stdout(&o);
+    assert_eq!(o.status.code(), Some(0), "stdout: {text} stderr: {}", stderr(&o));
+    assert_eq!(text.lines().last(), Some("ok: proved"), "{text}");
+}
+
+/// A static member function template has no rule yet, and its sentence says so, decision 0215.
+#[test]
+fn a_static_member_template_is_refused() {
+    let Some(dafny) = dafny() else { return };
+    if !clang_tidy_available() {
+        return;
+    }
+    let o = prove("model-member-template-static.cpp", &[], &dafny);
+    let text = stdout(&o);
+    assert_eq!(o.status.code(), Some(1), "stdout: {text} stderr: {}", stderr(&o));
+    let refused: Vec<&str> = text.lines().filter(|l| l.starts_with("Not proved: ") || l.starts_with("Not provable: ")).map(|l| l.rsplit_once(".cpp:").unwrap().1).collect();
+    assert!(refused.contains(&"13: a member function template: the translator has no rule for it yet."), "{text}");
+    assert!(!text.contains("a name with a character Dafny cannot read"), "{text}");
+}
