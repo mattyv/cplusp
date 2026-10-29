@@ -876,3 +876,61 @@ fn the_object_as_an_argument_proves() {
     assert_eq!(o.status.code(), Some(1), "stdout: {text} stderr: {}", stderr(&o));
     assert_eq!(failures(&text), ["18: `*this` as a reference that is not const: the translator has no rule for it yet."], "{text}");
 }
+
+/// A local through a reference to its interface needs a final class over each interface of the file, decision 0217.
+#[test]
+fn a_local_through_its_interface_with_an_unbacked_interface_is_refused() {
+    let Some(dafny) = dafny() else { return };
+    if !clang_tidy_available() {
+        return;
+    }
+    let o = prove("model-iface-local-unbacked.cpp", &[], &dafny);
+    let text = stdout(&o);
+    assert_eq!(o.status.code(), Some(1), "stdout: {text} stderr: {}", stderr(&o));
+    assert_eq!(failures(&text), ["42: a class as a reference to its interface: the translator has no rule for it yet."], "{text}");
+}
+
+/// `*this` for a reference that is not const has no rule in a member call either, decision 0217.
+#[test]
+fn the_object_as_an_argument_of_a_member_call_is_refused() {
+    let Some(dafny) = dafny() else { return };
+    if !clang_tidy_available() {
+        return;
+    }
+    let o = prove("model-this-arg-member-refuse.cpp", &[], &dafny);
+    let text = stdout(&o);
+    assert_eq!(o.status.code(), Some(1), "stdout: {text} stderr: {}", stderr(&o));
+    assert_eq!(failures(&text), ["22: `*this` as a reference that is not const: the translator has no rule for it yet."], "{text}");
+}
+
+/// A sentence names one of two virtual functions of one name by its plain name, and a contract that calls such a name is no pure
+/// function, decision 0217.
+#[test]
+fn a_name_of_two_virtual_functions_stays_plain_in_each_sentence() {
+    let Some(dafny) = dafny() else { return };
+    if !clang_tidy_available() {
+        return;
+    }
+    let o = prove("model-overload-names.cpp", &[], &dafny);
+    let text = stdout(&o);
+    assert_eq!(o.status.code(), Some(1), "stdout: {text} stderr: {}", stderr(&o));
+    let want = [
+        "7: the contract of Late::apply reads Late::ready, which comes later in Late. Declare Late::ready first.",
+        "29: size is no pure function. A contract calls a function with one return and no write.",
+    ];
+    assert_eq!(failures(&text), want, "{text}");
+}
+
+/// A const and a non-const virtual function of one name are two overloads, so each override is checked against its own function,
+/// decision 0217.
+#[test]
+fn a_const_and_a_non_const_virtual_function_of_one_name_are_two_overloads() {
+    let Some(dafny) = dafny() else { return };
+    if !clang_tidy_available() {
+        return;
+    }
+    let o = prove("model-overload-const.cpp", &[], &dafny);
+    let text = stdout(&o);
+    assert_eq!(o.status.code(), Some(1), "stdout: {text} stderr: {}", stderr(&o));
+    assert_eq!(failures(&text), ["18: the override may not keep the promise of Look::see."], "{text}");
+}
