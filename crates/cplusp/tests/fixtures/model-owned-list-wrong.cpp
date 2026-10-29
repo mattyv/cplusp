@@ -53,7 +53,7 @@ class Holder {
   std::vector<std::unique_ptr<Counter>> items_;
 };
 
-//@ ensures result == 2
+//@ ensures result == 3
 int32_t demo() {
   Holder h;
   h.add(std::make_unique<One>());

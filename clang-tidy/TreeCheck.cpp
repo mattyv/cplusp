@@ -482,8 +482,8 @@ private:
       if (!(Field || T.isConstQualified()) || Elem.getCanonicalType().hasQualifiers())
         return QualType();
       const char *S = scalar(Elem);
-      // A unique_ptr of a struct or an interface is an element of a vector, not of a field, decision 0170.
-      if (!Field && !ownVecElement(Elem).isNull())
+      // A unique_ptr of a struct or an interface is an element of a vector, decision 0170, and of a vector field, decision 0204.
+      if (!ownVecElement(Elem).isNull())
         return Elem;
       return (S ? StringRef(S) != "Bool" : plainStruct(Elem) != nullptr) ? Elem : QualType();
     }
@@ -2029,7 +2029,10 @@ private:
       const Expr *Arg = Push->getArg(0);
       if (const auto *Temporary = dyn_cast<MaterializeTemporaryExpr>(Arg))
         Arg = Temporary->getSubExpr();
-      llvm::json::Value Pushed = expr(Arg, line(S->getBeginLoc()));
+      // `std::move(o)` of a unique_ptr local or parameter `o` is the move of `o`, decision 0204.
+      llvm::json::Value Pushed = moveOfLocal(Arg, Push->getMethodDecl()->getParamDecl(0)->getType().getNonReferenceType());
+      if (Pushed.getAsNull())
+        Pushed = expr(Arg, line(S->getBeginLoc()));
       // The conversion of `std::make_unique<D>(a)` to the unique_ptr of the interface stands as the `Wrap` alone, decision 0170.
       if (llvm::json::Object *Outer = Pushed.getAsObject())
         if (llvm::json::Array *Casted = Outer->getArray("Cast"); Casted && Casted->size() == 2 && (*Casted)[0].getAsString() == StringRef("Construct"))
@@ -2048,7 +2051,10 @@ private:
         const Expr *Arg = Call->getArg(0);
         if (const auto *Temporary = dyn_cast<MaterializeTemporaryExpr>(Arg))
           Arg = Temporary->getSubExpr();
-        return tag("PushField", llvm::json::Array{Field->getNameAsString(), expr(Arg, line(S->getBeginLoc())), number(line(S->getBeginLoc()))});
+        llvm::json::Value Pushed = moveOfLocal(Arg, Call->getMethodDecl()->getParamDecl(0)->getType().getNonReferenceType());
+        if (Pushed.getAsNull())
+          Pushed = expr(Arg, line(S->getBeginLoc()));
+        return tag("PushField", llvm::json::Array{Field->getNameAsString(), std::move(Pushed), number(line(S->getBeginLoc()))});
       }
       if (Call->getNumArgs() == 0 && Call->getMethodDecl()->getName() == "pop_back")
         return tag("PopField", llvm::json::Array{Field->getNameAsString(), number(line(S->getBeginLoc()))});

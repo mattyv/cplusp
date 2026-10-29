@@ -1663,6 +1663,8 @@ impl Printer<'_> {
                 Obj::Local(n) => mangle(self.names.text(*n)),
                 Obj::Object => "v_this'".to_string(),
                 Obj::Out(x) => format!("{}'", mangle(self.names.text(*x))),
+                // The vector place of an `UpdateAt` only. It is never one of the places of the results.
+                Obj::Field(_) => "v_this'".to_string(),
                 Obj::Owned(v) => {
                     self.fresh += 1;
                     let temp = format!("v_'o{}", self.fresh);
@@ -1780,6 +1782,8 @@ impl Printer<'_> {
                     Obj::Local(v) => (*v, mangle(names.text(*v))),
                     Obj::Out(v) | Obj::Owned(v) => (*v, format!("{}'", mangle(names.text(*v)))),
                     Obj::Object => (0, "v_this'".to_string()),
+                    // The element of a vector field of the new object, decision 0204. The field keeps the type of its elements in `owned`.
+                    Obj::Field(f) => (*f, format!("v_this'.f_{}", names.text(*f))),
                 };
                 let pointed = self.owned.get(&name).cloned().unwrap_or_default();
                 let mut gives = vec![temp.clone()];
@@ -1795,9 +1799,14 @@ impl Printer<'_> {
                         format!("var {r}: {}; ", dty(*t, names))
                     }
                 };
+                let element = format!("{written}[{} := Some({temp})]", dexpr(index, names));
+                let update = match vec {
+                    Obj::Field(f) => format!("v_this'.(f_{} := {element})", names.text(*f)),
+                    _ => element,
+                };
                 self.put(
                     depth,
-                    format!("{before}{result}var {temp}: {pointed}; {} := {call}; {written} := {written}[{} := Some({temp})];{after}", gives.join(", "), dexpr(index, names)),
+                    format!("{before}{result}var {temp}: {pointed}; {} := {call}; {} := {update};{after}", gives.join(", "), if matches!(vec, Obj::Field(_)) { "v_this'" } else { &written }),
                     place,
                 );
             }
@@ -2698,6 +2707,10 @@ pub fn translate(lines: &str, companion: Option<(&str, &str)>) -> Result<Transla
             Ok((key, mut fields)) => {
                 let mut shown = Vec::new();
                 while let List::Cons((n, t), next) = fields {
+                    // ponytail: the type of the elements is keyed by the field name. Two structs with one field name and two element types clash. Upgrade: key it by the struct.
+                    if matches!(t, DTy::Seq(Scalar::Own(_))) {
+                        p.note(n, t);
+                    }
                     shown.push(format!("f_{}: {}", names.text(n), dty(t, &names)));
                     fields = *next;
                 }
