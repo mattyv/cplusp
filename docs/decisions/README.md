@@ -208,3 +208,4 @@ Status is `decided`, `proposed` (the default until someone objects or the thin s
 | [0201](0201-a-base-class-with-data.md) | A base class with data | decided |
 | [0202](0202-a-variant-of-two-types.md) | A variant of two types | decided |
 | [0206](0206-a-variant-that-can-lose-its-value.md) | A variant that can lose its value | decided |
+| [0207](0207-a-variant-whose-alternative-cannot-be-assigned.md) | A variant whose alternative cannot be assigned | decided |

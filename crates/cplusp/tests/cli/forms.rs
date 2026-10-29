@@ -391,7 +391,7 @@ fn an_array_with_no_const_and_an_array_field_are_refused() {
         text.lines().filter(|l| l.starts_with("Not provable: ")).map(|l| l.rsplit_once(".cpp:").unwrap().1).collect::<Vec<_>>(),
         vec![
             "6: std::array<int32_t, 4> &: the translator has no rule for it yet.",
-            "23: an optional of a struct or a sequence of bool has no rule yet.",
+            "23: an optional of a struct, a sequence of bool or a variant of one type twice has no rule yet.",
         ],
         "{text}"
     );
@@ -842,6 +842,7 @@ fn a_variant_with_no_rule_is_refused() {
         "37: const std::variant<Big, uint64_t> &: the translator has no rule for it yet.",
         "42: the contract line has a form the translator cannot read.",
         "48: an optional of a struct, a sequence of bool or a variant of one type twice has no rule yet.",
+        "59: const std::variant<NoAssign, uint64_t> &: the translator has no rule for it yet.",
     ];
     assert_eq!(refused, want, "{text}");
 }

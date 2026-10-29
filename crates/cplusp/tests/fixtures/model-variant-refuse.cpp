@@ -48,3 +48,14 @@ bool order(const std::variant<int32_t, bool>& v, const std::variant<int32_t, boo
 bool twice(const std::variant<int32_t, int32_t>& v) {
   return true;
 }
+
+// An alternative that cannot be assigned, decision 0207.
+struct NoAssign {
+  int32_t x;
+  NoAssign& operator=(const NoAssign&) = delete;
+};
+
+//@ ensures true
+bool no_assign(const std::variant<NoAssign, uint64_t>& v) {
+  return std::holds_alternative<uint64_t>(v);
+}
