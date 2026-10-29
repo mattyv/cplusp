@@ -578,9 +578,18 @@ pub fn inline(all: &Fns, key: u32, sd: &Structs) -> (r: bool)
 /// A plain member function: a const member function with no reference parameter that it writes, whose body is one return of an
 /// expression with no call, decision 0189. It calls nothing, so a call of it can never be part of a cycle.
 pub open spec fn spec_plain(f: Function) -> bool {
-    !f.trusted && (spec_head_ty(f.params) matches Some(Ty::This(_))) && !spec_mutates(f.params) && match f.body {
-        List::Cons(st, rest) => *rest == List::Nil && match *st {
-            Stmt::Return(e, _) => spec_gcalls(e) == List::<(u32, u32, u32)>::Nil,
+    !f.trusted && (spec_head_ty(f.params) matches Some(Ty::This(_))) && !spec_mutates(f.params) && spec_plain_body(f.body)
+}
+
+/// A plain body: apply lines, then one `return` of an expression with no call, decisions 0189 and 0211. An apply line calls a lemma,
+/// which changes no value.
+pub open spec fn spec_plain_body(ss: Stmts) -> bool
+    decreases ss,
+{
+    match ss {
+        List::Cons(st, rest) => match *st {
+            Stmt::Return(e, _) => *rest == List::Nil && spec_gcalls(e) == List::<(u32, u32, u32)>::Nil,
+            Stmt::Apply(_, _, _) => spec_plain_body(*rest),
             _ => false,
         },
         List::Nil => false,
@@ -591,9 +600,18 @@ pub fn plain(f: &Function) -> (r: bool)
     ensures
         r == spec_plain(*f),
 {
-    !f.trusted && matches!(head_ty(&f.params), Some(Ty::This(_))) && !mutates(&f.params) && match &f.body {
-        List::Cons(st, rest) => matches!(&**rest, List::Nil) && match &**st {
-            Stmt::Return(e, _) => matches!(gcalls(e), List::Nil),
+    !f.trusted && matches!(head_ty(&f.params), Some(Ty::This(_))) && !mutates(&f.params) && plain_body(&f.body)
+}
+
+pub fn plain_body(ss: &Stmts) -> (r: bool)
+    ensures
+        r == spec_plain_body(*ss),
+    decreases ss,
+{
+    match ss {
+        List::Cons(st, rest) => match &**st {
+            Stmt::Return(e, _) => matches!(&**rest, List::Nil) && matches!(gcalls(e), List::Nil),
+            Stmt::Apply(_, _, _) => plain_body(rest),
             _ => false,
         },
         List::Nil => false,

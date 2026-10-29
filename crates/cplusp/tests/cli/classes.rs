@@ -1029,3 +1029,17 @@ fn a_move_of_a_value_that_is_not_trivially_copyable_is_refused() {
     let refused: Vec<&str> = text.lines().filter(|l| l.starts_with("Not proved: ") || l.starts_with("Not provable: ")).map(|l| l.rsplit_once(".cpp:").unwrap().1).collect();
     assert_eq!(refused, ["13: a call to std::move<Bag &>, which has no model in view."], "{text}");
 }
+
+/// The function of a pure member function keeps its ensures lines, so the check of an override two calls from the bound proves,
+/// decision 0213.
+#[test]
+fn a_function_keeps_its_ensures_lines() {
+    let Some(dafny) = dafny() else { return };
+    if !clang_tidy_available() {
+        return;
+    }
+    let o = prove("model-function-ensures.cpp", &[], &dafny);
+    let text = stdout(&o);
+    assert_eq!(o.status.code(), Some(0), "stdout: {text} stderr: {}", stderr(&o));
+    assert_eq!(text.lines().last(), Some("ok: proved"), "{text}");
+}

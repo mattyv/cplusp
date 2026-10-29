@@ -213,3 +213,4 @@ Status is `decided`, `proposed` (the default until someone objects or the thin s
 | [0207](0207-a-variant-whose-alternative-cannot-be-assigned.md) | A variant whose alternative cannot be assigned | decided |
 | [0211](0211-a-plain-member-function-with-apply-lines.md) | A plain member function with apply lines | decided |
 | [0212](0212-a-move-of-a-value-and-a-constructor-template.md) | A move of a value and a constructor template | decided |
+| [0213](0213-a-function-keeps-its-ensures-lines.md) | A function keeps its ensures lines | decided |
