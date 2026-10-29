@@ -14,5 +14,5 @@ bool holds_int(const std::variant<int32_t, bool>& v) {
 
 //@ ensures result == std::get<bool>(v)
 bool read_bool(const std::variant<int32_t, bool>& v) {
-  return std::holds_alternative<bool>(v);
+  return std::get<bool>(v);
 }

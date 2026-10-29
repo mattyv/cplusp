@@ -817,11 +817,13 @@ fn a_variant_of_two_types_keeps_its_contract() {
         "7: the variant may not hold this alternative.",
         "12: the ensures line may not hold on this return.",
         "15: the variant may not hold this alternative.",
+        "17: the variant may not hold this alternative.",
     ];
     assert_eq!(failed, want, "{text}");
 }
 
-/// A variant of three types, a type that is no alternative in a contract and `v.index()` have no rule yet, decision 0202.
+/// A variant of three types, a type that is no alternative in a contract and `v.index()` have no rule yet, decision 0202. Nor
+/// have an alternative that can leave the variant with no value, an order of two variants and one type twice, decision 0206.
 #[test]
 fn a_variant_with_no_rule_is_refused() {
     let Some(dafny) = dafny() else { return };
@@ -833,9 +835,13 @@ fn a_variant_with_no_rule_is_refused() {
     assert_eq!(o.status.code(), Some(1), "stdout: {text} stderr: {}", stderr(&o));
     let refused: Vec<&str> = text.lines().filter(|l| l.starts_with("Not proved: ") || l.starts_with("Not provable: ")).map(|l| l.rsplit_once(".cpp:").unwrap().1).collect();
     let want = [
-        "6: const std::variant<int32_t, bool, uint64_t> &: the translator has no rule for it yet.",
-        "10: the contract line has a form the translator cannot read.",
-        "17: a call to std::variant<int32_t, bool>::index, which has no model in view.",
+        "8: const std::variant<int32_t, bool, uint64_t> &: the translator has no rule for it yet.",
+        "12: the contract line has a form the translator cannot read.",
+        "19: a call to std::variant<int32_t, bool>::index, which has no model in view.",
+        "32: const std::variant<Bag, uint64_t> &: the translator has no rule for it yet.",
+        "37: const std::variant<Big, uint64_t> &: the translator has no rule for it yet.",
+        "42: the contract line has a form the translator cannot read.",
+        "48: an optional of a struct, a sequence of bool or a variant of one type twice has no rule yet.",
     ];
     assert_eq!(refused, want, "{text}");
 }

@@ -32,3 +32,9 @@ bool is_true(std::variant<int32_t, bool> v) {
 int32_t x_of(const std::variant<Point, uint64_t>& v) {
   return std::get<Point>(v).x;
 }
+
+// A variant parameter is an argument for a variant by value, as a copy, decision 0206.
+//@ ensures result == (std::holds_alternative<bool>(v) && std::get<bool>(v))
+bool calls_is_true(const std::variant<int32_t, bool>& v) {
+  return is_true(v);
+}

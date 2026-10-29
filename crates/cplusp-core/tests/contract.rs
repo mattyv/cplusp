@@ -341,3 +341,31 @@ fn the_reads_of_a_variant_are_tokens() {
     assert_eq!(lex("std::get<size_t>(v)")[0], ("std::get<size_t>".to_string(), LexKind::Fixed(Tok::Alt(Ty::U64))));
     assert_ne!(lex("std::get<Point>(v)")[0].1, LexKind::Fixed(Tok::Alt(Ty::I32)));
 }
+
+/// `static_cast<T>`, `std::get<T>` and `std::holds_alternative<T>` read each type name `T` as one type, decision 0206.
+#[test]
+fn the_three_forms_read_a_type_name_alike() {
+    let names = [
+        ("int8_t", Ty::I8),
+        ("int16_t", Ty::I16),
+        ("int32_t", Ty::I32),
+        ("int64_t", Ty::I64),
+        ("uint8_t", Ty::U8),
+        ("uint16_t", Ty::U16),
+        ("uint32_t", Ty::U32),
+        ("uint64_t", Ty::U64),
+        ("size_t", Ty::U64),
+    ];
+    for (name, ty) in names {
+        let cast = format!("static_cast<{name}>");
+        let get = format!("std::get<{name}>");
+        let holds = format!("std::holds_alternative<{name}>");
+        assert_eq!(lex(&format!("{cast}(v)"))[0], (cast.clone(), LexKind::Fixed(Tok::Cast(ty))), "{name}");
+        assert_eq!(lex(&format!("{get}(v)"))[0], (get.clone(), LexKind::Fixed(Tok::Alt(ty))), "{name}");
+        assert_eq!(lex(&format!("{holds}(v)"))[0], (holds.clone(), LexKind::Fixed(Tok::Holds(ty))), "{name}");
+    }
+    // `bool` has no cast of the contract language.
+    assert_eq!(lex("std::get<bool>(v)")[0], ("std::get<bool>".to_string(), LexKind::Fixed(Tok::Alt(Ty::Bool))));
+    assert_eq!(lex("std::holds_alternative<bool>(v)")[0], ("std::holds_alternative<bool>".to_string(), LexKind::Fixed(Tok::Holds(Ty::Bool))));
+    assert_ne!(lex("static_cast<bool>(v)")[0].1, LexKind::Fixed(Tok::Cast(Ty::Bool)));
+}
