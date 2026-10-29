@@ -33,7 +33,11 @@ class Square final : public Shape {
 
   //@ requires valid()
   //@ ensures result == side_ * side_
-  int32_t area() const override { return side_ * side_; }
+  //@ ensures 0 <= result <= 1000000
+  int32_t area() const override {
+    //@ apply MulBound(side_, side_, 1000, 1000)
+    return side_ * side_;
+  }
 
   //@ requires valid() && v.valid() && v.seen() <= 1000000000
   //@ modifies v
@@ -55,7 +59,11 @@ class Rect final : public Shape {
 
   //@ requires valid()
   //@ ensures result == w_ * h_
-  int32_t area() const override { return w_ * h_; }
+  //@ ensures 0 <= result <= 1000000
+  int32_t area() const override {
+    //@ apply MulBound(w_, h_, 1000, 1000)
+    return w_ * h_;
+  }
 
   //@ requires valid() && v.valid() && v.seen() <= 1000000000
   //@ modifies v
