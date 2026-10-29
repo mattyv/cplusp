@@ -1074,3 +1074,49 @@ fn a_member_function_named_size_with_no_rule_is_refused() {
     ];
     assert_eq!(refused, want, "{text}");
 }
+
+/// A const member function that gives bool and has a loop in its body is the function of its ensures line `result == e`, so a
+/// contract can call it, decision 0205.
+#[test]
+fn a_function_from_its_ensures_line_proves() {
+    let Some(dafny) = dafny() else { return };
+    if !clang_tidy_available() {
+        return;
+    }
+    let o = prove("model-ensures-function.cpp", &[], &dafny);
+    let text = stdout(&o);
+    assert_eq!(o.status.code(), Some(0), "stdout: {text} stderr: {}", stderr(&o));
+    assert_eq!(text.lines().last(), Some("ok: proved"), "{text}");
+}
+
+/// A false claim through the function of an ensures line fails, decision 0205.
+#[test]
+fn a_function_from_its_ensures_line_keeps_its_contract() {
+    let Some(dafny) = dafny() else { return };
+    if !clang_tidy_available() {
+        return;
+    }
+    let o = prove("model-ensures-function-wrong.cpp", &[], &dafny);
+    let text = stdout(&o);
+    assert_eq!(o.status.code(), Some(1), "stdout: {text} stderr: {}", stderr(&o));
+    let failed: Vec<&str> = text.lines().filter(|l| l.starts_with("Not proved: ") || l.starts_with("Not provable: ")).map(|l| l.rsplit_once(".cpp:").unwrap().1).collect();
+    assert_eq!(failed, ["25: the ensures line may not hold on this return."], "{text}");
+}
+
+/// A function with a loop that gives an integer, or that writes its object, has no function in the model, decision 0205.
+#[test]
+fn a_function_from_its_ensures_line_with_no_rule_is_refused() {
+    let Some(dafny) = dafny() else { return };
+    if !clang_tidy_available() {
+        return;
+    }
+    let o = prove("model-ensures-function-refuse.cpp", &[], &dafny);
+    let text = stdout(&o);
+    assert_eq!(o.status.code(), Some(1), "stdout: {text} stderr: {}", stderr(&o));
+    let refused: Vec<&str> = text.lines().filter(|l| l.starts_with("Not proved: ") || l.starts_with("Not provable: ")).map(|l| l.rsplit_once(".cpp:").unwrap().1).collect();
+    let want = [
+        "29: total is no pure function. A contract calls a function with one return and no write.",
+        "35: grow is no pure function. A contract calls a function with one return and no write.",
+    ];
+    assert_eq!(refused, want, "{text}");
+}

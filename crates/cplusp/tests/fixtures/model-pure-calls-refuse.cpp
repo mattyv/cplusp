@@ -25,11 +25,11 @@ class Written final : public Component {
 
 class Own final : public Component {
  public:
-  //@ ensures result == true
-  bool ok() const { return cost(0) == 0; }
+  //@ ensures result == 0
+  int32_t ok() const { return cost(0); }
 
-  //@ ensures result == true
-  bool valid() const override { return ok(); }
+  //@ ensures result
+  bool valid() const override { return ok() == 0; }
 
   //@ requires valid() && 0 <= x <= 1000
   //@ ensures result == 0
