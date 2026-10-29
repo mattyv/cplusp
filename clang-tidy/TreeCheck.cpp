@@ -633,7 +633,7 @@ private:
       return nullptr;
     RD = RD->getDefinition();
     if (RD->isUnion() || RD->isLambda() || !RD->getIdentifier() || RD->isDependentContext() || (isa<ClassTemplateSpecializationDecl>(RD) && !namedInstance(RD)) ||
-        ((RD->getNumBases() || RD->isPolymorphic()) && !finalOverInterface(RD)))
+        ((RD->getNumBases() || RD->isPolymorphic()) && !finalOverInterface(RD) && !(RD->getNumBases() == 1 && !RD->isPolymorphic() && dataBase(RD))))
       return nullptr;
     // A member function, a static member and a private field do not change the value of the struct, decision 0089. A member template still has no rule, decision 0089.
     // An instance of a class template keeps its member template, which is refused at the template, decision 0188.
@@ -740,7 +740,16 @@ private:
     if (!isa<CompoundStmt>(C->getBody()))
       return nullptr;
     std::set<const FieldDecl *> Given;
+    // The base with data starts from `B(args)` of the list, once, and not from the compiler's default, decision 0201.
+    const CXXRecordDecl *Data = dataBase(C->getParent());
+    bool DataGiven = false;
     for (const CXXCtorInitializer *Init : C->inits()) {
+      if (Data && Init->isBaseInitializer() && Init->getBaseClass()->getAsCXXRecordDecl()->getDefinition() == Data) {
+        if (!Init->isWritten() || DataGiven || readsObject(Init->getInit()))
+          return nullptr;
+        DataGiven = true;
+        continue;
+      }
       // The interface bases of a final class over interfaces are built by the compiler, decision 0166.
       if (Init->isBaseInitializer() && !Init->isWritten())
         continue;
@@ -759,6 +768,8 @@ private:
       if (!Init->isWritten() || !Init->isMemberInitializer() || !Given.insert(Init->getMember()).second || readsObject(Init->getInit()))
         return nullptr;
     }
+    if (Data && !DataGiven)
+      return nullptr;
     for (const FieldDecl *F : C->getParent()->fields())
       if (!Given.count(F) && (F->hasInClassInitializer() || localVec(F->getType()).isNull()))
         return nullptr;
@@ -798,6 +809,14 @@ private:
     const auto readOther = [&](const FieldDecl *From) {
       return tag("Field", llvm::json::Array{tag("Var", llvm::json::Array{nameOf(Other), varType(Other)}), From->getNameAsString()});
     };
+    // The base with data is the field `'B` before the fields, started from `B(args)` of the list, decision 0201.
+    const CXXRecordDecl *Data = dataBase(C->getParent());
+    if (Data)
+      for (const CXXCtorInitializer *Init : C->inits())
+        if (Init->isBaseInitializer() && Init->getBaseClass()->getAsCXXRecordDecl()->getDefinition() == Data) {
+          Values.push_back(expr(Init->getInit(), At));
+          After.push_back(nullptr);
+        }
     for (const FieldDecl *F : C->getParent()->fields()) {
       // `f(n, x)` of a vector field is a vector of copies, and a vector field that the list does not name is empty, decision 0187.
       llvm::json::Value Value = nullptr;
@@ -847,21 +866,24 @@ private:
       After.push_back(Moved);
     }
     size_t Next = 0;
-    for (const FieldDecl *F : C->getParent()->fields()) {
+    const auto place = [&](const std::string &Name, llvm::json::Value Kind, const FieldDecl *Moved) {
       llvm::json::Value Value = std::move(Values[Next++]);
-      const FieldDecl *Moved = After[Next - 1];
       if (!Locals) {
         Args.push_back(std::move(Value));
-        continue;
+        return;
       }
-      const std::string Fresh = "'init'" + F->getNameAsString();
-      // A local vector is a `Vec`, as in `varType`.
-      const QualType Element = localVec(F->getType());
-      llvm::json::Value Kind = Element.isNull() ? type(F->getType(), true) : tag("Vec", elementType(Element));
+      const std::string Fresh = "'init'" + Name;
       Out.push_back(tag("Local", llvm::json::Array{Fresh, Kind, std::move(Value), number(At)}));
       Args.push_back(tag("Var", llvm::json::Array{Fresh, std::move(Kind)}));
       if (Moved)
         Out.push_back(tag("SetRefField", llvm::json::Array{nameOf(Other), Moved->getNameAsString(), "Nullopt", number(At)}));
+    };
+    if (Data)
+      place(baseField(Data), type(Context.getRecordType(Data), true), nullptr);
+    for (const FieldDecl *F : C->getParent()->fields()) {
+      // A local vector is a `Vec`, as in `varType`.
+      const QualType Element = localVec(F->getType());
+      place(F->getNameAsString(), Element.isNull() ? type(F->getType(), true) : tag("Vec", elementType(Element)), After[Next]);
     }
     if (!Body->body_empty()) {
       InConstructorBody = true;
@@ -1011,19 +1033,70 @@ public:
     }
     return Virtual;
   }
+  // The base with data of a class, decision 0201: the one base that is no interface, when it is public, not virtual, with no base of its own, no virtual function
+  // and no destructor of its own, and a plain struct. Null for any other class. ponytail: a base from a system header, a base with a destructor, and an instance of a
+  // class template, as the class or as the base, have no rule. Upgrade: a field for the destructor, and the names of instances.
+  const CXXRecordDecl *dataBase(const CXXRecordDecl *RD) const {
+    if (!RD || !RD->hasDefinition() || RD->getNumVBases() != 0 || isa<ClassTemplateSpecializationDecl>(RD))
+      return nullptr;
+    const CXXRecordDecl *Found = nullptr;
+    for (const CXXBaseSpecifier &Base : RD->getDefinition()->bases()) {
+      const CXXRecordDecl *B = Base.getType()->getAsCXXRecordDecl();
+      if (isInterface(B))
+        continue;
+      if (Found || !B || !B->hasDefinition() || Base.isVirtual() || Base.getAccessSpecifier() != AS_public)
+        return nullptr;
+      B = B->getDefinition();
+      if (SM.isInSystemHeader(B->getLocation()) || isa<ClassTemplateSpecializationDecl>(B) || B->getNumBases() || B->isPolymorphic() || B->hasUserDeclaredDestructor() || !plainStruct(Context.getRecordType(B)))
+        return nullptr;
+      Found = B;
+    }
+    return Found;
+  }
   // The interfaces that a class derives from, or none when it has a base that is no interface, a virtual base or a base that is not public, decision 0165.
+  // The base with data is none of them, decision 0201.
   std::vector<const CXXRecordDecl *> interfaceBases(const CXXRecordDecl *RD) const {
     std::vector<const CXXRecordDecl *> Out;
     if (!RD || !RD->hasDefinition() || RD->getNumBases() == 0 || RD->getNumVBases() != 0)
       return Out;
+    const CXXRecordDecl *Data = dataBase(RD);
     for (const CXXBaseSpecifier &Base : RD->getDefinition()->bases()) {
       const CXXRecordDecl *B = Base.getType()->getAsCXXRecordDecl();
+      if (Data && B && B->getDefinition() == Data)
+        continue;
       if (Base.isVirtual() || Base.getAccessSpecifier() != AS_public || !isInterface(B))
         return {};
       Out.push_back(B->getDefinition());
     }
     return Out;
   }
+  // The name of the field that holds the base with data, decision 0201.
+  static std::string baseField(const CXXRecordDecl *Data) { return "'" + Data->getNameAsString(); }
+  // Whether a function has a `requires` line in its contract.
+  bool hasRequires(const CXXMethodDecl *M) const {
+    const FunctionDecl *Def = M->getDefinition();
+    for (const Contract::Line &L : contractOf(SM, Def ? Def : M).Lines)
+      if (StringRef(L.Text).ltrim().consume_front("requires"))
+        return true;
+    return false;
+  }
+  // The const member functions of the base with data that a class takes as its own for a contract, decision 0201: each that the model writes as a function with a
+  // body, and that the class does not hide. C++ finds a name in the class first, so any member of the class with the name hides it. An operator has no rule. One with
+  // a requires line is left out, decision 0203: the function of the class has no requires line, so it could not meet the one of the base. ponytail: a contract cannot
+  // call such a function through the class. Upgrade: copy the requires lines through `'B`.
+  std::vector<const CXXMethodDecl *> baseMembers(const CXXRecordDecl *RD) const {
+    std::vector<const CXXMethodDecl *> Out;
+    const CXXRecordDecl *Data = plainStruct(Context.getRecordType(RD)) ? dataBase(RD) : nullptr;
+    if (!Data)
+      return Out;
+    for (const Decl *D : Data->decls())
+      if (const auto *M = dyn_cast<CXXMethodDecl>(D); M && constMember(M) && !M->isOverloadedOperator() && (M->isDefined() || trustedReason(M)) && !hasRequires(M) && RD->lookup(M->getDeclName()).empty())
+        Out.push_back(M);
+    return Out;
+  }
+  // The key of the function that a class takes from its base with data, as the key of a function that has no mangled name: the key of the class, `'` and the key of the
+  // function of the base, decision 0201.
+  std::string baseKey(const CXXRecordDecl *RD, const CXXMethodDecl *M) const { return structKey(RD) + "'" + key(M); }
   // A final class whose bases are all interfaces, decision 0165.
   bool finalOverInterface(const CXXRecordDecl *RD) const {
     return RD && RD->hasDefinition() && RD->getDefinition()->isEffectivelyFinal() && !interfaceBases(RD).empty();
@@ -1096,6 +1169,47 @@ public:
     const SourceLocation Loc = SM.getFileLoc(RD->getLocation());
     Structs.at(Key) = llvm::json::Object{{"struct", Key}, {"name", RD->getNameAsString()}, {"file", file(Loc)}, {"line", number(line(Loc))},
                                              {"fields", llvm::json::Array{}}, {"members", llvm::json::Array{}}, {"bases", std::move(Bases)}, {"final", false}};
+  }
+
+  // The functions that a class takes from its base with data, decision 0201. Each is a member function with the parameters and the result of the function of the base.
+  // Its body is `return this->'B.f(args);`, a call of the function of the base on the field that holds the base. It has no contract line. This is trusted: the
+  // sample pairs and the fixtures of decision 0201 are its evidence.
+  std::vector<llvm::json::Value> baseFunctions(const CXXRecordDecl *RD) const {
+    std::vector<llvm::json::Value> Out;
+    const std::vector<const CXXMethodDecl *> Members = baseMembers(RD);
+    if (Members.empty())
+      return Out;
+    const SourceLocation Loc = structLoc(RD);
+    const unsigned At = line(Loc);
+    const llvm::json::Value Self = thisType(RD);  // writes the struct
+    for (const CXXMethodDecl *M : Members) {
+      llvm::json::Array Params{llvm::json::Array{"this", Self}};
+      llvm::json::Array Args{tag("Field", llvm::json::Array{tag("Var", llvm::json::Array{"this", Self}), baseField(dataBase(RD))})};
+      for (unsigned I = 0; I < M->getNumParams(); ++I) {
+        const ParmVarDecl *P = M->getParamDecl(I);
+        // An unnamed parameter has the name that the shell gives it: `'` and its place, `this` being the first.
+        const std::string Name = P->getNameAsString().empty() ? "'" + std::to_string(I + 1) : P->getNameAsString();
+        Params.push_back(llvm::json::Array{Name, paramType(P->getType())});
+        Args.push_back(tag("Var", llvm::json::Array{Name, varType(P)}));
+      }
+      llvm::json::Value Call = tag("Call", llvm::json::Array{key(M), name(M), std::move(Args), number(At)});
+      const bool Void = M->getReturnType()->isVoidType();
+      const QualType ValueResult = valueResult(M);
+      llvm::json::Array Body;
+      Body.push_back(Void ? std::move(Call) : tag("Return", llvm::json::Array{std::move(Call), number(At)}));
+      Out.push_back(llvm::json::Object{{"name", M->getNameAsString()},
+                                       {"key", baseKey(RD, M)},
+                                       {"file", file(Loc)},
+                                       {"line", number(At)},
+                                       {"params", std::move(Params)},
+                                       {"ret", Void ? llvm::json::Value("Void") : !ValueResult.isNull() ? type(ValueResult) : resultType(M->getReturnType())},
+                                       {"trusted", nullptr},
+                                       {"interface", false},
+                                       {"hidden", llvm::json::Array{}},
+                                       {"conds", llvm::json::Array{}},
+                                       {"body", std::move(Body)}});
+    }
+    return Out;
   }
 
   // A struct with a field of a struct with a destructor is written, also when no type names it, so the core refuses the field at its line, decision 0178.
@@ -1552,6 +1666,10 @@ public:
       if (!Structs.count(Key)) {
         Structs.emplace(Key, nullptr);  // a recursive struct finds itself here, decision 0076
         llvm::json::Array Fields;
+        // The base with data is the field `'B` before the fields of the class, decision 0201. C++ cannot write a name with `'`.
+        const CXXRecordDecl *Data = dataBase(RD);
+        if (Data)
+          Fields.push_back(llvm::json::Array{baseField(Data), type(Context.getRecordType(Data), true)});
         for (const FieldDecl *F : RD->fields())
           Fields.push_back(llvm::json::Array{F->getNameAsString(), type(F->getType(), true)});
         // The member functions that are written as functions, as (name, key), decision 0090. A name that two of them share is left out:
@@ -1564,6 +1682,9 @@ public:
             // prints in the sentence of a contract that calls it, decision 0188.
             Named[isa<CXXDestructorDecl>(M) ? "~" : M->getNameAsString()].push_back(
                 constMember(M) && !M->isDefined() && !trustedReason(M) ? name(M) : key(M));
+        // The member functions that the class takes from its base with data, decision 0201.
+        for (const CXXMethodDecl *M : baseMembers(RD))
+          Named[M->getNameAsString()].push_back(baseKey(RD, M));
         // The static member functions with a contract, under their qualified names, decision 0174.
         for (const Decl *D : RD->decls())
           if (const auto *M = dyn_cast<CXXMethodDecl>(D); M && listedStatic(M))
@@ -1798,6 +1919,20 @@ private:
           Start = expr(Var->getInit(), line(S->getBeginLoc()));
         return tag("Local", llvm::json::Array{Var->getNameAsString(), varType(Var), std::move(Start), number(line(S->getBeginLoc()))});
       }
+    // A write of a field of the base with data has no rule, decision 0203. Clang writes the cast to the base under the field, and the forms below look through it.
+    {
+      const Expr *Left = nullptr;
+      if (const auto *Op = dyn_cast<BinaryOperator>(S); Op && Op->isAssignmentOp())
+        Left = Op->getLHS();
+      else if (const auto *Op = dyn_cast<CXXOperatorCallExpr>(S); Op && Op->isAssignmentOp() && Op->getNumArgs() == 2)
+        Left = Op->getArg(0);
+      // `f[i] = e` of a vector field writes the field.
+      if (const auto *Element = Left ? dyn_cast<CXXOperatorCallExpr>(Left->IgnoreParens()) : nullptr; Element && Element->getOperator() == OO_Subscript && Element->getNumArgs() == 2)
+        Left = Element->getArg(0);
+      if (const auto *Member = Left ? dyn_cast<MemberExpr>(Left->IgnoreParenImpCasts()) : nullptr; Member && isa<FieldDecl>(Member->getMemberDecl()))
+        if (const CastExpr *Up = toDataBase(Member->getBase()))
+          return unknown(S, "a field of the base " + recordOf(Up->getType())->getNameAsString(), line(S->getBeginLoc()));
+    }
     if (const auto *Assign = dyn_cast<BinaryOperator>(S); Assign && Assign->getOpcode() == BO_Assign) {
       if (const auto *Target = dyn_cast<DeclRefExpr>(Assign->getLHS()); Target && isTarget(Target->getDecl()))
         return tag("Assign", llvm::json::Array{nameOf(Target->getDecl()), expr(Assign->getRHS(), line(S->getBeginLoc())), number(line(S->getBeginLoc()))});
@@ -1958,7 +2093,9 @@ private:
         return Written;
       // The call with a class at a reference of its interface says why, decision 0169.
       else if (const llvm::json::Array *Why = Written.getAsObject() ? Written.getAsObject()->getArray("Unknown") : nullptr;
-               Why && !Why->empty() && (*Why)[0].getAsString() == StringRef("a class as a reference to its interface"))
+               Why && !Why->empty() && ((*Why)[0].getAsString() == StringRef("a class as a reference to its interface") ||
+                                         StringRef((*Why)[0].getAsString().value_or("")).starts_with("a call of a member function of the base ") ||
+                                         StringRef((*Why)[0].getAsString().value_or("")).starts_with("a change of ")))
         return Written;
     }
     // A bare block `{ ... }` is a block of the model, decision 0178.
@@ -2060,7 +2197,7 @@ private:
 
   // A field of a struct reference parameter, `p.f`, as the parameter and the field, or two nulls, decision 0108.
   std::pair<const ParmVarDecl *, const FieldDecl *> refField(const Expr *E) const {
-    if (const auto *Member = dyn_cast<MemberExpr>(E->IgnoreParens()); Member && !Member->isArrow())
+    if (const auto *Member = dyn_cast<MemberExpr>(E->IgnoreParens()); Member && !Member->isArrow() && !toDataBase(Member->getBase()))
       if (const auto *Base = dyn_cast<DeclRefExpr>(Member->getBase()->IgnoreParenImpCasts()))
         if (const auto *Param = dyn_cast<ParmVarDecl>(Base->getDecl()); Param && !mutRef(Param->getType()).getAsNull())
           if (const auto *Field = dyn_cast<FieldDecl>(Member->getMemberDecl()); Field && plainStruct(Context.getRecordType(Field->getParent())))
@@ -2070,7 +2207,7 @@ private:
 
   // The field of a plain struct that an expression names on the object of a member function, `n_` or `this->n_`, or null.
   const FieldDecl *objectField(const Expr *E) const {
-    if (const auto *Member = dyn_cast<MemberExpr>(E->IgnoreParens()); Member && isa<CXXThisExpr>(Member->getBase()->IgnoreParenImpCasts()))
+    if (const auto *Member = dyn_cast<MemberExpr>(E->IgnoreParens()); Member && isa<CXXThisExpr>(Member->getBase()->IgnoreParenImpCasts()) && !toDataBase(Member->getBase()))
       if (const auto *Field = dyn_cast<FieldDecl>(Member->getMemberDecl()); Field && plainStruct(Context.getRecordType(Field->getParent())))
         return Field;
     return nullptr;
@@ -2263,6 +2400,25 @@ private:
       return Negative;
     return tag("Cast", llvm::json::Array{tag("Integral", llvm::json::Array{Computed, Own}), std::move(Negative)});
   }
+  // The class of a type, or of what a pointer to it points to.
+  static const CXXRecordDecl *recordOf(QualType T) { return (T->isPointerType() ? T->getPointeeType() : T)->getAsCXXRecordDecl(); }
+  // The sentence for a change of a class into its base with data, decision 0201. The classes have their plain names, decision 0203.
+  static std::string changeIntoBase(const CastExpr *Up) {
+    return "a change of " + recordOf(Up->getSubExpr()->getType())->getNameAsString() + " into its base " + recordOf(Up->getType())->getNameAsString() + ", which has data";
+  }
+  // The cast that changes a class into its base with data, or null, decision 0201. Clang writes it for `d.f()` and `this->x`, and for an argument `d` for `const B&`.
+  // It is `DerivedToBase` for an argument and `UncheckedDerivedToBase` for the object of a member. The object can be a pointer. A `NoOp` cast around it is skipped.
+  const CastExpr *toDataBase(const Expr *E) const {
+    E = E->IgnoreParens();
+    for (const auto *Same = dyn_cast<ImplicitCastExpr>(E); Same && Same->getCastKind() == CK_NoOp; Same = dyn_cast<ImplicitCastExpr>(E))
+      E = Same->getSubExpr()->IgnoreParens();
+    const auto *Cast = dyn_cast<CastExpr>(E);
+    if (!Cast || (Cast->getCastKind() != CK_DerivedToBase && Cast->getCastKind() != CK_UncheckedDerivedToBase))
+      return nullptr;
+    const CXXRecordDecl *From = recordOf(Cast->getSubExpr()->getType()), *To = recordOf(Cast->getType());
+    const CXXRecordDecl *Data = dataBase(From);
+    return Data && To && To->getDefinition() == Data ? Cast : nullptr;
+  }
   // The kind of a cast of a final class over an interface to one of its interfaces, or null, decision 0166.
   llvm::json::Value upcastKind(const CastExpr *Cast) const {
     const CXXRecordDecl *To = Cast->getType()->getAsCXXRecordDecl();
@@ -2299,7 +2455,7 @@ private:
   std::pair<const VarDecl *, const FieldDecl *> ownField(const Expr *E) const {
     const auto *Member = dyn_cast<MemberExpr>(E->IgnoreParens());
     const auto *Field = Member ? dyn_cast<FieldDecl>(Member->getMemberDecl()) : nullptr;
-    const auto *Arrow = Member && Member->isArrow() ? dyn_cast<CXXOperatorCallExpr>(Member->getBase()->IgnoreParenImpCasts()) : nullptr;
+    const auto *Arrow = Member && Member->isArrow() && !toDataBase(Member->getBase()) ? dyn_cast<CXXOperatorCallExpr>(Member->getBase()->IgnoreParenImpCasts()) : nullptr;
     if (!Field || !Arrow || Arrow->getOperator() != OO_Arrow || Arrow->getNumArgs() != 1)
       return {};
     const auto *Ref = dyn_cast<DeclRefExpr>(Arrow->getArg(0)->IgnoreParenImpCasts());
@@ -2316,7 +2472,7 @@ private:
   std::pair<const FieldDecl *, const FieldDecl *> throughField(const Expr *E) const {
     const auto *Member = dyn_cast<MemberExpr>(E->IgnoreParens());
     const auto *Field = Member ? dyn_cast<FieldDecl>(Member->getMemberDecl()) : nullptr;
-    const auto *Arrow = Member && Member->isArrow() ? dyn_cast<CXXOperatorCallExpr>(Member->getBase()->IgnoreParenImpCasts()) : nullptr;
+    const auto *Arrow = Member && Member->isArrow() && !toDataBase(Member->getBase()) ? dyn_cast<CXXOperatorCallExpr>(Member->getBase()->IgnoreParenImpCasts()) : nullptr;
     if (!Field || !Arrow || Arrow->getOperator() != OO_Arrow || Arrow->getNumArgs() != 1)
       return {};
     const FieldDecl *Held = objectField(Arrow->getArg(0)->IgnoreParenImpCasts());
@@ -2592,6 +2748,10 @@ private:
   llvm::json::Value expr(const Expr *E, unsigned Near) const {
     if (InConstructorBody && readsObject(E))
       return unknown(E, "a field in the body of a constructor", Near);
+    // A field of the base with data has no rule, in a read through `this`, `.`, `->`, an optional or a `std::unique_ptr`, decisions 0201 and 0203.
+    if (const auto *Member = dyn_cast<MemberExpr>(E); Member && isa<FieldDecl>(Member->getMemberDecl()))
+      if (const CastExpr *Up = toDataBase(Member->getBase()))
+        return unknown(E, "a field of the base " + recordOf(Up->getType())->getNameAsString(), Near);
     // The result of a call that gives back its object is the object of a call, or a statement, and both are read before this. Any other use has no rule, decision 0183.
     if (fluentCall(E) == E)
       return tag("Unknown", llvm::json::Array{"the result of a call that gives back its object, used as a value", number(Near)});
@@ -2863,6 +3023,9 @@ private:
       // `nullptr` as an argument for a pointer to const is no value, decision 0140.
       if (Cast->getCastKind() == CK_NullToPointer && isa<CXXNullPtrLiteralExpr>(Cast->getSubExpr()->IgnoreParens()))
         return "Nullopt";
+      // A change of a class into its base with data has no rule, decision 0201. The object of a member call is read before this.
+      if (Cast->getCastKind() == CK_DerivedToBase && toDataBase(Cast))
+        return unknown(E, changeIntoBase(Cast), Near);
       // A final class at a reference of its interface that is not const has no rule: the model has no way back from a value of the interface, decision 0169.
       if (Cast->getCastKind() == CK_DerivedToBase && !Cast->getType().isConstQualified() && Cast->getValueKind() == VK_LValue && !upcastKind(Cast).getAsNull())
         return unknown(E, "a class as a reference to its interface", Near);
@@ -3033,6 +3196,34 @@ private:
           Args.push_back(expr(Arg, line(E->getBeginLoc())));
         return tag("Call", llvm::json::Array{key(Call->getDirectCallee()), name(Call->getDirectCallee()), std::move(Args), number(line(E->getBeginLoc()))});
       }
+    // A call of a member function of the base with data, decisions 0201 and 0203. A const one is a call of the function of the base on the field that holds the
+    // base, so the call keeps its contract. One that is not const has no rule.
+    if (const auto *Call = dyn_cast<CXXMemberCallExpr>(E); Call && Call->getDirectCallee() && Call->getImplicitObjectArgument())
+      if (const CastExpr *Up = toDataBase(Call->getImplicitObjectArgument())) {
+        const CXXMethodDecl *Callee = Call->getMethodDecl();
+        const unsigned At = line(E->getBeginLoc());
+        if (!Callee->isConst())
+          return unknown(E, "a call of a member function of the base " + recordOf(Up->getType())->getNameAsString() + " that is not const", Near);
+        // The object is the value of the class: the object itself, `this`, what a pointer to const points to, or the value of an optional or a `std::unique_ptr`.
+        const Expr *Sub = Up->getSubExpr()->IgnoreParenImpCasts();
+        const auto *Written = dyn_cast<MemberExpr>(Call->getCallee()->IgnoreParens());
+        const auto *Arrow = dyn_cast<CXXOperatorCallExpr>(Sub);
+        llvm::json::Value Object = nullptr;
+        if (Written && member(Callee)) {
+          if (!Written->isArrow() || isa<CXXThisExpr>(Sub))
+            Object = expr(Sub, At);
+          else if (!constPointee(Sub->getType()).isNull())
+            Object = tag("Value", expr(Sub, At));
+          else if (Arrow && Arrow->getOperator() == OO_Arrow && Arrow->getNumArgs() == 1 && (isOpt(Arrow->getArg(0)->getType()) || isOwn(Arrow->getArg(0)->getType())))
+            Object = tag("Value", expr(optObject(Arrow->getArg(0)), At));
+        }
+        if (!Object.getAsNull()) {
+          llvm::json::Array Args{tag("Field", llvm::json::Array{std::move(Object), baseField(recordOf(Up->getType()))})};
+          for (unsigned I = 0; I < Call->getNumArgs(); ++I)
+            Args.push_back(callArg(Callee, I, Call->getArg(I), At));
+          return tag("Call", llvm::json::Array{key(Callee), name(Callee), std::move(Args), number(At)});
+        }
+      }
     // A call of a member function, `o.f(a)` or `f(a)` in a method, is a call of `f` with the object first, decisions 0089 and 0096.
     if (const auto *Call = dyn_cast<CXXMemberCallExpr>(E); Call && Call->getDirectCallee() && member(Call->getDirectCallee())) {
       const Expr *Object = Call->getImplicitObjectArgument()->IgnoreParenImpCasts();
@@ -3072,6 +3263,9 @@ private:
         for (unsigned I = 0; I < cast<CallExpr>(E)->getNumArgs(); ++I) {
           const Expr *Arg = cast<CallExpr>(E)->getArg(I);
           // A class at a reference of its interface that is not const stands for the whole call, because the core would refuse the write-back first, decision 0169.
+          // So does a class at a reference of its base with data, decision 0203.
+          if (const CastExpr *Up = toDataBase(Arg); Up && Up->getCastKind() == CK_DerivedToBase && !Up->getType().isConstQualified() && Up->getValueKind() == VK_LValue)
+            return unknown(E, changeIntoBase(Up), Near);
           if (const auto *Up = dyn_cast<ImplicitCastExpr>(Arg->IgnoreParens()); Up && Up->getCastKind() == CK_DerivedToBase && !Up->getType().isConstQualified() &&
                                                                               Up->getValueKind() == VK_LValue && !upcastKind(Up).getAsNull())
             return unknown(E, "a class as a reference to its interface", Near);
@@ -3134,6 +3328,8 @@ public:
       TreeWriter(*Context, Claimed, Structs).classEntry(RD);
       TreeWriter(*Context, Claimed, Structs).staticEntry(RD);
       TreeWriter(*Context, Claimed, Structs).holderEntry(RD);
+      for (const llvm::json::Value &F : Writer.baseFunctions(RD))
+        append(F);
       return;
     }
     const auto *FD = Result.Nodes.getNodeAs<FunctionDecl>("fn");
