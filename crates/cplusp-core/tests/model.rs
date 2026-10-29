@@ -5243,3 +5243,29 @@ fn a_local_vector_from_a_fill_and_from_a_move() {
         "{second:?}"
     );
 }
+
+/// A variant of two types reads its alternatives by type, in a contract and in code, decision 0202. A type that is neither
+/// alternative has no form, and a variant of one type twice has no rule.
+#[test]
+fn a_variant_reads_its_alternatives_by_type() {
+    let var = Ty::Variant(Scalar::I32, Scalar::Bool);
+    let toks = vec![Tok::Holds(Ty::Bool), Tok::LParen, Tok::Ident(X), Tok::RParen];
+    assert_eq!(parse_contract(&toks, 3), Ok(Expr::Holds(Ty::Bool, b(Expr::Name(X)))));
+    let toks = vec![Tok::Alt(Ty::I32), Tok::LParen, Tok::Ident(X), Tok::RParen];
+    assert_eq!(parse_contract(&toks, 3), Ok(Expr::GetAlt(Ty::I32, b(Expr::Name(X)))));
+    let decl = List::Cons(X, Box::new(List::Nil));
+    let ps = List::Cons((X, var), Box::new(List::Nil));
+    let c = |e: &Expr| translate_contract(e, &decl, &ps, Some(Ty::I32), &List::Nil, 5, &List::Nil);
+    assert_eq!(c(&Expr::Holds(Ty::Bool, b(Expr::Name(X)))), Ok(DExpr::Is(true, Box::new(DExpr::Var(X)))));
+    assert_eq!(c(&Expr::Holds(Ty::I32, b(Expr::Name(X)))), Ok(DExpr::Is(false, Box::new(DExpr::Var(X)))));
+    let Ok(d) = c(&Expr::Bin(BinOp::Eq, b(Expr::Result), b(Expr::GetAlt(Ty::I32, b(Expr::Name(X)))))) else { panic!("a contract") };
+    assert!(format!("{d:?}").contains("Alt(false, Var("), "{d:?}");
+    assert_eq!(c(&Expr::Holds(Ty::I64, b(Expr::Name(X)))), Err(Refusal::Syntax(5)));
+    assert_eq!(c(&Expr::GetAlt(Ty::U8, b(Expr::Name(X)))), Err(Refusal::Syntax(5)));
+    // In code, the plugin gives the type of each alternative.
+    assert_eq!(translate_code(&Expr::Holds(Ty::Bool, b(Expr::Var(X, var))), 3), Ok(DExpr::Is(true, Box::new(DExpr::Var(X)))));
+    assert_eq!(translate_code(&Expr::GetAlt(Ty::I32, b(Expr::Var(X, var))), 3), Ok(DExpr::Alt(false, Box::new(DExpr::Var(X)))));
+    assert_eq!(translate_code(&Expr::GetAlt(Ty::I64, b(Expr::Var(X, var))), 3), Err(Refusal::Syntax(3)));
+    assert_eq!(translate_ty(var, 3), Ok(DTy::Variant(Scalar::I32, Scalar::Bool)));
+    assert_eq!(translate_ty(Ty::Variant(Scalar::I32, Scalar::I32), 3), Err(Refusal::Element(3)));
+}

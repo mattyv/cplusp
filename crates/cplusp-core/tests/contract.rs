@@ -319,3 +319,25 @@ fn a_cast_and_a_bit_operator() {
     assert_eq!(lex("a && b")[1], op("&&", BinOp::And));
     assert_eq!(lex("static_cast<double>(x)")[0], name("static_cast"));
 }
+
+/// `std::holds_alternative<T>` and `std::get<T>` with a type name of 0064 are one token each, decision 0202. Another type name is no
+/// such token.
+#[test]
+fn the_reads_of_a_variant_are_tokens() {
+    assert_eq!(
+        lex("std::holds_alternative<int32_t>(v) && std::get<bool>(v)"),
+        vec![
+            ("std::holds_alternative<int32_t>".to_string(), LexKind::Fixed(Tok::Holds(Ty::I32))),
+            ("(".to_string(), LexKind::Fixed(Tok::LParen)),
+            ("v".to_string(), LexKind::Name(false)),
+            (")".to_string(), LexKind::Fixed(Tok::RParen)),
+            ("&&".to_string(), LexKind::Fixed(Tok::Op(BinOp::And))),
+            ("std::get<bool>".to_string(), LexKind::Fixed(Tok::Alt(Ty::Bool))),
+            ("(".to_string(), LexKind::Fixed(Tok::LParen)),
+            ("v".to_string(), LexKind::Name(false)),
+            (")".to_string(), LexKind::Fixed(Tok::RParen)),
+        ]
+    );
+    assert_eq!(lex("std::get<size_t>(v)")[0], ("std::get<size_t>".to_string(), LexKind::Fixed(Tok::Alt(Ty::U64))));
+    assert_ne!(lex("std::get<Point>(v)")[0].1, LexKind::Fixed(Tok::Alt(Ty::I32)));
+}

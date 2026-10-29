@@ -788,3 +788,54 @@ fn the_lambdas_example_proves() {
     assert_eq!(o.status.code(), Some(0), "stdout: {text} stderr: {}", stderr(&o));
     assert_eq!(text.lines().last(), Some("ok: proved"), "{text}");
 }
+
+/// A variant of two types proves through `std::holds_alternative` and `std::get`, in code and in its contracts, decision 0202.
+#[test]
+fn a_variant_of_two_types_proves() {
+    let Some(dafny) = dafny() else { return };
+    if !clang_tidy_available() {
+        return;
+    }
+    let o = prove("model-variant.cpp", &[], &dafny);
+    let text = stdout(&o);
+    assert_eq!(o.status.code(), Some(0), "stdout: {text} stderr: {}", stderr(&o));
+    assert_eq!(text.lines().last(), Some("ok: proved"), "{text}");
+}
+
+/// A read of an alternative that the variant may not hold fails at the read, in code and in a contract, decision 0202.
+#[test]
+fn a_variant_of_two_types_keeps_its_contract() {
+    let Some(dafny) = dafny() else { return };
+    if !clang_tidy_available() {
+        return;
+    }
+    let o = prove("model-variant-wrong.cpp", &[], &dafny);
+    let text = stdout(&o);
+    assert_eq!(o.status.code(), Some(1), "stdout: {text} stderr: {}", stderr(&o));
+    let failed: Vec<&str> = text.lines().filter(|l| l.starts_with("Not proved: ") || l.starts_with("Not provable: ")).map(|l| l.rsplit_once(".cpp:").unwrap().1).collect();
+    let want = [
+        "7: the variant may not hold this alternative.",
+        "12: the ensures line may not hold on this return.",
+        "15: the variant may not hold this alternative.",
+    ];
+    assert_eq!(failed, want, "{text}");
+}
+
+/// A variant of three types, a type that is no alternative in a contract and `v.index()` have no rule yet, decision 0202.
+#[test]
+fn a_variant_with_no_rule_is_refused() {
+    let Some(dafny) = dafny() else { return };
+    if !clang_tidy_available() {
+        return;
+    }
+    let o = prove("model-variant-refuse.cpp", &[], &dafny);
+    let text = stdout(&o);
+    assert_eq!(o.status.code(), Some(1), "stdout: {text} stderr: {}", stderr(&o));
+    let refused: Vec<&str> = text.lines().filter(|l| l.starts_with("Not proved: ") || l.starts_with("Not provable: ")).map(|l| l.rsplit_once(".cpp:").unwrap().1).collect();
+    let want = [
+        "6: const std::variant<int32_t, bool, uint64_t> &: the translator has no rule for it yet.",
+        "10: the contract line has a form the translator cannot read.",
+        "17: a call to std::variant<int32_t, bool>::index, which has no model in view.",
+    ];
+    assert_eq!(refused, want, "{text}");
+}
