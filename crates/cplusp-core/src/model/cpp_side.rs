@@ -132,7 +132,8 @@ pub enum CastKind {
 /// decision 0171. `Bits` is `a & b` or `a | b` in code, with the type of its result, `StaticCast` is `static_cast<T>(e)` in a
 /// contract, and `List` is a braced list `{a, b, c}` in code, decision 0175. `Step` is `x++`, `x--`, `++x` or `--x` inside an
 /// expression, by the name and type of `x`, whether it adds one, and whether it is a prefix, decision 0177. `Fill` is the start
-/// value `v(n, x)` of a local vector, by the count and the value, decision 0185. `Unknown` is a construct with no rule, by the id of
+/// value `v(n, x)` of a local vector, by the count and the value, decision 0185. `Either` is `o.size()`, `o.empty()` or `o.back()` in a contract, as the form of a sequence and the id of the name of a
+/// member, and the translator picks one by the type of `o`, decision 0200. `Unknown` is a construct with no rule, by the id of
 /// its kind and its line.
 #[derive(PartialEq, Eq, Debug)]
 pub enum Expr {
@@ -184,6 +185,7 @@ pub enum Expr {
     EmptyVec,
     Fill(Box<Expr>, Box<Expr>),
     Back(Box<Expr>),
+    Either(Box<Expr>, u32),
     Move(u32, Ty),
     Bits(BinOp, Box<Expr>, Box<Expr>, Ty),
     Step(u32, Ty, bool, bool),

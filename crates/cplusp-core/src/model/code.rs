@@ -729,6 +729,55 @@ pub fn translate_leaf(d: DExpr, t: Ty, line: u32) -> (r: Result<DExpr, Refusal>)
     }
 }
 
+pub fn member_of(t: Ty, f: u32, line: u32, sd: &Structs) -> (r: Result<(u32, Ty, Params), Refusal>)
+    ensures
+        r == spec_member_of(t, f, line, *sd),
+{
+    match struct_key(t) {
+        Some(k) => match member(sd, k, f) {
+            Some((key, Some((Ty::Other(_), _)))) => Err(Refusal::Callee(key, line)),
+            Some((key, Some((rt, mps)))) => Ok((key, rt, mps)),
+            _ => Err(Refusal::NotPure(f, line)),
+        },
+        None => Err(Refusal::Syntax(line)),
+    }
+}
+
+pub fn nullary(d: DExpr, t: Ty, f: u32, line: u32, sd: &Structs) -> (r: Result<DExpr, Refusal>)
+    ensures
+        r == spec_nullary(d, t, f, line, *sd),
+{
+    match member_of(t, f, line, sd) {
+        Ok((key, rt, _)) => translate_leaf(DExpr::FCall(key, Box::new(List::Cons(d, Box::new(List::Nil)))), rt, line),
+        Err(r) => Err(r),
+    }
+}
+
+pub fn translate_either(s: &Expr, id: u32, decl: &Names, ps: &Params, ret: Option<Ty>, bound: &Names, line: u32, sd: &Structs) -> (r: Result<DExpr, Refusal>)
+    ensures
+        r == spec_contract(Expr::Either(Box::new(*s), id), *decl, *ps, ret, *bound, line, *sd),
+    decreases s, 2nat,
+{
+    match s {
+        Expr::Size(o) => match path(o, decl, ps, ret, bound, line, sd) {
+            Ok((d, Ty::Seq(_, _))) => Ok(DExpr::Len(Box::new(d))),
+            Ok((d, t)) => nullary(d, t, id, line, sd),
+            Err(r) => Err(r),
+        },
+        Expr::Empty(o) => match path(o, decl, ps, ret, bound, line, sd) {
+            Ok((d, Ty::Seq(_, _))) => Ok(DExpr::Bin(BinOp::Eq, Box::new(DExpr::Len(Box::new(d))), Box::new(DExpr::Lit(0)))),
+            Ok((d, t)) => nullary(d, t, id, line, sd),
+            Err(r) => Err(r),
+        },
+        Expr::Back(o) => match path(o, decl, ps, ret, bound, line, sd) {
+            Ok((d, Ty::Seq(s, _))) => translate_leaf(DExpr::Back(Box::new(d)), elem(s), line),
+            Ok((d, t)) => nullary(d, t, id, line, sd),
+            Err(r) => Err(r),
+        },
+        _ => Err(Refusal::Syntax(line)),
+    }
+}
+
 pub fn translate_contract(e: &Expr, decl: &Names, ps: &Params, ret: Option<Ty>, bound: &Names, line: u32, sd: &Structs) -> (r: Result<DExpr, Refusal>)
     ensures
         r == spec_contract(*e, *decl, *ps, ret, *bound, line, *sd),
@@ -859,6 +908,8 @@ pub fn translate_contract(e: &Expr, decl: &Names, ps: &Params, ret: Option<Ty>, 
             Ok(_) => Err(Refusal::Syntax(line)),
             Err(r) => Err(r),
         },
+        // `o.size()`, `o.empty()` and `o.back()` read a sequence, and call the member of that name of any other type, decision 0200.
+        Expr::Either(s, id) => translate_either(s, *id, decl, ps, ret, bound, line, sd),
         Expr::Index(_, _) | Expr::Back(_) | Expr::Suffix(_, _) | Expr::Prefix(_, _) | Expr::Slice(_, _, _) => match path(e, decl, ps, ret, bound, line, sd) {
             Ok((d, t)) => translate_leaf(d, t, line),
             Err(r) => Err(r),
@@ -952,20 +1003,16 @@ pub fn translate_contract(e: &Expr, decl: &Names, ps: &Params, ret: Option<Ty>, 
             Err(r) => Err(r),
         },
         Expr::MApply(o, f, args) => match path(o, decl, ps, ret, bound, line, sd) {
-            Ok((d, t)) => match struct_key(t) {
-                Some(k) => match member(sd, k, *f) {
-                    Some((key, Some((Ty::Other(_), _)))) => Err(Refusal::Callee(key, line)),
-                    Some((key, Some((rt, mps)))) => match translate_contract_args(args, decl, ps, ret, bound, line, sd) {
+            Ok((d, t)) => if *f == COUNT_NAME && matches!(**args, List::Nil) && t == Ty::I64 {
+                translate_leaf(d, t, line)
+            } else {
+                match member_of(t, *f, line, sd) {
+                    Ok((key, rt, mps)) => match translate_contract_args(args, decl, ps, ret, bound, line, sd) {
                         Ok(da) => translate_leaf(DExpr::FCall(key, Box::new(List::Cons(d, Box::new(convert(da, &tail(&mps)))))), rt, line),
                         Err(r) => Err(r),
                     },
-                    _ => Err(Refusal::NotPure(*f, line)),
-                },
-                None => if *f == COUNT_NAME && matches!(**args, List::Nil) && t == Ty::I64 {
-                    translate_leaf(d, t, line)
-                } else {
-                    Err(Refusal::Syntax(line))
-                },
+                    Err(r) => Err(r),
+                }
             },
             Err(r) => Err(r),
         },
@@ -1161,6 +1208,14 @@ pub fn path(e: &Expr, decl: &Names, ps: &Params, ret: Option<Ty>, bound: &Names,
                 None => Err(Refusal::Syntax(line)),
             },
             Err(r) => Err(r),
+        },
+        Expr::Either(s, _) => match &**s {
+            Expr::Back(o) => match path(o, decl, ps, ret, bound, line, sd) {
+                Ok((d, Ty::Seq(s, _))) => Ok((DExpr::Back(Box::new(d)), elem(s))),
+                Ok(_) => Err(Refusal::Syntax(line)),
+                Err(r) => Err(r),
+            },
+            _ => Err(Refusal::Syntax(line)),
         },
         Expr::Back(o) => match path(o, decl, ps, ret, bound, line, sd) {
             Ok((d, Ty::Seq(s, _))) => Ok((DExpr::Back(Box::new(d)), elem(s))),
@@ -2626,6 +2681,7 @@ pub fn has_result(e: &Expr) -> (r: bool)
         Expr::Paren(a) => has_result(a),
         Expr::Size(a) => has_result(a),
         Expr::Back(a) => has_result(a),
+        Expr::Either(a, _) => has_result(a),
         Expr::Empty(a) => has_result(a),
         Expr::Apply(_, args) => has_result_args(args),
         Expr::MApply(o, _, args) => has_result(o) || has_result_args(args),

@@ -698,7 +698,13 @@ fn lex(text: &str, line: u32, names: &mut Names) -> Vec<Tok> {
                     if !after_colons {
                         chain.clear();
                     }
-                    tok
+                    // The core lexer cannot intern: the shell gives the three names their ids, decision 0200.
+                    match tok {
+                        Tok::Size(_) => Tok::Size(names.id("size")),
+                        Tok::Empty(_) => Tok::Empty(names.id("empty")),
+                        Tok::Back(_) => Tok::Back(names.id("back")),
+                        tok => tok,
+                    }
                 }
                 LexKind::Int(value) => Tok::Int(value),
                 LexKind::Real(digits, after) => Tok::Real(digits, after),

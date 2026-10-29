@@ -387,11 +387,11 @@ pub open spec fn spec_token(t: Seq<u8>, i: int) -> (int, LexKind) {
             (e, spec_number(strip(t.subrange(i, e))))
         }
     } else if at(t, i, b".size()"@) {
-        (i + 7, LexKind::Fixed(Tok::Size))
+        (i + 7, LexKind::Fixed(Tok::Size(0)))
     } else if at(t, i, b".empty()"@) {
-        (i + 8, LexKind::Fixed(Tok::Empty))
+        (i + 8, LexKind::Fixed(Tok::Empty(0)))
     } else if at(t, i, b".back()"@) {
-        (i + 7, LexKind::Fixed(Tok::Back))
+        (i + 7, LexKind::Fixed(Tok::Back(0)))
     } else if at(t, i, b".has_value()"@) {
         (i + 12, LexKind::Fixed(Tok::HasValue))
     } else if at(t, i, b".value()"@) {
@@ -1118,11 +1118,11 @@ fn token(t: &Vec<u8>, i: usize) -> (r: (usize, LexKind))
             (e, number(&w))
         }
     } else if at_exec(t, i, b".size()") {
-        (i + 7, LexKind::Fixed(Tok::Size))
+        (i + 7, LexKind::Fixed(Tok::Size(0)))
     } else if at_exec(t, i, b".empty()") {
-        (i + 8, LexKind::Fixed(Tok::Empty))
+        (i + 8, LexKind::Fixed(Tok::Empty(0)))
     } else if at_exec(t, i, b".back()") {
-        (i + 7, LexKind::Fixed(Tok::Back))
+        (i + 7, LexKind::Fixed(Tok::Back(0)))
     } else if at_exec(t, i, b".has_value()") {
         (i + 12, LexKind::Fixed(Tok::HasValue))
     } else if at_exec(t, i, b".value()") {

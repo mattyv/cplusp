@@ -1176,6 +1176,7 @@ pub open spec fn spec_has_result(e: Expr) -> bool
         Expr::Paren(a) => spec_has_result(*a),
         Expr::Size(a) => spec_has_result(*a),
         Expr::Back(a) => spec_has_result(*a),
+        Expr::Either(a, _) => spec_has_result(*a),
         Expr::Empty(a) => spec_has_result(*a),
         Expr::Apply(_, args) => spec_has_result_args(*args),
         Expr::MApply(o, _, args) => spec_has_result(*o) || spec_has_result_args(*args),

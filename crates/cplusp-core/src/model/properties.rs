@@ -24,6 +24,7 @@ pub open spec fn unknown_expr(e: Expr) -> bool
         Expr::Call(_, _, args, _) => unknown_args(*args),
         Expr::Size(a) => unknown_expr(*a),
         Expr::Back(a) => unknown_expr(*a),
+        Expr::Either(a, _) => unknown_expr(*a),
         Expr::Index(a, i) => unknown_expr(*a) || unknown_expr(*i),
         Expr::CountIf(a, _, _, t) => unknown_expr(*a) || unknown_expr(*t),
         Expr::Copy(a, _, _) => unknown_expr(*a),

@@ -16,7 +16,7 @@ class Bag {
   int32_t back() const { return items_.back(); }
 
   //@ requires size() < 100
-  //@ ensures size() == old(size()) && back() == x
+  //@ ensures size() == old(size()) + 2 && back() == x
   void push(int32_t x) {
     items_.push_back(x);
     top_ = x;

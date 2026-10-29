@@ -602,13 +602,36 @@ fn a_chain_of_two_directions_and_an_index_of_a_scalar_are_refused() {
 #[test]
 fn size_is_a_length_or_a_member_by_the_type() {
     let sz = 71;
-    let either = Expr::Either(b(Expr::Size(b(Expr::Name(X)))), b(Expr::MApply(b(Expr::Name(X)), sz, Box::new(List::Nil))));
-    assert_eq!(parse_contract(&vec![Tok::Ident(X), Tok::Size(sz)], 3), Ok(Expr::Either(b(Expr::Size(b(Expr::Name(X)))), b(Expr::MApply(b(Expr::Name(X)), sz, Box::new(List::Nil))))));
+    let either = Expr::Either(b(Expr::Size(b(Expr::Name(X)))), sz);
+    assert_eq!(parse_contract(&vec![Tok::Ident(X), Tok::Size(sz)], 3), Ok(Expr::Either(b(Expr::Size(b(Expr::Name(X)))), sz)));
     let decl = List::Cons(X, Box::new(List::Nil));
     let seq = List::Cons((X, Ty::Seq(Scalar::I32, Extent::Dynamic)), Box::new(List::Nil));
     assert_eq!(translate_contract(&either, &decl, &seq, Some(Ty::I32), &List::Nil, 5, &List::Nil), Ok(DExpr::Len(Box::new(DExpr::Var(X)))));
     let scalar = List::Cons((X, Ty::I32), Box::new(List::Nil));
     assert_eq!(translate_contract(&either, &decl, &scalar, Some(Ty::I32), &List::Nil, 5, &List::Nil), Err(Refusal::Syntax(5)));
+}
+
+/// A chain of `.back()` holds its object once, and the translator reads it once, so a long chain ends at once, decision 0200.
+#[test]
+fn a_long_chain_of_back_ends() {
+    let mut toks = vec![Tok::Ident(X)];
+    toks.extend(std::iter::repeat(Tok::Back(72)).take(64));
+    let Ok(e) = parse_contract(&toks, 5) else { panic!("a contract") };
+    let decl = List::Cons(X, Box::new(List::Nil));
+    let seq = List::Cons((X, Ty::Seq(Scalar::I32, Extent::Dynamic)), Box::new(List::Nil));
+    assert_eq!(translate_contract(&e, &decl, &seq, Some(Ty::I32), &List::Nil, 5, &List::Nil), Err(Refusal::Syntax(5)));
+}
+
+/// The object of `.back()` keeps its own refusal under a cast and a field, decision 0200.
+#[test]
+fn the_object_of_back_keeps_its_refusal() {
+    let w = 74;
+    let f = 75;
+    let decl = List::Cons(X, Box::new(List::Nil));
+    let seq = List::Cons((X, Ty::Seq(Scalar::I32, Extent::Dynamic)), Box::new(List::Nil));
+    let back = || b(Expr::Either(b(Expr::Back(b(Expr::Name(w)))), 72));
+    assert_eq!(translate_contract(&Expr::StaticCast(Ty::I64, back()), &decl, &seq, Some(Ty::I64), &List::Nil, 5, &List::Nil), Err(Refusal::Name(w, 5)));
+    assert_eq!(translate_contract(&Expr::Field(back(), f), &decl, &seq, Some(Ty::I32), &List::Nil, 5, &List::Nil), Err(Refusal::Name(w, 5)));
 }
 
 #[test]
@@ -625,7 +648,7 @@ fn the_parser_reads_forall_index_size_and_a_chain() {
         j,
         b(Expr::Bin(
             BinOp::Implies,
-            b(Expr::Chain(BinOp::Le, BinOp::Lt, b(Expr::Int(0)), b(Expr::Name(j)), b(Expr::Either(b(Expr::Size(b(Expr::Name(v)))), b(Expr::MApply(b(Expr::Name(v)), 71, Box::new(List::Nil))))))),
+            b(Expr::Chain(BinOp::Le, BinOp::Lt, b(Expr::Int(0)), b(Expr::Name(j)), b(Expr::Either(b(Expr::Size(b(Expr::Name(v)))), 71)))),
             b(Expr::Bin(BinOp::Ne, b(Expr::Index(b(Expr::Name(v)), b(Expr::Name(j)))), b(Expr::Int(0)))),
         )),
     );
@@ -1029,7 +1052,7 @@ fn back_is_the_last_element_in_code_and_in_a_contract() {
     let seq = Ty::Seq(Scalar::I32, Extent::Dynamic);
     let code = Expr::Back(b(Expr::Var(X, seq)));
     assert_eq!(translate_code(&code, 3), Ok(DExpr::Back(Box::new(DExpr::Var(X)))));
-    assert_eq!(parse_contract(&vec![Tok::Ident(X), Tok::Back(72)], 4), Ok(Expr::Either(b(Expr::Back(b(Expr::Name(X)))), b(Expr::MApply(b(Expr::Name(X)), 72, Box::new(List::Nil))))));
+    assert_eq!(parse_contract(&vec![Tok::Ident(X), Tok::Back(72)], 4), Ok(Expr::Either(b(Expr::Back(b(Expr::Name(X)))), 72)));
     // result == v.back() + 1 compares an int32 with an int32.
     let sum = Expr::Bin(BinOp::Eq, b(Expr::Result), b(Expr::Bin(BinOp::Add, b(Expr::Back(b(Expr::Name(X)))), b(Expr::Int(1)))));
     let ps = List::Cons((X, seq), Box::new(List::Nil));
@@ -1194,10 +1217,10 @@ fn the_parser_reads_empty_after_a_path() {
     let em = 73;
     let toks = vec![Tok::Bang, Tok::Ident(A), Tok::Empty(em)];
     let a = || b(Expr::Name(A));
-    assert_eq!(parse_contract(&toks, 3), Ok(Expr::Not(b(Expr::Either(b(Expr::Empty(a())), b(Expr::MApply(a(), em, Box::new(List::Nil))))))));
+    assert_eq!(parse_contract(&toks, 3), Ok(Expr::Not(b(Expr::Either(b(Expr::Empty(a())), em)))));
     let toks = vec![Tok::Ident(B), Tok::Field(PRE), Tok::Empty(em)];
     let bp = || b(Expr::Field(b(Expr::Name(B)), PRE));
-    assert_eq!(parse_contract(&toks, 4), Ok(Expr::Either(b(Expr::Empty(bp())), b(Expr::MApply(bp(), em, Box::new(List::Nil))))));
+    assert_eq!(parse_contract(&toks, 4), Ok(Expr::Either(b(Expr::Empty(bp())), em)));
 }
 
 const MAX: u32 = 110;

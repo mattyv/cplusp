@@ -987,6 +987,7 @@ pub fn copy_expr(e: &Expr) -> (r: Expr)
         Expr::Call(f0, f1, f2, f3) => Expr::Call(*f0, *f1, Box::new(copy_args(f2)), *f3),
         Expr::Size(f0) => Expr::Size(Box::new(copy_expr(f0))),
         Expr::Back(f0) => Expr::Back(Box::new(copy_expr(f0))),
+        Expr::Either(f0, f1) => Expr::Either(Box::new(copy_expr(f0)), *f1),
         Expr::Index(f0, f1) => Expr::Index(Box::new(copy_expr(f0)), Box::new(copy_expr(f1))),
         Expr::Copy(f0, f1, f2) => Expr::Copy(Box::new(copy_expr(f0)), *f1, *f2),
         Expr::Field(f0, f1) => Expr::Field(Box::new(copy_expr(f0)), *f1),
@@ -1106,6 +1107,7 @@ pub open spec fn spec_var_names(e: Expr) -> Names
         Expr::Call(_, _, f2, _) => spec_var_names_args(*f2),
         Expr::Size(f0) => spec_var_names(*f0),
         Expr::Back(f0) => spec_var_names(*f0),
+        Expr::Either(f0, _) => spec_var_names(*f0),
         Expr::Index(f0, f1) => spec_append(spec_var_names(*f0), spec_var_names(*f1)),
         Expr::Copy(f0, _, _) => spec_var_names(*f0),
         Expr::Field(f0, _) => spec_var_names(*f0),
@@ -1178,6 +1180,7 @@ pub fn var_names(e: &Expr) -> (r: Names)
         Expr::Call(_, _, f2, _) => var_names_args(f2),
         Expr::Size(f0) => var_names(f0),
         Expr::Back(f0) => var_names(f0),
+        Expr::Either(f0, _) => var_names(f0),
         Expr::Index(f0, f1) => append(var_names(f0), var_names(f1)),
         Expr::Copy(f0, _, _) => var_names(f0),
         Expr::Field(f0, _) => var_names(f0),
@@ -1584,6 +1587,27 @@ pub open spec fn spec_leaf(d: DExpr, t: Ty, line: u32) -> Result<DExpr, Refusal>
     }
 }
 
+/// The member function `f` of a value of type `t` that a contract calls: the key of its function, its result type and its
+/// parameters, decision 0090. A type with no member table has no member function.
+pub open spec fn spec_member_of(t: Ty, f: u32, line: u32, sd: Structs) -> Result<(u32, Ty, Params), Refusal> {
+    match spec_struct_key(t) {
+        Some(k) => match spec_member(sd, k, f) {
+            Some((key, Some((Ty::Other(_), _)))) => Err(Refusal::Callee(key, line)),
+            Some((key, Some((rt, mps)))) => Ok((key, rt, mps)),
+            _ => Err(Refusal::NotPure(f, line)),
+        },
+        None => Err(Refusal::Syntax(line)),
+    }
+}
+
+/// A call with no argument of the member function `f` on the value `d` of type `t`, decision 0200.
+pub open spec fn spec_nullary(d: DExpr, t: Ty, f: u32, line: u32, sd: Structs) -> Result<DExpr, Refusal> {
+    match spec_member_of(t, f, line, sd) {
+        Ok((key, rt, _)) => spec_leaf(DExpr::FCall(key, Box::new(List::Cons(d, Box::new(List::Nil)))), rt, line),
+        Err(r) => Err(r),
+    }
+}
+
 /// An expression of a contract. Arithmetic is on the exact integers, the battery case signed_overflow: each integer name and
 /// `result` read as `as int`, so no step can overflow. A name bound by a `forall` in `bound` is an exact integer. Any other name
 /// must be a parameter of the declaration `decl`, and it reads the parameter of the definition at its place. A loop contract has
@@ -1738,6 +1762,26 @@ pub open spec fn spec_contract(e: Expr, decl: Names, ps: Params, ret: Option<Ty>
             Ok(_) => Err(Refusal::Syntax(line)),
             Err(r) => Err(r),
         },
+        // `o.size()`, `o.empty()` and `o.back()` read a sequence, and call the member of that name of any other type, decision 0200.
+        // The object is read once, so a chain of them is read in a time that grows with its length.
+        Expr::Either(s, id) => match *s {
+            Expr::Size(o) => match spec_path(*o, decl, ps, ret, bound, line, sd) {
+                Ok((d, Ty::Seq(_, _))) => Ok(DExpr::Len(Box::new(d))),
+                Ok((d, t)) => spec_nullary(d, t, id, line, sd),
+                Err(r) => Err(r),
+            },
+            Expr::Empty(o) => match spec_path(*o, decl, ps, ret, bound, line, sd) {
+                Ok((d, Ty::Seq(_, _))) => Ok(DExpr::Bin(BinOp::Eq, Box::new(DExpr::Len(Box::new(d))), Box::new(DExpr::Lit(0)))),
+                Ok((d, t)) => spec_nullary(d, t, id, line, sd),
+                Err(r) => Err(r),
+            },
+            Expr::Back(o) => match spec_path(*o, decl, ps, ret, bound, line, sd) {
+                Ok((d, Ty::Seq(s, _))) => spec_leaf(DExpr::Back(Box::new(d)), spec_elem(s), line),
+                Ok((d, t)) => spec_nullary(d, t, id, line, sd),
+                Err(r) => Err(r),
+            },
+            _ => Err(Refusal::Syntax(line)),
+        },
         Expr::Back(o) => match spec_path(Expr::Back(o), decl, ps, ret, bound, line, sd) {
             Ok((d, t)) => spec_leaf(d, t, line),
             Err(r) => Err(r),
@@ -1845,21 +1889,17 @@ pub open spec fn spec_contract(e: Expr, decl: Names, ps: Params, ret: Option<Ty>
             Err(r) => Err(r),
         },
         Expr::MApply(o, f, args) => match spec_path(*o, decl, ps, ret, bound, line, sd) {
-            Ok((d, t)) => match spec_struct_key(t) {
-                Some(k) => match spec_member(sd, k, f) {
-                    Some((key, Some((Ty::Other(_), _)))) => Err(Refusal::Callee(key, line)),
-                    Some((key, Some((rt, mps)))) => match spec_contract_args(*args, decl, ps, ret, bound, line, sd) {
+            // `a.count()` of a duration is its count, an int64, decision 0175.
+            Ok((d, t)) => if f == COUNT_NAME && *args is Nil && t == Ty::I64 {
+                spec_leaf(d, t, line)
+            } else {
+                match spec_member_of(t, f, line, sd) {
+                    Ok((key, rt, mps)) => match spec_contract_args(*args, decl, ps, ret, bound, line, sd) {
                         Ok(da) => spec_leaf(DExpr::FCall(key, Box::new(List::Cons(d, Box::new(spec_convert(da, spec_tail(mps)))))), rt, line),
                         Err(r) => Err(r),
                     },
-                    _ => Err(Refusal::NotPure(f, line)),
-                },
-                // `a.count()` of a duration is its count, an int64, decision 0175.
-                None => if f == COUNT_NAME && *args is Nil && t == Ty::I64 {
-                    spec_leaf(d, t, line)
-                } else {
-                    Err(Refusal::Syntax(line))
-                },
+                    Err(r) => Err(r),
+                }
             },
             Err(r) => Err(r),
         },
@@ -2056,6 +2096,15 @@ pub open spec fn spec_path(e: Expr, decl: Names, ps: Params, ret: Option<Ty>, bo
                 None => Err(Refusal::Syntax(line)),
             },
             Err(r) => Err(r),
+        },
+        // `o.back()` of a sequence is its last element, decision 0200. A call of a member function is no path.
+        Expr::Either(s, _) => match *s {
+            Expr::Back(o) => match spec_path(*o, decl, ps, ret, bound, line, sd) {
+                Ok((d, Ty::Seq(s, _))) => Ok((DExpr::Back(Box::new(d)), spec_elem(s))),
+                Ok(_) => Err(Refusal::Syntax(line)),
+                Err(r) => Err(r),
+            },
+            _ => Err(Refusal::Syntax(line)),
         },
         // `v.back()` is the last element, decision 0191.
         Expr::Back(o) => match spec_path(*o, decl, ps, ret, bound, line, sd) {

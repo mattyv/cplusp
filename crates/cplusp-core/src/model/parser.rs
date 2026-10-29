@@ -27,12 +27,12 @@ pub enum Tok {
     RParen,
     LBracket,
     RBracket,
-    Size,
+    Size(u32),
     Field(u32),
     HasValue,
     Value,
-    Empty,
-    Back,
+    Empty(u32),
+    Back(u32),
     Comma,
     DotDot,
     Forall,
@@ -393,7 +393,7 @@ fn parse_unary(toks: &Vec<Tok>, pos: usize, line: u32) -> (r: Result<(Expr, usiz
 /// A token that follows an atom: `.size()`, `.name` or `[`.
 fn is_postfix(t: Tok) -> bool {
     match t {
-        Tok::Size | Tok::Field(_) | Tok::HasValue | Tok::Value | Tok::Empty | Tok::Back | Tok::LBracket | Tok::Arrow => true,
+        Tok::Size(_) | Tok::Field(_) | Tok::HasValue | Tok::Value | Tok::Empty(_) | Tok::Back(_) | Tok::LBracket | Tok::Arrow => true,
         _ => false,
     }
 }
@@ -415,8 +415,12 @@ fn parse_postfix(toks: &Vec<Tok>, pos: usize, line: u32) -> (r: Result<(Expr, us
             !unknown_expr(a),
         decreases toks.len() - p,
     {
-        if toks[p] == Tok::Size {
-            a = Expr::Size(Box::new(a));
+        // `o.size()`, `o.empty()` and `o.back()` keep the form of a sequence and the call of a member, decision 0200.
+        if let Tok::Size(id) = toks[p] {
+            a = Expr::Either(Box::new(Expr::Size(Box::new(a))), id);
+            assert(!unknown_expr(a)) by {
+                reveal_with_fuel(unknown_expr, 2);
+            }
             p = p + 1;
         } else if let Tok::Field(f) = toks[p] {
             if toks.len() - p > 2 && toks[p + 1] == Tok::LParen && toks[p + 2] == Tok::RParen {
@@ -441,11 +445,17 @@ fn parse_postfix(toks: &Vec<Tok>, pos: usize, line: u32) -> (r: Result<(Expr, us
         } else if toks[p] == Tok::Value {
             a = Expr::Value(Box::new(a));
             p = p + 1;
-        } else if toks[p] == Tok::Empty {
-            a = Expr::Empty(Box::new(a));
+        } else if let Tok::Empty(id) = toks[p] {
+            a = Expr::Either(Box::new(Expr::Empty(Box::new(a))), id);
+            assert(!unknown_expr(a)) by {
+                reveal_with_fuel(unknown_expr, 2);
+            }
             p = p + 1;
-        } else if toks[p] == Tok::Back {
-            a = Expr::Back(Box::new(a));
+        } else if let Tok::Back(id) = toks[p] {
+            a = Expr::Either(Box::new(Expr::Back(Box::new(a))), id);
+            assert(!unknown_expr(a)) by {
+                reveal_with_fuel(unknown_expr, 2);
+            }
             p = p + 1;
         } else if toks[p] == Tok::Arrow {
             // `o->f` is `o.value().f`, decision 0137. A name of a field follows. `o->f(a)` calls `f` on `o.value()`, decision 0168.
