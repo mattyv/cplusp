@@ -597,13 +597,27 @@ fn a_chain_of_two_directions_and_an_index_of_a_scalar_are_refused() {
     assert_eq!(bare_refusal(translate_function(&f, &List::Nil, &List::Nil)), Refusal::Syntax(2));
 }
 
+/// `o.size()` keeps both forms, the length of a sequence and the call of a member function named size, and the translator picks one
+/// by the type of `o`, decision 0200.
+#[test]
+fn size_is_a_length_or_a_member_by_the_type() {
+    let sz = 71;
+    let either = Expr::Either(b(Expr::Size(b(Expr::Name(X)))), b(Expr::MApply(b(Expr::Name(X)), sz, Box::new(List::Nil))));
+    assert_eq!(parse_contract(&vec![Tok::Ident(X), Tok::Size(sz)], 3), Ok(Expr::Either(b(Expr::Size(b(Expr::Name(X)))), b(Expr::MApply(b(Expr::Name(X)), sz, Box::new(List::Nil))))));
+    let decl = List::Cons(X, Box::new(List::Nil));
+    let seq = List::Cons((X, Ty::Seq(Scalar::I32, Extent::Dynamic)), Box::new(List::Nil));
+    assert_eq!(translate_contract(&either, &decl, &seq, Some(Ty::I32), &List::Nil, 5, &List::Nil), Ok(DExpr::Len(Box::new(DExpr::Var(X)))));
+    let scalar = List::Cons((X, Ty::I32), Box::new(List::Nil));
+    assert_eq!(translate_contract(&either, &decl, &scalar, Some(Ty::I32), &List::Nil, 5, &List::Nil), Err(Refusal::Syntax(5)));
+}
+
 #[test]
 fn the_parser_reads_forall_index_size_and_a_chain() {
-    // forall j :: 0 <= j < v.size() ==> v[j] != 0
+    // forall j :: 0 <= j < v.size() ==> v[j] != 0. `.size()` keeps both of its forms, decision 0200.
     let (v, j) = (X, 70);
     let toks = vec![
         Tok::Forall, Tok::Ident(j), Tok::ColonColon,
-        Tok::Int(0), Tok::Op(BinOp::Le), Tok::Ident(j), Tok::Op(BinOp::Lt), Tok::Ident(v), Tok::Size,
+        Tok::Int(0), Tok::Op(BinOp::Le), Tok::Ident(j), Tok::Op(BinOp::Lt), Tok::Ident(v), Tok::Size(71),
         Tok::Op(BinOp::Implies),
         Tok::Ident(v), Tok::LBracket, Tok::Ident(j), Tok::RBracket, Tok::Op(BinOp::Ne), Tok::Int(0),
     ];
@@ -611,7 +625,7 @@ fn the_parser_reads_forall_index_size_and_a_chain() {
         j,
         b(Expr::Bin(
             BinOp::Implies,
-            b(Expr::Chain(BinOp::Le, BinOp::Lt, b(Expr::Int(0)), b(Expr::Name(j)), b(Expr::Size(b(Expr::Name(v)))))),
+            b(Expr::Chain(BinOp::Le, BinOp::Lt, b(Expr::Int(0)), b(Expr::Name(j)), b(Expr::Either(b(Expr::Size(b(Expr::Name(v)))), b(Expr::MApply(b(Expr::Name(v)), 71, Box::new(List::Nil))))))),
             b(Expr::Bin(BinOp::Ne, b(Expr::Index(b(Expr::Name(v)), b(Expr::Name(j)))), b(Expr::Int(0)))),
         )),
     );
@@ -1015,7 +1029,7 @@ fn back_is_the_last_element_in_code_and_in_a_contract() {
     let seq = Ty::Seq(Scalar::I32, Extent::Dynamic);
     let code = Expr::Back(b(Expr::Var(X, seq)));
     assert_eq!(translate_code(&code, 3), Ok(DExpr::Back(Box::new(DExpr::Var(X)))));
-    assert_eq!(parse_contract(&vec![Tok::Ident(X), Tok::Back], 4), Ok(Expr::Back(b(Expr::Name(X)))));
+    assert_eq!(parse_contract(&vec![Tok::Ident(X), Tok::Back(72)], 4), Ok(Expr::Either(b(Expr::Back(b(Expr::Name(X)))), b(Expr::MApply(b(Expr::Name(X)), 72, Box::new(List::Nil))))));
     // result == v.back() + 1 compares an int32 with an int32.
     let sum = Expr::Bin(BinOp::Eq, b(Expr::Result), b(Expr::Bin(BinOp::Add, b(Expr::Back(b(Expr::Name(X)))), b(Expr::Int(1)))));
     let ps = List::Cons((X, seq), Box::new(List::Nil));
@@ -1177,10 +1191,13 @@ fn empty_of_a_name_that_is_no_sequence_is_refused() {
 #[test]
 fn the_parser_reads_empty_after_a_path() {
     // !key.empty() and n.prefix.empty()
-    let toks = vec![Tok::Bang, Tok::Ident(A), Tok::Empty];
-    assert_eq!(parse_contract(&toks, 3), Ok(Expr::Not(b(Expr::Empty(b(Expr::Name(A)))))));
-    let toks = vec![Tok::Ident(B), Tok::Field(PRE), Tok::Empty];
-    assert_eq!(parse_contract(&toks, 4), Ok(Expr::Empty(b(Expr::Field(b(Expr::Name(B)), PRE)))));
+    let em = 73;
+    let toks = vec![Tok::Bang, Tok::Ident(A), Tok::Empty(em)];
+    let a = || b(Expr::Name(A));
+    assert_eq!(parse_contract(&toks, 3), Ok(Expr::Not(b(Expr::Either(b(Expr::Empty(a())), b(Expr::MApply(a(), em, Box::new(List::Nil))))))));
+    let toks = vec![Tok::Ident(B), Tok::Field(PRE), Tok::Empty(em)];
+    let bp = || b(Expr::Field(b(Expr::Name(B)), PRE));
+    assert_eq!(parse_contract(&toks, 4), Ok(Expr::Either(b(Expr::Empty(bp())), b(Expr::MApply(bp(), em, Box::new(List::Nil))))));
 }
 
 const MAX: u32 = 110;

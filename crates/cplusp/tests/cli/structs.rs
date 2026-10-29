@@ -1028,3 +1028,49 @@ fn a_call_that_cpp_may_not_run_once_is_refused_at_its_line() {
     }
     assert_eq!(refusals.len(), 2, "{text}");
 }
+
+/// In a contract, `o.size()`, `o.empty()` and `o.back()` call the member function of that name when `o` is a struct, and read the
+/// sequence when `o` is one, decision 0200.
+#[test]
+fn a_member_function_named_size_proves() {
+    let Some(dafny) = dafny() else { return };
+    if !clang_tidy_available() {
+        return;
+    }
+    let o = prove("model-size-member.cpp", &[], &dafny);
+    let text = stdout(&o);
+    assert_eq!(o.status.code(), Some(0), "stdout: {text} stderr: {}", stderr(&o));
+    assert_eq!(text.lines().last(), Some("ok: proved"), "{text}");
+}
+
+/// A false claim through a member function named size or back fails, decision 0200.
+#[test]
+fn a_member_function_named_size_keeps_its_contract() {
+    let Some(dafny) = dafny() else { return };
+    if !clang_tidy_available() {
+        return;
+    }
+    let o = prove("model-size-member-wrong.cpp", &[], &dafny);
+    let text = stdout(&o);
+    assert_eq!(o.status.code(), Some(1), "stdout: {text} stderr: {}", stderr(&o));
+    let failed: Vec<&str> = text.lines().filter(|l| l.starts_with("Not proved: ") || l.starts_with("Not provable: ")).map(|l| l.rsplit_once(".cpp:").unwrap().1).collect();
+    assert_eq!(failed, ["20: the ensures line may not hold on this return.", "33: the ensures line may not hold on this return."], "{text}");
+}
+
+/// `o.size()` of a struct with no member size names the member, and of a scalar has no form, decision 0200.
+#[test]
+fn a_member_function_named_size_with_no_rule_is_refused() {
+    let Some(dafny) = dafny() else { return };
+    if !clang_tidy_available() {
+        return;
+    }
+    let o = prove("model-size-member-refuse.cpp", &[], &dafny);
+    let text = stdout(&o);
+    assert_eq!(o.status.code(), Some(1), "stdout: {text} stderr: {}", stderr(&o));
+    let refused: Vec<&str> = text.lines().filter(|l| l.starts_with("Not proved: ") || l.starts_with("Not provable: ")).map(|l| l.rsplit_once(".cpp:").unwrap().1).collect();
+    let want = [
+        "9: size is no pure function. A contract calls a function with one return and no write.",
+        "15: the contract line has a form the translator cannot read.",
+    ];
+    assert_eq!(refused, want, "{text}");
+}

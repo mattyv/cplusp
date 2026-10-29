@@ -150,7 +150,7 @@ fn a_separator_only_stands_between_two_digits_or_letters() {
 /// `.back()` is a token of its own, as `.size()` is, decision 0191. A field named back with no call stays a field.
 #[test]
 fn back_is_a_method_token() {
-    assert_eq!(lex("v.back() v.back"), vec![name("v"), fixed(".back()", Tok::Back), name("v"), t(".back", LexKind::Field)]);
+    assert_eq!(lex("v.back() v.back"), vec![name("v"), fixed(".back()", Tok::Back(0)), name("v"), t(".back", LexKind::Field)]);
 }
 
 #[test]
@@ -159,9 +159,9 @@ fn the_methods_fields_slices_and_paths() {
         lex("v.size() s.empty() o.has_value() o.value() p.x a[1..2] A::B v.size ()"),
         vec![
             name("v"),
-            fixed(".size()", Tok::Size),
+            fixed(".size()", Tok::Size(0)),
             name("s"),
-            fixed(".empty()", Tok::Empty),
+            fixed(".empty()", Tok::Empty(0)),
             name("o"),
             fixed(".has_value()", Tok::HasValue),
             name("o"),
