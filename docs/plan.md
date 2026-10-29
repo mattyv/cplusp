@@ -651,6 +651,7 @@ Decided Oct 3, 2026: we prove as much of our own tooling as the tools allow. Few
 - **The edges.** Reading files, running clang-tidy and git, parsing YAML, writing the report. Verus treats these as trusted functions with contracts, the same way cplusp treats `memcpy`. We keep them thin and list them. Every build prints the size of this trusted surface, exactly as the gate prints it for user code.
 - **The clang-tidy module.** C++ has no prover we would use on it. The module stays small, mechanical, and covered by the sample pair of every rule.
 - **The trusted contract library.** Contracts for `vector`, `span` and the rest are axioms. Review and tests, not proofs.
+- **The variant of libstdc++.** The model of `std::variant` has a value in each state, decision 0206. That holds because libstdc++ never leaves such a variant without a value, decision 0207. Each alternative is trivially copyable, at most 256 bytes, move-constructible and move-assignable. The plugin checks these facts. Review and tests, not proofs.
 
 **Where this costs us.** Verus does not support all of Rust. No trait objects in proved code, limited closures, weak reasoning about string contents. So the proved core works on structured data. The final step that turns a structure into YAML text is one of the thin trusted edges. Verus also tracks a pinned Rust nightly, so the toolchain is pinned with it.
 

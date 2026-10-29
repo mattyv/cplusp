@@ -64,6 +64,8 @@ fn sentence(message: &str) -> String {
     match message {
         "a postcondition could not be proved on this return path" => "the ensures line may not hold on this return.".to_string(),
         "destructor 'value' can only be applied to datatype values constructed by 'Some'" => "the optional may be empty or the pointer may be null here.".to_string(),
+        "destructor 'alt0' can only be applied to datatype values constructed by 'Alt0'"
+        | "destructor 'alt1' can only be applied to datatype values constructed by 'Alt1'" => "the variant may not hold this alternative.".to_string(),
         "assertion might not hold" => "the assert line may not hold.".to_string(),
         // A contract that divides a real by a divisor that may be zero, decision 0154.
         "possible division by zero" => "the divisor may be zero.".to_string(),

@@ -26,11 +26,13 @@ pub enum DTy {
     Opt(Scalar),
     Enum(u32),
     Iface(u32),
+    Variant(Scalar, Scalar),
     Void,
 }
 
 /// A Dafny expression. `AsInt` is `(e as int)`, the exact value of a machine integer. `Conv` is `(e as T)`, which Dafny proves
-/// fits `T`. `IsSome` is `e.Some?`, `Get` is `e.value`, which Dafny proves holds a value, and `Nothing` and `Just` are `None` and
+/// fits `T`. `Is` is `e.Alt0?`, or `e.Alt1?` when its flag is true, and `Alt` is `e.alt0` or `e.alt1`, which Dafny proves the
+/// variant holds, decision 0202. `IsSome` is `e.Some?`, `Get` is `e.value`, which Dafny proves holds a value, and `Nothing` and `Just` are `None` and
 /// `Some(e)`. `Drop` is `s[k..]`, which Dafny proves is in range, decision 0078. `Apply` calls a function of the companion file,
 /// decision 0079. `Take` is `s[..j]` and `Slice` is `s[i..j]`, decision 0085. `TDiv` and `TRem` are `trunc_div` and `trunc_rem`
 /// on the exact integers. `DivIn` is `(trunc_div(a, b) as T)`, and `RemIn` is the remainder of `T`, which also needs the quotient to
@@ -66,6 +68,8 @@ pub enum DExpr {
     Field(Box<DExpr>, u32),
     Ctor(u32, Box<DArgs>),
     IsSome(Box<DExpr>),
+    Is(bool, Box<DExpr>),
+    Alt(bool, Box<DExpr>),
     Get(Box<DExpr>),
     Nothing,
     Just(Box<DExpr>),

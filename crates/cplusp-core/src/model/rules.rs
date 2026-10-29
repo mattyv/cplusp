@@ -80,6 +80,10 @@ pub open spec fn spec_ty(t: Ty, line: u32) -> Result<DTy, Refusal> {
         Ty::Vec(Scalar::Bool) => Err(Refusal::Element(line)),
         Ty::Vec(s) => Ok(DTy::Seq(s)),
         Ty::Enum(k) => Ok(DTy::Enum(k)),
+        // A variant of two different element types, decision 0202.
+        Ty::Variant(Scalar::Own(_), _) => Err(Refusal::Element(line)),
+        Ty::Variant(_, Scalar::Own(_)) => Err(Refusal::Element(line)),
+        Ty::Variant(a, b) => if a != b { Ok(DTy::Variant(a, b)) } else { Err(Refusal::Element(line)) },
         // An interface is a type with no value that the model can see, decision 0165.
         Ty::Iface(k) => Ok(DTy::Iface(k)),
         Ty::IfaceRef(k) => Ok(DTy::Iface(k)),
@@ -881,6 +885,15 @@ pub open spec fn spec_lift(e: Expr, all: Fns, line: u32, sd: Structs, n: u32, op
             Err(r) => Err(r),
             Ok((c, d, n1)) => Ok((c, DExpr::IsSome(Box::new(d)), n1)),
         },
+        // `std::holds_alternative<T>(v)` and `std::get<T>(v)` of a variant parameter, decision 0202.
+        Expr::Holds(t, o) => match spec_code_alt(false, t, *o, line) {
+            Ok(d) => Ok((List::Nil, d, n)),
+            Err(r) => Err(r),
+        },
+        Expr::GetAlt(t, o) => match spec_code_alt(true, t, *o, line) {
+            Ok(d) => Ok((List::Nil, d, n)),
+            Err(r) => Err(r),
+        },
         Expr::Value(o) => match spec_lift(*o, all, line, sd, n, open) {
             Err(r) => Err(r),
             Ok((c, d, n1)) => Ok((c, DExpr::Get(Box::new(d)), n1)),
@@ -1025,6 +1038,8 @@ pub fn copy_expr(e: &Expr) -> (r: Expr)
         Expr::Move(f0, f1) => Expr::Move(*f0, *f1),
         Expr::Bits(f0, f1, f2, f3) => Expr::Bits(*f0, Box::new(copy_expr(f1)), Box::new(copy_expr(f2)), *f3),
         Expr::StaticCast(f0, f1) => Expr::StaticCast(*f0, Box::new(copy_expr(f1))),
+        Expr::Holds(f0, f1) => Expr::Holds(*f0, Box::new(copy_expr(f1))),
+        Expr::GetAlt(f0, f1) => Expr::GetAlt(*f0, Box::new(copy_expr(f1))),
         Expr::List(f0) => Expr::List(Box::new(copy_args(f0))),
         Expr::Step(f0, f1, f2, f3) => Expr::Step(*f0, *f1, *f2, *f3),
     }
@@ -1132,6 +1147,8 @@ pub open spec fn spec_var_names(e: Expr) -> Names
         Expr::Shr(f0, f1, _) => spec_append(spec_var_names(*f0), spec_var_names(*f1)),
         Expr::Bits(_, f1, f2, _) => spec_append(spec_var_names(*f1), spec_var_names(*f2)),
         Expr::StaticCast(_, f1) => spec_var_names(*f1),
+        Expr::Holds(_, f1) => spec_var_names(*f1),
+        Expr::GetAlt(_, f1) => spec_var_names(*f1),
         Expr::List(f0) => spec_var_names_args(*f0),
         Expr::Step(f0, _, _, _) => List::Cons(f0, Box::new(List::Nil)),
         Expr::Enumerator(_, _) => List::Nil,
@@ -1205,6 +1222,8 @@ pub fn var_names(e: &Expr) -> (r: Names)
         Expr::Shr(f0, f1, _) => append(var_names(f0), var_names(f1)),
         Expr::Bits(_, f1, f2, _) => append(var_names(f1), var_names(f2)),
         Expr::StaticCast(_, f1) => var_names(f1),
+        Expr::Holds(_, f1) => var_names(f1),
+        Expr::GetAlt(_, f1) => var_names(f1),
         Expr::List(f0) => var_names_args(f0),
         Expr::Step(f0, _, _, _) => List::Cons(*f0, Box::new(List::Nil)),
         Expr::Enumerator(_, _) => List::Nil,
@@ -1587,6 +1606,32 @@ pub open spec fn spec_leaf(d: DExpr, t: Ty, line: u32) -> Result<DExpr, Refusal>
     }
 }
 
+/// The alternative of the variant of `a` and `b` whose type is `t`: false for `a`, true for `b`, decision 0202.
+pub open spec fn spec_alt_index(t: Ty, a: Scalar, b: Scalar) -> Option<bool> {
+    if spec_elem(a) == t {
+        Some(false)
+    } else if spec_elem(b) == t {
+        Some(true)
+    } else {
+        None
+    }
+}
+
+/// `std::holds_alternative<T>(v)`, or `std::get<T>(v)` when `get` holds, of a variant parameter `v` in code, decision 0202.
+pub open spec fn spec_code_alt(get: bool, t: Ty, o: Expr, line: u32) -> Result<DExpr, Refusal> {
+    match o {
+        Expr::Var(v, Ty::Variant(a, b)) => match spec_alt_index(t, a, b) {
+            Some(i) => Ok(if get {
+                DExpr::Alt(i, Box::new(spec_code_var(v, Ty::Variant(a, b))))
+            } else {
+                DExpr::Is(i, Box::new(spec_code_var(v, Ty::Variant(a, b))))
+            }),
+            None => Err(Refusal::Syntax(line)),
+        },
+        _ => Err(Refusal::Syntax(line)),
+    }
+}
+
 /// The member function `f` of a value of type `t` that a contract calls: the key of its function, its result type and its
 /// parameters, decision 0090. A type with no member table has no member function.
 pub open spec fn spec_member_of(t: Ty, f: u32, line: u32, sd: Structs) -> Result<(u32, Ty, Params), Refusal> {
@@ -1783,6 +1828,19 @@ pub open spec fn spec_contract(e: Expr, decl: Names, ps: Params, ret: Option<Ty>
             _ => Err(Refusal::Syntax(line)),
         },
         Expr::Back(o) => match spec_path(Expr::Back(o), decl, ps, ret, bound, line, sd) {
+            Ok((d, t)) => spec_leaf(d, t, line),
+            Err(r) => Err(r),
+        },
+        // `std::holds_alternative<T>(v)` is a test of the constructor of the datatype, decision 0202.
+        Expr::Holds(t, o) => match spec_path(*o, decl, ps, ret, bound, line, sd) {
+            Ok((d, Ty::Variant(a, b))) => match spec_alt_index(t, a, b) {
+                Some(i) => Ok(DExpr::Is(i, Box::new(d))),
+                None => Err(Refusal::Syntax(line)),
+            },
+            Ok(_) => Err(Refusal::Syntax(line)),
+            Err(r) => Err(r),
+        },
+        Expr::GetAlt(t, o) => match spec_path(Expr::GetAlt(t, o), decl, ps, ret, bound, line, sd) {
             Ok((d, t)) => spec_leaf(d, t, line),
             Err(r) => Err(r),
         },
@@ -1987,8 +2045,10 @@ pub open spec fn spec_enum_operand(e: Expr, decl: Names, ps: Params, ret: Option
             Some(Ty::Enum(_)) => true,
             _ => false,
         },
+        // Dafny orders two variants by a rank that C++ does not know, as two enums, decision 0206.
         _ => match spec_path(e, decl, ps, ret, bound, line, sd) {
             Ok((_, Ty::Enum(_))) => true,
+            Ok((_, Ty::Variant(_, _))) => true,
             _ => false,
         },
     }
@@ -2105,6 +2165,15 @@ pub open spec fn spec_path(e: Expr, decl: Names, ps: Params, ret: Option<Ty>, bo
                 Err(r) => Err(r),
             },
             _ => Err(Refusal::Syntax(line)),
+        },
+        // `std::get<T>(v)` is the value of the alternative, which Dafny proves the variant holds, decision 0202.
+        Expr::GetAlt(t, o) => match spec_path(*o, decl, ps, ret, bound, line, sd) {
+            Ok((d, Ty::Variant(a, b))) => match spec_alt_index(t, a, b) {
+                Some(i) => Ok((DExpr::Alt(i, Box::new(d)), t)),
+                None => Err(Refusal::Syntax(line)),
+            },
+            Ok(_) => Err(Refusal::Syntax(line)),
+            Err(r) => Err(r),
         },
         // `v.back()` is the last element, decision 0191.
         Expr::Back(o) => match spec_path(*o, decl, ps, ret, bound, line, sd) {

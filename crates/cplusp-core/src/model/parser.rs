@@ -33,6 +33,8 @@ pub enum Tok {
     Value,
     Empty(u32),
     Back(u32),
+    Holds(Ty),
+    Alt(Ty),
     Comma,
     DotDot,
     Forall,
@@ -595,6 +597,28 @@ fn parse_args(toks: &Vec<Tok>, pos: usize, line: u32) -> (r: Result<(Args, usize
     }
 }
 
+/// `( e )` from `pos`: the expression inside and the place after the `)`.
+fn parse_wrapped(toks: &Vec<Tok>, pos: usize, line: u32) -> (r: Result<(Expr, usize), Refusal>)
+    requires
+        pos <= toks.len(),
+    ensures
+        parsed(r, toks@, pos),
+    decreases toks.len() - pos, 12usize,
+{
+    if pos < toks.len() && toks[pos] == Tok::LParen {
+        match parse_implies(toks, pos + 1, line) {
+            Ok((e, p)) => if p < toks.len() && toks[p] == Tok::RParen {
+                Ok((e, p + 1))
+            } else {
+                Err(Refusal::Syntax(line))
+            },
+            Err(e) => Err(e),
+        }
+    } else {
+        Err(Refusal::Syntax(line))
+    }
+}
+
 fn parse_atom(toks: &Vec<Tok>, pos: usize, line: u32) -> (r: Result<(Expr, usize), Refusal>)
     requires
         pos <= toks.len(),
@@ -679,6 +703,15 @@ fn parse_atom(toks: &Vec<Tok>, pos: usize, line: u32) -> (r: Result<(Expr, usize
             }
         } else {
             Err(Refusal::Syntax(line))
+        },
+        // `std::holds_alternative<T>(v)` and `std::get<T>(v)`, decision 0202.
+        Tok::Holds(t) => match parse_wrapped(toks, pos + 1, line) {
+            Ok((e, p)) => Ok((Expr::Holds(t, Box::new(e)), p)),
+            Err(e) => Err(e),
+        },
+        Tok::Alt(t) => match parse_wrapped(toks, pos + 1, line) {
+            Ok((e, p)) => Ok((Expr::GetAlt(t, Box::new(e)), p)),
+            Err(e) => Err(e),
         },
         // `this->x` reads `x`, and `this->f(a)` calls `f(a)`, decision 0166.
         Tok::This => if toks.len() - pos > 1 && toks[pos + 1] == Tok::Arrow {
