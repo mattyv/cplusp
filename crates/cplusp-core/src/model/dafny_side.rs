@@ -183,13 +183,14 @@ pub enum DStmt {
 
 /// A place that a call writes back: a local by its name, the object of the member function that makes the call, or a reference
 /// parameter of that function, decision 0108. `Owned` is the value of a local unique_ptr, which a virtual function writes, decision
-/// 0169.
+/// 0169. `Field` is a vector field of the object of the member function, whose element a call writes, decision 0204.
 #[derive(Structural, PartialEq, Eq, Clone, Copy, Debug)]
 pub enum Obj {
     Local(u32),
     Object,
     Out(u32),
     Owned(u32),
+    Field(u32),
 }
 
 /// The places that a call writes back, in the order of the results of its method after `result`: the object, then each reference

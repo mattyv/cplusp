@@ -345,11 +345,15 @@ pub proof fn lemma_unknown_stmt_is_refused(s: Stmt, all: Fns, env: Params, ps: P
                 lemma_unknown_code_is_refused(e, l);
             }
         },
-        Stmt::PushField(_, e, l) => lemma_unknown_code_is_refused(e, l),
+        Stmt::PushField(_, e, l) => {
+            lemma_unmove_unknown(e);
+            lemma_unknown_code_is_refused(spec_unmove(e).0, l);
+        },
         Stmt::SetThroughField(_, _, e, l) => lemma_unknown_code_is_refused(e, l),
         Stmt::PushBack(_, e, l) => {
-            lemma_unknown_code_is_refused(e, l);
-            lemma_unknown_lift_is_refused(e, all, l, sd, 0, true);
+            lemma_unmove_unknown(e);
+            lemma_unknown_code_is_refused(spec_unmove(e).0, l);
+            lemma_unknown_lift_is_refused(spec_unmove(e).0, all, l, sd, 0, true);
         },
         Stmt::Sort(_, _) => {},
         Stmt::SortBy(_, _, _, _, e, l) => lemma_unknown_code_is_refused(e, l),
@@ -643,11 +647,42 @@ pub proof fn lemma_kept_assign(s: Stmt, all: Fns, env: Params, ps: Params, sd: S
 pub proof fn lemma_kept_set_field(s: Stmt, all: Fns, env: Params, ps: Params, sd: Structs)
     requires
         spec_stmt(s, all, env, ps, sd).is_ok(),
-        s is SetField || s is SetRefField || s is SetFieldAt || s is PushField || s is PopField || s is SetThroughField || s is PushBack,
+        s is SetField || s is SetRefField || s is SetFieldAt || s is PopField || s is SetThroughField,
     ensures
         count_dstmt(spec_stmt(s, all, env, ps, sd).unwrap()) == 1,
 {
     reveal_with_fuel(count_dstmt, 2);
+}
+
+/// A push is one Dafny statement, with its calls before it and the null of a moved name after it, decision 0204.
+pub proof fn lemma_kept_push(s: Stmt, all: Fns, env: Params, ps: Params, sd: Structs)
+    requires
+        spec_stmt(s, all, env, ps, sd).is_ok(),
+        s is PushField || s is PushBack,
+    ensures
+        count_dstmt(spec_stmt(s, all, env, ps, sd).unwrap()) == 1,
+{
+    reveal_with_fuel(count_dstmt, 2);
+    match s {
+        Stmt::PushField(f, e, l) => if spec_code(spec_unmove(e).0, l).is_ok() {
+            let de = spec_code(spec_unmove(e).0, l).unwrap();
+            lemma_moved_count(
+                DStmt::SetField(f, DExpr::Append(Box::new(DExpr::Field(Box::new(DExpr::After), f)), Box::new(de))),
+                spec_unmove(e).1,
+                spec_vec_moves(e),
+            );
+        },
+        Stmt::PushBack(v, e, l) => if spec_push_value(spec_unmove(e).0, all, l, sd).is_ok() {
+            let (c, de) = spec_push_value(spec_unmove(e).0, all, l, sd).unwrap();
+            let a = DStmt::SetOut(v, DExpr::Append(Box::new(DExpr::Out(v)), Box::new(de)));
+            let b = DStmt::Assign(v, DExpr::Append(Box::new(DExpr::Var(v)), Box::new(de)));
+            lemma_pre_count(c, a);
+            lemma_pre_count(c, b);
+            lemma_moved_count(spec_pre(c, a), spec_unmove(e).1, spec_vec_moves(e));
+            lemma_moved_count(spec_pre(c, b), spec_unmove(e).1, spec_vec_moves(e));
+        },
+        _ => {},
+    }
 }
 
 pub proof fn lemma_kept_set_own_field(s: Stmt, all: Fns, env: Params, ps: Params, sd: Structs)
@@ -823,9 +858,9 @@ pub proof fn lemma_stmt_kept(s: Stmt, all: Fns, env: Params, ps: Params, sd: Str
         Stmt::SetField(_, _, _) => lemma_kept_set_field(s, all, env, ps, sd),
         Stmt::SetRefField(_, _, _, _) => lemma_kept_set_field(s, all, env, ps, sd),
         Stmt::SetOwnField(_, _, _, _) => lemma_kept_set_own_field(s, all, env, ps, sd),
-        Stmt::PushBack(_, _, _) => lemma_kept_set_field(s, all, env, ps, sd),
+        Stmt::PushBack(_, _, _) => lemma_kept_push(s, all, env, ps, sd),
         Stmt::SetFieldAt(_, _, _, _) => lemma_kept_set_field(s, all, env, ps, sd),
-        Stmt::PushField(_, _, _) => lemma_kept_set_field(s, all, env, ps, sd),
+        Stmt::PushField(_, _, _) => lemma_kept_push(s, all, env, ps, sd),
         Stmt::SetThroughField(_, _, _, _) => lemma_kept_set_field(s, all, env, ps, sd),
         Stmt::PopField(_, _) => lemma_kept_set_field(s, all, env, ps, sd),
         Stmt::Switch(e, k, cs, l) => {
@@ -1474,13 +1509,40 @@ pub proof fn lemma_resolves_push(s: Stmt, all: Fns, env: Params, ps: Params, sd:
 {
     reveal_with_fuel(calls_resolve_stmt, 2);
     let v = s->PushBack_0;
-    let e = s->PushBack_1;
+    let e0 = s->PushBack_1;
+    let e = spec_unmove(e0).0;
     let l = s->PushBack_2;
-    if e is Wrap && spec_lift(e, all, l, sd, 0, true).is_ok() {
-        lemma_lift_resolves(e, all, l, sd, 0, true);
-        let (c, d, _) = spec_lift(e, all, l, sd, 0, true).unwrap();
-        lemma_pre_resolves(c, DStmt::SetOut(v, DExpr::Append(Box::new(DExpr::Out(v)), Box::new(d))), all, sd);
-        lemma_pre_resolves(c, DStmt::Assign(v, DExpr::Append(Box::new(DExpr::Var(v)), Box::new(d))), all, sd);
+    if spec_push_value(e, all, l, sd).is_ok() {
+        let (c, d) = spec_push_value(e, all, l, sd).unwrap();
+        if e is Wrap {
+            lemma_lift_resolves(e, all, l, sd, 0, true);
+        }
+        let a = DStmt::SetOut(v, DExpr::Append(Box::new(DExpr::Out(v)), Box::new(d)));
+        let b = DStmt::Assign(v, DExpr::Append(Box::new(DExpr::Var(v)), Box::new(d)));
+        lemma_pre_resolves(c, a, all, sd);
+        lemma_pre_resolves(c, b, all, sd);
+        lemma_moved_resolves(spec_pre(c, a), spec_unmove(e0).1, spec_vec_moves(e0), all, sd);
+        lemma_moved_resolves(spec_pre(c, b), spec_unmove(e0).1, spec_vec_moves(e0), all, sd);
+    }
+}
+
+/// A push into a field holds no call, and the null of a moved name after it holds none, decision 0204.
+pub proof fn lemma_resolves_push_field(s: Stmt, all: Fns, env: Params, ps: Params, sd: Structs)
+    requires
+        spec_stmt(s, all, env, ps, sd).is_ok(),
+        s is PushField,
+    ensures
+        calls_resolve_stmt(spec_stmt(s, all, env, ps, sd).unwrap(), all, sd),
+{
+    reveal_with_fuel(calls_resolve_stmt, 2);
+    let f = s->PushField_0;
+    let e = s->PushField_1;
+    let l = s->PushField_2;
+    if spec_code(spec_unmove(e).0, l).is_ok() {
+        let de = spec_code(spec_unmove(e).0, l).unwrap();
+        let d = DStmt::SetField(f, DExpr::Append(Box::new(DExpr::Field(Box::new(DExpr::After), f)), Box::new(de)));
+        assert(calls_resolve_stmt(d, all, sd));
+        lemma_moved_resolves(d, spec_unmove(e).1, spec_vec_moves(e), all, sd);
     }
 }
 
@@ -1526,7 +1588,7 @@ pub proof fn lemma_resolves_set_own_field(s: Stmt, all: Fns, env: Params, ps: Pa
 pub proof fn lemma_resolves_plain(s: Stmt, all: Fns, env: Params, ps: Params, sd: Structs)
     requires
         spec_stmt(s, all, env, ps, sd).is_ok(),
-        s is Step || s is Assert || s is Apply || s is Unknown || s is SetIndex || s is SetFieldAt || s is PushField || s is PopField || s is SetThroughField
+        s is Step || s is Assert || s is Apply || s is Unknown || s is SetIndex || s is SetFieldAt || s is PopField || s is SetThroughField
             || s is Sort
             || s is SortBy,
     ensures
@@ -1671,7 +1733,7 @@ pub proof fn lemma_stmt_calls_resolve(s: Stmt, all: Fns, env: Params, ps: Params
         Stmt::Unknown(_, _) => lemma_resolves_plain(s, all, env, ps, sd),
         Stmt::SetIndex(_, _, _, _) => lemma_resolves_plain(s, all, env, ps, sd),
         Stmt::SetFieldAt(_, _, _, _) => lemma_resolves_plain(s, all, env, ps, sd),
-        Stmt::PushField(_, _, _) => lemma_resolves_plain(s, all, env, ps, sd),
+        Stmt::PushField(_, _, _) => lemma_resolves_push_field(s, all, env, ps, sd),
         Stmt::SetThroughField(_, _, _, _) => lemma_resolves_plain(s, all, env, ps, sd),
         Stmt::PopField(_, _) => lemma_resolves_plain(s, all, env, ps, sd),
         Stmt::PushBack(_, _, _) => lemma_resolves_push(s, all, env, ps, sd),
