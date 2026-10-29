@@ -8,6 +8,8 @@ Take a `const` member function that gives `bool`, whose body is no pure body. It
 
 The method still has its body and its contract. Dafny proves that the body gives `e`, so the function and the method agree.
 
+This amends 0172, 0189, 0190 and 0194. Take a body that writes a local, holds a loop, or takes a vector by value. Or take a body that calls a member function that is no plain member function. Each is no pure body. Such a member function that gives `bool` now takes its function from its ensures line too. So the fixtures of 0172, 0189 and 0194 that test such a member function now give an integer from it. Their tests keep their lines.
+
 The rule holds for the first such ensures line. A member function that writes its object, a static member function, a free function, a trusted function and a virtual function keep their rules.
 
 ## Why
@@ -18,4 +20,4 @@ The ceiling is a result of `bool`. A result of an integer type needs a proof tha
 
 ## What changes
 
-The core gives such a member function the function `e`, in the two passes of the table of members, decision 0095. Three fixtures follow the form of 0178.
+The core gives such a member function the function `e`, in the strict marks of the table of members, decisions 0095 and 0190. Three fixtures follow the form of 0178.

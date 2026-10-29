@@ -6,10 +6,10 @@
 // The forms of a vector by value that have no rule, decision 0194.
 class Probe {
  public:
-  //@ ensures result == (v.size() > 0)
-  bool any(std::vector<int32_t> v) const { return v.size() > 0; }
+  //@ ensures result == v.size()
+  size_t any(std::vector<int32_t> v) const { return v.size(); }
 
-  //@ requires any(v)
+  //@ requires any(v) > 0
   //@ ensures true
   int32_t first(std::vector<int32_t> v) const { return v.at(0); }
 };

@@ -66,14 +66,14 @@ class Whole final : public Part {
   //@ ensures result == (inner_ != nullptr && inner_->valid())
   bool valid() const override { return inner_ != nullptr && inner_->valid(); }
 
-  //@ ensures result == valid()
-  bool outer() const { return valid(); }
+  //@ ensures result == (valid() ? 1 : 0)
+  int32_t outer() const { return valid() ? 1 : 0; }
 
  private:
   std::unique_ptr<Part> inner_;
 };
 
-//@ requires w.outer()
+//@ requires w.outer() == 1
 //@ ensures true
 int32_t use_outer(const Whole& w) {
   return 0;
