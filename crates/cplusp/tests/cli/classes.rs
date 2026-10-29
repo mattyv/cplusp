@@ -1086,3 +1086,32 @@ fn a_static_member_template_is_refused() {
     assert!(refused.contains(&"13: a member function template: the translator has no rule for it yet."), "{text}");
     assert!(!text.contains("a name with a character Dafny cannot read"), "{text}");
 }
+
+/// A static member function and a member function template of one name are overloads, so a contract that calls the name is
+/// refused, decision 0215.
+#[test]
+fn a_contract_that_calls_a_static_name_of_a_member_template_is_refused() {
+    let Some(dafny) = dafny() else { return };
+    if !clang_tidy_available() {
+        return;
+    }
+    let o = prove("model-member-template-static-name.cpp", &[], &dafny);
+    let text = stdout(&o);
+    assert_eq!(o.status.code(), Some(1), "stdout: {text} stderr: {}", stderr(&o));
+    let refused: Vec<&str> = text.lines().filter(|l| l.starts_with("Not proved: ") || l.starts_with("Not provable: ")).map(|l| l.rsplit_once(".cpp:").unwrap().1).collect();
+    assert_eq!(refused, ["19: S::get is no pure function. A contract calls a function with one return and no write."], "{text}");
+}
+
+/// Two static member functions of one name are overloads, so a contract that calls the name is refused, decision 0215.
+#[test]
+fn a_contract_that_calls_an_overloaded_static_name_is_refused() {
+    let Some(dafny) = dafny() else { return };
+    if !clang_tidy_available() {
+        return;
+    }
+    let o = prove("model-static-overload-contract.cpp", &[], &dafny);
+    let text = stdout(&o);
+    assert_eq!(o.status.code(), Some(1), "stdout: {text} stderr: {}", stderr(&o));
+    let refused: Vec<&str> = text.lines().filter(|l| l.starts_with("Not proved: ") || l.starts_with("Not provable: ")).map(|l| l.rsplit_once(".cpp:").unwrap().1).collect();
+    assert_eq!(refused, ["18: S::get is no pure function. A contract calls a function with one return and no write."], "{text}");
+}
