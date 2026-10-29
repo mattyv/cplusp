@@ -206,3 +206,4 @@ Status is `decided`, `proposed` (the default until someone objects or the thin s
 | [0199](0199-a-state-that-gives-the-next-state.md) | A state that gives the next state | decided |
 | [0200](0200-a-member-function-named-size.md) | A member function named size | decided |
 | [0201](0201-a-base-class-with-data.md) | A base class with data | decided |
+| [0203](0203-a-field-of-the-base-and-a-call-of-the-base.md) | A field of the base and a call of the base | decided |
