@@ -3595,7 +3595,12 @@ fn a_class_with_no_override_or_an_override_that_cannot_be_checked_is_refused() {
     // A class over an interface that is not final.
     let open = List::Cons((SQUARE, (names(&[SHAPE]), false)), Box::new(List::Nil));
     let all = fns(vec![base(), derived_corners(List::Nil, List::Nil)]);
-    assert_eq!(translate_overrides(&open, &all, &shapes(corners_member())), List::Cons(Err(Refusal::NotFinal(SQUARE, 12)), Box::new(List::Nil)));
+    // With no final class over Shape, the file also refuses the interface, decision 0220.
+    let shape_line = 9;
+    assert_eq!(
+        translate_overrides(&open, &all, &shapes(corners_member())),
+        List::Cons(Err(Refusal::NotFinal(SQUARE, 12)), Box::new(List::Cons(Err(Refusal::NoClass(SHAPE, shape_line)), Box::new(List::Nil))))
+    );
 }
 
 /// A free function of `const Shape&` is no virtual function of the interface, so it does not make the interface look overloaded,

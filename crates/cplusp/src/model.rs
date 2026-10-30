@@ -340,6 +340,8 @@ struct Names {
     sorted: std::cell::Cell<bool>,
     /// The plain name of each class of the table of structs by the id of its key, and of each function by the id of its key, for the sentences of decision 0165.
     class_names: HashMap<u32, String>,
+    /// The name of each interface by the id of its key, as its Axiom line names it, decision 0166: the plain name, or the qualified name when two structs share it.
+    interface_names: HashMap<u32, String>,
     fn_names: HashMap<u32, String>,
     /// The id of the key of the class of `this` of each member function, by the id of its key, for the sentence of decision 0218.
     fn_classes: HashMap<u32, u32>,
@@ -2437,6 +2439,8 @@ fn sentence(r: Refusal, names: &Names) -> (u32, String) {
             line,
             format!("the override of {}::{} in {} has no function in the model, so the translator cannot check it.", names.class_names[&b], plain_member(names.text(n)), names.class_names[&d]),
         ),
+        // An interface with no final class over it, decision 0220.
+        Refusal::NoClass(k, line) => (line, format!("{} has no final class over it in the file, so the translator cannot check its contract.", names.interface_names.get(&k).unwrap_or(&names.class_names[&k]))),
         Refusal::NotFinal(d, line) => (line, format!("{} derives from an interface and is not final. Mark it final.", names.class_names[&d])),
         Refusal::Overload(b, line) => (line, format!("{} has two virtual functions of one name. The translator has no rule for it yet.", names.class_names[&b])),
         Refusal::SortForm(line) => (line, "std::sort of another form: the translator has no rule for it yet.".to_string()),
@@ -2675,6 +2679,10 @@ pub fn translate(lines: &str, companion: Option<(&str, &str)>) -> Result<Transla
         .filter(|st| st.interface)
         .map(|st| if structs.iter().filter(|g| g.name == st.name).count() > 1 && !st.qualified.is_empty() { st.qualified.clone() } else { st.name.clone() })
         .collect();
+    for (st, name) in structs.iter().filter(|st| st.interface).zip(&interface_names) {
+        let key = names.id(&st.key);
+        names.interface_names.insert(key, name.clone());
+    }
     let struct_places: Vec<(u32, Option<String>)> = structs.iter().map(|st| (names.place(&st.file, st.line), unreadable_struct_name(st).map(String::from))).collect();
     for st in structs.into_iter().rev() {
         let key = names.id(&st.key);

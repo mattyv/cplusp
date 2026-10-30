@@ -4509,10 +4509,32 @@ pub fn upcasts(bases: &List<(u32, (Names, bool))>, all: &Fns, sd: &Structs) -> (
 /// of its functions do.
 pub fn translate_overrides(bases: &List<(u32, (Names, bool))>, all: &Fns, sd: &Structs) -> (r: List<Result<DUpcast, Refusal>>)
     ensures
-        r == spec_upcasts(*bases, *all, spec_marked(*sd, *all)),
+        r == spec_file_upcasts(*bases, *all, *sd),
+        !spec_backed(*all, *bases) ==> spec_unbacked(*all, *bases, List::Nil) is Cons,
 {
+    proof {
+        lemma_unbacked(*all, *bases, List::Nil);
+    }
     let marked = marked(sd, all);
-    upcasts(bases, all, &marked)
+    append(upcasts(bases, all, &marked), unbacked(all, bases, List::Nil))
+}
+
+pub fn unbacked(fs: &Fns, bases: &Bases, seen: Names) -> (r: List<Result<DUpcast, Refusal>>)
+    ensures
+        r == spec_unbacked(*fs, *bases, seen),
+    decreases fs,
+{
+    match fs {
+        List::Nil => List::Nil,
+        List::Cons(f, rest) => match iface_of(f) {
+            Some(k) => if !over(bases, k) && (has(&seen, k) == false) {
+                List::Cons(Err(Refusal::NoClass(k, f.line)), Box::new(unbacked(rest, bases, List::Cons(k, Box::new(seen)))))
+            } else {
+                unbacked(rest, bases, seen)
+            },
+            None => unbacked(rest, bases, seen),
+        },
+    }
 }
 pub fn pairs_of(os: &DOverrides) -> (r: Pairs)
     ensures

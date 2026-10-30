@@ -42,3 +42,9 @@ bool k(std::unique_ptr<Counter> o) {
   v.push_back(std::move(o));
   return v.size() == 2 && v[0] != nullptr && v[1] == nullptr;
 }
+
+// A final class over Counter, so the file checks its contract, decision 0220.
+class One final : public Counter {
+ public:
+  int32_t count() const override { return 1; }
+};

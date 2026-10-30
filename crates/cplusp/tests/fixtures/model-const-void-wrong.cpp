@@ -35,3 +35,19 @@ class Two final : public Source {
 void use(const Source& src, Sink& s) {
   src.give(s);
 }
+
+// A final class over Sink, so the file checks its contract, decision 0220.
+class Tally final : public Sink {
+ public:
+  //@ ensures result == (0 <= n_ && n_ <= 2000)
+  bool valid() const override { return 0 <= n_ && n_ <= 2000; }
+  //@ requires valid()
+  //@ ensures result == n_
+  int64_t seen() const override { return n_; }
+  //@ requires valid() && seen() <= 1000 && 0 <= k <= 10
+  //@ ensures valid() && seen() == old(seen()) + k
+  void add(int32_t k) override { n_ += k; }
+
+ private:
+  int64_t n_;
+};

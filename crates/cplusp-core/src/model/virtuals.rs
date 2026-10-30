@@ -1487,4 +1487,50 @@ pub open spec fn spec_file(all: Fns, sd: Structs, bases: Bases) -> Models {
     )
 }
 
+// ------------------------------------------------------------------ an interface needs a final class, decision 0220
+
+/// A refusal for each interface of a virtual function of `fs` with no final class over it in the file, at the line of its first
+/// virtual function. `seen` holds the interfaces that have one already.
+pub open spec fn spec_unbacked(fs: Fns, bases: Bases, seen: Names) -> List<Result<DUpcast, Refusal>>
+    decreases fs,
+{
+    match fs {
+        List::Nil => List::Nil,
+        List::Cons(f, rest) => match spec_iface_of(*f) {
+            Some(k) => if !spec_over(bases, k) && !spec_has(seen, k) {
+                List::Cons(Err(Refusal::NoClass(k, f.line)), Box::new(spec_unbacked(*rest, bases, List::Cons(k, Box::new(seen)))))
+            } else {
+                spec_unbacked(*rest, bases, seen)
+            },
+            None => spec_unbacked(*rest, bases, seen),
+        },
+    }
+}
+
+/// When an interface of the file has no final class over it, the list of refusals is not empty, decision 0220.
+pub proof fn lemma_unbacked(fs: Fns, bases: Bases, seen: Names)
+    ensures
+        !spec_backed(fs, bases) ==> (spec_unbacked(fs, bases, seen) is Cons || exists|k: u32| #[trigger] spec_has(seen, k) && !spec_over(bases, k)),
+    decreases fs,
+{
+    match fs {
+        List::Nil => {},
+        List::Cons(f, rest) => match spec_iface_of(*f) {
+            Some(k) => if !spec_over(bases, k) && !spec_has(seen, k) {
+            } else if !spec_over(bases, k) {
+                assert(spec_has(seen, k) && !spec_over(bases, k));
+            } else {
+                lemma_unbacked(*rest, bases, seen);
+            },
+            None => lemma_unbacked(*rest, bases, seen),
+        },
+    }
+}
+
+/// The upcasts of the file with the check of each override, decision 0165, then a refusal for each interface with no final class
+/// over it, decision 0220.
+pub open spec fn spec_file_upcasts(bases: Bases, all: Fns, sd: Structs) -> List<Result<DUpcast, Refusal>> {
+    spec_append(spec_upcasts(bases, all, spec_marked(sd, all)), spec_unbacked(all, bases, List::Nil))
+}
+
 } // verus!

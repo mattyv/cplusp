@@ -162,7 +162,9 @@ fn a_contract_of_an_interface_reads_only_the_functions_above_it() {
         refusals,
         [
             "6: the contract of Late::apply reads Late::ready, which comes later in Late. Declare Late::ready first.",
+            "21: Quiet has no final class over it in the file, so the translator cannot check its contract.",
             "26: the contract of Loop::size reads Loop::size itself. The translator has no rule for it yet.",
+            "27: Loop has no final class over it in the file, so the translator cannot check its contract.",
         ],
         "{text}"
     );
@@ -408,6 +410,7 @@ fn a_write_through_an_interface_with_no_rule_is_refused() {
             "49: the call writes a value back, and the translator writes back only to a local or a reference parameter.",
             "53: the override of Observer::on_change in Loud has no method in the model, so the translator cannot check it.",
             "63: DoStmt: the translator has no rule for it yet.",
+            "83: Act has no final class over it in the file, so the translator cannot check its contract.",
             "83: c is a reference parameter that the modifies line does not name.",
         ],
         "{text}"
@@ -469,6 +472,7 @@ fn a_vector_of_unique_ptr_with_no_rule_is_refused() {
             "54: a range-for over a vector of unique_ptr: the translator has no rule for it yet.",
             "63: the call writes a value back, and the translator writes back only to a local or a reference parameter.",
             "66: std::vector<std::unique_ptr<Observer>>: the translator has no rule for it yet.",
+            "75: Bumper has no final class over it in the file, so the translator cannot check its contract.",
             "82: the index reads a value that the call writes: the translator has no rule for it yet.",
         ],
         "{text}"
@@ -887,7 +891,11 @@ fn a_local_through_its_interface_with_an_unbacked_interface_is_refused() {
     let o = prove("model-iface-local-unbacked.cpp", &[], &dafny);
     let text = stdout(&o);
     assert_eq!(o.status.code(), Some(1), "stdout: {text} stderr: {}", stderr(&o));
-    assert_eq!(failures(&text), ["42: a class as a reference to its interface: the translator has no rule for it yet."], "{text}");
+    let want = [
+        "36: Poker has no final class over it in the file, so the translator cannot check its contract.",
+        "42: a class as a reference to its interface: the translator has no rule for it yet.",
+    ];
+    assert_eq!(failures(&text), want, "{text}");
 }
 
 /// `*this` for a reference that is not const has no rule in a member call either, decision 0217.
@@ -916,6 +924,7 @@ fn a_name_of_two_virtual_functions_stays_plain_in_each_sentence() {
     assert_eq!(o.status.code(), Some(1), "stdout: {text} stderr: {}", stderr(&o));
     let want = [
         "7: the contract of Late::apply reads Late::ready, which comes later in Late. Declare Late::ready first.",
+        "28: Self has no final class over it in the file, so the translator cannot check its contract.",
         "29: size is no pure function. A contract calls a function with one return and no write.",
     ];
     assert_eq!(failures(&text), want, "{text}");
@@ -972,6 +981,7 @@ fn an_unbacked_write_back_is_refused_in_each_place_of_a_body() {
     assert_eq!(o.status.code(), Some(1), "stdout: {text} stderr: {}", stderr(&o));
     let iface = "a class as a reference to its interface: the translator has no rule for it yet.";
     let want = [
+        "36: Poker has no final class over it in the file, so the translator cannot check its contract.".to_string(),
         format!("62: {iface}"),
         format!("74: {iface}"),
         format!("86: {iface}"),

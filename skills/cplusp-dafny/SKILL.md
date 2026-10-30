@@ -51,7 +51,7 @@ Treat SPARK guidance as an engineering method, not an LLM performance measuremen
 
 ## Contract lines that the translator reads
 
-This list is true at decision 0219. Read the later decisions before you rely on it.
+This list is true at decision 0220. Read the later decisions before you rely on it.
 `cplusp prove` translates the C++ and the `//@` lines to Dafny, and runs Dafny. It says `ok: proved`, or `Not proved: FILE:LINE: sentence` for a proof that fails, or `Not provable: FILE:LINE: sentence` for a form that has no rule.
 
 Where each line goes:
@@ -90,6 +90,7 @@ The modifies line:
 - A local `d` of a final class `D` can be the argument for a parameter `B&` of its interface, decision 0208. After the call, `d` is a `D` whose value through `B` meets the contract of the call. `prove` names this on an `Axiom: model:` line. It holds only when each interface of the file has a final class over it in the file, decision 0217. A field, a parameter and a local of a class that is not final at a `B&` have no rule yet.
 - A `const` virtual function that gives no value is a method, as one that writes its object is, decision 0209. Two virtual functions of one name are two overloads, also a `const` and a non-`const` one, decision 0210. A contract cannot call such a name.
 - `*this` can be the argument for a parameter by value or `const&`, decision 0214. For a reference that is not `const` it has no rule yet, decision 0217.
+- Each interface with a virtual function needs a final class over it in the same file, decision 0220. Without one, `prove` refuses the interface, because nothing checks its contract.
 - A call through an interface must not be able to run an override of it again before it returns, decision 0218. So an override must not reach the same call through `*this`, a local or a chain of calls. A call through a `std::unique_ptr` field of `this`, as in a decorator, is a step down to a part of the object, decision 0219. Such a call can come back.
 - A vector of `std::unique_ptr<B>` works as a `const&` parameter, a parameter by reference on the modifies line, or a local, decision 0170. A local `std::vector<T> v;` starts empty, and `v.push_back(std::make_unique<D>(a))` adds an element. `v[i]->f(a)` calls through the element, and a call that writes the object writes the element back. Its index must not read a value that the call writes. Write `v[i] != nullptr` in a requires line or an invariant above a line that reads `v[i]->f()`. A range-for over such a vector, an assignment to an element, and `std::move` of an element have no rule yet.
 - `std::unique_ptr<B>` can be a field of a struct or a final class, and a parameter by value, decision 0171. Write `f_ != nullptr && f_->valid()` in a requires line above a line that reads `f_->g()`. Give it a value with `std::move(x)` of a local, or with `std::make_unique<D>(a)`. After `f(std::move(x));` or `T y = std::move(x);`, `x` is null. A statement that moves `x` must not read `x` again. A parameter can move in a return or a constructor init, as `f_(std::move(p))`. A move inside an `if` condition or an operator has no rule.

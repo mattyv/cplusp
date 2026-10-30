@@ -281,7 +281,8 @@ pub type Models = List<Model>;
 /// is a copy of a struct with a destructor, and `NoDtorContract` is a local of a struct whose destructor has no contract, each by
 /// the line, decision 0178. `Unbacked` is a call that writes a local back through its interface in a file where an interface has no
 /// final class over it, by the line of the call, decision 0217. `Loop` is a call through an interface that can run an override of
-/// it again before it returns, by the key of the callee and the line, decision 0218.
+/// it again before it returns, by the key of the callee and the line, decision 0218. `NoClass` is an interface with no final class over it
+/// in the file, by its key and the line of its first virtual function, decision 0220.
 #[derive(Structural, PartialEq, Eq, Clone, Copy, Debug)]
 pub enum Refusal {
     Construct(u32, u32),
@@ -337,6 +338,7 @@ pub enum Refusal {
     NoDtorContract(u32),
     Unbacked(u32),
     Loop(u32, u32),
+    NoClass(u32, u32),
 }
 
 } // verus!
