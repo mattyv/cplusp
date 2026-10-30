@@ -1061,3 +1061,17 @@ fn an_interface_with_no_final_class_is_refused() {
     assert_eq!(o.status.code(), Some(1), "stdout: {text} stderr: {}", stderr(&o));
     assert_eq!(failures(&text), ["34: Poker has no final class over it in the file, so the translator cannot check its contract."], "{text}");
 }
+
+/// The sentence for an interface with no final class names it as its Axiom line does, with its namespace when two interfaces share a
+/// name, decisions 0166 and 0220.
+#[test]
+fn an_interface_with_no_final_class_is_named_as_its_axiom_line_names_it() {
+    let Some(dafny) = dafny() else { return };
+    if !clang_tidy_available() {
+        return;
+    }
+    let o = prove("model-virtual-names-unbacked.cpp", &[], &dafny);
+    let text = stdout(&o);
+    assert_eq!(o.status.code(), Some(1), "stdout: {text} stderr: {}", stderr(&o));
+    assert_eq!(failures(&text), ["20: b::Shape has no final class over it in the file, so the translator cannot check its contract."], "{text}");
+}
