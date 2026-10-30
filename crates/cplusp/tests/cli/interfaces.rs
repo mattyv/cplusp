@@ -1047,3 +1047,17 @@ fn the_visitor_example_proves() {
     assert!(text.lines().any(|l| l == "Axiom: model: AreaSum: a call through a reference to Visitor leaves an object of AreaSum, C++23 [class.virtual]."), "{text}");
     assert_eq!(text.lines().last(), Some("ok: proved"), "{text}");
 }
+
+/// An interface with no final class over it in the file is refused, so a contract that no override can keep never stands as an
+/// axiom, decision 0220.
+#[test]
+fn an_interface_with_no_final_class_is_refused() {
+    let Some(dafny) = dafny() else { return };
+    if !clang_tidy_available() {
+        return;
+    }
+    let o = prove("model-iface-unbacked-contract.cpp", &[], &dafny);
+    let text = stdout(&o);
+    assert_eq!(o.status.code(), Some(1), "stdout: {text} stderr: {}", stderr(&o));
+    assert_eq!(failures(&text), ["34: Poker has no final class over it in the file, so the translator cannot check its contract."], "{text}");
+}
