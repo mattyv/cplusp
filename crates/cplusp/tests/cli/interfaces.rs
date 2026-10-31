@@ -1106,3 +1106,21 @@ fn a_requires_line_that_no_input_meets_proves_and_its_caller_does_not() {
     let lines: Vec<&str> = text.lines().filter(|l| l.starts_with("  The contract line: ")).map(|l| l.rsplit_once(".cpp:").unwrap().1).collect();
     assert_eq!(lines, ["20: requires p.valid()", "33: requires false"], "{text}");
 }
+
+/// A function that ends the life of no object has no edge to a destructor, so a destructor can call through an interface whose
+/// override ends no life. A local whose destructor calls back through the interface still comes back, decision 0222.
+#[test]
+fn a_destructor_edge_comes_only_from_a_function_that_ends_a_life() {
+    let Some(dafny) = dafny() else { return };
+    if !clang_tidy_available() {
+        return;
+    }
+    let o = prove("model-dtor-quiet.cpp", &[], &dafny);
+    let text = stdout(&o);
+    assert_eq!(o.status.code(), Some(0), "stdout: {text} stderr: {}", stderr(&o));
+    assert_eq!(text.lines().last(), Some("ok: proved"), "{text}");
+    let o = prove("model-dtor-loop-refuse.cpp", &[], &dafny);
+    let text = stdout(&o);
+    assert_eq!(o.status.code(), Some(1), "stdout: {text} stderr: {}", stderr(&o));
+    assert_eq!(failures(&text), ["21: the call of Log::note can run Log::note again before it returns: the translator has no rule for it yet."], "{text}");
+}

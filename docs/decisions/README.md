@@ -226,3 +226,4 @@ Status is `decided`, `proposed` (the default until someone objects or the thin s
 | [0219](0219-a-step-down-to-an-owned-object.md) | A step down to an owned object | decided |
 | [0220](0220-an-interface-needs-a-final-class.md) | An interface needs a final class | decided |
 | [0221](0221-a-requires-line-that-no-input-meets.md) | A requires line that no input meets | decided |
+| [0222](0222-a-destructor-edge-from-a-function-that-ends-a-life.md) | A destructor edge from a function that ends a life | decided |
