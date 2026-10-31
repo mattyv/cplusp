@@ -56,7 +56,7 @@ A trusted body can also break an assumption that no contract states. The model o
 
 ## Gap 6: the prover
 
-Partly open. Solver bugs. Timeouts. Axioms and `assume` in trusted contracts. A precondition that can never be true makes every proof of that function trivial: a vacuous proof. The battery's `unlisted_modifies` case shows the other vacuity. A trusted contract with an `ensures` on a variable it does not list in `modifies` contradicts Dafny's frame. The caller then proves anything. How we detect vacuity is still open. Dafny is pinned at 4.11.0.
+Partly open. Solver bugs. Timeouts. Axioms and `assume` in trusted contracts. A precondition that can never be true makes every proof of that function trivial: a vacuous proof. The battery's `unlisted_modifies` case shows the other vacuity. A trusted contract with an `ensures` on a variable it does not list in `modifies` contradicts Dafny's frame. The caller then proves anything. A requires line that no input meets is not detected, decision 0221. Dafny refuses each call of such a function in verified code, so the gap is the boundary of gap 8. Dafny is pinned at 4.11.0.
 
 ## Gap 7: the verdict
 
@@ -64,7 +64,7 @@ Open. The verdict names a line in a file. Which version of the file, under which
 
 ## Gap 8: the bot
 
-Open. The bot writes the contracts and can weaken them until the proof goes through. A `requires false` proves anything. What a human must review, what the tool must refuse, and what the caller's contract forces.
+Open. The bot writes the contracts and can weaken them until the proof goes through. A `requires false` proves anything. Decision 0221 says why the gate does not look for it. The risk is in the requires lines of the functions that unverified code calls. What a human must review, what the tool must refuse, and what the caller's contract forces.
 
 ## Principles that fall out
 

@@ -51,7 +51,7 @@ Treat SPARK guidance as an engineering method, not an LLM performance measuremen
 
 ## Contract lines that the translator reads
 
-This list is true at decision 0220. Read the later decisions before you rely on it.
+This list is true at decision 0221. Read the later decisions before you rely on it.
 `cplusp prove` translates the C++ and the `//@` lines to Dafny, and runs Dafny. It says `ok: proved`, or `Not proved: FILE:LINE: sentence` for a proof that fails, or `Not provable: FILE:LINE: sentence` for a form that has no rule.
 
 Where each line goes:
@@ -70,6 +70,8 @@ What a contract expression can hold:
 - A `constexpr` integer or `double` constant of the file, when C++ finds it from the function, decisions 0106, 0107 and 0158. A `double` constant is exact when its value is `m / 2^p` with `p` up to 63, such as `0x1p-30`. A contract cannot write a hexadecimal double, so give it a name.
 - An enumerator such as `Kind::Small`, decision 0109.
 - A pure `const` member function, and a function or predicate of the companion file, decisions 0079 and 0090.
+
+A requires line is a duty of the caller. Dafny checks it at each call in verified code. A function with a requires line that no input meets proves, and no verified code can call it, decision 0221. Nothing checks the requires lines of a function that only unverified code calls. Give such a function the requires lines that each of those callers meets.
 
 The modifies line:
 - It names each non-const reference parameter (`T&`) that the function writes, and nothing else, decisions 0108 and 0110. The translator refuses a function with a reference parameter that the line does not name.

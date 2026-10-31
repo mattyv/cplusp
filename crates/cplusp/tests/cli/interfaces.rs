@@ -1085,3 +1085,24 @@ fn an_interface_with_no_final_class_is_named_as_its_axiom_line_names_it() {
     assert_eq!(o.status.code(), Some(1), "stdout: {text} stderr: {}", stderr(&o));
     assert_eq!(failures(&text), ["20: b::Shape has no final class over it in the file, so the translator cannot check its contract."], "{text}");
 }
+
+/// A function whose requires lines no input meets proves, and each call of it in verified code is not proved, decision 0221. So the
+/// proof of the function is true as stated, and no verified code can run it.
+#[test]
+fn a_requires_line_that_no_input_meets_proves_and_its_caller_does_not() {
+    let Some(dafny) = dafny() else { return };
+    if !clang_tidy_available() {
+        return;
+    }
+    let o = prove("model-requires-none.cpp", &[], &dafny);
+    let text = stdout(&o);
+    assert_eq!(o.status.code(), Some(0), "stdout: {text} stderr: {}", stderr(&o));
+    assert_eq!(text.lines().last(), Some("ok: proved"), "{text}");
+    let o = prove("model-requires-none-call.cpp", &[], &dafny);
+    let text = stdout(&o);
+    assert_eq!(o.status.code(), Some(1), "stdout: {text} stderr: {}", stderr(&o));
+    let callee = "a requires line of the callee may not hold.";
+    assert_eq!(failures(&text), [format!("30: {callee}"), format!("38: {callee}")], "{text}");
+    let lines: Vec<&str> = text.lines().filter(|l| l.starts_with("  The contract line: ")).map(|l| l.rsplit_once(".cpp:").unwrap().1).collect();
+    assert_eq!(lines, ["20: requires p.valid()", "33: requires false"], "{text}");
+}
