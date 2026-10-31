@@ -4322,7 +4322,9 @@ pub fn translate_file(all: &Fns, sd: &Structs, bases: &Bases) -> (r: Models)
     let ok = backed(all, bases);
     let marked = marked(sd, all);
     let prs = pairs(&upcasts(bases, all, &marked));
-    let ds = dtors(&marked, &marked);
+    let dts = dtors(&marked, &marked);
+    let ends = ends(all, all, &marked, &dts);
+    let ds = (dts, ends);
     let n = fuel(all);
     proof {
         lemma_backed_models(ms, ok);
@@ -4616,20 +4618,33 @@ pub fn succ_flat_calls(cs: &List<(u32, bool, u32)>, prs: &Pairs) -> (r: Names)
     }
 }
 
-pub fn succ(all: &Fns, prs: &Pairs, ds: &Names, flat: bool, k: u32) -> (r: Names)
+pub fn succ(all: &Fns, prs: &Pairs, ds: &Dtors, flat: bool, k: u32) -> (r: Names)
     ensures
         r == spec_succ(*all, *prs, *ds, flat, k),
 {
     match find(all, k) {
-        Some(f) => {
+        Some(f) => if f.trusted && iface_of(f).is_none() {
+            fn_keys(all)
+        } else {
             let cs = ocalls_stmts(&f.body);
-            append(if flat { succ_flat_calls(&cs, prs) } else { succ_calls(&cs, prs) }, copy(ds))
+            append(if flat { succ_flat_calls(&cs, prs) } else { succ_calls(&cs, prs) }, if has(&ds.1, k) { copy(&ds.0) } else { List::Nil })
         },
         None => List::Nil,
     }
 }
 
-pub fn succs(all: &Fns, prs: &Pairs, ds: &Names, flat: bool, ks: &Names) -> (r: Names)
+pub fn fn_keys(fs: &Fns) -> (r: Names)
+    ensures
+        r == spec_fn_keys(*fs),
+    decreases fs,
+{
+    match fs {
+        List::Nil => List::Nil,
+        List::Cons(f, rest) => List::Cons(f.name, Box::new(fn_keys(rest))),
+    }
+}
+
+pub fn succs(all: &Fns, prs: &Pairs, ds: &Dtors, flat: bool, ks: &Names) -> (r: Names)
     ensures
         r == spec_succs(*all, *prs, *ds, flat, *ks),
     decreases ks,
@@ -4666,7 +4681,7 @@ pub fn add(r: Names, xs: &Names) -> (o: Names)
     }
 }
 
-pub fn close(all: &Fns, prs: &Pairs, ds: &Names, r: Names, fuel: u64) -> (o: Option<Names>)
+pub fn close(all: &Fns, prs: &Pairs, ds: &Dtors, r: Names, fuel: u64) -> (o: Option<Names>)
     ensures
         o == spec_close(*all, *prs, *ds, r, fuel),
     decreases fuel,
@@ -4681,7 +4696,7 @@ pub fn close(all: &Fns, prs: &Pairs, ds: &Names, r: Names, fuel: u64) -> (o: Opt
     }
 }
 
-pub fn comes_back(d: u32, g: u32, down: bool, all: &Fns, prs: &Pairs, ds: &Names, fuel: u64) -> (r: bool)
+pub fn comes_back(d: u32, g: u32, down: bool, all: &Fns, prs: &Pairs, ds: &Dtors, fuel: u64) -> (r: bool)
     ensures
         r == spec_comes_back(d, g, down, *all, *prs, *ds, fuel),
 {
@@ -4698,7 +4713,7 @@ pub fn comes_back(d: u32, g: u32, down: bool, all: &Fns, prs: &Pairs, ds: &Names
     }
 }
 
-pub fn loops_over(os: &Names, g: u32, down: bool, all: &Fns, prs: &Pairs, ds: &Names, fuel: u64) -> (r: bool)
+pub fn loops_over(os: &Names, g: u32, down: bool, all: &Fns, prs: &Pairs, ds: &Dtors, fuel: u64) -> (r: bool)
     ensures
         r == spec_loops_over(*os, g, down, *all, *prs, *ds, fuel),
     decreases os,
@@ -4709,7 +4724,7 @@ pub fn loops_over(os: &Names, g: u32, down: bool, all: &Fns, prs: &Pairs, ds: &N
     }
 }
 
-pub fn loop_calls(cs: &List<(u32, bool, u32)>, g: u32, all: &Fns, prs: &Pairs, ds: &Names, fuel: u64) -> (r: Option<(u32, u32)>)
+pub fn loop_calls(cs: &List<(u32, bool, u32)>, g: u32, all: &Fns, prs: &Pairs, ds: &Dtors, fuel: u64) -> (r: Option<(u32, u32)>)
     ensures
         r == spec_loop_calls(*cs, g, *all, *prs, *ds, fuel),
     decreases cs,
@@ -4724,7 +4739,7 @@ pub fn loop_calls(cs: &List<(u32, bool, u32)>, g: u32, all: &Fns, prs: &Pairs, d
     }
 }
 
-pub fn loop_model(m: Model, f: &Function, all: &Fns, prs: &Pairs, ds: &Names, fuel: u64) -> (r: Model)
+pub fn loop_model(m: Model, f: &Function, all: &Fns, prs: &Pairs, ds: &Dtors, fuel: u64) -> (r: Model)
     ensures
         r == spec_loop_model(m, *f, *all, *prs, *ds, fuel),
 {
@@ -4737,7 +4752,7 @@ pub fn loop_model(m: Model, f: &Function, all: &Fns, prs: &Pairs, ds: &Names, fu
     }
 }
 
-pub fn loop_models(ms: Models, fs: &Fns, all: &Fns, prs: &Pairs, ds: &Names, fuel: u64) -> (r: Models)
+pub fn loop_models(ms: Models, fs: &Fns, all: &Fns, prs: &Pairs, ds: &Dtors, fuel: u64) -> (r: Models)
     ensures
         r == spec_loop_models(ms, *fs, *all, *prs, *ds, fuel),
     decreases ms,

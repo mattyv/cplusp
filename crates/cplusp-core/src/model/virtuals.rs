@@ -1051,19 +1051,38 @@ pub open spec fn spec_succ_flat_calls(cs: List<(u32, bool, u32)>, prs: Pairs) ->
     }
 }
 
-/// The edges of the call graph from the function `k`: the functions that its body can run first, and each destructor `ds` of the
-/// file, which a body runs at the end of a scope. `flat` leaves out the steps down the tree of owned objects.
-pub open spec fn spec_succ(all: Fns, prs: Pairs, ds: Names, flat: bool, k: u32) -> Names {
+/// The destructors of the file, and the functions that can end the life of an object whose end runs one, decision 0222.
+pub type Dtors = (Names, Names);
+
+/// The edges of the call graph from the function `k`: the functions that its body can run first, and, when `k` can end a life,
+/// each destructor of the file, decision 0222. A trusted function that is no function of an interface has an edge to each function of the file, decision
+/// 0223. A function of an interface reaches its overrides through the pairs. `flat` leaves out the steps down the tree of owned objects.
+pub open spec fn spec_succ(all: Fns, prs: Pairs, ds: Dtors, flat: bool, k: u32) -> Names {
     match spec_find(all, k) {
-        Some(f) => spec_append(
+        Some(f) => if f.trusted && spec_iface_of(f) is None {
+            spec_fn_keys(all)
+        } else {
+            spec_append(
             if flat { spec_succ_flat_calls(spec_ocalls_stmts(f.body), prs) } else { spec_succ_calls(spec_ocalls_stmts(f.body), prs) },
-            ds,
-        ),
+            if spec_has(ds.1, k) { ds.0 } else { List::Nil },
+        )
+        },
         None => List::Nil,
     }
 }
 
-pub open spec fn spec_succs(all: Fns, prs: Pairs, ds: Names, flat: bool, ks: Names) -> Names
+/// The keys of the functions `fs`. A trusted body is not in the model, so the core takes it that it can call each of them, decision
+/// 0223.
+pub open spec fn spec_fn_keys(fs: Fns) -> Names
+    decreases fs,
+{
+    match fs {
+        List::Nil => List::Nil,
+        List::Cons(f, rest) => List::Cons(f.name, Box::new(spec_fn_keys(*rest))),
+    }
+}
+
+pub open spec fn spec_succs(all: Fns, prs: Pairs, ds: Dtors, flat: bool, ks: Names) -> Names
     decreases ks,
 {
     match ks {
@@ -1097,7 +1116,7 @@ pub open spec fn spec_add(r: Names, xs: Names) -> Names
 }
 
 /// The functions that a path from `r` reaches, when the steps end in `fuel` steps. `None` when they do not.
-pub open spec fn spec_close(all: Fns, prs: Pairs, ds: Names, r: Names, fuel: u64) -> Option<Names>
+pub open spec fn spec_close(all: Fns, prs: Pairs, ds: Dtors, r: Names, fuel: u64) -> Option<Names>
     decreases fuel,
 {
     let next = spec_succs(all, prs, ds, false, r);
@@ -1111,14 +1130,14 @@ pub open spec fn spec_close(all: Fns, prs: Pairs, ds: Names, r: Names, fuel: u64
 }
 
 /// A path of at most `n` edges goes from `from` to `to`.
-pub open spec fn spec_reach(all: Fns, prs: Pairs, ds: Names, from: u32, to: u32, n: nat) -> bool
+pub open spec fn spec_reach(all: Fns, prs: Pairs, ds: Dtors, from: u32, to: u32, n: nat) -> bool
     decreases n,
 {
     from == to || (n > 0 && exists|s: u32| #[trigger] spec_has(spec_succ(all, prs, ds, false, from), s) && spec_reach(all, prs, ds, s, to, (n - 1) as nat))
 }
 
 /// A path of at most `n` edges goes from `from` to `to`, with at least one edge that is no step down the tree of owned objects.
-pub open spec fn spec_reach_flat(all: Fns, prs: Pairs, ds: Names, from: u32, to: u32, n: nat) -> bool
+pub open spec fn spec_reach_flat(all: Fns, prs: Pairs, ds: Dtors, from: u32, to: u32, n: nat) -> bool
     decreases n,
 {
     n > 0 && exists|s: u32|
@@ -1128,7 +1147,7 @@ pub open spec fn spec_reach_flat(all: Fns, prs: Pairs, ds: Names, from: u32, to:
 
 /// A path from the override `d` can come back to `g`. For a call whose object is owned by `this`, only a path with a step that is
 /// no step down counts, since a path of steps down ends. When the steps do not end, the core takes it that a path comes back.
-pub open spec fn spec_comes_back(d: u32, g: u32, down: bool, all: Fns, prs: Pairs, ds: Names, fuel: u64) -> bool {
+pub open spec fn spec_comes_back(d: u32, g: u32, down: bool, all: Fns, prs: Pairs, ds: Dtors, fuel: u64) -> bool {
     match spec_close(all, prs, ds, List::Cons(d, Box::new(List::Nil)), fuel) {
         None => true,
         Some(c) => if !down {
@@ -1143,7 +1162,7 @@ pub open spec fn spec_comes_back(d: u32, g: u32, down: bool, all: Fns, prs: Pair
 }
 
 /// An override among `os` can come back to `g`.
-pub open spec fn spec_loops_over(os: Names, g: u32, down: bool, all: Fns, prs: Pairs, ds: Names, fuel: u64) -> bool
+pub open spec fn spec_loops_over(os: Names, g: u32, down: bool, all: Fns, prs: Pairs, ds: Dtors, fuel: u64) -> bool
     decreases os,
 {
     match os {
@@ -1154,7 +1173,7 @@ pub open spec fn spec_loops_over(os: Names, g: u32, down: bool, all: Fns, prs: P
 
 /// The first call among `cs` of the function `g` that can come back to `g` through an override of its callee, by the key of the
 /// callee and the line.
-pub open spec fn spec_loop_calls(cs: List<(u32, bool, u32)>, g: u32, all: Fns, prs: Pairs, ds: Names, fuel: u64) -> Option<(u32, u32)>
+pub open spec fn spec_loop_calls(cs: List<(u32, bool, u32)>, g: u32, all: Fns, prs: Pairs, ds: Dtors, fuel: u64) -> Option<(u32, u32)>
     decreases cs,
 {
     match cs {
@@ -1169,7 +1188,7 @@ pub open spec fn spec_loop_calls(cs: List<(u32, bool, u32)>, g: u32, all: Fns, p
 
 /// No override among `os` has a path back to `g`. For a call whose object is owned by `this`, no such path has a step that is no
 /// step down.
-pub open spec fn spec_safe_over(os: Names, g: u32, down: bool, all: Fns, prs: Pairs, ds: Names) -> bool
+pub open spec fn spec_safe_over(os: Names, g: u32, down: bool, all: Fns, prs: Pairs, ds: Dtors) -> bool
     decreases os,
 {
     match os {
@@ -1183,7 +1202,7 @@ pub open spec fn spec_safe_over(os: Names, g: u32, down: bool, all: Fns, prs: Pa
 }
 
 /// No call among `cs` of `g` can come back to `g` through an override of its callee, other than down the tree of owned objects.
-pub open spec fn spec_safe_calls(cs: List<(u32, bool, u32)>, g: u32, all: Fns, prs: Pairs, ds: Names) -> bool
+pub open spec fn spec_safe_calls(cs: List<(u32, bool, u32)>, g: u32, all: Fns, prs: Pairs, ds: Dtors) -> bool
     decreases cs,
 {
     match cs {
@@ -1229,7 +1248,7 @@ pub proof fn lemma_add_keeps(r: Names, xs: Names, x: u32)
     }
 }
 
-pub proof fn lemma_succs_has(all: Fns, prs: Pairs, ds: Names, flat: bool, ks: Names, k: u32, s: u32)
+pub proof fn lemma_succs_has(all: Fns, prs: Pairs, ds: Dtors, flat: bool, ks: Names, k: u32, s: u32)
     ensures
         spec_has(ks, k) && spec_has(spec_succ(all, prs, ds, flat, k), s) ==> spec_has(spec_succs(all, prs, ds, flat, ks), s),
     decreases ks,
@@ -1244,7 +1263,7 @@ pub proof fn lemma_succs_has(all: Fns, prs: Pairs, ds: Names, flat: bool, ks: Na
 }
 
 /// The result of the steps holds each key of the start, and no step from it adds a key.
-pub proof fn lemma_close(all: Fns, prs: Pairs, ds: Names, r: Names, fuel: u64, x: u32)
+pub proof fn lemma_close(all: Fns, prs: Pairs, ds: Dtors, r: Names, fuel: u64, x: u32)
     ensures
         spec_close(all, prs, ds, r, fuel) is Some ==> !spec_new(spec_close(all, prs, ds, r, fuel)->Some_0, spec_succs(all, prs, ds, false, spec_close(all, prs, ds, r, fuel)->Some_0)),
         spec_close(all, prs, ds, r, fuel) is Some && spec_has(r, x) ==> spec_has(spec_close(all, prs, ds, r, fuel)->Some_0, x),
@@ -1258,7 +1277,7 @@ pub proof fn lemma_close(all: Fns, prs: Pairs, ds: Names, r: Names, fuel: u64, x
 }
 
 /// A set of keys that no step leaves holds each key that a path from one of its keys reaches.
-pub proof fn lemma_reach_closed(all: Fns, prs: Pairs, ds: Names, c: Names, from: u32, to: u32, n: nat)
+pub proof fn lemma_reach_closed(all: Fns, prs: Pairs, ds: Dtors, c: Names, from: u32, to: u32, n: nat)
     requires
         !spec_new(c, spec_succs(all, prs, ds, false, c)),
         spec_has(c, from),
@@ -1277,7 +1296,7 @@ pub proof fn lemma_reach_closed(all: Fns, prs: Pairs, ds: Names, c: Names, from:
 
 /// A path with a step that is no step down, from a key of a closed set `c`, ends in the closed set `c2` that holds each such step
 /// from `c`.
-pub proof fn lemma_reach_flat_closed(all: Fns, prs: Pairs, ds: Names, c: Names, c2: Names, from: u32, to: u32, n: nat)
+pub proof fn lemma_reach_flat_closed(all: Fns, prs: Pairs, ds: Dtors, c: Names, c2: Names, from: u32, to: u32, n: nat)
     requires
         !spec_new(c, spec_succs(all, prs, ds, false, c)),
         !spec_new(c2, spec_succs(all, prs, ds, false, c2)),
@@ -1301,7 +1320,7 @@ pub proof fn lemma_reach_flat_closed(all: Fns, prs: Pairs, ds: Names, c: Names, 
     }
 }
 
-pub proof fn lemma_comes_back(d: u32, g: u32, down: bool, all: Fns, prs: Pairs, ds: Names, fuel: u64)
+pub proof fn lemma_comes_back(d: u32, g: u32, down: bool, all: Fns, prs: Pairs, ds: Dtors, fuel: u64)
     ensures
         !spec_comes_back(d, g, down, all, prs, ds, fuel) ==> (if down {
             forall|n: nat| !#[trigger] spec_reach_flat(all, prs, ds, d, g, n)
@@ -1335,7 +1354,7 @@ pub proof fn lemma_comes_back(d: u32, g: u32, down: bool, all: Fns, prs: Pairs, 
     }
 }
 
-pub proof fn lemma_safe_over(os: Names, g: u32, down: bool, all: Fns, prs: Pairs, ds: Names, fuel: u64)
+pub proof fn lemma_safe_over(os: Names, g: u32, down: bool, all: Fns, prs: Pairs, ds: Dtors, fuel: u64)
     ensures
         !spec_loops_over(os, g, down, all, prs, ds, fuel) ==> spec_safe_over(os, g, down, all, prs, ds),
     decreases os,
@@ -1351,7 +1370,7 @@ pub proof fn lemma_safe_over(os: Names, g: u32, down: bool, all: Fns, prs: Pairs
 
 /// A call that the check keeps cannot come back to its function through an override of its callee on a path of any length, other
 /// than down the tree of owned objects.
-pub proof fn lemma_safe_calls(cs: List<(u32, bool, u32)>, g: u32, all: Fns, prs: Pairs, ds: Names, fuel: u64)
+pub proof fn lemma_safe_calls(cs: List<(u32, bool, u32)>, g: u32, all: Fns, prs: Pairs, ds: Dtors, fuel: u64)
     ensures
         spec_loop_calls(cs, g, all, prs, ds, fuel) is None ==> spec_safe_calls(cs, g, all, prs, ds),
     decreases cs,
@@ -1366,7 +1385,7 @@ pub proof fn lemma_safe_calls(cs: List<(u32, bool, u32)>, g: u32, all: Fns, prs:
 }
 
 /// The model of the function `f`: a method with a call that can come back is refused at the line of that call, decision 0218.
-pub open spec fn spec_loop_model(m: Model, f: Function, all: Fns, prs: Pairs, ds: Names, fuel: u64) -> Model {
+pub open spec fn spec_loop_model(m: Model, f: Function, all: Fns, prs: Pairs, ds: Dtors, fuel: u64) -> Model {
     match m {
         Model::Full(meth) => match spec_loop_calls(spec_ocalls_stmts(f.body), f.name, all, prs, ds, fuel) {
             Some((k, l)) => Model::Bare(meth.name, meth.params, meth.ret, Refusal::Loop(k, l)),
@@ -1377,7 +1396,7 @@ pub open spec fn spec_loop_model(m: Model, f: Function, all: Fns, prs: Pairs, ds
 }
 
 /// The models `ms` of the functions `fs`, in their order, with the check of 0218.
-pub open spec fn spec_loop_models(ms: Models, fs: Fns, all: Fns, prs: Pairs, ds: Names, fuel: u64) -> Models
+pub open spec fn spec_loop_models(ms: Models, fs: Fns, all: Fns, prs: Pairs, ds: Dtors, fuel: u64) -> Models
     decreases ms,
 {
     match (ms, fs) {
@@ -1387,7 +1406,7 @@ pub open spec fn spec_loop_models(ms: Models, fs: Fns, all: Fns, prs: Pairs, ds:
 }
 
 /// Each method of `ms` is the model of the function of `fs` at its place, and no call in its body can come back to it.
-pub open spec fn spec_no_loop(ms: Models, fs: Fns, all: Fns, prs: Pairs, ds: Names) -> bool
+pub open spec fn spec_no_loop(ms: Models, fs: Fns, all: Fns, prs: Pairs, ds: Dtors) -> bool
     decreases ms,
 {
     match (ms, fs) {
@@ -1410,7 +1429,7 @@ pub open spec fn spec_fuel(fs: Fns) -> u64
     }
 }
 
-pub proof fn lemma_loop_models(ms: Models, fs: Fns, all: Fns, prs: Pairs, ds: Names, fuel: u64)
+pub proof fn lemma_loop_models(ms: Models, fs: Fns, all: Fns, prs: Pairs, ds: Dtors, fuel: u64)
     requires
         spec_len_le(ms, fs),
     ensures
@@ -1470,8 +1489,9 @@ pub open spec fn spec_file_pairs(all: Fns, sd: Structs, bases: Bases) -> Pairs {
     spec_pairs(spec_upcasts(bases, all, spec_marked(sd, all)))
 }
 
-pub open spec fn spec_file_dtors(all: Fns, sd: Structs) -> Names {
-    spec_dtors(spec_marked(sd, all), spec_marked(sd, all))
+pub open spec fn spec_file_dtors(all: Fns, sd: Structs) -> Dtors {
+    let ds = spec_dtors(spec_marked(sd, all), spec_marked(sd, all));
+    (ds, spec_ends(all, all, spec_marked(sd, all), ds))
 }
 
 /// The models of the functions of a file, with the checks of 0217 on its classes over interfaces and of 0218 on its calls through
