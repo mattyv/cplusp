@@ -1124,3 +1124,35 @@ fn a_destructor_edge_comes_only_from_a_function_that_ends_a_life() {
     assert_eq!(o.status.code(), Some(1), "stdout: {text} stderr: {}", stderr(&o));
     assert_eq!(failures(&text), ["21: the call of Log::note can run Log::note again before it returns: the translator has no rule for it yet."], "{text}");
 }
+
+/// A trusted body can call each function of the file, so a recursion through a trusted function is refused at the call through the
+/// interface in the model, decision 0223. The Trusted line still names the function.
+#[test]
+fn a_trusted_body_can_call_each_function() {
+    let Some(dafny) = dafny() else { return };
+    if !clang_tidy_available() {
+        return;
+    }
+    let o = prove("model-dtor-trusted-refuse.cpp", &[], &dafny);
+    let text = stdout(&o);
+    assert_eq!(o.status.code(), Some(1), "stdout: {text} stderr: {}", stderr(&o));
+    assert!(text.lines().any(|l| l.starts_with("Trusted: ") && l.ends_with(": spawn: logs elsewhere")), "{text}");
+    assert_eq!(failures(&text), ["22: the call of Log::note can run Log::note again before it returns: the translator has no rule for it yet."], "{text}");
+    let o = prove("model-iface-recursion-trusted.cpp", &[], &dafny);
+    let text = stdout(&o);
+    assert_eq!(o.status.code(), Some(1), "stdout: {text} stderr: {}", stderr(&o));
+    assert_eq!(failures(&text), ["64: the call of Filler::fill can run Filler::fill again before it returns: the translator has no rule for it yet."], "{text}");
+}
+
+/// A call result that a parameter by value ends can run a destructor, so the call in the destructor can come back, decision 0222.
+#[test]
+fn a_call_result_that_a_parameter_by_value_ends_comes_back() {
+    let Some(dafny) = dafny() else { return };
+    if !clang_tidy_available() {
+        return;
+    }
+    let o = prove("model-dtor-ret-refuse.cpp", &[], &dafny);
+    let text = stdout(&o);
+    assert_eq!(o.status.code(), Some(1), "stdout: {text} stderr: {}", stderr(&o));
+    assert_eq!(failures(&text), ["21: the call of Log::note can run Log::note again before it returns: the translator has no rule for it yet."], "{text}");
+}
