@@ -154,7 +154,7 @@ fn prove_names_each_failed_read_and_measure_on_a_recursive_struct() {
 /// A struct that holds a sequence, directly or through a field, is a value: a local copy, a result and a copy of a struct around
 /// it translate, decision 0187.
 #[test]
-fn a_struct_that_holds_a_sequence_is_a_value() {
+fn prove_treats_a_struct_that_holds_a_sequence_as_a_value() {
     if !clang_tidy_available() {
         return;
     }
@@ -182,6 +182,25 @@ fn a_struct_or_field_name_dafny_cannot_read_is_refused() {
         assert!(refusals.iter().any(|l| l.ends_with(&want)), "{want}: {text}");
     }
     assert_eq!(refusals.len(), 2, "{text}");
+}
+
+/// A global of a struct that the model leaves out, because a name in it is one that Dafny cannot read, gets the sentence of a
+/// global with no rule. The run does not stop with a panic, decision 0226.
+#[test]
+fn a_global_of_a_struct_with_a_name_dafny_cannot_read_is_refused() {
+    let Some(dafny) = dafny() else { return };
+    if !clang_tidy_available() {
+        return;
+    }
+    for (name, line) in [("model-global-of-unreadable-struct.cpp", 5), ("model-global-of-unreadable-field.cpp", 4)] {
+        let o = prove(name, &[], &dafny);
+        let text = stdout(&o);
+        assert_eq!(o.status.code(), Some(1), "{name}: stdout: {text} stderr: {}", stderr(&o));
+        assert!(!stderr(&o).contains("panicked"), "{name}: {}", stderr(&o));
+        let want = format!("{line}: a global of this type: the translator has no rule for it yet.");
+        assert!(text.lines().any(|l| l.ends_with(&want)), "{name}: {text}");
+        assert!(!text.contains("Dafny says"), "{name}: {text}");
+    }
 }
 
 /// `empty()` and `subspan(k)` prove, in code and in contracts, through a recursion over a span, decision 0078.
@@ -607,7 +626,7 @@ fn pure_member_functions_are_functions_that_contracts_call() {
 /// A contract that calls a member function that is not pure, or a name that is no member function, is refused at its line,
 /// decision 0090. So is one that calls a member whose own contract is refused, decision 0095.
 #[test]
-fn a_contract_that_calls_a_member_function_that_is_not_pure_is_refused() {
+fn prove_refuses_a_contract_that_calls_a_member_function_that_is_not_pure() {
     if !clang_tidy_available() {
         return;
     }

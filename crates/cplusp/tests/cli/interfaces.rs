@@ -1080,7 +1080,7 @@ fn an_unbacked_write_back_is_refused_in_each_place_of_a_body() {
         format!("96: {iface}"),
         format!("107: {iface}"),
         format!("114: {iface}"),
-        "121: a call out of place. The translator takes a call when C++ runs it once and the statement uses its value. It takes a call that gives no value only alone.".to_string(),
+        "121: the call writes a value back, and the translator writes back only to a local or a reference parameter.".to_string(),
         "128: the call writes a value back, and the translator writes back only to a local or a reference parameter.".to_string(),
     ];
     assert_eq!(failures(&text), want, "{text}");

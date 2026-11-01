@@ -822,6 +822,23 @@ fn prove_stops_when_its_dafny_does_not_run() {
     assert!(!stdout(&o).contains("ok: proved"), "{}", stdout(&o));
 }
 
+/// An empty `DAFNY` is a `DAFNY` that is not set, decision 0226.
+#[test]
+fn prove_reads_an_empty_dafny_as_unset() {
+    if !clang_tidy_available() {
+        return;
+    }
+    let f = fixture("model-clamp.cpp");
+    let plugin = plugin();
+    let o = Command::new(env!("CARGO_BIN_EXE_cplusp"))
+        .args(["prove", "--plugin", plugin.to_str().unwrap(), f.to_str().unwrap(), "--", "-std=c++23", "-ffp-contract=off"])
+        .env("DAFNY", "")
+        .current_dir(root())
+        .output()
+        .unwrap();
+    assert!(!stderr(&o).contains("DAFNY names"), "{}", stderr(&o));
+}
+
 /// A time limit of 0 would let Dafny run with no limit, so `prove` refuses it, decision 0225.
 #[test]
 fn prove_refuses_a_time_limit_of_zero() {

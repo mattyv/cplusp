@@ -201,7 +201,7 @@ fn an_integer_converts_to_a_double_exactly() {
 /// A local vector is a copy: a write to the copy leaves the vector of the caller as it was, and a write to the vector after the copy
 /// leaves the copy as it was, decision 0160. A contract that reads the copy as the vector, or the vector as a view, fails.
 #[test]
-fn a_local_vector_is_a_copy() {
+fn prove_treats_a_local_vector_as_a_copy() {
     let Some(dafny) = dafny() else { return };
     if !clang_tidy_available() {
         return;

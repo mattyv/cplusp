@@ -564,6 +564,7 @@ fn gate_drops_the_flags_that_write_a_file() {
     let mf = format!("-MF{}", dir.join("deps.d").display());
     let o = gated(&["rules/goto/allowed.cpp", "--", "-std=c++23", "-ffp-contract=off", "-MMD", &mf]);
     assert_eq!(o.status.code(), Some(0), "stdout: {} stderr: {}", stdout(&o), stderr(&o));
+    assert!(!dir.join("deps.d").exists(), "the gate wrote the dependency file of the build");
     let _ = std::fs::remove_dir_all(&dir);
 }
 
@@ -1360,5 +1361,23 @@ fn a_pointer_to_a_global_in_an_object_is_a_change_under_a_loosened_pointer_row()
     let o = gated(&["--policy", team.to_str().unwrap(), f.to_str().unwrap(), "--", "-std=c++23", "-ffp-contract=off"]);
     let text = stdout(&o);
     assert_eq!(o.status.code(), Some(1), "stdout: {text} stderr: {}", stderr(&o));
-    assert!(text.lines().any(|l| l.contains("global_state: g_total changes")), "{text}");
+    assert!(text.lines().any(|l| l.ends_with("g_total changes, and the modifies line does not list it.")), "{text}");
+}
+
+/// The address of a global that reaches an object through a value that is not a constant still changes the global: a local
+/// pointer, a conditional and the elements of a vector. When a team loosens raw_pointer, the state check refuses the write,
+/// decision 0226.
+#[test]
+fn a_pointer_to_a_global_that_is_no_constant_is_a_change_under_a_loosened_pointer_row() {
+    if !clang_tidy_available() {
+        return;
+    }
+    let team = fixture("team-loosen-views.yaml");
+    for name in ["global-through-pointer-local.cpp", "global-through-pointer-select.cpp", "global-through-pointer-vector.cpp"] {
+        let f = fixture(name);
+        let o = gated(&["--policy", team.to_str().unwrap(), f.to_str().unwrap(), "--", "-std=c++23", "-ffp-contract=off"]);
+        let text = stdout(&o);
+        assert_eq!(o.status.code(), Some(1), "{name}: stdout: {text} stderr: {}", stderr(&o));
+        assert!(text.lines().any(|l| l.ends_with("g_total changes, and the modifies line does not list it.")), "{name}: {text}");
+    }
 }

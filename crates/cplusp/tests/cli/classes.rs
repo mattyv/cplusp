@@ -1342,6 +1342,25 @@ fn a_static_member_function_in_a_contract_proves_in_each_place() {
     }
 }
 
+/// A short name of a static member function, such as `T::up`, resolves only through the class of the member function whose
+/// contract it is. A contract of a function that is in no class writes the full name. So a short name never names a function of
+/// another namespace, decision 0226.
+#[test]
+fn a_short_static_name_outside_its_class_is_refused() {
+    let Some(dafny) = dafny() else { return };
+    if !clang_tidy_available() {
+        return;
+    }
+    for (name, line) in [("model-static-short-name-other-namespace.cpp", 6), ("model-static-short-name-free.cpp", 14)] {
+        let o = prove(name, &[], &dafny);
+        let text = stdout(&o);
+        assert_eq!(o.status.code(), Some(1), "{name}: stdout: {text} stderr: {}", stderr(&o));
+        let want = format!("{line}: T::up names no static member function from here. Write the name with its namespace.");
+        let got: Vec<&str> = text.lines().filter(|l| l.starts_with("Not prov")).map(|l| l.rsplit_once(".cpp:").unwrap().1).collect();
+        assert_eq!(got, vec![want.as_str()], "{name}: {text}");
+    }
+}
+
 /// A bare call in a contract of a member function of a name that two member functions share is no pure function, decision 0225.
 #[test]
 fn a_bare_call_of_an_overloaded_member_name_in_a_contract_is_refused() {

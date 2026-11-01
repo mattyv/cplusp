@@ -2,7 +2,7 @@
 
 One file per decision, numbered in the order we made them. A file is short: the date, the status, the decision in one or two sentences, why, and what it changes. A reversed decision gets a new file that names the old one. Nothing is edited after the fact.
 
-Status is `decided`, `proposed` (the default until someone objects or the thin slice settles it) or `superseded by NNNN`.
+Status is `decided`, `proposed`, `superseded by NNNN`, or a short note that names the decision with the outcome. A number with no file has the status `none`.
 
 | No. | Decision | Status |
 | --- | --- | --- |
@@ -24,7 +24,7 @@ Status is `decided`, `proposed` (the default until someone objects or the thin s
 | [0016](0016-data-driven-plugin.md) | One generic clang-tidy check driven by matcher patterns in the policy | decided |
 | [0017](0017-hand-written-dafny-and-divergence-battery.md) | No translator yet. Hand-written Dafny under rules found by a divergence battery | decided |
 | [0018](0018-one-battery-per-prover.md) | One divergence battery, one skill and one mitigation report per prover | decided |
-| [0019](0019-floats-as-a-real-after-rounding-on-trial.md) | Floating point stays in the subset on trial, modelled as a real after rounding | decided, on trial |
+| [0019](0019-floats-as-a-real-after-rounding-on-trial.md) | Floating point stays in the subset on trial, modelled as a real after rounding | decided, outcome in 0020 |
 | [0020](0020-floats-stay-with-three-corrections.md) | Floating point stays, with a corrected error axiom, a required flag, and a contract spelling for bounds | decided |
 | [0021](0021-the-gate-requires-the-build-the-proofs-assume.md) | The gate refuses a build the proofs cannot follow: fast math, a standard below C++20, a silenced warning | decided |
 | [0022](0022-the-baseline-is-cpp23.md) | Verified code is C++23 or later | decided |
@@ -118,6 +118,7 @@ Status is `decided`, `proposed` (the default until someone objects or the thin s
 | [0110](0110-the-form-and-place-of-a-modifies-line.md) | A modifies line is a list of names. Any other form is refused first. The misplaced sentence names it | decided |
 | [0111](0111-a-parameter-on-a-modifies-line-is-no-global.md) | A name on a modifies or reads line that names a parameter is that parameter, not a global | decided |
 | [0112](0112-only-a-reference-parameter-hides-a-global.md) | Only a reference parameter hides a global on a modifies line | decided |
+| 0113 | Number not used | none |
 | [0114](0114-the-gate-keeps-each-enum-value-an-enumerator.md) | A gate row bans each cast to an enum class with no values written. An order of enums in a contract is refused. A case body can be a block | decided |
 | [0115](0115-why-an-order-of-enums-has-no-rule.md) | The true reason that an order of enums has no rule. enum_cast also bans casts from enums, to pointers, and the address of bit_cast | decided |
 | [0116](0116-a-read-through-another-type-is-banned.md) | A gate row bans each cast that changes the type a pointer or reference points to, except to bytes, in all code | decided |
@@ -230,3 +231,4 @@ Status is `decided`, `proposed` (the default until someone objects or the thin s
 | [0223](0223-a-trusted-body-can-call-each-function.md) | A trusted body can call each function | decided |
 | [0224](0224-a-test-fails-when-its-tool-is-missing.md) | A test fails when its tool is missing | decided |
 | [0225](0225-fixes-from-the-pre-review.md) | Fixes from the pre-review | decided |
+| [0226](0226-fixes-from-the-review-of-0225.md) | Fixes from the review of 0225 | decided |
