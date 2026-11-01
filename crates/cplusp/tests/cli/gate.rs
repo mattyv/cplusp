@@ -1347,3 +1347,18 @@ fn every_sample_pair_agrees_with_its_rule() {
     }
     assert!(checked >= 66, "expected at least 66 sample pairs, found {checked}");
 }
+
+/// A pointer to a global inside an object still changes the global. When a team loosens raw_pointer, the state check refuses the
+/// write through the object, decision 0225.
+#[test]
+fn a_pointer_to_a_global_in_an_object_is_a_change_under_a_loosened_pointer_row() {
+    if !clang_tidy_available() {
+        return;
+    }
+    let team = fixture("team-loosen-views.yaml");
+    let f = fixture("global-through-pointer-member.cpp");
+    let o = gated(&["--policy", team.to_str().unwrap(), f.to_str().unwrap(), "--", "-std=c++23", "-ffp-contract=off"]);
+    let text = stdout(&o);
+    assert_eq!(o.status.code(), Some(1), "stdout: {text} stderr: {}", stderr(&o));
+    assert!(text.lines().any(|l| l.contains("global_state: g_total changes")), "{text}");
+}

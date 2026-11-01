@@ -114,7 +114,9 @@ fn run(exe: &Path) -> (String, String) {
 
 /// clang-tidy runs. When it does not, the battery fails, unless `CPLUSP_SKIP_TOOLS` is set, decision 0224.
 fn clang_tidy_available() -> bool {
-    let runs = ["clang-tidy-18", "clang-tidy"].iter().any(|b| Command::new(b).arg("--version").output().map(|o| o.status.success()).unwrap_or(false));
+    let runs = ["clang-tidy-18", "clang-tidy"]
+        .iter()
+        .any(|b| Command::new(b).arg("--version").output().map(|o| o.status.success()).unwrap_or(false));
     assert!(
         runs || std::env::var_os("CPLUSP_SKIP_TOOLS").is_some(),
         "clang-tidy does not run: install clang-tidy-18, or set CPLUSP_SKIP_TOOLS=1 to skip the gate in the battery"

@@ -229,3 +229,4 @@ Status is `decided`, `proposed` (the default until someone objects or the thin s
 | [0222](0222-a-destructor-edge-from-a-function-that-ends-a-life.md) | A destructor edge from a function that ends a life | decided |
 | [0223](0223-a-trusted-body-can-call-each-function.md) | A trusted body can call each function | decided |
 | [0224](0224-a-test-fails-when-its-tool-is-missing.md) | A test fails when its tool is missing | decided |
+| [0225](0225-fixes-from-the-pre-review.md) | Fixes from the pre-review | decided |

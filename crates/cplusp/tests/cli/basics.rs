@@ -802,3 +802,30 @@ fn prove_names_a_recursion_whose_measure_may_not_decrease() {
     let want = "model-recursion-wrong.cpp:14: the contract line has a form the translator cannot read.";
     assert!(text.lines().any(|l| l.starts_with("Not provable: ") && l.ends_with(want)), "{text}");
 }
+
+/// A `DAFNY` that does not run stops `prove` with a sentence that names it. No other Dafny takes its place, decision 0225.
+#[test]
+fn prove_stops_when_its_dafny_does_not_run() {
+    if !clang_tidy_available() {
+        return;
+    }
+    let f = fixture("model-clamp.cpp");
+    let plugin = plugin();
+    let o = Command::new(env!("CARGO_BIN_EXE_cplusp"))
+        .args(["prove", "--plugin", plugin.to_str().unwrap(), f.to_str().unwrap(), "--", "-std=c++23", "-ffp-contract=off"])
+        .env("DAFNY", "/nonexistent/dafny")
+        .current_dir(root())
+        .output()
+        .unwrap();
+    assert_eq!(o.status.code(), Some(2), "stdout: {} stderr: {}", stdout(&o), stderr(&o));
+    assert!(stderr(&o).contains("/nonexistent/dafny"), "{}", stderr(&o));
+    assert!(!stdout(&o).contains("ok: proved"), "{}", stdout(&o));
+}
+
+/// A time limit of 0 would let Dafny run with no limit, so `prove` refuses it, decision 0225.
+#[test]
+fn prove_refuses_a_time_limit_of_zero() {
+    let o = cplusp(&["prove", "--time-limit", "0", "x.cpp"]);
+    assert_eq!(o.status.code(), Some(2), "stdout: {} stderr: {}", stdout(&o), stderr(&o));
+    assert!(stderr(&o).contains("time-limit"), "{}", stderr(&o));
+}

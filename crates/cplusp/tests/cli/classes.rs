@@ -1325,3 +1325,105 @@ fn a_contract_that_calls_a_name_of_a_static_and_a_member_that_writes_is_refused(
         .collect();
     assert_eq!(refused, ["19: S::get is no pure function. A contract calls a function with one return and no write."], "{text}");
 }
+
+/// A qualified call of a static member function in a contract of a member function takes no object, and a static member function
+/// that a contract names by its class inside a namespace is the function of the file, decision 0225.
+#[test]
+fn a_static_member_function_in_a_contract_proves_in_each_place() {
+    let Some(dafny) = dafny() else { return };
+    if !clang_tidy_available() {
+        return;
+    }
+    for name in ["model-static-in-member-contract.cpp", "model-static-in-namespace.cpp"] {
+        let o = prove(name, &[], &dafny);
+        let text = stdout(&o);
+        assert_eq!(o.status.code(), Some(0), "{name}: stdout: {text} stderr: {}", stderr(&o));
+        assert_eq!(text.lines().last(), Some("ok: proved"), "{name}: {text}");
+    }
+}
+
+/// A bare call in a contract of a member function of a name that two member functions share is no pure function, decision 0225.
+#[test]
+fn a_bare_call_of_an_overloaded_member_name_in_a_contract_is_refused() {
+    let Some(dafny) = dafny() else { return };
+    if !clang_tidy_available() {
+        return;
+    }
+    let o = prove("model-overload-bare-member.cpp", &[], &dafny);
+    let text = stdout(&o);
+    assert_eq!(o.status.code(), Some(1), "stdout: {text} stderr: {}", stderr(&o));
+    let refused: Vec<&str> = text
+        .lines()
+        .filter(|l| l.starts_with("Not proved: ") || l.starts_with("Not provable: "))
+        .map(|l| l.rsplit_once(".cpp:").unwrap().1)
+        .collect();
+    assert_eq!(refused, ["12: get is no pure function. A contract calls a function with one return and no write."], "{text}");
+}
+
+/// A conditional of two locals with destructors is a copy, so a return of it is refused as a return of one local is, decision
+/// 0225.
+#[test]
+fn a_return_of_a_conditional_of_two_locals_with_destructors_is_refused() {
+    let Some(dafny) = dafny() else { return };
+    if !clang_tidy_available() {
+        return;
+    }
+    let o = prove("model-dtor-copy-cond.cpp", &[], &dafny);
+    let text = stdout(&o);
+    assert_eq!(o.status.code(), Some(1), "stdout: {text} stderr: {}", stderr(&o));
+    assert!(
+        text.lines().any(|l| l.ends_with(".cpp:25: a copy of a struct with a destructor: the translator has no rule for it yet.")),
+        "{text}"
+    );
+}
+
+/// A const virtual function that gives a value and writes a parameter has no rule yet. The core refuses it with a sentence, and the
+/// model holds no name that Dafny cannot resolve, decision 0225.
+#[test]
+fn a_const_virtual_function_that_gives_a_value_and_writes_a_parameter_is_refused() {
+    let Some(dafny) = dafny() else { return };
+    if !clang_tidy_available() {
+        return;
+    }
+    let o = prove("model-const-virtual-writes-refuse.cpp", &[], &dafny);
+    let text = stdout(&o);
+    assert_eq!(o.status.code(), Some(1), "stdout: {text} stderr: {}", stderr(&o));
+    assert!(
+        text.lines().any(|l| l.ends_with(
+            ".cpp:28: a const virtual function that gives a value and writes a parameter: the translator has no rule for it yet."
+        )),
+        "{text}"
+    );
+    assert!(!text.contains("Dafny says:"), "{text}");
+}
+
+/// An assignment of a call that writes its object proves alone, in parentheses and in a sum, decision 0225.
+#[test]
+fn an_assignment_of_a_call_that_writes_its_object_proves_in_each_spelling() {
+    let Some(dafny) = dafny() else { return };
+    if !clang_tidy_available() {
+        return;
+    }
+    let o = prove("model-assign-writing-call.cpp", &[], &dafny);
+    let text = stdout(&o);
+    assert_eq!(o.status.code(), Some(0), "stdout: {text} stderr: {}", stderr(&o));
+    assert_eq!(text.lines().last(), Some("ok: proved"), "{text}");
+}
+
+/// A braced list in a bare block gets the sentence of a braced list, as one outside a block does, decision 0225.
+#[test]
+fn a_braced_list_in_a_bare_block_gets_its_sentence() {
+    let Some(dafny) = dafny() else { return };
+    if !clang_tidy_available() {
+        return;
+    }
+    let o = prove("model-brace-in-block.cpp", &[], &dafny);
+    let text = stdout(&o);
+    assert_eq!(o.status.code(), Some(1), "stdout: {text} stderr: {}", stderr(&o));
+    let refused: Vec<&str> = text
+        .lines()
+        .filter(|l| l.starts_with("Not proved: ") || l.starts_with("Not provable: "))
+        .map(|l| l.rsplit_once(".cpp:").unwrap().1)
+        .collect();
+    assert_eq!(refused, ["8: a braced list of 1 values for a std::array of 2: the translator has no rule for it yet."], "{text}");
+}
