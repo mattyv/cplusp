@@ -1365,15 +1365,20 @@ fn a_pointer_to_a_global_in_an_object_is_a_change_under_a_loosened_pointer_row()
 }
 
 /// The address of a global that reaches an object through a value that is not a constant still changes the global: a local
-/// pointer, a conditional and the elements of a vector. When a team loosens raw_pointer, the state check refuses the write,
-/// decision 0226.
+/// pointer, a conditional, the elements of a vector and a constant global of the file. When a team loosens raw_pointer, the state
+/// check refuses the write, decisions 0226 and 0228.
 #[test]
 fn a_pointer_to_a_global_that_is_no_constant_is_a_change_under_a_loosened_pointer_row() {
     if !clang_tidy_available() {
         return;
     }
     let team = fixture("team-loosen-views.yaml");
-    for name in ["global-through-pointer-local.cpp", "global-through-pointer-select.cpp", "global-through-pointer-vector.cpp"] {
+    for name in [
+        "global-through-pointer-local.cpp",
+        "global-through-pointer-select.cpp",
+        "global-through-pointer-vector.cpp",
+        "global-through-constant-object.cpp",
+    ] {
         let f = fixture(name);
         let o = gated(&["--policy", team.to_str().unwrap(), f.to_str().unwrap(), "--", "-std=c++23", "-ffp-contract=off"]);
         let text = stdout(&o);

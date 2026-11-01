@@ -1344,7 +1344,8 @@ fn a_static_member_function_in_a_contract_proves_in_each_place() {
 
 /// A short name of a static member function, such as `T::up`, names the static member function of the only class of that name in
 /// the file. When two classes have the name, or the class has no such static member function with a body, the name is refused.
-/// So a short name never names a function of another scope, decisions 0226 and 0227.
+/// A name with `::` in its class part, such as `a::T::up`, follows the same rule, and a class that is only declared counts. So a
+/// short name never names a function of another scope, decisions 0226, 0227 and 0228.
 #[test]
 fn a_short_static_name_outside_its_class_is_refused() {
     let Some(dafny) = dafny() else { return };
@@ -1355,6 +1356,8 @@ fn a_short_static_name_outside_its_class_is_refused() {
         ("model-static-short-name-other-namespace.cpp", 6),
         ("model-static-short-name-free.cpp", 14),
         ("model-static-short-name-declared-only.cpp", 10),
+        ("model-static-short-name-qualified.cpp", 8),
+        ("model-static-short-name-declared-class.cpp", 8),
     ] {
         let o = prove(name, &[], &dafny);
         let text = stdout(&o);
