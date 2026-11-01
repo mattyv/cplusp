@@ -39,7 +39,12 @@ fn a_global_keeps_the_contract_of_its_function() {
         ],
         "{text}"
     );
-    assert!(under(&text, "model-state-wrong.cpp:41: a requires line of the callee may not hold.").iter().any(|l| l.ends_with("model-state-wrong.cpp:32: requires total < 1000")), "{text}");
+    assert!(
+        under(&text, "model-state-wrong.cpp:41: a requires line of the callee may not hold.")
+            .iter()
+            .any(|l| l.ends_with("model-state-wrong.cpp:32: requires total < 1000")),
+        "{text}"
+    );
 }
 
 /// A member function that lists a global, and a global of a type with no rule, are refused at the line that lists them. A reads
@@ -53,7 +58,8 @@ fn a_global_with_no_rule_is_refused() {
     let o = prove("model-state-refuse.cpp", &[], &dafny);
     let text = stdout(&o);
     assert_eq!(o.status.code(), Some(1), "stdout: {text} stderr: {}", stderr(&o));
-    let mut refusals: Vec<&str> = text.lines().filter(|l| l.starts_with("Not provable: ")).map(|l| l.rsplit_once(".cpp:").unwrap().1).collect();
+    let mut refusals: Vec<&str> =
+        text.lines().filter(|l| l.starts_with("Not provable: ")).map(|l| l.rsplit_once(".cpp:").unwrap().1).collect();
     refusals.sort_by_key(|l| l.split(':').next().unwrap().parse::<u32>().unwrap());
     assert_eq!(
         refusals,
@@ -105,7 +111,12 @@ fn a_static_keeps_the_contract_of_its_class() {
         ],
         "{text}"
     );
-    assert!(under(&text, "model-static-wrong.cpp:78: a requires line of the callee may not hold.").iter().any(|l| l.ends_with("model-static-wrong.cpp:58: requires valid() && 0 < size && size <= 4096 - used()")), "{text}");
+    assert!(
+        under(&text, "model-static-wrong.cpp:78: a requires line of the callee may not hold.")
+            .iter()
+            .any(|l| l.ends_with("model-static-wrong.cpp:58: requires valid() && 0 < size && size <= 4096 - used()")),
+        "{text}"
+    );
 }
 
 /// A contract that calls a static which writes, a static whose contract names a field, and a bare call of a static outside its
@@ -119,7 +130,8 @@ fn a_static_with_no_rule_is_refused() {
     let o = prove("model-static-refuse.cpp", &[], &dafny);
     let text = stdout(&o);
     assert_eq!(o.status.code(), Some(1), "stdout: {text} stderr: {}", stderr(&o));
-    let mut refusals: Vec<&str> = text.lines().filter(|l| l.starts_with("Not provable: ")).map(|l| l.rsplit_once(".cpp:").unwrap().1).collect();
+    let mut refusals: Vec<&str> =
+        text.lines().filter(|l| l.starts_with("Not provable: ")).map(|l| l.rsplit_once(".cpp:").unwrap().1).collect();
     refusals.sort_by_key(|l| l.split(':').next().unwrap().parse::<u32>().unwrap());
     assert_eq!(
         refusals,
@@ -141,7 +153,8 @@ fn types_that_are_an_integer_prove() {
     if !clang_tidy_available() {
         return;
     }
-    let examples = ["enum_table", "chrono", "operator_overloading", "reinterpret_const_cast"].map(|e| format!("../../../../examples/{e}/example.cpp"));
+    let examples =
+        ["enum_table", "chrono", "operator_overloading", "reinterpret_const_cast"].map(|e| format!("../../../../examples/{e}/example.cpp"));
     for name in std::iter::once("model-int-types.cpp".to_string()).chain(examples) {
         let o = prove(&name, &[], &dafny);
         let text = stdout(&o);
@@ -177,7 +190,8 @@ fn types_that_are_an_integer_with_no_rule_are_refused() {
     let o = prove("model-int-types-refuse.cpp", &[], &dafny);
     let text = stdout(&o);
     assert_eq!(o.status.code(), Some(1), "stdout: {text} stderr: {}", stderr(&o));
-    let mut refusals: Vec<&str> = text.lines().filter(|l| l.starts_with("Not provable: ")).map(|l| l.rsplit_once(".cpp:").unwrap().1).collect();
+    let mut refusals: Vec<&str> =
+        text.lines().filter(|l| l.starts_with("Not provable: ")).map(|l| l.rsplit_once(".cpp:").unwrap().1).collect();
     refusals.sort_by_key(|l| l.split(':').next().unwrap().parse::<u32>().unwrap());
     assert_eq!(
         refusals,
@@ -233,7 +247,8 @@ fn a_free_function_with_no_twin_is_refused() {
     let o = prove("model-free-twin-refuse.cpp", &[], &dafny);
     let text = stdout(&o);
     assert_eq!(o.status.code(), Some(1), "stdout: {text} stderr: {}", stderr(&o));
-    let mut refusals: Vec<&str> = text.lines().filter(|l| l.starts_with("Not provable: ")).map(|l| l.rsplit_once(".cpp:").unwrap().1).collect();
+    let mut refusals: Vec<&str> =
+        text.lines().filter(|l| l.starts_with("Not provable: ")).map(|l| l.rsplit_once(".cpp:").unwrap().1).collect();
     refusals.sort_by_key(|l| l.split(':').next().unwrap().parse::<u32>().unwrap());
     assert_eq!(
         refusals,
@@ -304,7 +319,8 @@ fn a_write_inside_an_expression_with_no_rule_is_refused() {
     let o = prove("model-writes-refuse.cpp", &[], &dafny);
     let text = stdout(&o);
     assert_eq!(o.status.code(), Some(1), "stdout: {text} stderr: {}", stderr(&o));
-    let mut refusals: Vec<&str> = text.lines().filter(|l| l.starts_with("Not provable: ")).map(|l| l.rsplit_once(".cpp:").unwrap().1).collect();
+    let mut refusals: Vec<&str> =
+        text.lines().filter(|l| l.starts_with("Not provable: ")).map(|l| l.rsplit_once(".cpp:").unwrap().1).collect();
     refusals.sort_by_key(|l| l.split(':').next().unwrap().parse::<u32>().unwrap());
     let place = "a call out of place. The translator takes a call when C++ runs it once and the statement uses its value. It takes a call that gives no value only alone.";
     assert_eq!(

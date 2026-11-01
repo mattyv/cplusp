@@ -63,9 +63,13 @@ fn sentence(message: &str) -> String {
     let fit = |t: &str| format!("the value may not fit {t}.");
     match message {
         "a postcondition could not be proved on this return path" => "the ensures line may not hold on this return.".to_string(),
-        "destructor 'value' can only be applied to datatype values constructed by 'Some'" => "the optional may be empty or the pointer may be null here.".to_string(),
+        "destructor 'value' can only be applied to datatype values constructed by 'Some'" => {
+            "the optional may be empty or the pointer may be null here.".to_string()
+        }
         "destructor 'alt0' can only be applied to datatype values constructed by 'Alt0'"
-        | "destructor 'alt1' can only be applied to datatype values constructed by 'Alt1'" => "the variant may not hold this alternative.".to_string(),
+        | "destructor 'alt1' can only be applied to datatype values constructed by 'Alt1'" => {
+            "the variant may not hold this alternative.".to_string()
+        }
         "assertion might not hold" => "the assert line may not hold.".to_string(),
         // A contract that divides a real by a divisor that may be zero, decision 0154.
         "possible division by zero" => "the divisor may be zero.".to_string(),
@@ -115,13 +119,23 @@ pub fn run(t: &Translation, limit: u32, refused: bool, source: &str, shown: &dyn
         .errors
         .iter()
         .enumerate()
-        .map(|(k, &(line, start, end))| Error { line, column: column_of(&output[..start]), message: output[start..end].to_string(), related: reading.related.iter().filter(|(of, _)| *of == k).map(|&(_, line)| line).collect() })
+        .map(|(k, &(line, start, end))| Error {
+            line,
+            column: column_of(&output[..start]),
+            message: output[start..end].to_string(),
+            related: reading.related.iter().filter(|(of, _)| *of == k).map(|&(_, line)| line).collect(),
+        })
         .collect();
     // A warning on a line of the companion file refuses the file, decisions 0079, 0099 and 0101. A declaration, a forall statement or a loop with no body is
     // an axiom. A lemma with no body is named at its own name, because Dafny warns at its first ensures line. Any other is named at its own line.
     let map = &t.map;
     let mut axioms: Vec<(String, usize, String)> = Vec::new();
-    for (&(line, start, end), _) in reading.warnings.iter().zip(&reading.trigger).filter(|(&(line, ..), &trigger)| !trigger && line.checked_sub(1).is_some_and(|n| map.companion.contains(&n))) {
+    for (&(line, start, end), _) in reading
+        .warnings
+        .iter()
+        .zip(&reading.trigger)
+        .filter(|(&(line, ..), &trigger)| !trigger && line.checked_sub(1).is_some_and(|n| map.companion.contains(&n)))
+    {
         let message = &output[start..end];
         let bodyless = message.contains("bodyless") || message.contains("{:axiom}");
         let lemma = map.decls.iter().rev().find(|(at, _)| *at <= line).filter(|(_, lemma)| *lemma && bodyless);
@@ -207,7 +221,10 @@ pub fn run(t: &Translation, limit: u32, refused: bool, source: &str, shown: &dyn
         // lines of the original do. The original reports that failure, so a failure with the same message in the original stands for this one, decision 0167.
         if let Some((_, originals)) = map.copies.iter().find(|(r, _)| r.contains(&e.line)) {
             // A call in code is a function in the function and a method in the method, so Dafny words one failure two ways, decision 0172.
-            let same = |m: &str| if m == "function precondition could not be proved" { "a precondition for this call could not be proved" } else { m }.to_string();
+            let same = |m: &str| {
+                if m == "function precondition could not be proved" { "a precondition for this call could not be proved" } else { m }
+                    .to_string()
+            };
             if found.iter().any(|o| same(&o.message) == same(&e.message) && originals.iter().any(|r| r.contains(&o.line))) {
                 continue;
             }
@@ -244,7 +261,8 @@ pub fn run(t: &Translation, limit: u32, refused: bool, source: &str, shown: &dyn
             } else {
                 format!("Not proved: {}:{line}: the override may not keep the promise of {}.", shown(path), lemma.of)
             };
-            let places: Vec<u32> = if more { lemma.requires.clone() } else { e.related.iter().filter_map(|r| here(*r)).map(|l| l.place).collect() };
+            let places: Vec<u32> =
+                if more { lemma.requires.clone() } else { e.related.iter().filter_map(|r| here(*r)).map(|l| l.place).collect() };
             for p in places {
                 if let Some(text) = contract(map, p, shown) {
                     block.push_str(&format!("\n  The contract line: {text}"));
@@ -280,10 +298,13 @@ pub fn run(t: &Translation, limit: u32, refused: bool, source: &str, shown: &dyn
             && e.related.iter().filter_map(|r| here(*r)).any(|l| map.contracts.get(&l.place).is_some_and(|(word, _)| word == "requires"));
         // A call of shr whose `requires 0 <= n < w` of the prelude fails is a shift amount that may be too wide, decision 0106.
         let shift = message == "function precondition could not be proved"
-            && e.related.iter().any(|r| !map.companion.contains(&r.wrapping_sub(1)) && t.dafny.lines().nth(r.wrapping_sub(1)) == Some("  requires 0 <= n < w"));
+            && e.related.iter().any(|r| {
+                !map.companion.contains(&r.wrapping_sub(1)) && t.dafny.lines().nth(r.wrapping_sub(1)) == Some("  requires 0 <= n < w")
+            });
         // A call of fadd to fdiv whose bound `requires abs(...) <= MAX` of the module `Double` fails is a result that may pass DBL_MAX, and the divisor of
         // fdiv is `requires b != 0.0`, decision 0154. The lines are found by their text in the model, outside the companion file.
-        let double_line = |r: &usize| t.dafny.lines().nth(r.wrapping_sub(1)).map(str::trim).filter(|_| !map.companion.contains(&r.wrapping_sub(1)));
+        let double_line =
+            |r: &usize| t.dafny.lines().nth(r.wrapping_sub(1)).map(str::trim).filter(|_| !map.companion.contains(&r.wrapping_sub(1)));
         let overflow = message == "function precondition could not be proved"
             && e.related.iter().any(|r| double_line(r).is_some_and(|l| l.starts_with("requires abs(") && l.ends_with(") <= MAX")));
         let too_large = message == "function precondition could not be proved"
@@ -291,7 +312,8 @@ pub fn run(t: &Translation, limit: u32, refused: bool, source: &str, shown: &dyn
         // StdSort is a method, so Dafny says "a precondition for this call".
         let comparator = message == "a precondition for this call could not be proved"
             && e.related.iter().any(|r| double_line(r) == Some("requires StrictWeakOrder(cmp)"));
-        let double_zero = message == "function precondition could not be proved" && e.related.iter().any(|r| double_line(r) == Some("requires b != 0.0"));
+        let double_zero =
+            message == "function precondition could not be proved" && e.related.iter().any(|r| double_line(r) == Some("requires b != 0.0"));
         let said = if overflow {
             "the result of the operation may exceed DBL_MAX.".to_string()
         } else if comparator {

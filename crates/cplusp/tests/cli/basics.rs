@@ -47,7 +47,10 @@ fn the_translator_refuses_what_it_has_no_rule_for() {
     assert_eq!(o.status.code(), Some(1), "stdout: {text} stderr: {}", stderr(&o));
     let refusals: Vec<&str> = text.lines().filter(|l| l.starts_with("Not provable: ")).collect();
     assert_eq!(refusals.len(), 2, "{text}");
-    assert!(refusals.iter().any(|l| l.ends_with("model-refuse.cpp:9: BinaryOperator <<: the translator has no rule for it yet.")), "{text}");
+    assert!(
+        refusals.iter().any(|l| l.ends_with("model-refuse.cpp:9: BinaryOperator <<: the translator has no rule for it yet.")),
+        "{text}"
+    );
     assert!(refusals.iter().any(|l| l.ends_with("model-refuse.cpp:12: y in the contract is no parameter.")), "{text}");
     let model = std::fs::read_to_string(&out).unwrap();
     assert!(full(&model, "one"), "{model}");
@@ -81,7 +84,10 @@ fn every_function_and_contract_line_in_view_is_modelled_or_refused() {
     assert_eq!(refusals.len(), 6, "{text}");
     let model = std::fs::read_to_string(&out).unwrap();
     for name in ["in_header", "apart", "noted"] {
-        assert!(model.contains(&format!("method {name}(")) || model.lines().any(|l| l.starts_with("method ") && l.contains(name)), "{name}: {model}");
+        assert!(
+            model.contains(&format!("method {name}(")) || model.lines().any(|l| l.starts_with("method ") && l.contains(name)),
+            "{name}: {model}"
+        );
     }
     for name in ["tmpl", "abbreviated", "gone"] {
         assert!(!model.lines().any(|l| l.starts_with("method ") && l.contains(name)), "{name}: {model}");
@@ -179,7 +185,9 @@ fn calls_locals_and_casts_with_no_rule_are_refused_at_their_lines() {
     for name in ["id", "calls_bad", "calls_refused", "add", "assigns", "inside", "nested"] {
         assert!(full(&model, name), "{name}: {model}");
     }
-    for name in ["to_declared", "to_member", "twice", "shadow", "from_bool", "no_start", "two_names", "bad_contract", "refused_body", "defaulted"] {
+    for name in
+        ["to_declared", "to_member", "twice", "shadow", "from_bool", "no_start", "two_names", "bad_contract", "refused_body", "defaulted"]
+    {
         assert!(bare(&model, name), "{name}: {model}");
     }
     assert!(method_lines(&model, "declared").is_none() && method_lines(&model, "one").is_none(), "{model}");
@@ -483,7 +491,10 @@ fn a_callee_that_writes_the_data_behind_a_sequence_is_refused_by_the_gate() {
     let (o, _) = model("model-seq-global.cpp", dir.path());
     let text = stdout(&o);
     assert_eq!(o.status.code(), Some(1), "stdout: {text} stderr: {}", stderr(&o));
-    assert!(text.lines().any(|l| l.ends_with("model-seq-global.cpp:8: BinaryOperator =: the translator has no rule for it yet.")), "{text}");
+    assert!(
+        text.lines().any(|l| l.ends_with("model-seq-global.cpp:8: BinaryOperator =: the translator has no rule for it yet.")),
+        "{text}"
+    );
 }
 
 /// A name that `forall` binds is an exact integer, decision 0067, so the file resolves when the body does not use it or a second
@@ -560,7 +571,12 @@ fn prove_names_a_failed_ensures_at_its_return_with_its_contract_and_assumptions(
     let text = stdout(&o);
     assert_eq!(o.status.code(), Some(1), "stdout: {text} stderr: {}", stderr(&o));
     let lines = under(&text, "model-clamp-wrong.cpp:8: the ensures line may not hold on this return.");
-    assert!(lines.iter().any(|l| l.starts_with("  The contract line: ") && l.ends_with("model-clamp-wrong.cpp:5: ensures x < lo ==> result == hi")), "{text}");
+    assert!(
+        lines
+            .iter()
+            .any(|l| l.starts_with("  The contract line: ") && l.ends_with("model-clamp-wrong.cpp:5: ensures x < lo ==> result == hi")),
+        "{text}"
+    );
     assert!(lines.iter().any(|l| l.starts_with("  It assumes: ") && l.ends_with("model-clamp-wrong.cpp:4: requires lo <= hi")), "{text}");
     assert_eq!(text.lines().filter(|l| l.starts_with("Not proved: ")).count(), 1, "{text}");
 }
@@ -582,7 +598,10 @@ fn prove_names_a_value_that_may_not_fit_and_an_index_out_of_range() {
     let o = prove("model-seq-wrong.cpp", &[], &dafny);
     let text = stdout(&o);
     assert_eq!(o.status.code(), Some(1), "stdout: {text} stderr: {}", stderr(&o));
-    assert!(text.lines().any(|l| l.starts_with("Not proved: ") && l.ends_with("model-seq-wrong.cpp:6: the index may be out of range.")), "{text}");
+    assert!(
+        text.lines().any(|l| l.starts_with("Not proved: ") && l.ends_with("model-seq-wrong.cpp:6: the index may be out of range.")),
+        "{text}"
+    );
 }
 
 /// A loop invariant that fails at the start, one that the loop does not keep, and a requires line of a callee that the caller may
@@ -600,7 +619,10 @@ fn prove_names_failed_invariants_and_a_callee_requires() {
     assert!(lines.iter().any(|l| l.starts_with("  It assumes: ") && l.ends_with("model-prove-loops.cpp:4: requires 0 <= n")), "{text}");
     under(&text, "model-prove-loops.cpp:18: the loop may not keep the invariant.");
     let lines = under(&text, "model-prove-loops.cpp:32: a requires line of the callee may not hold.");
-    assert!(lines.iter().any(|l| l.starts_with("  The contract line: ") && l.ends_with("model-prove-loops.cpp:26: requires x > 0")), "{text}");
+    assert!(
+        lines.iter().any(|l| l.starts_with("  The contract line: ") && l.ends_with("model-prove-loops.cpp:26: requires x > 0")),
+        "{text}"
+    );
     assert_eq!(text.lines().filter(|l| l.starts_with("Not proved: ")).count(), 3, "{text}");
 }
 
@@ -689,11 +711,15 @@ fn prove_gives_each_obligation_its_own_line_and_assumptions() {
     let o = prove("model-prove-places.cpp", &[], &dafny);
     let text = stdout(&o);
     assert_eq!(o.status.code(), Some(1), "stdout: {text} stderr: {}", stderr(&o));
-    for want in ["model-prove-places.cpp:8: the value may not fit uint32_t.", "model-prove-places.cpp:10: the value may not fit uint32_t."] {
+    for want in ["model-prove-places.cpp:8: the value may not fit uint32_t.", "model-prove-places.cpp:10: the value may not fit uint32_t."]
+    {
         assert!(text.lines().any(|l| l.starts_with("Not proved: ") && l.ends_with(want)), "{want}: {text}");
     }
     let lines = under(&text, "model-prove-places.cpp:18: the index may be out of range.");
-    assert!(lines.iter().any(|l| l.starts_with("  It assumes: ") && l.ends_with("model-prove-places.cpp:17: requires v[10] == 0")), "{text}");
+    assert!(
+        lines.iter().any(|l| l.starts_with("  It assumes: ") && l.ends_with("model-prove-places.cpp:17: requires v[10] == 0")),
+        "{text}"
+    );
     let lines = under(&text, "model-prove-places.cpp:27: the loop may not keep the invariant.");
     assert!(lines.iter().any(|l| l.ends_with("model-prove-places.cpp:24: requires 0 <= n && n <= 10")), "{text}");
     assert!(lines.iter().any(|l| l.ends_with("model-prove-places.cpp:28: invariant 0 <= j")), "{text}");

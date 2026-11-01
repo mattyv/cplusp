@@ -34,7 +34,10 @@ fn an_override_that_breaks_the_contract_of_the_interface_fails_at_its_line() {
     assert_eq!(text.lines().filter(|l| *l == SHAPE_AXIOM).count(), 1, "{text}");
     let found = blocks(&text);
     let broken = |head: &str, clause: &str| {
-        found.iter().filter(|(h, under)| h.ends_with(head) && under.iter().any(|u| u.starts_with("  The contract line: ") && u.ends_with(clause))).count()
+        found
+            .iter()
+            .filter(|(h, under)| h.ends_with(head) && under.iter().any(|u| u.starts_with("  The contract line: ") && u.ends_with(clause)))
+            .count()
     };
     let more = "model-virtual-wrong.cpp:17: the override may require more than Shape::corners.";
     assert_eq!(broken(more, "model-virtual-wrong.cpp:7: requires 0 <= scale && scale <= 100"), 1, "{text}");
@@ -134,7 +137,10 @@ fn a_virtual_call_and_an_upcast_keep_the_contract_of_the_interface() {
     assert_eq!(o.status.code(), Some(1), "stdout: {text} stderr: {}", stderr(&o));
     let found = blocks(&text);
     let broken = |head: &str, clause: &str| {
-        found.iter().filter(|(h, under)| h.ends_with(head) && under.iter().any(|u| u.starts_with("  The contract line: ") && u.ends_with(clause))).count()
+        found
+            .iter()
+            .filter(|(h, under)| h.ends_with(head) && under.iter().any(|u| u.starts_with("  The contract line: ") && u.ends_with(clause)))
+            .count()
     };
     let ensures = "model-virtual-call-wrong.cpp:24: the ensures line may not hold on this return.";
     assert_eq!(broken(ensures, "model-virtual-call-wrong.cpp:22: ensures result <= 1000"), 1, "{text}");
@@ -200,7 +206,9 @@ fn the_axiom_line_of_an_interface_names_it_in_cpp() {
     assert_eq!(o.status.code(), Some(0), "stdout: {text} stderr: {}", stderr(&o));
     assert_eq!(text.lines().last(), Some("ok: proved"), "{text}");
     let axioms: Vec<&str> = text.lines().filter(|l| l.starts_with("Axiom: model: ")).collect();
-    let line = |n: &str| format!("Axiom: model: {n}: a call through {n} runs an override that keeps the contract of {n}, C++23 [class.virtual]. Each override of {n} in this file is checked against that contract.");
+    let line = |n: &str| {
+        format!("Axiom: model: {n}: a call through {n} runs an override that keeps the contract of {n}, C++23 [class.virtual]. Each override of {n} in this file is checked against that contract.")
+    };
     assert_eq!(axioms, [line("a::Shape"), line("b::Shape")], "{text}");
 }
 
@@ -222,7 +230,10 @@ fn the_bound_of_a_product_proves_with_mul_bound() {
     let dir = tempfile::tempdir().unwrap();
     let (_, out) = model("model-product.cpp", dir.path());
     let model = std::fs::read_to_string(&out).unwrap();
-    let check = model.split_once("lemma c_Rect'area'check'Shape").map(|(_, rest)| rest.split_once("\n}").map_or(rest, |(body, _)| body)).unwrap_or("");
+    let check = model
+        .split_once("lemma c_Rect'area'check'Shape")
+        .map(|(_, rest)| rest.split_once("\n}").map_or(rest, |(body, _)| body))
+        .unwrap_or("");
     assert!(check.contains("MulBound("), "{model}");
 }
 
@@ -248,12 +259,10 @@ fn the_product_examples_prove() {
     if !clang_tidy_available() {
         return;
     }
-    for example in ["strategy"] {
-        let o = prove(&format!("../../../../examples/{example}/example.cpp"), &[], &dafny);
-        let text = stdout(&o);
-        assert_eq!(o.status.code(), Some(0), "{example}: stdout: {text} stderr: {}", stderr(&o));
-        assert_eq!(text.lines().last(), Some("ok: proved"), "{example}: {text}");
-    }
+    let o = prove("../../../../examples/strategy/example.cpp", &[], &dafny);
+    let text = stdout(&o);
+    assert_eq!(o.status.code(), Some(0), "stdout: {text} stderr: {}", stderr(&o));
+    assert_eq!(text.lines().last(), Some("ok: proved"), "{text}");
 }
 
 /// A hint that holds in the method of an override and fails in its check means that the override requires more than the
@@ -266,14 +275,22 @@ fn a_hint_that_fails_only_in_the_check_names_the_requires_half() {
         return;
     }
     let more = "16: the override may require more than Shape::area.";
-    for (name, want) in [("model-product-more.cpp", vec![more]), ("model-product-more-twin.cpp", vec![more, "27: a requires line of the callee may not hold."])] {
+    for (name, want) in [
+        ("model-product-more.cpp", vec![more]),
+        ("model-product-more-twin.cpp", vec![more, "27: a requires line of the callee may not hold."]),
+    ] {
         let o = prove(name, &[], &dafny);
         let text = stdout(&o);
         assert_eq!(o.status.code(), Some(1), "{name}: stdout: {text} stderr: {}", stderr(&o));
         let failed: Vec<&str> = text.lines().filter(|l| l.starts_with("Not proved: ")).map(|l| l.rsplit_once(".cpp:").unwrap().1).collect();
         assert_eq!(failed, want, "{name}: {text}");
         let head = format!("{name}:{more}");
-        assert!(under(&text, &head).iter().any(|l| l.starts_with("  The contract line: ") && l.ends_with(&format!("{name}:14: requires valid() && w_ <= 500"))), "{name}: {text}");
+        assert!(
+            under(&text, &head)
+                .iter()
+                .any(|l| l.starts_with("  The contract line: ") && l.ends_with(&format!("{name}:14: requires valid() && w_ <= 500"))),
+            "{name}: {text}"
+        );
     }
 }
 
@@ -303,8 +320,17 @@ fn a_call_through_a_unique_ptr_of_an_interface_keeps_its_contract() {
     let text = stdout(&o);
     assert_eq!(o.status.code(), Some(1), "stdout: {text} stderr: {}", stderr(&o));
     let failed: Vec<&str> = text.lines().filter(|l| l.starts_with("Not proved: ")).map(|l| l.rsplit_once(".cpp:").unwrap().1).collect();
-    assert_eq!(failed, ["16: the optional may be empty or the pointer may be null here.", "22: a requires line of the callee may not hold."], "{text}");
-    assert!(under(&text, "model-unique-iface-wrong.cpp:22: a requires line of the callee may not hold.").iter().any(|l| l.ends_with("model-unique-iface-wrong.cpp:8: requires valid()")), "{text}");
+    assert_eq!(
+        failed,
+        ["16: the optional may be empty or the pointer may be null here.", "22: a requires line of the callee may not hold."],
+        "{text}"
+    );
+    assert!(
+        under(&text, "model-unique-iface-wrong.cpp:22: a requires line of the callee may not hold.")
+            .iter()
+            .any(|l| l.ends_with("model-unique-iface-wrong.cpp:8: requires valid()")),
+        "{text}"
+    );
 }
 
 /// The example factory makes a shape with std::make_unique and reads it through std::unique_ptr<Shape>, decision 0168.
@@ -332,7 +358,8 @@ fn a_unique_ptr_of_an_interface_has_one_owner_that_only_reads() {
     let o = prove("model-unique-iface-refuse.cpp", &[], &dafny);
     let text = stdout(&o);
     assert_eq!(o.status.code(), Some(1), "stdout: {text} stderr: {}", stderr(&o));
-    let mut refusals: Vec<&str> = text.lines().filter(|l| l.starts_with("Not provable: ")).map(|l| l.rsplit_once(".cpp:").unwrap().1).collect();
+    let mut refusals: Vec<&str> =
+        text.lines().filter(|l| l.starts_with("Not provable: ")).map(|l| l.rsplit_once(".cpp:").unwrap().1).collect();
     refusals.sort_by_key(|l| l.split(':').next().unwrap().parse::<u32>().unwrap());
     assert_eq!(
         refusals,
@@ -380,7 +407,10 @@ fn an_override_that_writes_keeps_the_contract_of_the_interface() {
     assert_eq!(o.status.code(), Some(1), "stdout: {text} stderr: {}", stderr(&o));
     let found = blocks(&text);
     let broken = |head: &str, clause: &str| {
-        found.iter().filter(|(h, under)| h.ends_with(head) && under.iter().any(|u| u.starts_with("  The contract line: ") && u.ends_with(clause))).count()
+        found
+            .iter()
+            .filter(|(h, under)| h.ends_with(head) && under.iter().any(|u| u.starts_with("  The contract line: ") && u.ends_with(clause)))
+            .count()
     };
     let less = "model-virtual-mut-wrong.cpp:26: the override may not keep the promise of Observer::on_change.";
     assert_eq!(broken(less, "model-virtual-mut-wrong.cpp:12: ensures valid() && seen() == old(seen()) + 1"), 1, "{text}");
@@ -401,7 +431,8 @@ fn a_write_through_an_interface_with_no_rule_is_refused() {
     let (o, _) = model("model-virtual-mut-refuse.cpp", dir.path());
     let text = stdout(&o);
     assert_eq!(o.status.code(), Some(1), "stdout: {text} stderr: {}", stderr(&o));
-    let mut refusals: Vec<&str> = text.lines().filter(|l| l.starts_with("Not provable: ")).map(|l| l.rsplit_once(".cpp:").unwrap().1).collect();
+    let mut refusals: Vec<&str> =
+        text.lines().filter(|l| l.starts_with("Not provable: ")).map(|l| l.rsplit_once(".cpp:").unwrap().1).collect();
     refusals.sort_by_key(|l| l.split(':').next().unwrap().parse::<u32>().unwrap());
     assert_eq!(
         refusals,
@@ -447,7 +478,11 @@ fn a_vector_of_unique_ptr_keeps_its_bounds_and_its_values() {
     let failed: Vec<&str> = text.lines().filter(|l| l.starts_with("Not proved: ")).map(|l| l.rsplit_once(".cpp:").unwrap().1).collect();
     assert_eq!(
         failed,
-        ["16: the optional may be empty or the pointer may be null here.", "21: the index may be out of range.", "39: the assert line may not hold."],
+        [
+            "16: the optional may be empty or the pointer may be null here.",
+            "21: the index may be out of range.",
+            "39: the assert line may not hold."
+        ],
         "{text}"
     );
 }
@@ -463,7 +498,8 @@ fn a_vector_of_unique_ptr_with_no_rule_is_refused() {
     let (o, _) = model("model-vec-unique-refuse.cpp", dir.path());
     let text = stdout(&o);
     assert_eq!(o.status.code(), Some(1), "stdout: {text} stderr: {}", stderr(&o));
-    let mut refusals: Vec<&str> = text.lines().filter(|l| l.starts_with("Not provable: ")).map(|l| l.rsplit_once(".cpp:").unwrap().1).collect();
+    let mut refusals: Vec<&str> =
+        text.lines().filter(|l| l.starts_with("Not provable: ")).map(|l| l.rsplit_once(".cpp:").unwrap().1).collect();
     refusals.sort_by_key(|l| l.split(':').next().unwrap().parse::<u32>().unwrap());
     assert_eq!(
         refusals,
@@ -530,8 +566,18 @@ fn a_call_through_a_unique_ptr_field_keeps_its_contract() {
         ],
         "{text}"
     );
-    assert!(under(&text, "model-unique-field-wrong.cpp:26: a requires line of the callee may not hold.").iter().any(|l| l.ends_with("model-unique-field-wrong.cpp:10: requires valid() && 0 <= x && x <= 1000")), "{text}");
-    assert!(under(&text, "model-unique-field-wrong.cpp:47: a requires line of the callee may not hold.").iter().any(|l| l.ends_with("model-unique-field-wrong.cpp:16: requires inner != nullptr && inner->valid()")), "{text}");
+    assert!(
+        under(&text, "model-unique-field-wrong.cpp:26: a requires line of the callee may not hold.")
+            .iter()
+            .any(|l| l.ends_with("model-unique-field-wrong.cpp:10: requires valid() && 0 <= x && x <= 1000")),
+        "{text}"
+    );
+    assert!(
+        under(&text, "model-unique-field-wrong.cpp:47: a requires line of the callee may not hold.")
+            .iter()
+            .any(|l| l.ends_with("model-unique-field-wrong.cpp:16: requires inner != nullptr && inner->valid()")),
+        "{text}"
+    );
 }
 
 /// Two moves of one local in one statement, a move and a read of one local in one call, a move in a condition, a move of an element
@@ -547,7 +593,8 @@ fn a_moved_unique_ptr_has_one_owner() {
     let o = prove("model-unique-field-refuse.cpp", &[], &dafny);
     let text = stdout(&o);
     assert_eq!(o.status.code(), Some(1), "stdout: {text} stderr: {}", stderr(&o));
-    let mut refusals: Vec<&str> = text.lines().filter(|l| l.starts_with("Not provable: ")).map(|l| l.rsplit_once(".cpp:").unwrap().1).collect();
+    let mut refusals: Vec<&str> =
+        text.lines().filter(|l| l.starts_with("Not provable: ")).map(|l| l.rsplit_once(".cpp:").unwrap().1).collect();
     refusals.sort_by_key(|l| l.split(':').next().unwrap().parse::<u32>().unwrap());
     assert_eq!(
         refusals,
@@ -598,7 +645,12 @@ fn a_pure_override_keeps_the_checks_of_its_calls() {
         ],
         "{text}"
     );
-    assert!(under(&text, "model-pure-calls-wrong.cpp:70: a requires line of the callee may not hold.").iter().any(|l| l.ends_with("model-pure-calls-wrong.cpp:10: requires valid() && 0 <= x <= 1000")), "{text}");
+    assert!(
+        under(&text, "model-pure-calls-wrong.cpp:70: a requires line of the callee may not hold.")
+            .iter()
+            .any(|l| l.ends_with("model-pure-calls-wrong.cpp:10: requires valid() && 0 <= x <= 1000")),
+        "{text}"
+    );
 }
 
 /// An override whose body writes a local, or calls a member function of its own class that is no plain member function, has no
@@ -612,7 +664,8 @@ fn an_override_that_is_no_pure_body_is_refused() {
     let o = prove("model-pure-calls-refuse.cpp", &[], &dafny);
     let text = stdout(&o);
     assert_eq!(o.status.code(), Some(1), "stdout: {text} stderr: {}", stderr(&o));
-    let mut refusals: Vec<&str> = text.lines().filter(|l| l.starts_with("Not provable: ")).map(|l| l.rsplit_once(".cpp:").unwrap().1).collect();
+    let mut refusals: Vec<&str> =
+        text.lines().filter(|l| l.starts_with("Not provable: ")).map(|l| l.rsplit_once(".cpp:").unwrap().1).collect();
     refusals.sort_by_key(|l| l.split(':').next().unwrap().parse::<u32>().unwrap());
     assert_eq!(
         refusals,
@@ -666,9 +719,17 @@ fn a_state_that_gives_the_next_state_keeps_its_contract() {
     let o = prove("model-next-state-wrong.cpp", &[], &dafny);
     let text = stdout(&o);
     assert_eq!(o.status.code(), Some(1), "stdout: {text} stderr: {}", stderr(&o));
-    let mut failed: Vec<&str> = text.lines().filter(|l| l.starts_with("Not proved: ") || l.starts_with("Not provable: ")).map(|l| l.rsplit_once(".cpp:").unwrap().1).collect();
+    let mut failed: Vec<&str> = text
+        .lines()
+        .filter(|l| l.starts_with("Not proved: ") || l.starts_with("Not provable: "))
+        .map(|l| l.rsplit_once(".cpp:").unwrap().1)
+        .collect();
     failed.sort_by_key(|l| l.split(':').next().unwrap().parse::<u32>().unwrap());
-    assert_eq!(failed, ["22: the override may not keep the promise of Signal::next.", "36: the ensures line may not hold on this return."], "{text}");
+    assert_eq!(
+        failed,
+        ["22: the override may not keep the promise of Signal::next.", "36: the ensures line may not hold on this return."],
+        "{text}"
+    );
 }
 
 /// An early return in a body that writes a local is no pure body, and a write of a unique_ptr field from a move of a local keeps
@@ -682,7 +743,11 @@ fn a_state_that_gives_the_next_state_with_no_rule_is_refused() {
     let o = prove("model-next-state-refuse.cpp", &[], &dafny);
     let text = stdout(&o);
     assert_eq!(o.status.code(), Some(1), "stdout: {text} stderr: {}", stderr(&o));
-    let refused: Vec<&str> = text.lines().filter(|l| l.starts_with("Not proved: ") || l.starts_with("Not provable: ")).map(|l| l.rsplit_once(".cpp:").unwrap().1).collect();
+    let refused: Vec<&str> = text
+        .lines()
+        .filter(|l| l.starts_with("Not proved: ") || l.starts_with("Not provable: "))
+        .map(|l| l.rsplit_once(".cpp:").unwrap().1)
+        .collect();
     let want = [
         "19: step is no pure function. A contract calls a function with one return and no write.",
         "36: CXXOperatorCallExpr: the translator has no rule for it yet.",
@@ -714,8 +779,16 @@ fn a_base_class_with_data_keeps_its_contract() {
     let o = prove("model-data-base-wrong.cpp", &[], &dafny);
     let text = stdout(&o);
     assert_eq!(o.status.code(), Some(1), "stdout: {text} stderr: {}", stderr(&o));
-    let failed: Vec<&str> = text.lines().filter(|l| l.starts_with("Not proved: ") || l.starts_with("Not provable: ")).map(|l| l.rsplit_once(".cpp:").unwrap().1).collect();
-    assert_eq!(failed, ["20: the ensures line may not hold on this return.", "26: the ensures line may not hold on this return."], "{text}");
+    let failed: Vec<&str> = text
+        .lines()
+        .filter(|l| l.starts_with("Not proved: ") || l.starts_with("Not provable: "))
+        .map(|l| l.rsplit_once(".cpp:").unwrap().1)
+        .collect();
+    assert_eq!(
+        failed,
+        ["20: the ensures line may not hold on this return.", "26: the ensures line may not hold on this return."],
+        "{text}"
+    );
 }
 
 /// A field of the base, a change into the base and a call of a member function of the base that is not const have no rule yet, decision 0201.
@@ -728,7 +801,11 @@ fn a_base_class_with_data_with_no_rule_is_refused() {
     let o = prove("model-data-base-refuse.cpp", &[], &dafny);
     let text = stdout(&o);
     assert_eq!(o.status.code(), Some(1), "stdout: {text} stderr: {}", stderr(&o));
-    let refused: Vec<&str> = text.lines().filter(|l| l.starts_with("Not proved: ") || l.starts_with("Not provable: ")).map(|l| l.rsplit_once(".cpp:").unwrap().1).collect();
+    let refused: Vec<&str> = text
+        .lines()
+        .filter(|l| l.starts_with("Not proved: ") || l.starts_with("Not provable: "))
+        .map(|l| l.rsplit_once(".cpp:").unwrap().1)
+        .collect();
     let want = [
         "29: a field of the base Spot: the translator has no rule for it yet.",
         "40: a change of Box into its base Tag, which has data: the translator has no rule for it yet.",
@@ -748,7 +825,11 @@ fn a_field_of_the_base_is_refused_in_each_form() {
     let o = prove("model-data-base-field.cpp", &[], &dafny);
     let text = stdout(&o);
     assert_eq!(o.status.code(), Some(1), "stdout: {text} stderr: {}", stderr(&o));
-    let refused: Vec<&str> = text.lines().filter(|l| l.starts_with("Not proved: ") || l.starts_with("Not provable: ")).map(|l| l.rsplit_once(".cpp:").unwrap().1).collect();
+    let refused: Vec<&str> = text
+        .lines()
+        .filter(|l| l.starts_with("Not proved: ") || l.starts_with("Not provable: "))
+        .map(|l| l.rsplit_once(".cpp:").unwrap().1)
+        .collect();
     let field = "a field of the base P: the translator has no rule for it yet.";
     let want = [
         format!("12: {field}"),
@@ -778,13 +859,20 @@ fn a_call_of_the_base_keeps_its_contract() {
     let o = prove("model-data-base-calls-wrong.cpp", &[], &dafny);
     let text = stdout(&o);
     assert_eq!(o.status.code(), Some(1), "stdout: {text} stderr: {}", stderr(&o));
-    let failed: Vec<&str> = text.lines().filter(|l| l.starts_with("Not proved: ") || l.starts_with("Not provable: ")).map(|l| l.rsplit_once(".cpp:").unwrap().1).collect();
+    let failed: Vec<&str> = text
+        .lines()
+        .filter(|l| l.starts_with("Not proved: ") || l.starts_with("Not provable: "))
+        .map(|l| l.rsplit_once(".cpp:").unwrap().1)
+        .collect();
     assert_eq!(failed, ["21: the ensures line may not hold on this return.", "27: a requires line of the callee may not hold."], "{text}");
 }
 
 /// The failures of a fixture, each as `LINE: sentence`.
 fn failures(text: &str) -> Vec<&str> {
-    text.lines().filter(|l| l.starts_with("Not proved: ") || l.starts_with("Not provable: ")).map(|l| l.rsplit_once(".cpp:").unwrap().1).collect()
+    text.lines()
+        .filter(|l| l.starts_with("Not proved: ") || l.starts_with("Not provable: "))
+        .map(|l| l.rsplit_once(".cpp:").unwrap().1)
+        .collect()
 }
 
 /// A local of a final class can be the argument for a reference to its interface, and the caller reads it after the call. `prove`
@@ -798,7 +886,11 @@ fn a_local_through_a_reference_to_its_interface_proves() {
     let o = prove("model-iface-local.cpp", &[], &dafny);
     let text = stdout(&o);
     assert_eq!(o.status.code(), Some(0), "stdout: {text} stderr: {}", stderr(&o));
-    assert!(text.lines().any(|l| l == "Axiom: model: Total: a call through a reference to Sink leaves an object of Total, C++23 [class.virtual]."), "{text}");
+    assert!(
+        text.lines()
+            .any(|l| l == "Axiom: model: Total: a call through a reference to Sink leaves an object of Total, C++23 [class.virtual]."),
+        "{text}"
+    );
     assert_eq!(text.lines().last(), Some("ok: proved"), "{text}");
     let o = prove("model-iface-local-wrong.cpp", &[], &dafny);
     let text = stdout(&o);
@@ -1020,8 +1112,16 @@ fn a_list_of_owned_objects_as_a_field_keeps_its_contract() {
     let o = prove("model-owned-list-wrong.cpp", &[], &dafny);
     let text = stdout(&o);
     assert_eq!(o.status.code(), Some(1), "stdout: {text} stderr: {}", stderr(&o));
-    let failed: Vec<&str> = text.lines().filter(|l| l.starts_with("Not proved: ") || l.starts_with("Not provable: ")).map(|l| l.rsplit_once(".cpp:").unwrap().1).collect();
-    assert_eq!(failed, ["50: the ensures line may not hold on this return.", "61: the ensures line may not hold on this return."], "{text}");
+    let failed: Vec<&str> = text
+        .lines()
+        .filter(|l| l.starts_with("Not proved: ") || l.starts_with("Not provable: "))
+        .map(|l| l.rsplit_once(".cpp:").unwrap().1)
+        .collect();
+    assert_eq!(
+        failed,
+        ["50: the ensures line may not hold on this return.", "61: the ensures line may not hold on this return."],
+        "{text}"
+    );
 }
 
 /// A push of `std::move(o)` leaves `o` null, in a field, in a vector by reference and in a local vector, decision 0204.
@@ -1038,7 +1138,11 @@ fn a_push_of_a_move_leaves_the_name_null() {
     let o = prove("model-owned-push-wrong.cpp", &[], &dafny);
     let text = stdout(&o);
     assert_eq!(o.status.code(), Some(1), "stdout: {text} stderr: {}", stderr(&o));
-    let failed: Vec<&str> = text.lines().filter(|l| l.starts_with("Not proved: ") || l.starts_with("Not provable: ")).map(|l| l.rsplit_once(".cpp:").unwrap().1).collect();
+    let failed: Vec<&str> = text
+        .lines()
+        .filter(|l| l.starts_with("Not proved: ") || l.starts_with("Not provable: "))
+        .map(|l| l.rsplit_once(".cpp:").unwrap().1)
+        .collect();
     let sentence = "the ensures line may not hold on this return.";
     assert_eq!(failed, [format!("20: {sentence}"), format!("32: {sentence}"), format!("43: {sentence}")], "{text}");
 }
@@ -1054,7 +1158,12 @@ fn the_visitor_example_proves() {
     let o = prove("../../../../examples/visitor/example.cpp", &[], &dafny);
     let text = stdout(&o);
     assert_eq!(o.status.code(), Some(0), "stdout: {text} stderr: {}", stderr(&o));
-    assert!(text.lines().any(|l| l == "Axiom: model: AreaSum: a call through a reference to Visitor leaves an object of AreaSum, C++23 [class.virtual]."), "{text}");
+    assert!(
+        text.lines().any(
+            |l| l == "Axiom: model: AreaSum: a call through a reference to Visitor leaves an object of AreaSum, C++23 [class.virtual]."
+        ),
+        "{text}"
+    );
     assert_eq!(text.lines().last(), Some("ok: proved"), "{text}");
 }
 
@@ -1069,7 +1178,11 @@ fn an_interface_with_no_final_class_is_refused() {
     let o = prove("model-iface-unbacked-contract.cpp", &[], &dafny);
     let text = stdout(&o);
     assert_eq!(o.status.code(), Some(1), "stdout: {text} stderr: {}", stderr(&o));
-    assert_eq!(failures(&text), ["34: Poker has no final class over it in the file, so the translator cannot check its contract."], "{text}");
+    assert_eq!(
+        failures(&text),
+        ["34: Poker has no final class over it in the file, so the translator cannot check its contract."],
+        "{text}"
+    );
 }
 
 /// The sentence for an interface with no final class names it as its Axiom line does, with its namespace when two interfaces share a
@@ -1083,7 +1196,11 @@ fn an_interface_with_no_final_class_is_named_as_its_axiom_line_names_it() {
     let o = prove("model-virtual-names-unbacked.cpp", &[], &dafny);
     let text = stdout(&o);
     assert_eq!(o.status.code(), Some(1), "stdout: {text} stderr: {}", stderr(&o));
-    assert_eq!(failures(&text), ["20: b::Shape has no final class over it in the file, so the translator cannot check its contract."], "{text}");
+    assert_eq!(
+        failures(&text),
+        ["20: b::Shape has no final class over it in the file, so the translator cannot check its contract."],
+        "{text}"
+    );
 }
 
 /// A function whose requires lines no input meets proves, and each call of it in verified code is not proved, decision 0221. So the
@@ -1103,7 +1220,8 @@ fn a_requires_line_that_no_input_meets_proves_and_its_caller_does_not() {
     assert_eq!(o.status.code(), Some(1), "stdout: {text} stderr: {}", stderr(&o));
     let callee = "a requires line of the callee may not hold.";
     assert_eq!(failures(&text), [format!("30: {callee}"), format!("38: {callee}")], "{text}");
-    let lines: Vec<&str> = text.lines().filter(|l| l.starts_with("  The contract line: ")).map(|l| l.rsplit_once(".cpp:").unwrap().1).collect();
+    let lines: Vec<&str> =
+        text.lines().filter(|l| l.starts_with("  The contract line: ")).map(|l| l.rsplit_once(".cpp:").unwrap().1).collect();
     assert_eq!(lines, ["20: requires p.valid()", "33: requires false"], "{text}");
 }
 
@@ -1122,7 +1240,11 @@ fn a_destructor_edge_comes_only_from_a_function_that_ends_a_life() {
     let o = prove("model-dtor-loop-refuse.cpp", &[], &dafny);
     let text = stdout(&o);
     assert_eq!(o.status.code(), Some(1), "stdout: {text} stderr: {}", stderr(&o));
-    assert_eq!(failures(&text), ["21: the call of Log::note can run Log::note again before it returns: the translator has no rule for it yet."], "{text}");
+    assert_eq!(
+        failures(&text),
+        ["21: the call of Log::note can run Log::note again before it returns: the translator has no rule for it yet."],
+        "{text}"
+    );
 }
 
 /// A trusted body can call each function of the file, so a recursion through a trusted function is refused at the call through the
@@ -1137,11 +1259,19 @@ fn a_trusted_body_can_call_each_function() {
     let text = stdout(&o);
     assert_eq!(o.status.code(), Some(1), "stdout: {text} stderr: {}", stderr(&o));
     assert!(text.lines().any(|l| l.starts_with("Trusted: ") && l.ends_with(": spawn: logs elsewhere")), "{text}");
-    assert_eq!(failures(&text), ["22: the call of Log::note can run Log::note again before it returns: the translator has no rule for it yet."], "{text}");
+    assert_eq!(
+        failures(&text),
+        ["22: the call of Log::note can run Log::note again before it returns: the translator has no rule for it yet."],
+        "{text}"
+    );
     let o = prove("model-iface-recursion-trusted.cpp", &[], &dafny);
     let text = stdout(&o);
     assert_eq!(o.status.code(), Some(1), "stdout: {text} stderr: {}", stderr(&o));
-    assert_eq!(failures(&text), ["64: the call of Filler::fill can run Filler::fill again before it returns: the translator has no rule for it yet."], "{text}");
+    assert_eq!(
+        failures(&text),
+        ["64: the call of Filler::fill can run Filler::fill again before it returns: the translator has no rule for it yet."],
+        "{text}"
+    );
 }
 
 /// A call result that a parameter by value ends can run a destructor, so the call in the destructor can come back, decision 0222.
@@ -1154,5 +1284,9 @@ fn a_call_result_that_a_parameter_by_value_ends_comes_back() {
     let o = prove("model-dtor-ret-refuse.cpp", &[], &dafny);
     let text = stdout(&o);
     assert_eq!(o.status.code(), Some(1), "stdout: {text} stderr: {}", stderr(&o));
-    assert_eq!(failures(&text), ["21: the call of Log::note can run Log::note again before it returns: the translator has no rule for it yet."], "{text}");
+    assert_eq!(
+        failures(&text),
+        ["21: the call of Log::note can run Log::note again before it returns: the translator has no rule for it yet."],
+        "{text}"
+    );
 }

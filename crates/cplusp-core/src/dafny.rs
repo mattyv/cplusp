@@ -840,7 +840,7 @@ fn at_kind(t: &Vec<u8>, s: usize, e: usize, p: &[u8]) -> (r: Option<(usize, usiz
                     Some(q) => match find_exec(t, q + 1, k - 1, &[0x2c]) {
                         None => None,
                         Some(c) => {
-                            
+
                             match parse_exec(t, q + 1, c, usize::MAX as u64) {
                                 Some(n) => Some((n as usize, k + p.len())),
                                 None => None,

@@ -80,7 +80,8 @@ fn a_finding_takes_the_kind_of_the_innermost_function_the_file_wrote() {
     .collect();
     assert_eq!(reported, expected, "{out}");
     for name in ["ends_in_macro", "ends_elsewhere"] {
-        let message = format!("marker: {name} starts or ends in a macro or in another file. Write its first and last token in its own file.");
+        let message =
+            format!("marker: {name} starts or ends in a macro or in another file. Write its first and last token in its own file.");
         assert!(out.contains(&message), "{message}: {out}");
     }
 }
@@ -99,7 +100,10 @@ fn verified_code_runs_no_plain_code() {
     let out = stdout(&o);
     assert_eq!(o.status.code(), Some(1), "stdout: {out} stderr: {}", stderr(&o));
     let reported: BTreeSet<(String, usize)> = out.lines().map(|l| (field(l, "rule"), field(l, "line").parse::<usize>().unwrap())).collect();
-    let expected: BTreeSet<(String, usize)> = [("marker", 17), ("marker", 29), ("marker", 41), ("marker", 47), ("marker", 75)].into_iter().map(|(r, n)| (r.to_string(), n)).collect();
+    let expected: BTreeSet<(String, usize)> = [("marker", 17), ("marker", 29), ("marker", 41), ("marker", 47), ("marker", 75)]
+        .into_iter()
+        .map(|(r, n)| (r.to_string(), n))
+        .collect();
     assert_eq!(reported, expected, "{out}");
     for message in [
         "marker: verified code calls Guard::~Guard, which is plain. Give it a contract and mark it trusted.",
@@ -139,8 +143,12 @@ fn each_entry_of_a_compile_database_is_its_own_run() {
     let root = root();
     let dir = root.to_str().unwrap();
     let entries = [
-        format!(r#"{{"directory": "{dir}", "arguments": ["clang++", "-std=c++23", "-ffp-contract=off", "-DLEGACY", "-c", "{file}"], "file": "{file}"}}"#),
-        format!(r#"{{"directory": "{dir}", "arguments": ["clang++", "-std=c++23", "-ffp-contract=off", "-c", "{file}"], "file": "{file}"}}"#),
+        format!(
+            r#"{{"directory": "{dir}", "arguments": ["clang++", "-std=c++23", "-ffp-contract=off", "-DLEGACY", "-c", "{file}"], "file": "{file}"}}"#
+        ),
+        format!(
+            r#"{{"directory": "{dir}", "arguments": ["clang++", "-std=c++23", "-ffp-contract=off", "-c", "{file}"], "file": "{file}"}}"#
+        ),
     ];
     let build = tempfile::tempdir().unwrap();
     std::fs::write(build.path().join("compile_commands.json"), format!("[{}]", entries.join(","))).unwrap();
@@ -169,8 +177,7 @@ fn an_indirect_call_has_a_name_only_from_constants() {
         .map(|l| (field(l, "rule"), field(l, "line").parse::<usize>().unwrap()))
         .filter(|(r, _)| r == "function_pointers" || r == "marker")
         .collect();
-    let expected: BTreeSet<(String, usize)> =
-        [16, 27, 38, 67].into_iter().map(|n| ("function_pointers".to_string(), n)).collect();
+    let expected: BTreeSet<(String, usize)> = [16, 27, 38, 67].into_iter().map(|n| ("function_pointers".to_string(), n)).collect();
     assert_eq!(reported, expected, "{out}");
 }
 
@@ -211,17 +218,11 @@ fn a_plain_object_goes_only_to_the_files_own_code() {
     let o = cplusp(&["gate", "--json", "--plugin", plugin.to_str().unwrap(), f.to_str().unwrap(), "--", "-std=c++23", "-ffp-contract=off"]);
     let out = stdout(&o);
     let reported: BTreeSet<(String, usize)> = out.lines().map(|l| (field(l, "rule"), field(l, "line").parse::<usize>().unwrap())).collect();
-    let expected: BTreeSet<(String, usize)> = [
-        ("shared_ptr", 13),
-        ("lvalue_references", 20),
-        ("marker", 20),
-        ("marker", 25),
-        ("marker", 30),
-        ("marker", 45),
-    ]
-    .into_iter()
-    .map(|(r, n)| (r.to_string(), n))
-    .collect();
+    let expected: BTreeSet<(String, usize)> =
+        [("shared_ptr", 13), ("lvalue_references", 20), ("marker", 20), ("marker", 25), ("marker", 30), ("marker", 45)]
+            .into_iter()
+            .map(|(r, n)| (r.to_string(), n))
+            .collect();
     assert_eq!(reported, expected, "{out}");
     for message in [
         "marker: verified code uses Record, which is plain. Reach it through a trusted member.",
@@ -283,6 +284,7 @@ fn the_impure_operator_check_judges_each_instantiation() {
     let plugin = plugin();
     let o = cplusp(&["gate", "--json", "--plugin", plugin.to_str().unwrap(), f.to_str().unwrap(), "--", "-std=c++23", "-ffp-contract=off"]);
     let out = stdout(&o);
-    let found: BTreeSet<usize> = out.lines().filter(|l| field(l, "rule") == "operator_overloading").map(|l| field(l, "line").parse::<usize>().unwrap()).collect();
+    let found: BTreeSet<usize> =
+        out.lines().filter(|l| field(l, "rule") == "operator_overloading").map(|l| field(l, "line").parse::<usize>().unwrap()).collect();
     assert_eq!(found, BTreeSet::from([8, 35, 39]), "{out}");
 }

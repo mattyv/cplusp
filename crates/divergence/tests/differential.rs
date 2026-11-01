@@ -57,11 +57,18 @@ fn the_model_and_the_cpp_agree_on_every_input_and_the_naive_model_does_not() {
         let id = dir.file_name().unwrap().to_string_lossy().into_owned();
         let case: Case = serde_yaml::from_str(&std::fs::read_to_string(dir.join("case.yaml")).unwrap()).unwrap();
         let Some(spec) = case.differential else { continue };
-        assert!(dir.join("drive.dfy").exists() && dir.join("drive.cpp").exists(), "{id}: a differential block needs drive.dfy and drive.cpp");
+        assert!(
+            dir.join("drive.dfy").exists() && dir.join("drive.cpp").exists(),
+            "{id}: a differential block needs drive.dfy and drive.cpp"
+        );
         seen += 1;
         let rel = format!("divergence/dafny/cases/{id}");
         let (o, out, err) = divergence(&["differential", &rel]);
-        assert_eq!(o.status.code(), Some(0), "{id}: the mitigated model and the C++ under the rule must agree. stdout: {out} stderr: {err}");
+        assert_eq!(
+            o.status.code(),
+            Some(0),
+            "{id}: the mitigated model and the C++ under the rule must agree. stdout: {out} stderr: {err}"
+        );
         assert_eq!(out.trim(), format!("agree: {id}, {} inputs", spec.runs), "{id}: the verdict line");
         if case.naive_is_wrong {
             let (o, out, err) = divergence(&["differential", &rel, "--naive"]);

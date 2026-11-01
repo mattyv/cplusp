@@ -6,7 +6,9 @@ use cplusp_core::verdict::*;
 fn proved_needs_each_fact_clean_and_every_method_verified() {
     for exit_ok in [true, false] {
         // The summary: verified, errors and time-outs.
-        for summary in [None, Some((2, 0, 0)), Some((5, 0, 0)), Some((1, 0, 0)), Some((0, 0, 0)), Some((2, 1, 0)), Some((2, 0, 1)), Some((0, 2, 3))] {
+        for summary in
+            [None, Some((2, 0, 0)), Some((5, 0, 0)), Some((1, 0, 0)), Some((0, 0, 0)), Some((2, 1, 0)), Some((2, 0, 1)), Some((0, 2, 3))]
+        {
             for errors in [0usize, 1, 2] {
                 for refused in [true, false] {
                     for axioms in [0usize, 1] {

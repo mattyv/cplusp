@@ -28,7 +28,11 @@ fn a_struct_with_a_destructor_keeps_its_contract() {
     let text = stdout(&o);
     assert_eq!(o.status.code(), Some(1), "stdout: {text} stderr: {}", stderr(&o));
     let failed: Vec<&str> = text.lines().filter(|l| l.starts_with("Not proved: ")).map(|l| l.rsplit_once(".cpp:").unwrap().1).collect();
-    let want = ["23: the ensures line may not hold on this return.", "37: the ensures line may not hold on this return.", "46: a requires line of the callee may not hold."];
+    let want = [
+        "23: the ensures line may not hold on this return.",
+        "37: the ensures line may not hold on this return.",
+        "46: a requires line of the callee may not hold.",
+    ];
     assert_eq!(failed, want, "{text}");
 }
 
@@ -43,7 +47,8 @@ fn a_struct_with_a_destructor_and_no_rule_is_refused() {
     let o = prove("model-dtor-refuse.cpp", &[], &dafny);
     let text = stdout(&o);
     assert_eq!(o.status.code(), Some(1), "stdout: {text} stderr: {}", stderr(&o));
-    let mut refusals: Vec<&str> = text.lines().filter(|l| l.starts_with("Not provable: ")).map(|l| l.rsplit_once(".cpp:").unwrap().1).collect();
+    let mut refusals: Vec<&str> =
+        text.lines().filter(|l| l.starts_with("Not provable: ")).map(|l| l.rsplit_once(".cpp:").unwrap().1).collect();
     refusals.sort_by_key(|l| l.split(':').next().unwrap().parse::<u32>().unwrap());
     let copy = "a copy of a struct with a destructor: the translator has no rule for it yet.";
     let mut want: Vec<String> = [28, 32, 36, 69, 76, 80, 86, 94].map(|l| format!("{l}: {copy}")).to_vec();
@@ -84,7 +89,11 @@ fn a_move_of_a_struct_keeps_its_contract() {
     let text = stdout(&o);
     assert_eq!(o.status.code(), Some(1), "stdout: {text} stderr: {}", stderr(&o));
     let failed: Vec<&str> = text.lines().filter(|l| l.starts_with("Not proved: ")).map(|l| l.rsplit_once(".cpp:").unwrap().1).collect();
-    let want = ["23: the ensures line may not hold on this return.", "57: the ensures line may not hold on this return.", "75: the ensures line may not hold on this return."];
+    let want = [
+        "23: the ensures line may not hold on this return.",
+        "57: the ensures line may not hold on this return.",
+        "75: the ensures line may not hold on this return.",
+    ];
     assert_eq!(failed, want, "{text}");
 }
 
@@ -100,7 +109,8 @@ fn a_move_with_no_rule_is_refused() {
     let o = prove("model-move-refuse.cpp", &[], &dafny);
     let text = stdout(&o);
     assert_eq!(o.status.code(), Some(1), "stdout: {text} stderr: {}", stderr(&o));
-    let mut refusals: Vec<&str> = text.lines().filter(|l| l.starts_with("Not provable: ")).map(|l| l.rsplit_once(".cpp:").unwrap().1).collect();
+    let mut refusals: Vec<&str> =
+        text.lines().filter(|l| l.starts_with("Not provable: ")).map(|l| l.rsplit_once(".cpp:").unwrap().1).collect();
     refusals.sort_by_key(|l| l.split(':').next().unwrap().parse::<u32>().unwrap());
     let field = "a field in the body of a constructor: the translator has no rule for it yet.";
     let mut want: Vec<String> = [9, 13, 18].map(|l| format!("{l}: {field}")).to_vec();
@@ -139,7 +149,11 @@ fn a_vector_that_the_code_gives_up_keeps_no_value() {
     let o = prove("model-vec-move-wrong.cpp", &[], &dafny);
     let text = stdout(&o);
     assert_eq!(o.status.code(), Some(1), "stdout: {text} stderr: {}", stderr(&o));
-    let failed: Vec<&str> = text.lines().filter(|l| l.starts_with("Not proved: ") || l.starts_with("Not provable: ")).map(|l| l.rsplit_once(".cpp:").unwrap().1).collect();
+    let failed: Vec<&str> = text
+        .lines()
+        .filter(|l| l.starts_with("Not proved: ") || l.starts_with("Not provable: "))
+        .map(|l| l.rsplit_once(".cpp:").unwrap().1)
+        .collect();
     let want = ["12", "18", "27", "35"].map(|l| format!("{l}: the ensures line may not hold on this return."));
     assert_eq!(failed, want, "{text}");
 }
@@ -156,8 +170,16 @@ fn a_vector_that_the_code_gives_up_has_no_value_without_the_gate() {
     let o = prove("model-vec-move-loose.cpp", &["--policy", team.to_str().unwrap()], &dafny);
     let text = stdout(&o);
     assert_eq!(o.status.code(), Some(1), "stdout: {text} stderr: {}", stderr(&o));
-    let failed: Vec<&str> = text.lines().filter(|l| l.starts_with("Not proved: ") || l.starts_with("Not provable: ")).map(|l| l.rsplit_once(".cpp:").unwrap().1).collect();
-    assert_eq!(failed, ["19: the ensures line may not hold on this return.", "26: the ensures line may not hold on this return."], "{text}");
+    let failed: Vec<&str> = text
+        .lines()
+        .filter(|l| l.starts_with("Not proved: ") || l.starts_with("Not provable: "))
+        .map(|l| l.rsplit_once(".cpp:").unwrap().1)
+        .collect();
+    assert_eq!(
+        failed,
+        ["19: the ensures line may not hold on this return.", "26: the ensures line may not hold on this return."],
+        "{text}"
+    );
 }
 
 /// The count and the value of `v(n, x)` are two arguments of one call, and the core checks them as it checks any call, so a write
@@ -186,7 +208,11 @@ fn a_vector_that_the_code_gives_up_with_no_rule_is_refused() {
     let o = prove("model-vec-move-refuse.cpp", &[], &dafny);
     let text = stdout(&o);
     assert_eq!(o.status.code(), Some(1), "stdout: {text} stderr: {}", stderr(&o));
-    let refused: Vec<&str> = text.lines().filter(|l| l.starts_with("Not proved: ") || l.starts_with("Not provable: ")).map(|l| l.rsplit_once(".cpp:").unwrap().1).collect();
+    let refused: Vec<&str> = text
+        .lines()
+        .filter(|l| l.starts_with("Not proved: ") || l.starts_with("Not provable: "))
+        .map(|l| l.rsplit_once(".cpp:").unwrap().1)
+        .collect();
     let local = "a local vector has a rule only as a copy of a vector in scope.";
     let want = [
         "9: v is a reference parameter that the modifies line does not name.".to_string(),
@@ -226,7 +252,11 @@ fn a_class_that_holds_a_vector_keeps_its_values() {
     let o = prove("model-bins-wrong.cpp", &[], &dafny);
     let text = stdout(&o);
     assert_eq!(o.status.code(), Some(1), "stdout: {text} stderr: {}", stderr(&o));
-    let failed: Vec<&str> = text.lines().filter(|l| l.starts_with("Not proved: ") || l.starts_with("Not provable: ")).map(|l| l.rsplit_once(".cpp:").unwrap().1).collect();
+    let failed: Vec<&str> = text
+        .lines()
+        .filter(|l| l.starts_with("Not proved: ") || l.starts_with("Not provable: "))
+        .map(|l| l.rsplit_once(".cpp:").unwrap().1)
+        .collect();
     let want = [
         "30: the index may be out of range.",
         "41: the ensures line may not hold on this return.",
@@ -248,7 +278,11 @@ fn a_class_that_holds_a_vector_with_no_rule_is_refused() {
     let o = prove("model-bins-refuse.cpp", &[], &dafny);
     let text = stdout(&o);
     assert_eq!(o.status.code(), Some(1), "stdout: {text} stderr: {}", stderr(&o));
-    let refused: Vec<&str> = text.lines().filter(|l| l.starts_with("Not proved: ") || l.starts_with("Not provable: ")).map(|l| l.rsplit_once(".cpp:").unwrap().1).collect();
+    let refused: Vec<&str> = text
+        .lines()
+        .filter(|l| l.starts_with("Not proved: ") || l.starts_with("Not provable: "))
+        .map(|l| l.rsplit_once(".cpp:").unwrap().1)
+        .collect();
     let holds = "a struct that holds a sequence has no rule yet in an optional, a pointer, a unique_ptr, or a vector that the code makes or writes.";
     let want = [
         "26: BinaryOperator =: the translator has no rule for it yet.".to_string(),
@@ -299,7 +333,11 @@ fn a_class_template_keeps_its_contract_at_each_type() {
     let o = prove("model-class-template-wrong.cpp", &[], &dafny);
     let text = stdout(&o);
     assert_eq!(o.status.code(), Some(1), "stdout: {text} stderr: {}", stderr(&o));
-    let failed: Vec<&str> = text.lines().filter(|l| l.starts_with("Not proved: ") || l.starts_with("Not provable: ")).map(|l| l.rsplit_once(".cpp:").unwrap().1).collect();
+    let failed: Vec<&str> = text
+        .lines()
+        .filter(|l| l.starts_with("Not proved: ") || l.starts_with("Not provable: "))
+        .map(|l| l.rsplit_once(".cpp:").unwrap().1)
+        .collect();
     assert_eq!(failed, ["18: the value may not fit int32_t.", "34: the ensures line may not hold on this return."], "{text}");
 }
 
@@ -316,7 +354,11 @@ fn a_class_template_with_no_rule_is_refused() {
     let o = prove("model-class-template-refuse.cpp", &[], &dafny);
     let text = stdout(&o);
     assert_eq!(o.status.code(), Some(1), "stdout: {text} stderr: {}", stderr(&o));
-    let refused: Vec<&str> = text.lines().filter(|l| l.starts_with("Not proved: ") || l.starts_with("Not provable: ")).map(|l| l.rsplit_once(".cpp:").unwrap().1).collect();
+    let refused: Vec<&str> = text
+        .lines()
+        .filter(|l| l.starts_with("Not proved: ") || l.starts_with("Not provable: "))
+        .map(|l| l.rsplit_once(".cpp:").unwrap().1)
+        .collect();
     let no_model = "a call to Gauge<int>::valid, which has no model in view.";
     let no_instance = "a member function with no instance: the translator has no rule for it yet.";
     let method = "CXXMethodDecl: the translator has no rule for it yet.";
@@ -372,7 +414,11 @@ fn a_call_of_a_plain_member_function_keeps_its_contract() {
     let o = prove("model-plain-member-wrong.cpp", &[], &dafny);
     let text = stdout(&o);
     assert_eq!(o.status.code(), Some(1), "stdout: {text} stderr: {}", stderr(&o));
-    let failed: Vec<&str> = text.lines().filter(|l| l.starts_with("Not proved: ") || l.starts_with("Not provable: ")).map(|l| l.rsplit_once(".cpp:").unwrap().1).collect();
+    let failed: Vec<&str> = text
+        .lines()
+        .filter(|l| l.starts_with("Not proved: ") || l.starts_with("Not provable: "))
+        .map(|l| l.rsplit_once(".cpp:").unwrap().1)
+        .collect();
     assert_eq!(failed, ["15: the ensures line may not hold on this return.", "24: a requires line of the callee may not hold."], "{text}");
 }
 
@@ -388,7 +434,11 @@ fn a_call_of_a_member_function_that_is_not_plain_keeps_its_rules() {
     let o = prove("model-plain-member-refuse.cpp", &[], &dafny);
     let text = stdout(&o);
     assert_eq!(o.status.code(), Some(1), "stdout: {text} stderr: {}", stderr(&o));
-    let failed: Vec<&str> = text.lines().filter(|l| l.starts_with("Not proved: ") || l.starts_with("Not provable: ")).map(|l| l.rsplit_once(".cpp:").unwrap().1).collect();
+    let failed: Vec<&str> = text
+        .lines()
+        .filter(|l| l.starts_with("Not proved: ") || l.starts_with("Not provable: "))
+        .map(|l| l.rsplit_once(".cpp:").unwrap().1)
+        .collect();
     let want = [
         "22: top is no pure function. A contract calls a function with one return and no write.",
         "32: the contract line has a form the translator cannot read.",
@@ -432,7 +482,11 @@ fn a_vector_field_that_grows_and_shrinks_keeps_its_contract() {
     let o = prove("model-vec-field-wrong.cpp", &[], &dafny);
     let text = stdout(&o);
     assert_eq!(o.status.code(), Some(1), "stdout: {text} stderr: {}", stderr(&o));
-    let mut failed: Vec<&str> = text.lines().filter(|l| l.starts_with("Not proved: ") || l.starts_with("Not provable: ")).map(|l| l.rsplit_once(".cpp:").unwrap().1).collect();
+    let mut failed: Vec<&str> = text
+        .lines()
+        .filter(|l| l.starts_with("Not proved: ") || l.starts_with("Not provable: "))
+        .map(|l| l.rsplit_once(".cpp:").unwrap().1)
+        .collect();
     failed.sort_by_key(|l| l.split(':').next().unwrap().parse::<u32>().unwrap());
     let want = [
         "17: a requires line of the callee may not hold.",
@@ -453,7 +507,11 @@ fn a_vector_form_with_no_rule_is_refused() {
     let o = prove("model-vec-field-refuse.cpp", &[], &dafny);
     let text = stdout(&o);
     assert_eq!(o.status.code(), Some(1), "stdout: {text} stderr: {}", stderr(&o));
-    let refused: Vec<&str> = text.lines().filter(|l| l.starts_with("Not proved: ") || l.starts_with("Not provable: ")).map(|l| l.rsplit_once(".cpp:").unwrap().1).collect();
+    let refused: Vec<&str> = text
+        .lines()
+        .filter(|l| l.starts_with("Not proved: ") || l.starts_with("Not provable: "))
+        .map(|l| l.rsplit_once(".cpp:").unwrap().1)
+        .collect();
     let want = [
         "10: CXXMemberCallExpr: the translator has no rule for it yet.",
         "14: CXXMemberCallExpr: the translator has no rule for it yet.",
@@ -491,7 +549,11 @@ fn a_tree_that_the_code_builds_keeps_what_it_wrote() {
     let o = prove("model-tree-wrong.cpp", &[], &dafny);
     let text = stdout(&o);
     assert_eq!(o.status.code(), Some(1), "stdout: {text} stderr: {}", stderr(&o));
-    let failed: Vec<&str> = text.lines().filter(|l| l.starts_with("Not proved: ") || l.starts_with("Not provable: ")).map(|l| l.rsplit_once(".cpp:").unwrap().1).collect();
+    let failed: Vec<&str> = text
+        .lines()
+        .filter(|l| l.starts_with("Not proved: ") || l.starts_with("Not provable: "))
+        .map(|l| l.rsplit_once(".cpp:").unwrap().1)
+        .collect();
     let ensures = "the ensures line may not hold on this return.";
     let want = [
         format!("16: {ensures}"),
@@ -517,7 +579,11 @@ fn a_tree_that_the_code_builds_with_no_rule_is_refused() {
     let o = prove("model-tree-refuse.cpp", &[], &dafny);
     let text = stdout(&o);
     assert_eq!(o.status.code(), Some(1), "stdout: {text} stderr: {}", stderr(&o));
-    let refused: Vec<&str> = text.lines().filter(|l| l.starts_with("Not proved: ") || l.starts_with("Not provable: ")).map(|l| l.rsplit_once(".cpp:").unwrap().1).collect();
+    let refused: Vec<&str> = text
+        .lines()
+        .filter(|l| l.starts_with("Not proved: ") || l.starts_with("Not provable: "))
+        .map(|l| l.rsplit_once(".cpp:").unwrap().1)
+        .collect();
     let want = [
         "27: p is a parameter. The translator writes only a local or a reference parameter.",
         "34: BinaryOperator +=: the translator has no rule for it yet.",
@@ -561,10 +627,19 @@ fn a_local_array_keeps_its_values() {
     let o = prove("model-array-local-wrong.cpp", &[], &dafny);
     let text = stdout(&o);
     assert_eq!(o.status.code(), Some(1), "stdout: {text} stderr: {}", stderr(&o));
-    let failed: Vec<&str> = text.lines().filter(|l| l.starts_with("Not proved: ") || l.starts_with("Not provable: ")).map(|l| l.rsplit_once(".cpp:").unwrap().1).collect();
+    let failed: Vec<&str> = text
+        .lines()
+        .filter(|l| l.starts_with("Not proved: ") || l.starts_with("Not provable: "))
+        .map(|l| l.rsplit_once(".cpp:").unwrap().1)
+        .collect();
     assert_eq!(
         failed,
-        ["8: the ensures line may not hold on this return.", "16: the ensures line may not hold on this return.", "35: the ensures line may not hold on this return.", "42: the index may be out of range."],
+        [
+            "8: the ensures line may not hold on this return.",
+            "16: the ensures line may not hold on this return.",
+            "35: the ensures line may not hold on this return.",
+            "42: the index may be out of range."
+        ],
         "{text}"
     );
 }
@@ -580,7 +655,11 @@ fn a_local_array_with_no_rule_is_refused() {
     let o = prove("model-array-local-refuse.cpp", &[], &dafny);
     let text = stdout(&o);
     assert_eq!(o.status.code(), Some(1), "stdout: {text} stderr: {}", stderr(&o));
-    let refused: Vec<&str> = text.lines().filter(|l| l.starts_with("Not proved: ") || l.starts_with("Not provable: ")).map(|l| l.rsplit_once(".cpp:").unwrap().1).collect();
+    let refused: Vec<&str> = text
+        .lines()
+        .filter(|l| l.starts_with("Not proved: ") || l.starts_with("Not provable: "))
+        .map(|l| l.rsplit_once(".cpp:").unwrap().1)
+        .collect();
     let want = [
         "7: a braced list of 2 values for a std::array of 3: the translator has no rule for it yet.",
         "13: a sequence is in the subset only as a parameter.",
@@ -616,10 +695,18 @@ fn a_chain_of_calls_keeps_each_step() {
     let o = prove("model-this-wrong.cpp", &[], &dafny);
     let text = stdout(&o);
     assert_eq!(o.status.code(), Some(1), "stdout: {text} stderr: {}", stderr(&o));
-    let failed: Vec<&str> = text.lines().filter(|l| l.starts_with("Not proved: ") || l.starts_with("Not provable: ")).map(|l| l.rsplit_once(".cpp:").unwrap().1).collect();
+    let failed: Vec<&str> = text
+        .lines()
+        .filter(|l| l.starts_with("Not proved: ") || l.starts_with("Not provable: "))
+        .map(|l| l.rsplit_once(".cpp:").unwrap().1)
+        .collect();
     assert_eq!(
         failed,
-        ["26: the ensures line may not hold on this return.", "32: a requires line of the callee may not hold.", "39: a requires line of the callee may not hold."],
+        [
+            "26: the ensures line may not hold on this return.",
+            "32: a requires line of the callee may not hold.",
+            "39: a requires line of the callee may not hold."
+        ],
         "{text}"
     );
 }
@@ -636,7 +723,11 @@ fn a_chain_with_no_rule_is_refused() {
     let o = prove("model-this-refuse.cpp", &[], &dafny);
     let text = stdout(&o);
     assert_eq!(o.status.code(), Some(1), "stdout: {text} stderr: {}", stderr(&o));
-    let refused: Vec<&str> = text.lines().filter(|l| l.starts_with("Not proved: ") || l.starts_with("Not provable: ")).map(|l| l.rsplit_once(".cpp:").unwrap().1).collect();
+    let refused: Vec<&str> = text
+        .lines()
+        .filter(|l| l.starts_with("Not proved: ") || l.starts_with("Not provable: "))
+        .map(|l| l.rsplit_once(".cpp:").unwrap().1)
+        .collect();
     let place = "a call out of place. The translator takes a call when C++ runs it once and the statement uses its value. It takes a call that gives no value only alone.";
     let want = [
         "19: a reference result that is not `*this`: the translator has no rule for it yet.".to_string(),
@@ -679,7 +770,11 @@ fn a_temporary_bound_to_a_const_reference_keeps_its_value() {
     let o = prove("model-temp-ref-wrong.cpp", &[], &dafny);
     let text = stdout(&o);
     assert_eq!(o.status.code(), Some(1), "stdout: {text} stderr: {}", stderr(&o));
-    let failed: Vec<&str> = text.lines().filter(|l| l.starts_with("Not proved: ") || l.starts_with("Not provable: ")).map(|l| l.rsplit_once(".cpp:").unwrap().1).collect();
+    let failed: Vec<&str> = text
+        .lines()
+        .filter(|l| l.starts_with("Not proved: ") || l.starts_with("Not provable: "))
+        .map(|l| l.rsplit_once(".cpp:").unwrap().1)
+        .collect();
     assert_eq!(failed, ["16: the ensures line may not hold on this return."], "{text}");
 }
 
@@ -694,9 +789,21 @@ fn a_temporary_in_a_return_by_reference_is_refused() {
     let o = prove("model-temp-ref-refuse.cpp", &[], &dafny);
     let text = stdout(&o);
     assert_eq!(o.status.code(), Some(1), "stdout: {text} stderr: {}", stderr(&o));
-    let refused: Vec<&str> = text.lines().filter(|l| l.starts_with("Not provable: ") || l.starts_with("Not proved: ")).map(|l| l.rsplit_once(".cpp:").unwrap().1).collect();
+    let refused: Vec<&str> = text
+        .lines()
+        .filter(|l| l.starts_with("Not provable: ") || l.starts_with("Not proved: "))
+        .map(|l| l.rsplit_once(".cpp:").unwrap().1)
+        .collect();
     let sentence = "a temporary in the return of a function that returns a reference: the translator has no rule for it yet.";
-    assert_eq!(refused, [format!("16: {sentence}"), format!("33: {sentence}"), "56: MaterializeTemporaryExpr: the translator has no rule for it yet.".to_string()], "{text}");
+    assert_eq!(
+        refused,
+        [
+            format!("16: {sentence}"),
+            format!("33: {sentence}"),
+            "56: MaterializeTemporaryExpr: the translator has no rule for it yet.".to_string()
+        ],
+        "{text}"
+    );
 }
 
 /// Each instance of a function template is a function of the model with the contract of the template, and it proves on its own,
@@ -771,7 +878,8 @@ fn a_function_template_with_no_rule_is_refused() {
     let o = prove("model-template-refuse.cpp", &[], &dafny);
     let text = stdout(&o);
     assert_eq!(o.status.code(), Some(1), "stdout: {text} stderr: {}", stderr(&o));
-    let mut refusals: Vec<&str> = text.lines().filter(|l| l.starts_with("Not provable: ")).map(|l| l.rsplit_once(".cpp:").unwrap().1).collect();
+    let mut refusals: Vec<&str> =
+        text.lines().filter(|l| l.starts_with("Not provable: ")).map(|l| l.rsplit_once(".cpp:").unwrap().1).collect();
     refusals.sort_by_key(|l| l.split(':').next().unwrap().parse::<u32>().unwrap());
     let want = [
         "9: a member function template: the translator has no rule for it yet.",
@@ -814,7 +922,11 @@ fn a_vector_by_value_keeps_its_contract() {
     let o = prove("model-vec-value-wrong.cpp", &[], &dafny);
     let text = stdout(&o);
     assert_eq!(o.status.code(), Some(1), "stdout: {text} stderr: {}", stderr(&o));
-    let failed: Vec<&str> = text.lines().filter(|l| l.starts_with("Not proved: ") || l.starts_with("Not provable: ")).map(|l| l.rsplit_once(".cpp:").unwrap().1).collect();
+    let failed: Vec<&str> = text
+        .lines()
+        .filter(|l| l.starts_with("Not proved: ") || l.starts_with("Not provable: "))
+        .map(|l| l.rsplit_once(".cpp:").unwrap().1)
+        .collect();
     let want = ["11", "17", "31"].map(|l| format!("{l}: the ensures line may not hold on this return."));
     assert_eq!(failed, want, "{text}");
 }
@@ -832,8 +944,16 @@ fn a_vector_given_by_value_has_no_value_without_the_gate() {
     let o = prove("model-vec-value-loose.cpp", &["--policy", team.to_str().unwrap()], &dafny);
     let text = stdout(&o);
     assert_eq!(o.status.code(), Some(1), "stdout: {text} stderr: {}", stderr(&o));
-    let failed: Vec<&str> = text.lines().filter(|l| l.starts_with("Not proved: ") || l.starts_with("Not provable: ")).map(|l| l.rsplit_once(".cpp:").unwrap().1).collect();
-    assert_eq!(failed, ["25: the ensures line may not hold on this return.", "35: the ensures line may not hold on this return."], "{text}");
+    let failed: Vec<&str> = text
+        .lines()
+        .filter(|l| l.starts_with("Not proved: ") || l.starts_with("Not provable: "))
+        .map(|l| l.rsplit_once(".cpp:").unwrap().1)
+        .collect();
+    assert_eq!(
+        failed,
+        ["25: the ensures line may not hold on this return.", "35: the ensures line may not hold on this return."],
+        "{text}"
+    );
 }
 
 /// A function with a vector parameter by value is no pure function, so a contract cannot call it. A vector of bool by value keeps
@@ -848,7 +968,11 @@ fn a_vector_by_value_with_no_rule_is_refused() {
     let o = prove("model-vec-value-refuse.cpp", &[], &dafny);
     let text = stdout(&o);
     assert_eq!(o.status.code(), Some(1), "stdout: {text} stderr: {}", stderr(&o));
-    let refused: Vec<&str> = text.lines().filter(|l| l.starts_with("Not proved: ") || l.starts_with("Not provable: ")).map(|l| l.rsplit_once(".cpp:").unwrap().1).collect();
+    let refused: Vec<&str> = text
+        .lines()
+        .filter(|l| l.starts_with("Not proved: ") || l.starts_with("Not provable: "))
+        .map(|l| l.rsplit_once(".cpp:").unwrap().1)
+        .collect();
     let moved = "a std::move of a std::vector has no rule here. It has a rule as the start value of a local vector and in the init list of a constructor. It also has a rule at a parameter by value of a call. That call stands alone, is the value of a return, or is the start value of a local that is no vector.";
     let want = [
         "12: any is no pure function. A contract calls a function with one return and no write.".to_string(),
@@ -888,7 +1012,11 @@ fn a_class_that_holds_a_std_array_keeps_its_contract() {
     let o = prove("model-array-field-wrong.cpp", &[], &dafny);
     let text = stdout(&o);
     assert_eq!(o.status.code(), Some(1), "stdout: {text} stderr: {}", stderr(&o));
-    let mut failed: Vec<&str> = text.lines().filter(|l| l.starts_with("Not proved: ") || l.starts_with("Not provable: ")).map(|l| l.rsplit_once(".cpp:").unwrap().1).collect();
+    let mut failed: Vec<&str> = text
+        .lines()
+        .filter(|l| l.starts_with("Not proved: ") || l.starts_with("Not provable: "))
+        .map(|l| l.rsplit_once(".cpp:").unwrap().1)
+        .collect();
     failed.sort_by_key(|l| (l.split(':').next().unwrap().parse::<u32>().unwrap(), l.to_string()));
     let want = [
         "9: the ensures line may not hold on this return.",
@@ -947,7 +1075,11 @@ fn the_pointer_to_implementation_keeps_its_contract() {
     let o = prove("model-pimpl-wrong.cpp", &[], &dafny);
     let text = stdout(&o);
     assert_eq!(o.status.code(), Some(1), "stdout: {text} stderr: {}", stderr(&o));
-    let mut failed: Vec<&str> = text.lines().filter(|l| l.starts_with("Not proved: ") || l.starts_with("Not provable: ")).map(|l| l.rsplit_once(".cpp:").unwrap().1).collect();
+    let mut failed: Vec<&str> = text
+        .lines()
+        .filter(|l| l.starts_with("Not proved: ") || l.starts_with("Not provable: "))
+        .map(|l| l.rsplit_once(".cpp:").unwrap().1)
+        .collect();
     failed.sort_by_key(|l| l.split(':').next().unwrap().parse::<u32>().unwrap());
     let want = [
         "14: the ensures line may not hold on this return.",
@@ -971,7 +1103,11 @@ fn the_pointer_to_implementation_with_no_rule_is_refused() {
     let o = prove("model-pimpl-refuse.cpp", &[], &dafny);
     let text = stdout(&o);
     assert_eq!(o.status.code(), Some(1), "stdout: {text} stderr: {}", stderr(&o));
-    let refused: Vec<&str> = text.lines().filter(|l| l.starts_with("Not proved: ") || l.starts_with("Not provable: ")).map(|l| l.rsplit_once(".cpp:").unwrap().1).collect();
+    let refused: Vec<&str> = text
+        .lines()
+        .filter(|l| l.starts_with("Not proved: ") || l.starts_with("Not provable: "))
+        .map(|l| l.rsplit_once(".cpp:").unwrap().1)
+        .collect();
     let want = [
         "29: CXXConstructorDecl: the translator has no rule for it yet.",
         "41: BinaryOperator =: the translator has no rule for it yet.",
@@ -994,7 +1130,11 @@ fn a_plain_member_function_with_apply_lines_proves() {
     let o = prove("model-plain-apply-wrong.cpp", &[], &dafny);
     let text = stdout(&o);
     assert_eq!(o.status.code(), Some(1), "stdout: {text} stderr: {}", stderr(&o));
-    let failed: Vec<&str> = text.lines().filter(|l| l.starts_with("Not proved: ") || l.starts_with("Not provable: ")).map(|l| l.rsplit_once(".cpp:").unwrap().1).collect();
+    let failed: Vec<&str> = text
+        .lines()
+        .filter(|l| l.starts_with("Not proved: ") || l.starts_with("Not provable: "))
+        .map(|l| l.rsplit_once(".cpp:").unwrap().1)
+        .collect();
     assert_eq!(failed, ["29: the ensures line may not hold on this return."], "{text}");
 }
 
@@ -1012,8 +1152,16 @@ fn a_move_of_a_value_and_a_constructor_template_prove() {
     let o = prove("model-move-value-wrong.cpp", &[], &dafny);
     let text = stdout(&o);
     assert_eq!(o.status.code(), Some(1), "stdout: {text} stderr: {}", stderr(&o));
-    let failed: Vec<&str> = text.lines().filter(|l| l.starts_with("Not proved: ") || l.starts_with("Not provable: ")).map(|l| l.rsplit_once(".cpp:").unwrap().1).collect();
-    assert_eq!(failed, ["49: the ensures line may not hold on this return.", "56: the ensures line may not hold on this return."], "{text}");
+    let failed: Vec<&str> = text
+        .lines()
+        .filter(|l| l.starts_with("Not proved: ") || l.starts_with("Not provable: "))
+        .map(|l| l.rsplit_once(".cpp:").unwrap().1)
+        .collect();
+    assert_eq!(
+        failed,
+        ["49: the ensures line may not hold on this return.", "56: the ensures line may not hold on this return."],
+        "{text}"
+    );
 }
 
 /// A std::move of a value that is not trivially copyable keeps its sentence, decision 0212.
@@ -1026,7 +1174,11 @@ fn a_move_of_a_value_that_is_not_trivially_copyable_is_refused() {
     let o = prove("model-move-value-refuse.cpp", &[], &dafny);
     let text = stdout(&o);
     assert_eq!(o.status.code(), Some(1), "stdout: {text} stderr: {}", stderr(&o));
-    let refused: Vec<&str> = text.lines().filter(|l| l.starts_with("Not proved: ") || l.starts_with("Not provable: ")).map(|l| l.rsplit_once(".cpp:").unwrap().1).collect();
+    let refused: Vec<&str> = text
+        .lines()
+        .filter(|l| l.starts_with("Not proved: ") || l.starts_with("Not provable: "))
+        .map(|l| l.rsplit_once(".cpp:").unwrap().1)
+        .collect();
     assert_eq!(refused, ["13: a call to std::move<Bag &>, which has no model in view."], "{text}");
 }
 
@@ -1054,7 +1206,11 @@ fn a_contract_that_calls_a_name_of_a_member_template_is_refused() {
     let o = prove("model-member-template-overload.cpp", &[], &dafny);
     let text = stdout(&o);
     assert_eq!(o.status.code(), Some(1), "stdout: {text} stderr: {}", stderr(&o));
-    let refused: Vec<&str> = text.lines().filter(|l| l.starts_with("Not proved: ") || l.starts_with("Not provable: ")).map(|l| l.rsplit_once(".cpp:").unwrap().1).collect();
+    let refused: Vec<&str> = text
+        .lines()
+        .filter(|l| l.starts_with("Not proved: ") || l.starts_with("Not provable: "))
+        .map(|l| l.rsplit_once(".cpp:").unwrap().1)
+        .collect();
     assert_eq!(refused, ["16: get is no pure function. A contract calls a function with one return and no write."], "{text}");
 }
 
@@ -1082,7 +1238,11 @@ fn a_static_member_template_is_refused() {
     let o = prove("model-member-template-static.cpp", &[], &dafny);
     let text = stdout(&o);
     assert_eq!(o.status.code(), Some(1), "stdout: {text} stderr: {}", stderr(&o));
-    let refused: Vec<&str> = text.lines().filter(|l| l.starts_with("Not proved: ") || l.starts_with("Not provable: ")).map(|l| l.rsplit_once(".cpp:").unwrap().1).collect();
+    let refused: Vec<&str> = text
+        .lines()
+        .filter(|l| l.starts_with("Not proved: ") || l.starts_with("Not provable: "))
+        .map(|l| l.rsplit_once(".cpp:").unwrap().1)
+        .collect();
     assert!(refused.contains(&"13: a member function template: the translator has no rule for it yet."), "{text}");
     assert!(!text.contains("a name with a character Dafny cannot read"), "{text}");
 }
@@ -1098,7 +1258,11 @@ fn a_contract_that_calls_a_static_name_of_a_member_template_is_refused() {
     let o = prove("model-member-template-static-name.cpp", &[], &dafny);
     let text = stdout(&o);
     assert_eq!(o.status.code(), Some(1), "stdout: {text} stderr: {}", stderr(&o));
-    let refused: Vec<&str> = text.lines().filter(|l| l.starts_with("Not proved: ") || l.starts_with("Not provable: ")).map(|l| l.rsplit_once(".cpp:").unwrap().1).collect();
+    let refused: Vec<&str> = text
+        .lines()
+        .filter(|l| l.starts_with("Not proved: ") || l.starts_with("Not provable: "))
+        .map(|l| l.rsplit_once(".cpp:").unwrap().1)
+        .collect();
     assert_eq!(refused, ["19: S::get is no pure function. A contract calls a function with one return and no write."], "{text}");
 }
 
@@ -1112,7 +1276,11 @@ fn a_contract_that_calls_an_overloaded_static_name_is_refused() {
     let o = prove("model-static-overload-contract.cpp", &[], &dafny);
     let text = stdout(&o);
     assert_eq!(o.status.code(), Some(1), "stdout: {text} stderr: {}", stderr(&o));
-    let refused: Vec<&str> = text.lines().filter(|l| l.starts_with("Not proved: ") || l.starts_with("Not provable: ")).map(|l| l.rsplit_once(".cpp:").unwrap().1).collect();
+    let refused: Vec<&str> = text
+        .lines()
+        .filter(|l| l.starts_with("Not proved: ") || l.starts_with("Not provable: "))
+        .map(|l| l.rsplit_once(".cpp:").unwrap().1)
+        .collect();
     assert_eq!(refused, ["18: S::get is no pure function. A contract calls a function with one return and no write."], "{text}");
 }
 
@@ -1127,7 +1295,11 @@ fn a_contract_that_calls_a_name_of_a_static_and_a_member_is_refused() {
     let o = prove("model-static-member-same-name.cpp", &[], &dafny);
     let text = stdout(&o);
     assert_eq!(o.status.code(), Some(1), "stdout: {text} stderr: {}", stderr(&o));
-    let refused: Vec<&str> = text.lines().filter(|l| l.starts_with("Not proved: ") || l.starts_with("Not provable: ")).map(|l| l.rsplit_once(".cpp:").unwrap().1).collect();
+    let refused: Vec<&str> = text
+        .lines()
+        .filter(|l| l.starts_with("Not proved: ") || l.starts_with("Not provable: "))
+        .map(|l| l.rsplit_once(".cpp:").unwrap().1)
+        .collect();
     let want = [
         "18: get is no pure function. A contract calls a function with one return and no write.",
         "25: S::get is no pure function. A contract calls a function with one return and no write.",
@@ -1146,6 +1318,10 @@ fn a_contract_that_calls_a_name_of_a_static_and_a_member_that_writes_is_refused(
     let o = prove("model-static-member-writes-same-name.cpp", &[], &dafny);
     let text = stdout(&o);
     assert_eq!(o.status.code(), Some(1), "stdout: {text} stderr: {}", stderr(&o));
-    let refused: Vec<&str> = text.lines().filter(|l| l.starts_with("Not proved: ") || l.starts_with("Not provable: ")).map(|l| l.rsplit_once(".cpp:").unwrap().1).collect();
+    let refused: Vec<&str> = text
+        .lines()
+        .filter(|l| l.starts_with("Not proved: ") || l.starts_with("Not provable: "))
+        .map(|l| l.rsplit_once(".cpp:").unwrap().1)
+        .collect();
     assert_eq!(refused, ["19: S::get is no pure function. A contract calls a function with one return and no write."], "{text}");
 }

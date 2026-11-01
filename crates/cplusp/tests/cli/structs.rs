@@ -289,7 +289,9 @@ fn a_companion_file_with_other_words_is_refused() {
     let text = stdout(&o);
     assert_eq!(o.status.code(), Some(1), "stdout: {text} stderr: {}", stderr(&o));
     let refusals: Vec<&str> = text.lines().filter(|l| l.starts_with("Not provable: ")).collect();
-    for (file, line, word) in [("model-spec-words.spec.dfy", 1, "{:"), ("model-spec-words.spec.dfy", 3, "method"), ("model-spec-words.spec.dfy", 6, "assume")] {
+    for (file, line, word) in
+        [("model-spec-words.spec.dfy", 1, "{:"), ("model-spec-words.spec.dfy", 3, "method"), ("model-spec-words.spec.dfy", 6, "assume")]
+    {
         let want = format!("{file}:{line}: {word}: a companion file can hold only functions, predicates and lemmas.");
         assert!(refusals.iter().any(|l| l.ends_with(&want)), "{want}: {text}");
     }
@@ -507,7 +509,10 @@ fn prove_names_a_slice_that_may_start_past_the_end() {
     let text = stdout(&o);
     assert_eq!(o.status.code(), Some(1), "stdout: {text} stderr: {}", stderr(&o));
     let failed: Vec<&str> = text.lines().filter(|l| l.starts_with("Not proved: ")).collect();
-    for want in ["model-slice-wrong.cpp:6: the offset may be past the end.", "model-slice-wrong.cpp:8: the ensures line may not hold on this return."] {
+    for want in [
+        "model-slice-wrong.cpp:6: the offset may be past the end.",
+        "model-slice-wrong.cpp:8: the ensures line may not hold on this return.",
+    ] {
         assert!(failed.iter().any(|l| l.ends_with(want)), "{want}: {text}");
     }
     assert_eq!(failed.len(), 2, "{text}");
@@ -713,7 +718,9 @@ fn prove_names_a_write_that_may_overflow_and_an_ensures_line_of_a_void_function(
     let text = stdout(&o);
     assert_eq!(o.status.code(), Some(1), "stdout: {text} stderr: {}", stderr(&o));
     let failed: Vec<&str> = text.lines().filter(|l| l.starts_with("Not proved: ")).collect();
-    for want in ["model-mut-wrong.cpp:8: the value may not fit int32_t.", "model-mut-wrong.cpp:12: the ensures line may not hold on this return."] {
+    for want in
+        ["model-mut-wrong.cpp:8: the value may not fit int32_t.", "model-mut-wrong.cpp:12: the ensures line may not hold on this return."]
+    {
         assert!(failed.iter().any(|l| l.ends_with(want)), "{want}: {text}");
     }
     assert_eq!(failed.len(), 2, "{text}");
@@ -770,7 +777,9 @@ fn prove_names_a_conditional_that_does_not_meet_its_contract() {
     let text = stdout(&o);
     assert_eq!(o.status.code(), Some(1), "stdout: {text} stderr: {}", stderr(&o));
     let failed: Vec<&str> = text.lines().filter(|l| l.starts_with("Not proved: ")).collect();
-    for want in ["model-cond-wrong.cpp:6: the ensures line may not hold on this return.", "model-cond-wrong.cpp:10: the value may not fit int32_t."] {
+    for want in
+        ["model-cond-wrong.cpp:6: the ensures line may not hold on this return.", "model-cond-wrong.cpp:10: the value may not fit int32_t."]
+    {
         assert!(failed.iter().any(|l| l.ends_with(want)), "{want}: {text}");
     }
     assert_eq!(failed.len(), 2, "{text}");
@@ -823,7 +832,9 @@ fn prove_names_an_assert_line_and_an_apply_line_that_may_not_hold() {
     let text = stdout(&o);
     assert_eq!(o.status.code(), Some(1), "stdout: {text} stderr: {}", stderr(&o));
     let failed: Vec<&str> = text.lines().filter(|l| l.starts_with("Not proved: ")).collect();
-    for want in ["model-assert-wrong.cpp:4: the assert line may not hold.", "model-assert-wrong.cpp:9: a requires line of the callee may not hold."] {
+    for want in
+        ["model-assert-wrong.cpp:4: the assert line may not hold.", "model-assert-wrong.cpp:9: a requires line of the callee may not hold."]
+    {
         assert!(failed.iter().any(|l| l.ends_with(want)), "{want}: {text}");
     }
     assert_eq!(failed.len(), 2, "{text}");
@@ -927,7 +938,10 @@ fn prove_names_a_caller_that_needs_more_than_a_trusted_contract() {
     let text = stdout(&o);
     assert_eq!(o.status.code(), Some(1), "stdout: {text} stderr: {}", stderr(&o));
     let failed: Vec<&str> = text.lines().filter(|l| l.starts_with("Not proved: ")).collect();
-    for want in ["model-trusted-wrong.cpp:12: the ensures line may not hold on this return.", "model-trusted-wrong.cpp:21: a requires line of the callee may not hold."] {
+    for want in [
+        "model-trusted-wrong.cpp:12: the ensures line may not hold on this return.",
+        "model-trusted-wrong.cpp:21: a requires line of the callee may not hold.",
+    ] {
         assert!(failed.iter().any(|l| l.ends_with(want)), "{want}: {text}");
     }
     assert_eq!(failed.len(), 2, "{text}");
@@ -937,7 +951,10 @@ fn prove_names_a_caller_that_needs_more_than_a_trusted_contract() {
     assert_eq!(trusted.len(), 2, "{text}");
     assert!(trusted.iter().all(|&i| i < first_fault), "{text}");
     assert!(lines.iter().any(|l| l.ends_with("model-trusted-wrong.cpp:7: read_status: reads a hardware status register")), "{text}");
-    assert!(lines.iter().any(|l| l.ends_with("model-trusted-wrong.cpp:26: BinaryOperator <<: the translator has no rule for it yet.")), "{text}");
+    assert!(
+        lines.iter().any(|l| l.ends_with("model-trusted-wrong.cpp:26: BinaryOperator <<: the translator has no rule for it yet.")),
+        "{text}"
+    );
 }
 
 /// The //@ lines in the body of a trusted definition belong to it and are not read, and the Trusted: line names the marked
@@ -1053,8 +1070,16 @@ fn a_member_function_named_size_keeps_its_contract() {
     let o = prove("model-size-member-wrong.cpp", &[], &dafny);
     let text = stdout(&o);
     assert_eq!(o.status.code(), Some(1), "stdout: {text} stderr: {}", stderr(&o));
-    let failed: Vec<&str> = text.lines().filter(|l| l.starts_with("Not proved: ") || l.starts_with("Not provable: ")).map(|l| l.rsplit_once(".cpp:").unwrap().1).collect();
-    assert_eq!(failed, ["20: the ensures line may not hold on this return.", "33: the ensures line may not hold on this return."], "{text}");
+    let failed: Vec<&str> = text
+        .lines()
+        .filter(|l| l.starts_with("Not proved: ") || l.starts_with("Not provable: "))
+        .map(|l| l.rsplit_once(".cpp:").unwrap().1)
+        .collect();
+    assert_eq!(
+        failed,
+        ["20: the ensures line may not hold on this return.", "33: the ensures line may not hold on this return."],
+        "{text}"
+    );
 }
 
 /// `o.size()` of a struct with no member size names the member, and of a scalar has no form, decision 0200.
@@ -1067,7 +1092,11 @@ fn a_member_function_named_size_with_no_rule_is_refused() {
     let o = prove("model-size-member-refuse.cpp", &[], &dafny);
     let text = stdout(&o);
     assert_eq!(o.status.code(), Some(1), "stdout: {text} stderr: {}", stderr(&o));
-    let refused: Vec<&str> = text.lines().filter(|l| l.starts_with("Not proved: ") || l.starts_with("Not provable: ")).map(|l| l.rsplit_once(".cpp:").unwrap().1).collect();
+    let refused: Vec<&str> = text
+        .lines()
+        .filter(|l| l.starts_with("Not proved: ") || l.starts_with("Not provable: "))
+        .map(|l| l.rsplit_once(".cpp:").unwrap().1)
+        .collect();
     let want = [
         "9: size is no pure function. A contract calls a function with one return and no write.",
         "15: the contract line has a form the translator cannot read.",
@@ -1099,7 +1128,11 @@ fn a_function_from_its_ensures_line_keeps_its_contract() {
     let o = prove("model-ensures-function-wrong.cpp", &[], &dafny);
     let text = stdout(&o);
     assert_eq!(o.status.code(), Some(1), "stdout: {text} stderr: {}", stderr(&o));
-    let failed: Vec<&str> = text.lines().filter(|l| l.starts_with("Not proved: ") || l.starts_with("Not provable: ")).map(|l| l.rsplit_once(".cpp:").unwrap().1).collect();
+    let failed: Vec<&str> = text
+        .lines()
+        .filter(|l| l.starts_with("Not proved: ") || l.starts_with("Not provable: "))
+        .map(|l| l.rsplit_once(".cpp:").unwrap().1)
+        .collect();
     assert_eq!(failed, ["25: the ensures line may not hold on this return."], "{text}");
 }
 
@@ -1113,7 +1146,11 @@ fn a_function_from_its_ensures_line_with_no_rule_is_refused() {
     let o = prove("model-ensures-function-refuse.cpp", &[], &dafny);
     let text = stdout(&o);
     assert_eq!(o.status.code(), Some(1), "stdout: {text} stderr: {}", stderr(&o));
-    let refused: Vec<&str> = text.lines().filter(|l| l.starts_with("Not proved: ") || l.starts_with("Not provable: ")).map(|l| l.rsplit_once(".cpp:").unwrap().1).collect();
+    let refused: Vec<&str> = text
+        .lines()
+        .filter(|l| l.starts_with("Not proved: ") || l.starts_with("Not provable: "))
+        .map(|l| l.rsplit_once(".cpp:").unwrap().1)
+        .collect();
     let want = [
         "29: total is no pure function. A contract calls a function with one return and no write.",
         "35: grow is no pure function. A contract calls a function with one return and no write.",

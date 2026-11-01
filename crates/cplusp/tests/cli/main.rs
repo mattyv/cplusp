@@ -4,16 +4,16 @@ use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 
-mod policy;
-mod gate;
-mod markers;
 mod basics;
-mod structs;
-mod forms;
-mod doubles;
-mod interfaces;
-mod names;
 mod classes;
+mod doubles;
+mod forms;
+mod gate;
+mod interfaces;
+mod markers;
+mod names;
+mod policy;
+mod structs;
 
 fn root() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("../..").canonicalize().unwrap()
@@ -24,11 +24,7 @@ fn fixture(name: &str) -> PathBuf {
 }
 
 fn cplusp(args: &[&str]) -> Output {
-    Command::new(env!("CARGO_BIN_EXE_cplusp"))
-        .args(args)
-        .current_dir(root())
-        .output()
-        .expect("cplusp runs")
+    Command::new(env!("CARGO_BIN_EXE_cplusp")).args(args).current_dir(root()).output().expect("cplusp runs")
 }
 
 fn stdout(o: &Output) -> String {
@@ -50,28 +46,38 @@ fn gated(args: &[&str]) -> Output {
 
 fn plugin() -> PathBuf {
     let p = std::env::var_os("CPLUSP_PLUGIN").map(PathBuf::from).unwrap_or_else(|| root().join("target/plugin/libcplusp.so"));
-    assert!(p.exists(), "plugin not built: run `cmake -S clang-tidy -B target/plugin -G Ninja && cmake --build target/plugin`, or set CPLUSP_PLUGIN");
+    assert!(
+        p.exists(),
+        "plugin not built: run `cmake -S clang-tidy -B target/plugin -G Ninja && cmake --build target/plugin`, or set CPLUSP_PLUGIN"
+    );
     p
 }
 
+/// A test skips only when `CPLUSP_SKIP_TOOLS` is set. Otherwise a missing tool fails the test, decision 0224.
+fn skip_tools() -> bool {
+    std::env::var_os("CPLUSP_SKIP_TOOLS").is_some()
+}
+
+/// clang-tidy runs. When it does not, the test fails, unless `CPLUSP_SKIP_TOOLS` is set, decision 0224.
 fn clang_tidy_available() -> bool {
-    ["clang-tidy-18", "clang-tidy"]
-        .iter()
-        .any(|b| Command::new(b).arg("--version").output().map(|o| o.status.success()).unwrap_or(false))
+    let runs = ["clang-tidy-18", "clang-tidy"].iter().any(|b| Command::new(b).arg("--version").output().map(|o| o.status.success()).unwrap_or(false));
+    assert!(runs || skip_tools(), "clang-tidy does not run: install clang-tidy-18, or set CPLUSP_SKIP_TOOLS=1 to skip the tests that need it");
+    runs
 }
 
 // ------------------------------------------------------------------ the translator, decisions 0056 and 0057
 
-/// Dafny, from `$DAFNY`, the battery's install, or the path. None skips the test.
+/// Dafny, from `$DAFNY`, the battery's install, or the path. A `$DAFNY` that does not run fails the test, with no other install in
+/// its place. With no Dafny, the test fails, unless `CPLUSP_SKIP_TOOLS` is set, decision 0224.
 fn dafny() -> Option<PathBuf> {
-    if let Ok(d) = std::env::var("DAFNY") {
-        return Some(PathBuf::from(d));
+    let runs = |d: &Path| Command::new(d).arg("--version").output().is_ok_and(|o| o.status.success());
+    if let Some(d) = std::env::var_os("DAFNY").map(PathBuf::from) {
+        assert!(runs(&d), "DAFNY={} does not run `--version`", d.display());
+        return Some(d);
     }
-    let installed = PathBuf::from("/opt/dafny/dafny/dafny");
-    if installed.exists() {
-        return Some(installed);
-    }
-    Command::new("dafny").arg("--version").output().ok().filter(|o| o.status.success()).map(|_| PathBuf::from("dafny"))
+    let found = [PathBuf::from("/opt/dafny/dafny/dafny"), PathBuf::from("dafny")].into_iter().find(|d| runs(d));
+    assert!(found.is_some() || skip_tools(), "Dafny does not run: set DAFNY, or set CPLUSP_SKIP_TOOLS=1 to skip the tests that need it");
+    found
 }
 
 /// Translate one fixture into a Dafny file, and give the gate's output and the path of the model.
@@ -83,7 +89,17 @@ fn model(name: &str, dir: &Path) -> (Output, PathBuf) {
 fn model_of(f: &Path, dir: &Path) -> (Output, PathBuf) {
     let out = dir.join("model.dfy");
     let plugin = plugin();
-    let o = cplusp(&["model", "--plugin", plugin.to_str().unwrap(), "--out", out.to_str().unwrap(), f.to_str().unwrap(), "--", "-std=c++23", "-ffp-contract=off"]);
+    let o = cplusp(&[
+        "model",
+        "--plugin",
+        plugin.to_str().unwrap(),
+        "--out",
+        out.to_str().unwrap(),
+        f.to_str().unwrap(),
+        "--",
+        "-std=c++23",
+        "-ffp-contract=off",
+    ]);
     (o, out)
 }
 
@@ -140,7 +156,8 @@ fn field(line: &str, key: &str) -> String {
     }
 }
 
-const AXIOM: &str = "Axiom: Double.dfy: RoundError: IEEE 754 binary64, round to nearest even, gradual underflow, one rounding per operation.";
+const AXIOM: &str =
+    "Axiom: Double.dfy: RoundError: IEEE 754 binary64, round to nearest even, gradual underflow, one rounding per operation.";
 
 const SORT_AXIOM: &str = "Axiom: Algorithm.dfy: StdSort: std::sort with a strict weak order gives a permutation of its range, and no later element compares less than an earlier one, C++23 [sort] and [alg.sorting.general].";
 

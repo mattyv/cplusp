@@ -74,7 +74,10 @@ fn a_variable_in_a_contract_and_a_left_shift_are_refused() {
     let text = stdout(&o);
     assert_eq!(o.status.code(), Some(1), "stdout: {text} stderr: {}", stderr(&o));
     let refusals: Vec<&str> = text.lines().filter(|l| l.starts_with("Not provable: ")).collect();
-    for want in ["model-small-refuse.cpp:6: scale in the contract is no parameter.", "model-small-refuse.cpp:12: BinaryOperator <<: the translator has no rule for it yet."] {
+    for want in [
+        "model-small-refuse.cpp:6: scale in the contract is no parameter.",
+        "model-small-refuse.cpp:12: BinaryOperator <<: the translator has no rule for it yet.",
+    ] {
         assert!(refusals.iter().any(|l| l.ends_with(want)), "{want}: {text}");
     }
     assert_eq!(refusals.len(), 2, "{text}");
@@ -185,7 +188,10 @@ fn prove_names_a_switch_that_does_not_meet_its_contract() {
     let text = stdout(&o);
     assert_eq!(o.status.code(), Some(1), "stdout: {text} stderr: {}", stderr(&o));
     let failed: Vec<&str> = text.lines().filter(|l| l.starts_with("Not proved: ")).collect();
-    for want in ["model-enum-wrong.cpp:12: the ensures line may not hold on this return.", "model-enum-wrong.cpp:23: the ensures line may not hold on this return."] {
+    for want in [
+        "model-enum-wrong.cpp:12: the ensures line may not hold on this return.",
+        "model-enum-wrong.cpp:23: the ensures line may not hold on this return.",
+    ] {
         assert!(failed.iter().any(|l| l.ends_with(want)), "{want}: {text}");
     }
     assert_eq!(failed.len(), 2, "{text}");
@@ -258,7 +264,12 @@ fn a_raw_copy_says_why_it_is_refused() {
     ];
     for (line, want) in wants {
         let at = format!("banned.cpp:{line}: ");
-        assert!(out.lines().any(|l| l.contains(&at) && l.ends_with(&format!("Use std::bit_cast for the bits of a value, or a pointer to bytes. {want}"))), "{line}: {out}");
+        assert!(
+            out.lines()
+                .any(|l| l.contains(&at)
+                    && l.ends_with(&format!("Use std::bit_cast for the bits of a value, or a pointer to bytes. {want}"))),
+            "{line}: {out}"
+        );
     }
 }
 
@@ -333,7 +344,10 @@ fn a_longer_chain_gives_no_more_and_the_star_needs_a_value() {
     let o = prove("model-chain-wrong.cpp", &[], &dafny);
     let text = stdout(&o);
     assert_eq!(o.status.code(), Some(1), "stdout: {text} stderr: {}", stderr(&o));
-    for want in ["model-chain-wrong.cpp:8: the ensures line may not hold on this return.", "model-chain-wrong.cpp:12: the optional may be empty or the pointer may be null here."] {
+    for want in [
+        "model-chain-wrong.cpp:8: the ensures line may not hold on this return.",
+        "model-chain-wrong.cpp:12: the optional may be empty or the pointer may be null here.",
+    ] {
         assert!(text.lines().any(|l| l.starts_with("Not proved: ") && l.ends_with(want)), "{want}: {text}");
     }
 }
@@ -442,7 +456,10 @@ fn the_arrow_needs_a_value() {
     let o = prove("model-opt-struct-wrong.cpp", &[], &dafny);
     let text = stdout(&o);
     assert_eq!(o.status.code(), Some(1), "stdout: {text} stderr: {}", stderr(&o));
-    for want in ["model-opt-struct-wrong.cpp:20: the optional may be empty or the pointer may be null here.", "model-opt-struct-wrong.cpp:23: the optional may be empty or the pointer may be null here."] {
+    for want in [
+        "model-opt-struct-wrong.cpp:20: the optional may be empty or the pointer may be null here.",
+        "model-opt-struct-wrong.cpp:23: the optional may be empty or the pointer may be null here.",
+    ] {
         assert!(text.lines().any(|l| l.starts_with("Not proved: ") && l.ends_with(want)), "{want}: {text}");
     }
 }
@@ -617,7 +634,10 @@ fn a_range_for_is_a_loop_over_indexes() {
     let o = prove("model-range-wrong.cpp", &[], &dafny);
     let text = stdout(&o);
     assert_eq!(o.status.code(), Some(1), "stdout: {text} stderr: {}", stderr(&o));
-    for want in ["model-range-wrong.cpp:10: the invariant may not hold when the loop starts.", "model-range-wrong.cpp:22: the value may not fit int32_t."] {
+    for want in [
+        "model-range-wrong.cpp:10: the invariant may not hold when the loop starts.",
+        "model-range-wrong.cpp:22: the value may not fit int32_t.",
+    ] {
         assert!(text.lines().any(|l| l.starts_with("Not proved: ") && l.ends_with(want)), "{want}: {text}");
     }
 }
@@ -812,7 +832,11 @@ fn a_variant_of_two_types_keeps_its_contract() {
     let o = prove("model-variant-wrong.cpp", &[], &dafny);
     let text = stdout(&o);
     assert_eq!(o.status.code(), Some(1), "stdout: {text} stderr: {}", stderr(&o));
-    let failed: Vec<&str> = text.lines().filter(|l| l.starts_with("Not proved: ") || l.starts_with("Not provable: ")).map(|l| l.rsplit_once(".cpp:").unwrap().1).collect();
+    let failed: Vec<&str> = text
+        .lines()
+        .filter(|l| l.starts_with("Not proved: ") || l.starts_with("Not provable: "))
+        .map(|l| l.rsplit_once(".cpp:").unwrap().1)
+        .collect();
     let want = [
         "7: the variant may not hold this alternative.",
         "12: the ensures line may not hold on this return.",
@@ -833,7 +857,11 @@ fn a_variant_with_no_rule_is_refused() {
     let o = prove("model-variant-refuse.cpp", &[], &dafny);
     let text = stdout(&o);
     assert_eq!(o.status.code(), Some(1), "stdout: {text} stderr: {}", stderr(&o));
-    let refused: Vec<&str> = text.lines().filter(|l| l.starts_with("Not proved: ") || l.starts_with("Not provable: ")).map(|l| l.rsplit_once(".cpp:").unwrap().1).collect();
+    let refused: Vec<&str> = text
+        .lines()
+        .filter(|l| l.starts_with("Not proved: ") || l.starts_with("Not provable: "))
+        .map(|l| l.rsplit_once(".cpp:").unwrap().1)
+        .collect();
     let want = [
         "8: const std::variant<int32_t, bool, uint64_t> &: the translator has no rule for it yet.",
         "12: the contract line has a form the translator cannot read.",

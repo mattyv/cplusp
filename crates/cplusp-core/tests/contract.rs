@@ -138,7 +138,10 @@ fn a_number_that_cannot_be_read_is_never_a_value() {
 /// A bad suffix carries its length in the number without separators, so the shell names it as the author wrote it, decision 0124.
 #[test]
 fn a_bad_suffix_has_its_length_without_separators() {
-    assert_eq!(lex("12u'q 0x1Fzz"), vec![t("12u'q", LexKind::BadNumber(NumberFault::Suffix(2))), t("0x1Fzz", LexKind::BadNumber(NumberFault::Suffix(2)))]);
+    assert_eq!(
+        lex("12u'q 0x1Fzz"),
+        vec![t("12u'q", LexKind::BadNumber(NumberFault::Suffix(2))), t("0x1Fzz", LexKind::BadNumber(NumberFault::Suffix(2)))]
+    );
 }
 
 #[test]
@@ -215,7 +218,10 @@ fn the_punctuation() {
 fn white_space_is_ascii_only_and_any_other_character_is_refused_whole() {
     assert_eq!(lex("\tx\r\n y\u{b}\u{c}z"), vec![name("x"), name("y"), name("z")]);
     // A no-break space is no white space in a contract, decision 0124.
-    assert_eq!(lex("x\u{a0}y \u{e9} $"), vec![name("x"), t("\u{a0}", LexKind::BadChar), name("y"), t("\u{e9}", LexKind::BadChar), t("$", LexKind::BadChar)]);
+    assert_eq!(
+        lex("x\u{a0}y \u{e9} $"),
+        vec![name("x"), t("\u{a0}", LexKind::BadChar), name("y"), t("\u{e9}", LexKind::BadChar), t("$", LexKind::BadChar)]
+    );
 }
 
 /// The lexer drops no text except white space: the spans are in order, and each byte outside them is ASCII white space.
@@ -245,7 +251,10 @@ fn the_spans_cover_every_byte_but_white_space() {
 #[test]
 fn the_arrow_is_one_token() {
     assert_eq!(lex("result->lo"), vec![fixed("result", Tok::Result), fixed("->", Tok::Arrow), name("lo")]);
-    assert_eq!(lex("a -> b - > c"), vec![name("a"), fixed("->", Tok::Arrow), name("b"), op("-", BinOp::Sub), op(">", BinOp::Gt), name("c")]);
+    assert_eq!(
+        lex("a -> b - > c"),
+        vec![name("a"), fixed("->", Tok::Arrow), name("b"), op("-", BinOp::Sub), op(">", BinOp::Gt), name("c")]
+    );
     assert_eq!(lex("x-->0"), vec![name("x"), op("-", BinOp::Sub), fixed("->", Tok::Arrow), t("0", LexKind::Int(0))]);
     assert_eq!(lex("a ==> b"), vec![name("a"), op("==>", BinOp::Implies), name("b")]);
 }
@@ -261,7 +270,10 @@ fn nullptr_is_a_word() {
 /// decision 0150.
 #[test]
 fn a_decimal_with_a_point_is_a_real_and_isfinite_is_a_word() {
-    assert_eq!(lex("150.0 0.5 100.25"), vec![t("150.0", LexKind::Real(1500, 1)), t("0.5", LexKind::Real(5, 1)), t("100.25", LexKind::Real(10025, 2))]);
+    assert_eq!(
+        lex("150.0 0.5 100.25"),
+        vec![t("150.0", LexKind::Real(1500, 1)), t("0.5", LexKind::Real(5, 1)), t("100.25", LexKind::Real(10025, 2))]
+    );
     assert_eq!(
         lex("std::isfinite(a)"),
         vec![fixed("std::isfinite", Tok::IsFinite), fixed("(", Tok::LParen), name("a"), fixed(")", Tok::RParen)]
@@ -301,11 +313,13 @@ fn a_decimal_with_too_many_digits_after_the_point_has_its_own_fault() {
     assert_eq!(lex("0.0000000000000000001"), vec![t("0.0000000000000000001", LexKind::Real(1, 19))]);
 }
 
-
 /// `this` is a word of the grammar, decision 0166. A name that starts with it is a name.
 #[test]
 fn this_is_a_word() {
-    assert_eq!(lex("this->k_ == thisx"), vec![fixed("this", Tok::This), fixed("->", Tok::Arrow), name("k_"), op("==", BinOp::Eq), name("thisx")]);
+    assert_eq!(
+        lex("this->k_ == thisx"),
+        vec![fixed("this", Tok::This), fixed("->", Tok::Arrow), name("k_"), op("==", BinOp::Eq), name("thisx")]
+    );
 }
 
 /// `static_cast<uint32_t>` is one token, and `&` alone is the bit operator, decision 0175.
@@ -313,7 +327,14 @@ fn this_is_a_word() {
 fn a_cast_and_a_bit_operator() {
     assert_eq!(
         lex("static_cast<uint32_t>(f) & g"),
-        [fixed("static_cast<uint32_t>", Tok::Cast(Ty::U32)), fixed("(", Tok::LParen), name("f"), fixed(")", Tok::RParen), op("&", BinOp::BitAnd), name("g")]
+        [
+            fixed("static_cast<uint32_t>", Tok::Cast(Ty::U32)),
+            fixed("(", Tok::LParen),
+            name("f"),
+            fixed(")", Tok::RParen),
+            op("&", BinOp::BitAnd),
+            name("g")
+        ]
     );
     assert_eq!(lex("static_cast<size_t>(l)")[0], fixed("static_cast<size_t>", Tok::Cast(Ty::U64)));
     assert_eq!(lex("a && b")[1], op("&&", BinOp::And));
@@ -366,6 +387,9 @@ fn the_three_forms_read_a_type_name_alike() {
     }
     // `bool` has no cast of the contract language.
     assert_eq!(lex("std::get<bool>(v)")[0], ("std::get<bool>".to_string(), LexKind::Fixed(Tok::Alt(Ty::Bool))));
-    assert_eq!(lex("std::holds_alternative<bool>(v)")[0], ("std::holds_alternative<bool>".to_string(), LexKind::Fixed(Tok::Holds(Ty::Bool))));
+    assert_eq!(
+        lex("std::holds_alternative<bool>(v)")[0],
+        ("std::holds_alternative<bool>".to_string(), LexKind::Fixed(Tok::Holds(Ty::Bool)))
+    );
     assert_ne!(lex("static_cast<bool>(v)")[0].1, LexKind::Fixed(Tok::Cast(Ty::Bool)));
 }

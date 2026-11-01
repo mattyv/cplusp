@@ -75,7 +75,11 @@ fn verdict(file: &Path) -> Verdict {
         return Verdict::TypeError;
     }
     assert!(text.contains("verifier finished"), "{}: dafny did not finish:\n{text}", file.display());
-    if text.contains(", 0 errors") { Verdict::Verifies } else { Verdict::Fails }
+    if text.contains(", 0 errors") {
+        Verdict::Verifies
+    } else {
+        Verdict::Fails
+    }
 }
 
 // The sanitizer flags are the lib's, so the differential run and the witnesses see the same faults.
@@ -108,14 +112,23 @@ fn run(exe: &Path) -> (String, String) {
     (String::from_utf8_lossy(&o.stdout).into_owned(), String::from_utf8_lossy(&o.stderr).into_owned())
 }
 
+/// clang-tidy runs. When it does not, the battery fails, unless `CPLUSP_SKIP_TOOLS` is set, decision 0224.
 fn clang_tidy_available() -> bool {
-    ["clang-tidy-18", "clang-tidy"].iter().any(|b| Command::new(b).arg("--version").output().map(|o| o.status.success()).unwrap_or(false))
+    let runs = ["clang-tidy-18", "clang-tidy"].iter().any(|b| Command::new(b).arg("--version").output().map(|o| o.status.success()).unwrap_or(false));
+    assert!(
+        runs || std::env::var_os("CPLUSP_SKIP_TOOLS").is_some(),
+        "clang-tidy does not run: install clang-tidy-18, or set CPLUSP_SKIP_TOOLS=1 to skip the gate in the battery"
+    );
+    runs
 }
 
 /// The gate on one file, through the cplusp binary. The plugin must be built, as for the cli tests.
 fn gate(file: &Path) -> Output {
     let plugin = std::env::var_os("CPLUSP_PLUGIN").map(PathBuf::from).unwrap_or_else(|| root().join("target/plugin/libcplusp.so"));
-    assert!(plugin.exists(), "plugin not built: run `cmake -S clang-tidy -B target/plugin -G Ninja && cmake --build target/plugin`, or set CPLUSP_PLUGIN");
+    assert!(
+        plugin.exists(),
+        "plugin not built: run `cmake -S clang-tidy -B target/plugin -G Ninja && cmake --build target/plugin`, or set CPLUSP_PLUGIN"
+    );
     Command::new("cargo")
         .args(["run", "-q", "-p", "cplusp", "--", "gate", "--json", "--plugin"])
         .arg(plugin)
@@ -143,13 +156,18 @@ fn every_case_says_what_it_claims() {
     std::fs::create_dir_all(&out_dir).unwrap();
     let check = |dir: &Path| {
         let id = dir.file_name().unwrap().to_string_lossy().into_owned();
-        let case: Case = serde_yaml::from_str(&std::fs::read_to_string(dir.join("case.yaml")).unwrap()).unwrap_or_else(|e| panic!("{id}/case.yaml: {e}"));
+        let case: Case = serde_yaml::from_str(&std::fs::read_to_string(dir.join("case.yaml")).unwrap())
+            .unwrap_or_else(|e| panic!("{id}/case.yaml: {e}"));
         let code = dir.join("code.cpp");
         let witness = dir.join("witness.cpp");
         let fixed = dir.join("fixed.cpp");
 
         // The standard decides the case, and the case says where.
-        assert!(case.standard.starts_with('[') && case.standard.contains("]: "), "{id}: standard is `[section]: the sentence that decides the case`, got: {}", case.standard);
+        assert!(
+            case.standard.starts_with('[') && case.standard.contains("]: "),
+            "{id}: standard is `[section]: the sentence that decides the case`, got: {}",
+            case.standard
+        );
         // The case exercises one row of the policy, which is how the battery covers the subset.
         assert!(policy.contains(&format!("- id: {}\n", case.row)), "{id}: row {} is not a row in the policy", case.row);
 
@@ -165,7 +183,10 @@ fn every_case_says_what_it_claims() {
         match case.side {
             Side::Gate => {
                 let rule = case.gate_rule.as_deref().unwrap_or_else(|| panic!("{id}: a gate side names its gate_rule"));
-                assert!(root().join("rules").join(rule).join("banned.cpp").exists(), "{id}: gate_rule {rule} has no sample pair under rules/");
+                assert!(
+                    root().join("rules").join(rule).join("banned.cpp").exists(),
+                    "{id}: gate_rule {rule} has no sample pair under rules/"
+                );
                 assert!(policy.contains(&format!("- id: {rule}\n")), "{id}: gate_rule {rule} is not a row in the policy");
             }
             _ => assert!(case.gate_rule.is_none(), "{id}: only a gate side names a gate_rule"),
@@ -220,16 +241,29 @@ fn every_case_says_what_it_claims() {
             let (out, err) = text(&o);
             match (&case.side, &case.gate_rule) {
                 (Side::Gate, Some(rule)) => {
-                    assert_eq!(o.status.code(), Some(1), "{id}: code.cpp must fail the gate, that is the mitigation. stdout: {out} stderr: {err}");
+                    assert_eq!(
+                        o.status.code(),
+                        Some(1),
+                        "{id}: code.cpp must fail the gate, that is the mitigation. stdout: {out} stderr: {err}"
+                    );
                     // The named row is the reason. Another row may refuse the same code too.
-                    assert!(out.lines().any(|l| l.contains(&format!("\"rule\":\"{rule}\""))), "{id}: the gate must report code.cpp under {rule}, got: {out}");
+                    assert!(
+                        out.lines().any(|l| l.contains(&format!("\"rule\":\"{rule}\""))),
+                        "{id}: the gate must report code.cpp under {rule}, got: {out}"
+                    );
                 }
-                _ => assert!(o.status.code() == Some(0) && out.trim().is_empty(), "{id}: code.cpp must pass the gate, or the case is not about C+P. stdout: {out} stderr: {err}"),
+                _ => assert!(
+                    o.status.code() == Some(0) && out.trim().is_empty(),
+                    "{id}: code.cpp must pass the gate, or the case is not about C+P. stdout: {out} stderr: {err}"
+                ),
             }
             if needs_fixed {
                 let o = gate(&fixed);
                 let (out, err) = text(&o);
-                assert!(o.status.code() == Some(0) && out.trim().is_empty(), "{id}: fixed.cpp must pass the gate. stdout: {out} stderr: {err}");
+                assert!(
+                    o.status.code() == Some(0) && out.trim().is_empty(),
+                    "{id}: fixed.cpp must pass the gate. stdout: {out} stderr: {err}"
+                );
             }
         }
 
@@ -268,9 +302,15 @@ fn the_mitigation_report_has_one_row_per_case_in_a_fixed_shape() {
     let report = divergence::report(&root().join("divergence/dafny")).expect("report");
     let mut lines = report.lines();
     assert_eq!(lines.next().unwrap(), "# Mitigations: dafny");
-    assert!(report.contains("Generated by `cargo run -p divergence -- dafny` from `divergence/dafny/cases/*/case.yaml`. Do not edit by hand."), "{report}");
+    assert!(
+        report.contains("Generated by `cargo run -p divergence -- dafny` from `divergence/dafny/cases/*/case.yaml`. Do not edit by hand."),
+        "{report}"
+    );
     assert!(report.contains("The fields are explained in divergence/README.md."), "{report}");
-    assert!(report.contains("| Case | Construct | Standard | Gap | C++ does | Naive model does | Naive verdict | Mitigation | Side |"), "{report}");
+    assert!(
+        report.contains("| Case | Construct | Standard | Gap | C++ does | Naive model does | Naive verdict | Mitigation | Side |"),
+        "{report}"
+    );
     assert!(report.contains("| signed_overflow | Signed addition on int32_t | [expr.pre]: "), "{report}");
     assert!(report.contains("| verifies, wrong |"), "{report}");
     assert!(report.contains("| type_error |"), "{report}");
@@ -296,7 +336,8 @@ const A_CASE: &str = "construct: X\nstandard: \"[x]: y.\"\nrow: arithmetic\ngap:
 /// The generator checks what it prints, so a wrong case.yaml cannot become a wrong row.
 #[test]
 fn the_report_refuses_a_case_it_cannot_print_right() {
-    let wrong_flag = scratch_prover("flag", "x", Some(&format!("{A_CASE}naive: fails\nnaive_is_wrong: true\nmitigated: verifies\nside: model\n")));
+    let wrong_flag =
+        scratch_prover("flag", "x", Some(&format!("{A_CASE}naive: fails\nnaive_is_wrong: true\nmitigated: verifies\nside: model\n")));
     let err = divergence::report(&wrong_flag).expect_err("a naive model that fails cannot be wrong").to_string();
     assert!(err.contains("x/case.yaml") && err.contains("naive_is_wrong needs naive: verifies"), "{err}");
 
@@ -360,7 +401,11 @@ fn the_once_brittle_proofs_hold_on_every_seed() {
     for id in ["visitor", "factory", "shape_area_sum", "type_erasure"] {
         let file = root().join("examples").join(id).join("example.dfy");
         for seed in ["7", "1234"] {
-            let out = Command::new(divergence::dafny_path()).args(["verify", "--boogie", &format!("-randomSeed:{seed}")]).arg(&file).output().expect("dafny runs");
+            let out = Command::new(divergence::dafny_path())
+                .args(["verify", "--boogie", &format!("-randomSeed:{seed}")])
+                .arg(&file)
+                .output()
+                .expect("dafny runs");
             let text = String::from_utf8_lossy(&out.stdout) + String::from_utf8_lossy(&out.stderr);
             assert!(text.contains(", 0 errors"), "{id}: example.dfy fails under seed {seed}:\n{text}");
         }
@@ -424,21 +469,34 @@ fn every_row_the_bot_may_use_has_an_example() {
         }
         if trusted.exists() {
             let declaration = std::fs::read_to_string(&cpp).unwrap();
-            assert!(declaration.contains("CPLUSP_TRUSTED(\""), "{id}: the trusted declaration in example.cpp carries CPLUSP_TRUSTED with a reason, from include/cplusp.h");
+            assert!(
+                declaration.contains("CPLUSP_TRUSTED(\""),
+                "{id}: the trusted declaration in example.cpp carries CPLUSP_TRUSTED with a reason, from include/cplusp.h"
+            );
         }
         assert_eq!(verdict(&dfy), Verdict::Verifies, "{id}: example.dfy must verify");
         if gate_available {
             let o = gate(&cpp);
             let (out, err) = text(&o);
-            assert!(o.status.code() == Some(0) && out.trim().is_empty(), "{id}: example.cpp must pass the gate. stdout: {out} stderr: {err}");
+            assert!(
+                o.status.code() == Some(0) && out.trim().is_empty(),
+                "{id}: example.cpp must pass the gate. stdout: {out} stderr: {err}"
+            );
             if trusted.exists() {
                 let o = gate(&trusted);
                 let (out, err) = text(&o);
-                assert_eq!(o.status.code(), Some(1), "{id}: trusted.cpp must fail the gate, it holds the construct. stdout: {out} stderr: {err}");
+                assert_eq!(
+                    o.status.code(),
+                    Some(1),
+                    "{id}: trusted.cpp must fail the gate, it holds the construct. stdout: {out} stderr: {err}"
+                );
                 // A row's trusted body shows that row's construct and no other. A larger example's trusted body may hit any row.
                 if row.decision == "trusted_only" {
                     for line in out.lines() {
-                        assert!(line.contains(&format!("\"rule\":\"{id}\"")), "{id}: the gate must refuse trusted.cpp under {id} only, got: {line}");
+                        assert!(
+                            line.contains(&format!("\"rule\":\"{id}\"")),
+                            "{id}: the gate must refuse trusted.cpp under {id} only, got: {line}"
+                        );
                     }
                 }
             }
@@ -460,15 +518,29 @@ fn the_model_has_no_heap() {
     let heap = |code: &str| {
         let words: Vec<&str> = code.split(|c: char| !c.is_alphanumeric() && c != '_').filter(|w| !w.is_empty()).collect();
         let first = words.first().copied().unwrap_or("");
-        first == "class" || first == "trait" || first == "new" || words.iter().any(|w| ["modifies", "reads", "fresh", "old", "new"].contains(w))
+        first == "class"
+            || first == "trait"
+            || first == "new"
+            || words.iter().any(|w| ["modifies", "reads", "fresh", "old", "new"].contains(w))
     };
-    let mut files: Vec<PathBuf> = std::fs::read_dir(root().join("examples")).unwrap().map(|e| e.unwrap().path().join("example.dfy")).filter(|p| p.exists()).collect();
-    files.extend(std::fs::read_dir(root().join("divergence/dafny/cases")).unwrap().map(|e| e.unwrap().path().join("mitigated.dfy")).filter(|p| p.exists()));
+    let mut files: Vec<PathBuf> =
+        std::fs::read_dir(root().join("examples")).unwrap().map(|e| e.unwrap().path().join("example.dfy")).filter(|p| p.exists()).collect();
+    files.extend(
+        std::fs::read_dir(root().join("divergence/dafny/cases"))
+            .unwrap()
+            .map(|e| e.unwrap().path().join("mitigated.dfy"))
+            .filter(|p| p.exists()),
+    );
     assert!(files.len() > 100, "found only {} models", files.len());
     for file in files {
         for (n, line) in std::fs::read_to_string(&file).unwrap().lines().enumerate() {
             let code = line.split("//").next().unwrap_or("");
-            assert!(!heap(code), "{}:{}: the model has no heap, decision 0029. No class, trait, modifies, reads, old or new. An object is a value.\n{line}", file.strip_prefix(root()).unwrap().display(), n + 1);
+            assert!(
+                !heap(code),
+                "{}:{}: the model has no heap, decision 0029. No class, trait, modifies, reads, old or new. An object is a value.\n{line}",
+                file.strip_prefix(root()).unwrap().display(),
+                n + 1
+            );
         }
     }
 }
@@ -479,23 +551,80 @@ fn the_battery_has_the_planned_cases() {
     let cases = root().join("divergence/dafny/cases");
     for id in [
         // Round one: arithmetic and control.
-        "signed_overflow", "unsigned_wrap", "integral_promotion", "signed_division", "narrowing_cast", "shift", "sign_compare",
-        "plain_int", "reference_aliasing", "evaluation_order", "loop_underflow", "index_out_of_range", "optional_deref", "bool_from_int",
+        "signed_overflow",
+        "unsigned_wrap",
+        "integral_promotion",
+        "signed_division",
+        "narrowing_cast",
+        "shift",
+        "sign_compare",
+        "plain_int",
+        "reference_aliasing",
+        "evaluation_order",
+        "loop_underflow",
+        "index_out_of_range",
+        "optional_deref",
+        "bool_from_int",
         // Round C1: arithmetic and conversions.
-        "promotion_before_widening", "implicit_narrowing", "compound_assign_narrow", "signed_to_unsigned", "unary_minus_min", "abs_min",
-        "increment_overflow", "signed_shift_left", "signed_shift_right", "literal_shift", "bool_arith", "enum_cast", "size_minus_one",
+        "promotion_before_widening",
+        "implicit_narrowing",
+        "compound_assign_narrow",
+        "signed_to_unsigned",
+        "unary_minus_min",
+        "abs_min",
+        "increment_overflow",
+        "signed_shift_left",
+        "signed_shift_right",
+        "literal_shift",
+        "bool_arith",
+        "enum_cast",
+        "size_minus_one",
         // Round C2: objects and memory.
-        "value_semantics", "object_lifetime", "reference_into_container", "member_init_order", "slicing", "virtual_in_constructor",
-        "virtual_destructor", "use_after_move", "moved_from_unique_ptr", "null_pointer", "operator_meaning", "generic_per_type",
-        "stack_depth", "constexpr_runtime", "interface_dispatch",
+        "value_semantics",
+        "object_lifetime",
+        "reference_into_container",
+        "member_init_order",
+        "slicing",
+        "virtual_in_constructor",
+        "virtual_destructor",
+        "use_after_move",
+        "moved_from_unique_ptr",
+        "null_pointer",
+        "operator_meaning",
+        "generic_per_type",
+        "stack_depth",
+        "constexpr_runtime",
+        "interface_dispatch",
         // Round C3: library and control.
-        "array_index", "span_dangling", "range_for_mutation", "count_if_lambda", "fold_init_type", "sort_contract", "map_subscript",
-        "string_npos", "switch_fallthrough", "switch_missing_case", "optional_compare", "variant_get",
+        "array_index",
+        "span_dangling",
+        "range_for_mutation",
+        "count_if_lambda",
+        "fold_init_type",
+        "sort_contract",
+        "map_subscript",
+        "string_npos",
+        "switch_fallthrough",
+        "switch_missing_case",
+        "optional_compare",
+        "variant_get",
         // Round C4: floating point as a real after rounding, and a pointer into a container.
-        "double_sum", "double_nan", "double_to_int", "double_cancellation", "double_increment", "double_division_zero", "int_to_double",
+        "double_sum",
+        "double_nan",
+        "double_to_int",
+        "double_cancellation",
+        "double_increment",
+        "double_division_zero",
+        "int_to_double",
         "pointer_into_container",
         // The float review: a product that underflows. The last round: state.
-        "double_underflow", "unlisted_modifies", "static_local", "global_constructors", "torn_read", "single_precision", "double_literal",
+        "double_underflow",
+        "unlisted_modifies",
+        "static_local",
+        "global_constructors",
+        "torn_read",
+        "single_precision",
+        "double_literal",
         // The third review: two names for one object in one call.
         "const_alias",
     ] {

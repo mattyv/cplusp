@@ -706,7 +706,7 @@ pub fn lower(e: &Expr, sink: Option<u32>, res: bool, all: &Fns, line: u32, sd: &
     match e {
         Expr::Paren(a) => lower(a, sink, res, all, line, sd, n),
         Expr::Bin(op, a, b) => if (*op == BinOp::And || *op == BinOp::Or) && cond_calls(e, all, line, sd) {
-            if n >= 0xFFFF_FFFF {
+            if n == 0xFFFF_FFFF {
                 Err(Refusal::Syntax(line))
             } else {
                 let t = match sink { Some(t) => t, None => n };

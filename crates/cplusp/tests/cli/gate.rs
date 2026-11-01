@@ -99,19 +99,50 @@ fn gate_refuses_flags_the_proofs_cannot_follow() {
         (vec!["-std=c++23", "-ffp-contract=off", "-ffp-model=precise"], format!("-ffp-model=precise: {float}")),
         (vec!["-std=c++23", "-ffp-contract=off", "-ffp-eval-method=extended"], format!("-ffp-eval-method=extended: {float}")),
         (vec!["-std=c++23", "-ffp-contract=off", "-ffp-eval-method=double"], format!("-ffp-eval-method=double: {float}")),
-        (vec!["-std=c++23", "-ffp-contract=off", "--std=c++17"], "--std=c++17: not allowed with the gate. The proofs assume C++23 or later.".to_string()),
+        (
+            vec!["-std=c++23", "-ffp-contract=off", "--std=c++17"],
+            "--std=c++17: not allowed with the gate. The proofs assume C++23 or later.".to_string(),
+        ),
         (vec!["-std=c++20", "-ffp-contract=off"], "-std=c++20: not allowed with the gate. The proofs assume C++23 or later.".to_string()),
         (vec!["-ffp-contract=off"], "no -std flag: the gate needs -std=c++23 or later, because the proofs assume C++23.".to_string()),
         (vec!["-std=c++23"], "no -ffp-contract=off: the gate needs it, because the proofs assume no fused multiply-add.".to_string()),
-        (vec!["-std=c++23", "-ffp-contract=off", "-w"], "-w: not allowed with the gate. It hides the compiler warnings the policy names.".to_string()),
-        (vec!["-std=c++23", "-ffp-contract=off", "-Wno-everything"], "-Wno-everything: not allowed with the gate. It hides the compiler warnings the policy names.".to_string()),
-        (vec!["-std=c++23", "-ffp-contract=off", "--no-warnings"], "--no-warnings: not allowed with the gate. It hides the compiler warnings the policy names.".to_string()),
-        (vec!["-std=c++23", "-ffp-contract=off", "--std", "c++20"], "--std: not allowed with the gate. The proofs assume C++23 or later.".to_string()),
-        (vec!["-std=c++23", "-ffp-contract=off", "-ansi"], "-ansi: not allowed with the gate. The proofs assume C++23 or later.".to_string()),
-        (vec!["-I", "-std=c++23", "-ffp-contract=off"], "-I: not allowed with the gate. It takes the next flag as its value, and the gate reads the flags as written.".to_string()),
-        (vec!["-std=c++23", "-ffp-contract=off", "-I"], "-I: not allowed with the gate. It takes the next flag as its value, and the gate reads the flags as written.".to_string()),
-        (vec!["-std=c++23", "-ffp-contract=off", "-MJ", "x.json"], "-MJ: not allowed with the gate. It changes what the compiler reads or reports, and the gate runs the compiler itself.".to_string()),
-        (vec!["-std=c++23", "-ffp-contract=off", "-Wno-unsequenced"], "-Wno-unsequenced: not allowed with the gate. It hides a compiler warning the policy names.".to_string()),
+        (
+            vec!["-std=c++23", "-ffp-contract=off", "-w"],
+            "-w: not allowed with the gate. It hides the compiler warnings the policy names.".to_string(),
+        ),
+        (
+            vec!["-std=c++23", "-ffp-contract=off", "-Wno-everything"],
+            "-Wno-everything: not allowed with the gate. It hides the compiler warnings the policy names.".to_string(),
+        ),
+        (
+            vec!["-std=c++23", "-ffp-contract=off", "--no-warnings"],
+            "--no-warnings: not allowed with the gate. It hides the compiler warnings the policy names.".to_string(),
+        ),
+        (
+            vec!["-std=c++23", "-ffp-contract=off", "--std", "c++20"],
+            "--std: not allowed with the gate. The proofs assume C++23 or later.".to_string(),
+        ),
+        (
+            vec!["-std=c++23", "-ffp-contract=off", "-ansi"],
+            "-ansi: not allowed with the gate. The proofs assume C++23 or later.".to_string(),
+        ),
+        (
+            vec!["-I", "-std=c++23", "-ffp-contract=off"],
+            "-I: not allowed with the gate. It takes the next flag as its value, and the gate reads the flags as written.".to_string(),
+        ),
+        (
+            vec!["-std=c++23", "-ffp-contract=off", "-I"],
+            "-I: not allowed with the gate. It takes the next flag as its value, and the gate reads the flags as written.".to_string(),
+        ),
+        (
+            vec!["-std=c++23", "-ffp-contract=off", "-MJ", "x.json"],
+            "-MJ: not allowed with the gate. It changes what the compiler reads or reports, and the gate runs the compiler itself."
+                .to_string(),
+        ),
+        (
+            vec!["-std=c++23", "-ffp-contract=off", "-Wno-unsequenced"],
+            "-Wno-unsequenced: not allowed with the gate. It hides a compiler warning the policy names.".to_string(),
+        ),
     ] {
         let mut args = vec!["rules/goto/allowed.cpp", "--"];
         args.extend(flags.iter().copied());
@@ -121,7 +152,16 @@ fn gate_refuses_flags_the_proofs_cannot_follow() {
         assert!(stderr(&o).lines().any(|l| l == message), "{flags:?}: stderr {}", stderr(&o));
     }
     for std in ["-std=c++23", "-std=c++2b", "-std=c++26", "-std=gnu++23"] {
-        let o = gated(&["rules/goto/allowed.cpp", "--", std, "-ffp-contract=off", "-fdenormal-fp-math=ieee", "-ffp-model=strict", "-ffp-eval-method=source", "-Wno-unused-variable"]);
+        let o = gated(&[
+            "rules/goto/allowed.cpp",
+            "--",
+            std,
+            "-ffp-contract=off",
+            "-fdenormal-fp-math=ieee",
+            "-ffp-model=strict",
+            "-ffp-eval-method=source",
+            "-Wno-unused-variable",
+        ]);
         assert_eq!(o.status.code(), Some(0), "{std}: stdout {} stderr {}", stdout(&o), stderr(&o));
     }
 }
@@ -189,10 +229,32 @@ fn gate_reads_the_flags_of_the_compile_database() {
     let dir = root.to_str().unwrap();
     let float = "not allowed with the gate. It changes floating-point results, and the proofs assume IEEE 754 round to nearest.";
     for (entry, code, expected) in [
-        (format!(r#"{{"directory": "{dir}", "command": "clang++ -std=c++23 -ffp-contract=off -ffast-math -c {file} -o /tmp/allowed.o", "file": "{file}"}}"#), 2, format!("-ffast-math: {float}")),
-        (format!(r#"{{"directory": "{dir}", "arguments": ["clang++", "-std=c++20", "-ffp-contract=off", "-c", "{file}"], "file": "{file}"}}"#), 2, "-std=c++20: not allowed with the gate. The proofs assume C++23 or later.".to_string()),
-        (format!(r#"{{"directory": "{dir}", "command": "clang++ @flags.rsp -c {file}", "file": "{file}"}}"#), 2, "@flags.rsp: not allowed with the gate. The gate cannot read a response file.".to_string()),
-        (format!(r#"{{"directory": "{dir}", "command": "clang++ -std=c++23 -ffp-contract=off -c {file} -o /tmp/allowed.o", "file": "{file}"}}"#), 0, String::new()),
+        (
+            format!(
+                r#"{{"directory": "{dir}", "command": "clang++ -std=c++23 -ffp-contract=off -ffast-math -c {file} -o /tmp/allowed.o", "file": "{file}"}}"#
+            ),
+            2,
+            format!("-ffast-math: {float}"),
+        ),
+        (
+            format!(
+                r#"{{"directory": "{dir}", "arguments": ["clang++", "-std=c++20", "-ffp-contract=off", "-c", "{file}"], "file": "{file}"}}"#
+            ),
+            2,
+            "-std=c++20: not allowed with the gate. The proofs assume C++23 or later.".to_string(),
+        ),
+        (
+            format!(r#"{{"directory": "{dir}", "command": "clang++ @flags.rsp -c {file}", "file": "{file}"}}"#),
+            2,
+            "@flags.rsp: not allowed with the gate. The gate cannot read a response file.".to_string(),
+        ),
+        (
+            format!(
+                r#"{{"directory": "{dir}", "command": "clang++ -std=c++23 -ffp-contract=off -c {file} -o /tmp/allowed.o", "file": "{file}"}}"#
+            ),
+            0,
+            String::new(),
+        ),
     ] {
         let build = tempfile::tempdir().unwrap();
         std::fs::write(build.path().join("compile_commands.json"), format!("[{entry}]")).unwrap();
@@ -239,7 +301,13 @@ fn gate_sees_every_spelling_of_a_diagnostic_pragma() {
         assert!(stdout(&o).lines().any(|l| l.ends_with(&expected)), "{}", stdout(&o));
     }
     let f = fixture("define-pragma.cpp");
-    let o = gated(&[f.to_str().unwrap(), "--", "-std=c++23", "-ffp-contract=off", r#"-DSILENCE=_Pragma("clang diagnostic ignored \"-Wreturn-stack-address\"")"#]);
+    let o = gated(&[
+        f.to_str().unwrap(),
+        "--",
+        "-std=c++23",
+        "-ffp-contract=off",
+        r#"-DSILENCE=_Pragma("clang diagnostic ignored \"-Wreturn-stack-address\"")"#,
+    ]);
     assert_eq!(o.status.code(), Some(1), "stdout: {} stderr: {}", stdout(&o), stderr(&o));
     assert!(stdout(&o).lines().any(|l| l.ends_with(&format!("define-pragma.cpp:2: {pragma}"))), "{}", stdout(&o));
     let f = fixture("ms-pragma.cpp");
@@ -249,7 +317,13 @@ fn gate_sees_every_spelling_of_a_diagnostic_pragma() {
     let f = fixture("includes-spliced.cpp");
     let o = gated(&[f.to_str().unwrap(), "--", "-std=c++23", "-ffp-contract=off"]);
     assert_eq!(o.status.code(), Some(1), "stdout: {} stderr: {}", stdout(&o), stderr(&o));
-    assert!(stdout(&o).lines().any(|l| l.ends_with("spliced-system-header.h:2: pragma system_header: not allowed in verified code. It silences the gate.")), "{}", stdout(&o));
+    assert!(
+        stdout(&o)
+            .lines()
+            .any(|l| l.ends_with("spliced-system-header.h:2: pragma system_header: not allowed in verified code. It silences the gate.")),
+        "{}",
+        stdout(&o)
+    );
     // A comment is not a pragma.
     let f = fixture("comment-mentions-pragma.cpp");
     let o = gated(&[f.to_str().unwrap(), "--", "-std=c++23", "-ffp-contract=off"]);
@@ -267,12 +341,21 @@ fn gate_treats_a_line_directive_as_a_finding() {
     let o = gated(&[f.to_str().unwrap(), "--", "-std=c++23", "-ffp-contract=off"]);
     assert_eq!(o.status.code(), Some(1), "stdout: {} stderr: {}", stdout(&o), stderr(&o));
     let out = stdout(&o);
-    assert!(out.lines().any(|l| l.ends_with("line-directive.cpp:2: line directive: not allowed in verified code. It moves the gate's view.")), "{out}");
+    assert!(
+        out.lines().any(|l| l.ends_with("line-directive.cpp:2: line directive: not allowed in verified code. It moves the gate's view.")),
+        "{out}"
+    );
     assert!(out.lines().any(|l| l.ends_with("<x>:1: pragma diagnostic: not allowed in verified code. It silences the gate.")), "{out}");
     let f = fixture("line-system.cpp");
     let o = gated(&[f.to_str().unwrap(), "--", "-std=c++23", "-ffp-contract=off"]);
     assert_eq!(o.status.code(), Some(1), "stdout: {} stderr: {}", stdout(&o), stderr(&o));
-    assert!(stdout(&o).lines().any(|l| l.ends_with("line-system.cpp:2: line directive: not allowed in verified code. It moves the gate's view.")), "{}", stdout(&o));
+    assert!(
+        stdout(&o)
+            .lines()
+            .any(|l| l.ends_with("line-system.cpp:2: line directive: not allowed in verified code. It moves the gate's view.")),
+        "{}",
+        stdout(&o)
+    );
 }
 
 /// A line marker written in the source, `# 1 "x" 1 3`, looks like the preprocessor's own. It declares the rest of the file
@@ -322,7 +405,10 @@ fn gate_treats_a_marker_that_names_the_file_itself_as_a_finding() {
     let o = gated(&[f.to_str().unwrap(), "--", "-std=c++23", "-ffp-contract=off"]);
     assert_eq!(o.status.code(), Some(1), "stdout: {} stderr: {}", stdout(&o), stderr(&o));
     let out = stdout(&o);
-    assert!(out.lines().any(|l| l.ends_with("forged-own-name.cpp:2: line directive: not allowed in verified code. It moves the gate's view.")), "{out}");
+    assert!(
+        out.lines().any(|l| l.ends_with("forged-own-name.cpp:2: line directive: not allowed in verified code. It moves the gate's view.")),
+        "{out}"
+    );
     // The marker is a line directive and nothing else. No pragma wrote it.
     assert!(!out.contains("pragma system_header"), "{out}");
     let _ = std::fs::remove_dir_all(&dir);
@@ -348,12 +434,24 @@ fn the_sequencing_check_reads_a_callees_body_under_a_loosened_state_row() {
         let o = cplusp(&args);
         let out = stdout(&o);
         assert_eq!(o.status.code(), Some(1), "{policy:?}: stdout: {out} stderr: {}", stderr(&o));
-        assert!(out.lines().any(|l| l.contains("sequencing-through-bodies.cpp:21: Two changes of state in one expression")), "{policy:?}: {out}");
+        assert!(
+            out.lines().any(|l| l.contains("sequencing-through-bodies.cpp:21: Two changes of state in one expression")),
+            "{policy:?}: {out}"
+        );
         // The function the source names changes nothing. An override of it writes a global, and a call through the base may run it.
-        assert!(out.lines().any(|l| l.contains("sequencing-through-bodies.cpp:40: Two changes of state in one expression")), "{policy:?}: {out}");
+        assert!(
+            out.lines().any(|l| l.contains("sequencing-through-bodies.cpp:40: Two changes of state in one expression")),
+            "{policy:?}: {out}"
+        );
         // The writer sits behind code the compiler wrote, a lambda inside a std call and a copy of a container.
-        assert!(out.lines().any(|l| l.contains("sequencing-through-bodies.cpp:52: Two changes of state in one expression")), "{policy:?}: {out}");
-        assert!(out.lines().any(|l| l.contains("sequencing-through-bodies.cpp:69: Two changes of state in one expression")), "{policy:?}: {out}");
+        assert!(
+            out.lines().any(|l| l.contains("sequencing-through-bodies.cpp:52: Two changes of state in one expression")),
+            "{policy:?}: {out}"
+        );
+        assert!(
+            out.lines().any(|l| l.contains("sequencing-through-bodies.cpp:69: Two changes of state in one expression")),
+            "{policy:?}: {out}"
+        );
     }
 }
 
@@ -368,7 +466,10 @@ fn gate_reads_a_virtual_call_in_the_second_inclusion_of_a_header() {
     let o = gated(&[f.to_str().unwrap(), "--", "-std=c++23", "-ffp-contract=off"]);
     assert_eq!(o.status.code(), Some(1), "stdout: {} stderr: {}", stdout(&o), stderr(&o));
     let out = stdout(&o);
-    assert!(out.lines().any(|l| l.contains("twice-step.h:6: ") && l.ends_with("total changes, and the modifies line does not list it.")), "{out}");
+    assert!(
+        out.lines().any(|l| l.contains("twice-step.h:6: ") && l.ends_with("total changes, and the modifies line does not list it.")),
+        "{out}"
+    );
 }
 
 /// The directives are read under the build's own flags, decision 0037. With `-trigraphs`, `??=` is `#`, and the marker it starts
@@ -382,7 +483,10 @@ fn gate_reads_directives_under_the_builds_flags() {
     let o = gated(&[f.to_str().unwrap(), "--", "-std=c++23", "-ffp-contract=off", "-trigraphs"]);
     assert_eq!(o.status.code(), Some(1), "stdout: {} stderr: {}", stdout(&o), stderr(&o));
     let out = stdout(&o);
-    assert!(out.lines().any(|l| l.ends_with("forged-trigraph.cpp:2: line directive: not allowed in verified code. It moves the gate's view.")), "{out}");
+    assert!(
+        out.lines().any(|l| l.ends_with("forged-trigraph.cpp:2: line directive: not allowed in verified code. It moves the gate's view.")),
+        "{out}"
+    );
 }
 
 /// `__pragma` expands macros before the pragma runs, so its words are the ones the preprocessor hands on, not the ones in the source.
@@ -392,7 +496,9 @@ fn gate_reads_the_words_a_pragma_runs_with() {
     if !clang_tidy_available() {
         return;
     }
-    for (file, extra) in [("pragma-once-macro.cpp", None), ("pragma-once-flag.cpp", Some("-Donce=clang diagnostic ignored \"-Wreturn-stack-address\""))] {
+    for (file, extra) in
+        [("pragma-once-macro.cpp", None), ("pragma-once-flag.cpp", Some("-Donce=clang diagnostic ignored \"-Wreturn-stack-address\""))]
+    {
         let f = fixture(file);
         let mut args = vec![f.to_str().unwrap(), "--", "-std=c++23", "-ffp-contract=off", "-fms-extensions"];
         args.extend(extra);
@@ -415,8 +521,14 @@ fn gate_prints_findings_under_a_file_name_with_a_tab() {
     let o = gated(&[f.to_str().unwrap(), "--", "-std=c++23", "-ffp-contract=off"]);
     let out = stdout(&o);
     assert_eq!(o.status.code(), Some(1), "stdout: {out} stderr: {}", stderr(&o));
-    assert!(out.lines().any(|l| l.ends_with("line-tab.cpp:2: line directive: not allowed in verified code. It moves the gate's view.")), "{out}");
-    assert!(out.lines().any(|l| l.ends_with("a\tb:7: pragma clang fp: not allowed in verified code. It changes the build the proofs assume.")), "{out}");
+    assert!(
+        out.lines().any(|l| l.ends_with("line-tab.cpp:2: line directive: not allowed in verified code. It moves the gate's view.")),
+        "{out}"
+    );
+    assert!(
+        out.lines().any(|l| l.ends_with("a\tb:7: pragma clang fp: not allowed in verified code. It changes the build the proofs assume.")),
+        "{out}"
+    );
 }
 
 /// A backslash in a header name is read by the compiler in a way of its own, and the dependency list prints it as a slash. A header
@@ -478,7 +590,11 @@ fn gate_refuses_a_dependency_list_it_cannot_read() {
         .output()
         .expect("cplusp runs");
     assert_eq!(o.status.code(), Some(2), "stdout: {} stderr: {}", stdout(&o), stderr(&o));
-    assert!(stderr(&o).lines().any(|l| l == "cannot preprocess tab-dir.cpp: the dependency list holds a name the gate cannot read."), "{}", stderr(&o));
+    assert!(
+        stderr(&o).lines().any(|l| l == "cannot preprocess tab-dir.cpp: the dependency list holds a name the gate cannot read."),
+        "{}",
+        stderr(&o)
+    );
     let _ = std::fs::remove_dir_all(&dir);
 }
 
@@ -493,14 +609,23 @@ fn gate_refuses_a_system_header_that_changes_the_warnings_of_its_includer() {
     let dir = std::env::temp_dir().join(format!("cplusp-leak-{}", std::process::id()));
     std::fs::create_dir_all(dir.join("sys")).unwrap();
     std::fs::write(dir.join("sys").join("leak.h"), "#pragma clang diagnostic ignored \"-Wreturn-stack-address\"\n").unwrap();
-    std::fs::write(dir.join("sys").join("tidy.h"), "#pragma clang diagnostic push\n#pragma clang diagnostic ignored \"-Wreturn-stack-address\"\n#pragma clang diagnostic pop\n").unwrap();
+    std::fs::write(
+        dir.join("sys").join("tidy.h"),
+        "#pragma clang diagnostic push\n#pragma clang diagnostic ignored \"-Wreturn-stack-address\"\n#pragma clang diagnostic pop\n",
+    )
+    .unwrap();
     let main = dir.join("includes-leak.cpp");
-    std::fs::write(&main, "#include <cstdint>\n#include <leak.h>\n#include <tidy.h>\nconst int32_t& f() {\n  int32_t x = 1;\n  return x;\n}\n").unwrap();
+    std::fs::write(
+        &main,
+        "#include <cstdint>\n#include <leak.h>\n#include <tidy.h>\nconst int32_t& f() {\n  int32_t x = 1;\n  return x;\n}\n",
+    )
+    .unwrap();
     let sys = dir.join("sys");
     let o = gated(&[main.to_str().unwrap(), "--", "-std=c++23", "-ffp-contract=off", "-isystem", sys.to_str().unwrap()]);
     let out = stdout(&o);
     assert_eq!(o.status.code(), Some(1), "stdout: {out} stderr: {}", stderr(&o));
-    let expected = "includes-leak.cpp:2: pragma diagnostic: a system header changes the warnings of the code that includes it. It silences the gate.";
+    let expected =
+        "includes-leak.cpp:2: pragma diagnostic: a system header changes the warnings of the code that includes it. It silences the gate.";
     assert!(out.lines().any(|l| l.ends_with(expected)), "{out}");
     // A header that restores what it changed leaves the includer alone.
     assert!(!out.lines().any(|l| l.contains("includes-leak.cpp:3:")), "{out}");
@@ -611,9 +736,21 @@ fn what_carries_a_way_to_write_is_no_read() {
     let f = fixture("const-carriers.cpp");
     let sys = fixture("carriers");
     let plugin = plugin();
-    let o = cplusp(&["gate", "--json", "--plugin", plugin.to_str().unwrap(), f.to_str().unwrap(), "--", "-std=c++23", "-ffp-contract=off", "-isystem", sys.to_str().unwrap()]);
+    let o = cplusp(&[
+        "gate",
+        "--json",
+        "--plugin",
+        plugin.to_str().unwrap(),
+        f.to_str().unwrap(),
+        "--",
+        "-std=c++23",
+        "-ffp-contract=off",
+        "-isystem",
+        sys.to_str().unwrap(),
+    ]);
     let out = stdout(&o);
-    let found: BTreeSet<usize> = out.lines().filter(|l| field(l, "rule") == "unique_ptr").map(|l| field(l, "line").parse::<usize>().unwrap()).collect();
+    let found: BTreeSet<usize> =
+        out.lines().filter(|l| field(l, "rule") == "unique_ptr").map(|l| field(l, "line").parse::<usize>().unwrap()).collect();
     assert_eq!(found, BTreeSet::from([7, 8, 9, 13, 18]), "{out}");
 }
 
@@ -643,7 +780,8 @@ fn a_library_type_counts_by_what_it_holds() {
     let plugin = plugin();
     let o = cplusp(&["gate", "--json", "--plugin", plugin.to_str().unwrap(), f.to_str().unwrap(), "--", "-std=c++23", "-ffp-contract=off"]);
     let out = stdout(&o);
-    let found: BTreeSet<usize> = out.lines().filter(|l| field(l, "rule") == "unique_ptr").map(|l| field(l, "line").parse::<usize>().unwrap()).collect();
+    let found: BTreeSet<usize> =
+        out.lines().filter(|l| field(l, "rule") == "unique_ptr").map(|l| field(l, "line").parse::<usize>().unwrap()).collect();
     assert_eq!(found, BTreeSet::from([10, 15, 20, 25]), "{out}");
 }
 
@@ -663,7 +801,8 @@ fn the_const_handle_check_trusts_the_library_by_place_and_refuses_what_it_cannot
     let plugin = plugin();
     let o = cplusp(&["gate", "--json", "--plugin", plugin.to_str().unwrap(), f.to_str().unwrap(), "--", "-std=c++23", "-ffp-contract=off"]);
     let out = stdout(&o);
-    let found: BTreeSet<usize> = out.lines().filter(|l| field(l, "rule") == "unique_ptr").map(|l| field(l, "line").parse::<usize>().unwrap()).collect();
+    let found: BTreeSet<usize> =
+        out.lines().filter(|l| field(l, "rule") == "unique_ptr").map(|l| field(l, "line").parse::<usize>().unwrap()).collect();
     assert_eq!(found, BTreeSet::from([21, 30, 43, 60, 65, 80, 86, 91, 108, 153]), "{out}");
 }
 
@@ -674,7 +813,9 @@ fn gate_treats_any_other_pragma_as_a_finding() {
     if !clang_tidy_available() {
         return;
     }
-    for (file, name) in [("pragma-fp.cpp", "pragma clang fp"), ("pragma-stdc.cpp", "pragma STDC FP_CONTRACT"), ("pragma-pack.cpp", "pragma pack")] {
+    for (file, name) in
+        [("pragma-fp.cpp", "pragma clang fp"), ("pragma-stdc.cpp", "pragma STDC FP_CONTRACT"), ("pragma-pack.cpp", "pragma pack")]
+    {
         let f = fixture(file);
         let o = gated(&[f.to_str().unwrap(), "--", "-std=c++23", "-ffp-contract=off"]);
         assert_eq!(o.status.code(), Some(1), "{file}: stdout: {} stderr: {}", stdout(&o), stderr(&o));
@@ -694,7 +835,17 @@ fn a_loosened_row_that_claims_kinds_allows_them() {
     let team = fixture("team-loosen.yaml");
     let banned = root().join("rules/goto/banned.cpp");
     let plugin = plugin();
-    let o = cplusp(&["gate", "--policy", team.to_str().unwrap(), "--plugin", plugin.to_str().unwrap(), banned.to_str().unwrap(), "--", "-std=c++23", "-ffp-contract=off"]);
+    let o = cplusp(&[
+        "gate",
+        "--policy",
+        team.to_str().unwrap(),
+        "--plugin",
+        plugin.to_str().unwrap(),
+        banned.to_str().unwrap(),
+        "--",
+        "-std=c++23",
+        "-ffp-contract=off",
+    ]);
     let out = stdout(&o);
     assert_eq!(o.status.code(), Some(0), "stdout: {out} stderr: {}", stderr(&o));
     assert!(!out.contains("GotoStmt") && !out.contains("LabelStmt"), "a loosened goto is no unlisted construct: {out}");
@@ -709,10 +860,24 @@ fn a_loosened_allowlist_keeps_every_ban() {
     let team = fixture("team-loosen-unlisted.yaml");
     let banned = root().join("rules/goto/banned.cpp");
     let plugin = plugin();
-    let o = cplusp(&["gate", "--policy", team.to_str().unwrap(), "--plugin", plugin.to_str().unwrap(), banned.to_str().unwrap(), "--", "-std=c++23", "-ffp-contract=off"]);
+    let o = cplusp(&[
+        "gate",
+        "--policy",
+        team.to_str().unwrap(),
+        "--plugin",
+        plugin.to_str().unwrap(),
+        banned.to_str().unwrap(),
+        "--",
+        "-std=c++23",
+        "-ffp-contract=off",
+    ]);
     let out = stdout(&o);
     assert_eq!(o.status.code(), Some(1), "stdout: {out} stderr: {}", stderr(&o));
-    assert!(out.lines().any(|l| l.ends_with("banned.cpp:4: `goto`: not allowed in verified code. No benefit. Use a loop. The construct is GotoStmt.")), "{out}");
+    assert!(
+        out.lines()
+            .any(|l| l.ends_with("banned.cpp:4: `goto`: not allowed in verified code. No benefit. Use a loop. The construct is GotoStmt.")),
+        "{out}"
+    );
 }
 
 /// The gate runs the compiler itself and reads what it reports, decision 0038. A flag that changes what the compiler reads or reports
@@ -722,11 +887,28 @@ fn gate_refuses_flags_that_change_what_the_compiler_reports() {
     if !clang_tidy_available() {
         return;
     }
-    for flag in ["-E", "-P", "-Wp,-P", "-dM", "-M", "-MM", "-MV", "-Xpreprocessor", "-Xclang", "-include-pch", "-fmodules", "-fmodule-file=m.pcm", "-###", "-fdriver-only"] {
+    for flag in [
+        "-E",
+        "-P",
+        "-Wp,-P",
+        "-dM",
+        "-M",
+        "-MM",
+        "-MV",
+        "-Xpreprocessor",
+        "-Xclang",
+        "-include-pch",
+        "-fmodules",
+        "-fmodule-file=m.pcm",
+        "-###",
+        "-fdriver-only",
+    ] {
         let o = gated(&["rules/goto/allowed.cpp", "--", "-std=c++23", "-ffp-contract=off", flag]);
         assert_eq!(o.status.code(), Some(2), "{flag}: stdout {} stderr {}", stdout(&o), stderr(&o));
         assert_eq!(stdout(&o).trim(), "", "{flag}: nothing on stdout for a refused run");
-        let expected = format!("{flag}: not allowed with the gate. It changes what the compiler reads or reports, and the gate runs the compiler itself.");
+        let expected = format!(
+            "{flag}: not allowed with the gate. It changes what the compiler reads or reports, and the gate runs the compiler itself."
+        );
         assert!(stderr(&o).lines().any(|l| l == expected), "{flag}: stderr {}", stderr(&o));
     }
 }
@@ -805,11 +987,35 @@ fn gate_judges_every_database_entry_and_refuses_what_it_cannot_read() {
     let clean = format!(r#"{{"directory": "{dir}", "command": "clang++ -std=c++23 -ffp-contract=off -c {file}", "file": "{file}"}}"#);
     for (entries, code, expected) in [
         // The second entry carries the bad flag.
-        (format!(r#"{clean}, {{"directory": "{dir}", "command": "clang++ -std=c++23 -ffp-contract=off -ffast-math -c {file}", "file": "{file}"}}"#), 2, format!("-ffast-math: {float}")),
-        (format!(r#"{{"directory": "{dir}", "command": "clang++ -std=c++23 -ffp-contract=off '-DFOO' '-ffast-math' -c {file}", "file": "{file}"}}"#), 2, format!("{file}: the command in compile_commands.json has shell quoting, which the gate cannot read. Use arguments.")),
-        (format!(r#"{{"directory": "{dir}", "command": "clang++ -std=c++23 -ffp-contract=off --config fast.cfg -c {file}", "file": "{file}"}}"#), 2, "--config: not allowed with the gate. The gate cannot read a config file.".to_string()),
+        (
+            format!(
+                r#"{clean}, {{"directory": "{dir}", "command": "clang++ -std=c++23 -ffp-contract=off -ffast-math -c {file}", "file": "{file}"}}"#
+            ),
+            2,
+            format!("-ffast-math: {float}"),
+        ),
+        (
+            format!(
+                r#"{{"directory": "{dir}", "command": "clang++ -std=c++23 -ffp-contract=off '-DFOO' '-ffast-math' -c {file}", "file": "{file}"}}"#
+            ),
+            2,
+            format!("{file}: the command in compile_commands.json has shell quoting, which the gate cannot read. Use arguments."),
+        ),
+        (
+            format!(
+                r#"{{"directory": "{dir}", "command": "clang++ -std=c++23 -ffp-contract=off --config fast.cfg -c {file}", "file": "{file}"}}"#
+            ),
+            2,
+            "--config: not allowed with the gate. The gate cannot read a config file.".to_string(),
+        ),
         // Dependency flags are the build's business, and a phony target is not a header.
-        (format!(r#"{{"directory": "{dir}", "command": "clang++ -std=c++23 -ffp-contract=off -MD -MP -MT allowed.o -MF /dev/null -c {file}", "file": "{file}"}}"#), 0, String::new()),
+        (
+            format!(
+                r#"{{"directory": "{dir}", "command": "clang++ -std=c++23 -ffp-contract=off -MD -MP -MT allowed.o -MF /dev/null -c {file}", "file": "{file}"}}"#
+            ),
+            0,
+            String::new(),
+        ),
     ] {
         let build = tempfile::tempdir().unwrap();
         std::fs::write(build.path().join("compile_commands.json"), format!("[{entries}]")).unwrap();
@@ -890,7 +1096,17 @@ fn gate_refuses_a_policy_whose_matcher_does_not_parse() {
     }
     let policy = fixture("bad-matcher.yaml");
     let f = root().join("rules/goto/allowed.cpp");
-    let o = cplusp(&["gate", "--plugin", plugin().to_str().unwrap(), "--policy", policy.to_str().unwrap(), f.to_str().unwrap(), "--", "-std=c++23", "-ffp-contract=off"]);
+    let o = cplusp(&[
+        "gate",
+        "--plugin",
+        plugin().to_str().unwrap(),
+        "--policy",
+        policy.to_str().unwrap(),
+        f.to_str().unwrap(),
+        "--",
+        "-std=c++23",
+        "-ffp-contract=off",
+    ]);
     assert_eq!(o.status.code(), Some(2), "stdout: {} stderr: {}", stdout(&o), stderr(&o));
     let err = stderr(&o);
     assert!(err.contains("bad_rule") && err.contains("matcher"), "{err}");
@@ -927,7 +1143,14 @@ fn gate_prints_each_finding_once() {
     let f = fixture("twice.cpp");
     let o = gated(&[f.to_str().unwrap(), "--", "-std=c++23", "-ffp-contract=off"]);
     assert_eq!(o.status.code(), Some(1), "stdout: {} stderr: {}", stdout(&o), stderr(&o));
-    let lines: Vec<&str> = stdout(&o).lines().map(|l| l.trim()).filter(|l| !l.is_empty()).collect::<Vec<_>>().into_iter().map(|l| Box::leak(l.to_string().into_boxed_str()) as &str).collect();
+    let lines: Vec<&str> = stdout(&o)
+        .lines()
+        .map(|l| l.trim())
+        .filter(|l| !l.is_empty())
+        .collect::<Vec<_>>()
+        .into_iter()
+        .map(|l| Box::leak(l.to_string().into_boxed_str()) as &str)
+        .collect();
     let distinct: BTreeSet<&str> = lines.iter().copied().collect();
     assert_eq!(lines.len(), distinct.len(), "duplicate lines: {:?}", lines);
     assert!(lines.iter().any(|l| l.contains("twice.cpp:3:")), "{:?}", lines);
@@ -1005,11 +1228,29 @@ fn every_sample_pair_agrees_with_its_rule() {
         assert!(allowed.exists() && banned.exists(), "rule {id} needs allowed.cpp and banned.cpp");
 
         let plugin = plugin();
-        let o = cplusp(&["gate", "--json", "--plugin", plugin.to_str().unwrap(), allowed.to_str().unwrap(), "--", "-std=c++23", "-ffp-contract=off"]);
+        let o = cplusp(&[
+            "gate",
+            "--json",
+            "--plugin",
+            plugin.to_str().unwrap(),
+            allowed.to_str().unwrap(),
+            "--",
+            "-std=c++23",
+            "-ffp-contract=off",
+        ]);
         assert_eq!(o.status.code(), Some(0), "{id}/allowed.cpp: stdout {} stderr {}", stdout(&o), stderr(&o));
         assert_eq!(stdout(&o).trim(), "", "{id}/allowed.cpp must produce no findings");
 
-        let o = cplusp(&["gate", "--json", "--plugin", plugin.to_str().unwrap(), banned.to_str().unwrap(), "--", "-std=c++23", "-ffp-contract=off"]);
+        let o = cplusp(&[
+            "gate",
+            "--json",
+            "--plugin",
+            plugin.to_str().unwrap(),
+            banned.to_str().unwrap(),
+            "--",
+            "-std=c++23",
+            "-ffp-contract=off",
+        ]);
         assert_eq!(o.status.code(), Some(1), "{id}/banned.cpp: stdout {} stderr {}", stdout(&o), stderr(&o));
         let reported: BTreeSet<(String, usize)> = stdout(&o)
             .lines()
@@ -1026,7 +1267,9 @@ fn every_sample_pair_agrees_with_its_rule() {
             .filter_map(|(i, l)| l.split_once("// BANNED").map(|(_, mark)| (i + 1, mark)))
             .flat_map(|(line, mark)| {
                 let also = mark.split_once("also:").map(|(_, r)| r).unwrap_or("");
-                std::iter::once(id.clone()).chain(also.split(',').map(str::trim).filter(|r| !r.is_empty()).map(String::from)).map(move |r| (r, line))
+                std::iter::once(id.clone())
+                    .chain(also.split(',').map(str::trim).filter(|r| !r.is_empty()).map(String::from))
+                    .map(move |r| (r, line))
             })
             .collect();
         assert_eq!(reported, expected, "{id}/banned.cpp");
@@ -1034,18 +1277,71 @@ fn every_sample_pair_agrees_with_its_rule() {
     }
     // Every rule the gate can enforce today has a pair: the upstream checks and the matcher patterns.
     for id in [
-        "c_style_casts", "goto", "pointer_arithmetic", "reinterpret_const_cast", "varargs_coroutines", "uninitialised_variables",
-        "missing_override", "function_like_macros", "downcasts", "raw_allocation", "return_ref_to_local", "rvalue_references",
-        "unscoped_enum", "unions", "bitfields", "virtual_inheritance", "exceptions", "shared_ptr", "implicit_conversions",
-        "function_pointers", "concurrency", "volatile", "inline_asm_intrinsics", "unreachable_assume", "longjmp",
-        "raw_memory_ops", "launder_placement_new", "templates", "metaprogramming",
-        "mutable_members", "multiple_inheritance", "operator_overloading", "iterators", "lambdas",
-        "plain_int", "sign_compare", "evaluation_order",
-        "implicit_narrowing", "sign_conversion", "widening_multiplication", "literal_shift",
-        "member_init_order", "slicing", "virtual_call_in_constructor", "virtual_destructor", "raw_pointer", "containers",
-        "switch_fallthrough", "switch_missing_case", "accumulate_init", "array_span",
-        "double_equality", "double_expression", "rounding_mode", "global_constructors", "double_only", "inexact_literal", "unique_ptr", "static_local", "strings",
-        "aliasing", "unlisted", "global_state", "iostreams", "builtins",
+        "c_style_casts",
+        "goto",
+        "pointer_arithmetic",
+        "reinterpret_const_cast",
+        "varargs_coroutines",
+        "uninitialised_variables",
+        "missing_override",
+        "function_like_macros",
+        "downcasts",
+        "raw_allocation",
+        "return_ref_to_local",
+        "rvalue_references",
+        "unscoped_enum",
+        "unions",
+        "bitfields",
+        "virtual_inheritance",
+        "exceptions",
+        "shared_ptr",
+        "implicit_conversions",
+        "function_pointers",
+        "concurrency",
+        "volatile",
+        "inline_asm_intrinsics",
+        "unreachable_assume",
+        "longjmp",
+        "raw_memory_ops",
+        "launder_placement_new",
+        "templates",
+        "metaprogramming",
+        "mutable_members",
+        "multiple_inheritance",
+        "operator_overloading",
+        "iterators",
+        "lambdas",
+        "plain_int",
+        "sign_compare",
+        "evaluation_order",
+        "implicit_narrowing",
+        "sign_conversion",
+        "widening_multiplication",
+        "literal_shift",
+        "member_init_order",
+        "slicing",
+        "virtual_call_in_constructor",
+        "virtual_destructor",
+        "raw_pointer",
+        "containers",
+        "switch_fallthrough",
+        "switch_missing_case",
+        "accumulate_init",
+        "array_span",
+        "double_equality",
+        "double_expression",
+        "rounding_mode",
+        "global_constructors",
+        "double_only",
+        "inexact_literal",
+        "unique_ptr",
+        "static_local",
+        "strings",
+        "aliasing",
+        "unlisted",
+        "global_state",
+        "iostreams",
+        "builtins",
     ] {
         assert!(rules_dir.join(id).is_dir(), "no sample pair for rule {id}");
     }

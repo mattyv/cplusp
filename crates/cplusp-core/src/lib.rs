@@ -14,6 +14,26 @@
 //! - `kind_at`: a place takes the kind of the innermost marked function that
 //!   holds it, and is verified when none does.
 
+// The exec functions mirror their spec functions arm by arm, so that each `ensures r == spec_f(..)` stays a direct proof. Verus
+// does not take some of the forms that these lints ask for, such as `?` on an `Option`, a closure for `Option::map`, or a slice
+// for a `&Vec`, and the others would make an exec function differ in shape from its spec.
+#![allow(
+    clippy::assign_op_pattern,
+    clippy::bool_comparison,
+    clippy::collapsible_match,
+    clippy::int_plus_one,
+    clippy::large_enum_variant,
+    clippy::len_zero,
+    clippy::manual_map,
+    clippy::manual_range_contains,
+    clippy::match_like_matches_macro,
+    clippy::ptr_arg,
+    clippy::question_mark,
+    clippy::single_match,
+    clippy::too_many_arguments,
+    clippy::type_complexity
+)]
+
 pub mod companion;
 pub mod contract;
 pub mod dafny;

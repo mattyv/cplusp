@@ -71,7 +71,17 @@ pub fn report(prover_dir: &Path) -> Result<String, Box<dyn Error>> {
         let verdict = if case.naive_is_wrong { "verifies, wrong".to_string() } else { word(&case.naive)? };
         // A cell is one line. A pipe would end it early.
         let cell = |s: &str| s.split_whitespace().collect::<Vec<_>>().join(" ").replace('|', "\\|");
-        let cells = [id.clone(), cell(&case.construct), cell(&case.standard), case.gap.to_string(), cell(&case.cpp), cell(&case.naive_does), verdict, cell(&case.mitigation), word(&case.side)?];
+        let cells = [
+            id.clone(),
+            cell(&case.construct),
+            cell(&case.standard),
+            case.gap.to_string(),
+            cell(&case.cpp),
+            cell(&case.naive_does),
+            verdict,
+            cell(&case.mitigation),
+            word(&case.side)?,
+        ];
         rows.push((id, format!("| {} |", cells.join(" | "))));
     }
     rows.sort();
@@ -262,7 +272,11 @@ pub fn differential(case_dir: &Path, naive: bool) -> Result<Outcome, Box<dyn Err
     }
 
     let mut seed = 0x2545_F491_4F6C_DD1D;
-    let inputs = spec.args.iter().map(|a| generate(a, naive, spec.runs, &mut seed).map_err(|e| format!("{id}: {e}"))).collect::<Result<Vec<_>, _>>()?;
+    let inputs = spec
+        .args
+        .iter()
+        .map(|a| generate(a, naive, spec.runs, &mut seed).map_err(|e| format!("{id}: {e}")))
+        .collect::<Result<Vec<_>, _>>()?;
 
     let tmp = std::env::temp_dir().join(format!("divergence-{id}-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&tmp);
@@ -273,7 +287,14 @@ pub fn differential(case_dir: &Path, naive: bool) -> Result<Outcome, Box<dyn Err
 }
 
 /// The two runs and the comparison, with the files in `tmp`.
-fn compare(case_dir: &Path, naive: bool, spec: &Differential, inputs: &[Vec<Val>], tmp: &Path, id: &str) -> Result<Outcome, Box<dyn Error>> {
+fn compare(
+    case_dir: &Path,
+    naive: bool,
+    spec: &Differential,
+    inputs: &[Vec<Val>],
+    tmp: &Path,
+    id: &str,
+) -> Result<Outcome, Box<dyn Error>> {
     let mut dfy = String::new();
     // A sanitizer ends the process without a flush of stdout, and a pipe is buffered. So the header unbuffers stdout, and
     // the lines before the death survive, or the divergence would be reported at the wrong input.

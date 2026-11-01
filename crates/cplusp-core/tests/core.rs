@@ -88,10 +88,7 @@ fn a_prover_stage_restrict_rule_needs_a_limit_but_no_detect() {
     assert_eq!(validate(&policy(vec![ok]), &names(KNOWN)), vec![]);
     let mut bad = prover_rule("double", Decision::Restrict);
     bad.limit = None;
-    assert_eq!(
-        validate(&policy(vec![bad]), &names(KNOWN)),
-        vec![PolicyError::RestrictWithoutLimit { id: "double".to_string() }]
-    );
+    assert_eq!(validate(&policy(vec![bad]), &names(KNOWN)), vec![PolicyError::RestrictWithoutLimit { id: "double".to_string() }]);
 }
 
 #[test]
@@ -342,7 +339,9 @@ fn a_place_in_a_marked_function_takes_its_kind() {
 #[test]
 fn the_innermost_marked_function_decides() {
     // A trusted local function inside a plain one, in either order of the list.
-    for r in [vec![region(0, 100, Kind::Plain), region(10, 20, Kind::Trusted)], vec![region(10, 20, Kind::Trusted), region(0, 100, Kind::Plain)]] {
+    for r in
+        [vec![region(0, 100, Kind::Plain), region(10, 20, Kind::Trusted)], vec![region(10, 20, Kind::Trusted), region(0, 100, Kind::Plain)]]
+    {
         assert_eq!(kind_at(&r, 15), Kind::Trusted);
         assert_eq!(kind_at(&r, 50), Kind::Plain);
     }

@@ -161,7 +161,8 @@ fn a_name_of_cpp_with_the_name_of_a_contract_word_is_refused() {
         let (o, _) = model(fixture, dir.path());
         let text = stdout(&o);
         assert_eq!(o.status.code(), Some(1), "{fixture}: stdout: {text} stderr: {}", stderr(&o));
-        let refusals: Vec<&str> = text.lines().filter(|l| l.starts_with("Not provable: ")).map(|l| l.rsplit_once(".cpp:").unwrap().1).collect();
+        let refusals: Vec<&str> =
+            text.lines().filter(|l| l.starts_with("Not provable: ")).map(|l| l.rsplit_once(".cpp:").unwrap().1).collect();
         let wants: Vec<String> = wants.iter().map(|(line, w)| format!("{line}: {}", word(w))).collect();
         assert_eq!(refusals, wants, "{fixture}: {text}");
     }
@@ -188,7 +189,11 @@ fn an_integer_converts_to_a_double_exactly() {
     let text = stdout(&o);
     assert_eq!(o.status.code(), Some(1), "stdout: {text} stderr: {}", stderr(&o));
     let failed: Vec<&str> = text.lines().filter(|l| l.starts_with("Not proved: ")).map(|l| l.rsplit_once(".cpp:").unwrap().1).collect();
-    assert_eq!(failed, ["6: the integer may be too large for an exact double.", "11: the ensures line may not hold on this return."], "{text}");
+    assert_eq!(
+        failed,
+        ["6: the integer may be too large for an exact double.", "11: the ensures line may not hold on this return."],
+        "{text}"
+    );
     // A conversion alone names its own axiom and not the one of the operations.
     assert!(text.contains(exact) && !text.contains(AXIOM), "{text}");
 }
@@ -209,7 +214,11 @@ fn a_local_vector_is_a_copy() {
     let text = stdout(&o);
     assert_eq!(o.status.code(), Some(1), "stdout: {text} stderr: {}", stderr(&o));
     let failed: Vec<&str> = text.lines().filter(|l| l.starts_with("Not proved: ")).map(|l| l.rsplit_once(".cpp:").unwrap().1).collect();
-    assert_eq!(failed, ["10: the ensures line may not hold on this return.", "20: the ensures line may not hold on this return."], "{text}");
+    assert_eq!(
+        failed,
+        ["10: the ensures line may not hold on this return.", "20: the ensures line may not hold on this return."],
+        "{text}"
+    );
 }
 
 /// A local vector from a list of values has no rule yet, decision 0160. A local vector with no initial value is the empty sequence,
@@ -225,11 +234,7 @@ fn a_local_vector_with_no_rule_is_refused() {
     assert_eq!(o.status.code(), Some(1), "stdout: {text} stderr: {}", stderr(&o));
     let refusals: Vec<&str> = text.lines().filter(|l| l.starts_with("Not provable: ")).map(|l| l.rsplit_once(".cpp:").unwrap().1).collect();
     let copy = "a local vector has a rule only as a copy of a vector in scope.";
-    assert_eq!(
-        refusals,
-        [format!("15: {copy}")],
-        "{text}"
-    );
+    assert_eq!(refusals, [format!("15: {copy}")], "{text}");
 }
 
 /// std::sort of a vector of integers is StdSort: the order, the length and the multiset hold after the call, and prove names the
@@ -251,7 +256,11 @@ fn std_sort_of_a_vector_of_integers_is_std_sort() {
     let text = stdout(&o);
     assert_eq!(o.status.code(), Some(1), "stdout: {text} stderr: {}", stderr(&o));
     let failed: Vec<&str> = text.lines().filter(|l| l.starts_with("Not proved: ")).map(|l| l.rsplit_once(".cpp:").unwrap().1).collect();
-    assert_eq!(failed, ["11: the ensures line may not hold on this return.", "19: the ensures line may not hold on this return."], "{text}");
+    assert_eq!(
+        failed,
+        ["11: the ensures line may not hold on this return.", "19: the ensures line may not hold on this return."],
+        "{text}"
+    );
     // A model with no sort names no axiom of the sort.
     let o = prove("model-vec-local.cpp", &[], &dafny);
     assert!(!stdout(&o).contains("Algorithm.dfy"), "{}", stdout(&o));
@@ -341,9 +350,10 @@ fn a_vector_too_long_and_a_failed_lemma_have_plain_sentences() {
     let said: Vec<&str> = lemmas.iter().map(|l| l.rsplit_once(": ").unwrap().1).collect();
     assert_eq!(said, ["the ensures line may not hold on this return.", "the assert line may not hold."], "{lemmas:?}");
     let o = prove("model-companion-fail.cpp", &[], &dafny);
-    let named = blocks(&stdout(&o))
-        .into_iter()
-        .any(|(h, under)| h.ends_with("the ensures line may not hold on this return.") && under.iter().any(|u| u.ends_with("model-companion-fail.spec.dfy:2: ensures x > 0")));
+    let named = blocks(&stdout(&o)).into_iter().any(|(h, under)| {
+        h.ends_with("the ensures line may not hold on this return.")
+            && under.iter().any(|u| u.ends_with("model-companion-fail.spec.dfy:2: ensures x > 0"))
+    });
     assert!(named, "{}", stdout(&o));
 }
 
@@ -361,7 +371,10 @@ fn two_failures_at_one_place_stay_two_lines() {
     assert_eq!(o.status.code(), Some(1), "stdout: {text} stderr: {}", stderr(&o));
     let found = blocks(&text);
     let broken = |head: &str, clause: &str| {
-        found.iter().filter(|(h, under)| h.ends_with(head) && under.iter().any(|u| u.starts_with("  The contract line: ") && u.ends_with(clause))).count()
+        found
+            .iter()
+            .filter(|(h, under)| h.ends_with(head) && under.iter().any(|u| u.starts_with("  The contract line: ") && u.ends_with(clause)))
+            .count()
     };
     let ensures = "the ensures line may not hold on this return.";
     assert_eq!(broken(ensures, "model-companion-two.spec.dfy:2: ensures x > 0"), 1, "{text}");
@@ -372,7 +385,10 @@ fn two_failures_at_one_place_stay_two_lines() {
     assert_eq!(found.len(), 4, "{text}");
     let o = prove("model-two-index.cpp", &[], &dafny);
     let text = stdout(&o);
-    let index = text.lines().filter(|l| l.starts_with("Not proved: ") && l.ends_with("model-two-index.cpp:9: the index may be out of range.")).count();
+    let index = text
+        .lines()
+        .filter(|l| l.starts_with("Not proved: ") && l.ends_with("model-two-index.cpp:9: the index may be out of range."))
+        .count();
     assert_eq!(index, 2, "{text}");
 }
 
@@ -407,7 +423,12 @@ fn each_refusal_names_its_own_cause() {
     let refusals: Vec<&str> = text.lines().filter(|l| l.starts_with("Not provable: ")).map(|l| l.rsplit_once(".cpp:").unwrap().1).collect();
     assert_eq!(refusals.len(), 5, "{text}");
     assert_eq!(refusals[0], "5: isnan is no function of the companion file.", "{text}");
-    assert!(refusals[1].starts_with("12: ") && refusals[1].contains("FloatingToIntegral") && refusals[1].ends_with(": the translator has no rule for it yet."), "{text}");
+    assert!(
+        refusals[1].starts_with("12: ")
+            && refusals[1].contains("FloatingToIntegral")
+            && refusals[1].ends_with(": the translator has no rule for it yet."),
+        "{text}"
+    );
     assert_eq!(refusals[2], "15: a decimal with more than 19 digits after the point: the translator has no rule for it yet.", "{text}");
     assert_eq!(refusals[3], "20: a reference parameter has no name. Give it a name and put it on the modifies line.", "{text}");
     assert_eq!(refusals[4], "23: a double parameter has no name. Give it a name and say std::isfinite of it in a requires line.", "{text}");
@@ -456,7 +477,12 @@ fn a_ban_of_variable_index_covers_vectors_spans_and_at() {
     let o = gated(&["--policy", team.to_str().unwrap(), f.to_str().unwrap(), "--", "-std=c++23", "-ffp-contract=off"]);
     let text = stdout(&o);
     assert_eq!(o.status.code(), Some(1), "stdout: {text} stderr: {}", stderr(&o));
-    let lines: BTreeSet<&str> = text.lines().filter(|l| l.contains("`operator[]` with a variable index")).filter_map(|l| l.split("variable-index-ban.cpp:").nth(1)).filter_map(|r| r.split(':').next()).collect();
+    let lines: BTreeSet<&str> = text
+        .lines()
+        .filter(|l| l.contains("`operator[]` with a variable index"))
+        .filter_map(|l| l.split("variable-index-ban.cpp:").nth(1))
+        .filter_map(|r| r.split(':').next())
+        .collect();
     // An explicit `operator[]` call and a C array by reference too, which the upstream check misses.
     assert_eq!(lines, BTreeSet::from(["8", "12", "16", "24", "28"]), "{text}");
 }

@@ -80,8 +80,13 @@ fn a_carriage_return_before_a_line_feed_is_no_part_of_the_line_and_white_space_e
 
 #[test]
 fn warnings_are_read_with_their_lines() {
-    let (r, b) = read("m.dfy(9,1): Warning: this forall statement has no body\nm.dfy(10,2): Warning: Could not find a trigger for this quantifier\n");
-    assert_eq!(warnings(&r, &b), vec![(9, "this forall statement has no body".to_string()), (10, "Could not find a trigger for this quantifier".to_string())]);
+    let (r, b) = read(
+        "m.dfy(9,1): Warning: this forall statement has no body\nm.dfy(10,2): Warning: Could not find a trigger for this quantifier\n",
+    );
+    assert_eq!(
+        warnings(&r, &b),
+        vec![(9, "this forall statement has no body".to_string()), (10, "Could not find a trigger for this quantifier".to_string())]
+    );
 }
 
 /// The companion file is the lines from index 7 up to 10 of the Dafny text, so Dafny lines 8 to 10, and line 11 just past it.
@@ -104,7 +109,10 @@ fn proved_needs_a_clean_summary_and_every_method() {
 fn a_warning_on_the_companion_file_is_an_axiom_except_a_missing_trigger() {
     let tail = "Dafny program verifier finished with 3 verified, 0 errors\n";
     assert_eq!(judged(&format!("m.dfy(9,1): Warning: a bodyless function\n{tail}"), true, false, 3), Verdict::NotProved);
-    assert_eq!(judged(&format!("m.dfy(9,1): Warning: Could not find a trigger for this quantifier\n{tail}"), true, false, 3), Verdict::Proved);
+    assert_eq!(
+        judged(&format!("m.dfy(9,1): Warning: Could not find a trigger for this quantifier\n{tail}"), true, false, 3),
+        Verdict::Proved
+    );
     // Outside the companion file, before it and after it.
     assert_eq!(judged(&format!("m.dfy(7,1): Warning: x\nm.dfy(11,1): Warning: y\n{tail}"), true, false, 3), Verdict::Proved);
 }
@@ -112,8 +120,14 @@ fn a_warning_on_the_companion_file_is_an_axiom_except_a_missing_trigger() {
 #[test]
 fn a_parse_error_is_the_authors_only_when_each_error_is_in_the_companion_file() {
     // Line 11 is one past the last line of the companion file, and counts as the companion file, decision 0083.
-    assert_eq!(judged("m.dfy(9,1): Error: a\nm.dfy(11,1): Error: b\n2 parse errors detected in m.dfy\n", false, false, 3), Verdict::NotProved);
-    assert_eq!(judged("m.dfy(9,1): Error: a\nm.dfy(2,1): Error: b\n2 parse errors detected in m.dfy\n", false, false, 3), Verdict::ToolFailed);
+    assert_eq!(
+        judged("m.dfy(9,1): Error: a\nm.dfy(11,1): Error: b\n2 parse errors detected in m.dfy\n", false, false, 3),
+        Verdict::NotProved
+    );
+    assert_eq!(
+        judged("m.dfy(9,1): Error: a\nm.dfy(2,1): Error: b\n2 parse errors detected in m.dfy\n", false, false, 3),
+        Verdict::ToolFailed
+    );
     assert_eq!(judged("1 parse errors detected in m.dfy\n", false, false, 3), Verdict::ToolFailed);
     // A resolution error anywhere is the author's.
     assert_eq!(judged("m.dfy(2,1): Error: a\n1 resolution/type errors detected in m.dfy\n", false, false, 3), Verdict::NotProved);

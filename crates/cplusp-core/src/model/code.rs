@@ -1,7 +1,7 @@
 //! The translator: the code that runs. The summary of the proofs is in `model`.
 
-use super::*;
 use super::rules::real;
+use super::*;
 use vstd::prelude::*;
 
 verus! {
@@ -314,7 +314,7 @@ pub fn lift(e: &Expr, all: &Fns, line: u32, sd: &Structs, n: u32, open: bool) ->
                 Err(r) => Err(r),
                 Ok((ca, da, n1)) => if callee_void(all, *k) { Err(Refusal::Place(*at)) } else { match callee_ty(all, *k, line, sd) {
                     Err(r) => Err(r),
-                    Ok(dt) => if n1 >= 0xFFFF_FFFF {
+                    Ok(dt) => if n1 == 0xFFFF_FFFF {
                         Err(Refusal::Syntax(line))
                     } else if callee_writes(all, *k) {
                         if dt == DTy::Void {

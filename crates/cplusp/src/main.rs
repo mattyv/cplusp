@@ -11,8 +11,8 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, ExitCode, Stdio};
 
 use anyhow::{anyhow, bail, Context, Result};
-use cplusp_core::flags::FlagFault;
 use clap::{Args, Parser, Subcommand};
+use cplusp_core::flags::FlagFault;
 use cplusp_core::{
     apply_overrides, emit, is_active, keep_finding, kind_at, rule_by_id, rule_for_check, validate, CheckOption, CheckRef, Config, Decision,
     Kind, Override, Policy, PolicyError, Region, Rule,
@@ -64,9 +64,23 @@ const RULE_FIRST: &[&str] = &[MATCHER, ALLOWLIST, "cplusp-unlisted-state", "cplu
 /// Checks that the clang-tidy plugin will add. The policy may name them today.
 // ponytail: a hand-kept list. Upgrade: load the plugin and read its `--list-checks`.
 const PLANNED_CHECKS: &[&str] = &[
-    MATCHER, "cplusp-mutable", "cplusp-multiple-inheritance", "cplusp-iterator-arithmetic", "cplusp-impure-operator", "cplusp-lambda-limits",
-    "cplusp-evaluation-order", "cplusp-inexact-literal", "cplusp-raw-copy", "cplusp-aliasing", "cplusp-return-local", "cplusp-const-handle", "cplusp-allowlist", "cplusp-unlisted-state",
-    "cplusp-indirect-call", LINE_DIRECTIVE, PRAGMA,
+    MATCHER,
+    "cplusp-mutable",
+    "cplusp-multiple-inheritance",
+    "cplusp-iterator-arithmetic",
+    "cplusp-impure-operator",
+    "cplusp-lambda-limits",
+    "cplusp-evaluation-order",
+    "cplusp-inexact-literal",
+    "cplusp-raw-copy",
+    "cplusp-aliasing",
+    "cplusp-return-local",
+    "cplusp-const-handle",
+    "cplusp-allowlist",
+    "cplusp-unlisted-state",
+    "cplusp-indirect-call",
+    LINE_DIRECTIVE,
+    PRAGMA,
 ];
 
 // ------------------------------------------------------------------ command line
@@ -357,12 +371,20 @@ fn load(path: Option<&Path>, listed: Option<&[String]>) -> Result<Loaded> {
 /// The `name` of a `clang-diagnostic-{name}` check becomes `-W{name}` in the config, so it must be a warning flag.
 /// Not `error`, which makes every warning an error. Not `no-...`, which switches a warning off. No other characters.
 fn is_warning_flag(name: &str) -> bool {
-    name != "error" && !name.starts_with("no-") && !name.is_empty() && name.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-')
+    name != "error"
+        && !name.starts_with("no-")
+        && !name.is_empty()
+        && name.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-')
 }
 
 /// Run the core's validation. `listed` is the clang-tidy check list, if there is one.
 fn check(policy: &Policy, listed: Option<&[String]>) -> Result<()> {
-    let used = policy.rules.iter().flat_map(|r| &r.detect).map(|c| c.name.clone()).filter(|n| n.strip_prefix(DIAGNOSTIC).is_none_or(is_warning_flag));
+    let used = policy
+        .rules
+        .iter()
+        .flat_map(|r| &r.detect)
+        .map(|c| c.name.clone())
+        .filter(|n| n.strip_prefix(DIAGNOSTIC).is_none_or(is_warning_flag));
     let known: Vec<String> = match listed {
         // ponytail: `--list-checks` omits compiler diagnostics, so any `clang-diagnostic-` name with the shape of a warning passes.
         // Upgrade: validate it against clang's warning list.
@@ -482,7 +504,8 @@ fn flag_reason(fault: FlagFault) -> &'static str {
 fn refused_flags(flags: &[String], checks: &[String]) -> Vec<String> {
     let bytes = |list: &[String]| list.iter().map(|s| s.as_bytes().to_vec()).collect::<Vec<Vec<u8>>>();
     let check = cplusp_core::flags::check_flags(&bytes(flags), &bytes(checks));
-    let mut refused: Vec<String> = check.faults.into_iter().map(|(i, fault)| format!("{}: not allowed with the gate. {}", flags[i], flag_reason(fault))).collect();
+    let mut refused: Vec<String> =
+        check.faults.into_iter().map(|(i, fault)| format!("{}: not allowed with the gate. {}", flags[i], flag_reason(fault))).collect();
     if check.no_std {
         refused.push("no -std flag: the gate needs -std=c++23 or later, because the proofs assume C++23.".to_string());
     }
@@ -654,7 +677,11 @@ fn dependencies(clang: &str, (file, dir, flags): &Build, shown: impl Fn(&Path) -
     if !out.status.success() {
         // The first line with an error, else the first line: a warning before the error is not the cause.
         let stderr = String::from_utf8_lossy(&out.stderr);
-        bail!("cannot preprocess {}: {}", shown(file), stderr.lines().find(|l| l.contains("error:")).or_else(|| stderr.lines().next()).unwrap_or_default());
+        bail!(
+            "cannot preprocess {}: {}",
+            shown(file),
+            stderr.lines().find(|l| l.contains("error:")).or_else(|| stderr.lines().next()).unwrap_or_default()
+        );
     }
     let list = String::from_utf8_lossy(&out.stdout);
     // The compiler escapes a space, `#` and `$` in a name, and no other white space. A name with a tab or a newline would split in the
@@ -705,7 +732,14 @@ fn rule_files(rule: &str) -> Vec<String> {
     files
 }
 
-fn gate(c: &Common, json: bool, build_dir: Option<&Path>, plugin: Option<&Path>, files: &[PathBuf], clang_args: &[String]) -> Result<ExitCode> {
+fn gate(
+    c: &Common,
+    json: bool,
+    build_dir: Option<&Path>,
+    plugin: Option<&Path>,
+    files: &[PathBuf],
+    clang_args: &[String],
+) -> Result<ExitCode> {
     if let Some(dir) = build_dir {
         if !clang_args.is_empty() {
             bail!("Use -p or --, not both.");

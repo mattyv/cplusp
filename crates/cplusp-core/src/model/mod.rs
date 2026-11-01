@@ -16,31 +16,31 @@
 //! The lists are cons lists, so that each rule and each proof is one structural recursion.
 //! Names, keys of functions, kinds of construct and lines are numbers. The shell keeps the table of names and prints the text.
 
-mod lists;
+mod calls;
+mod code;
 mod cpp_side;
 mod dafny_side;
-mod rules;
-mod writes;
 mod dtor;
-mod virtuals;
-mod properties;
-mod code;
-mod parser;
 mod globals;
+mod lists;
+mod parser;
+mod properties;
+mod rules;
 mod statics;
-mod calls;
+mod virtuals;
+mod writes;
 
-pub use lists::*;
+pub use calls::*;
+pub use code::*;
 pub use cpp_side::*;
 pub use dafny_side::*;
-pub use rules::*;
-pub use writes::*;
 pub use dtor::*;
-pub use virtuals::*;
+pub use globals::*;
+pub use lists::*;
+pub use parser::*;
 #[allow(unused_imports)]
 pub use properties::*;
-pub use code::*;
-pub use parser::*;
-pub use globals::*;
+pub use rules::*;
 pub use statics::*;
-pub use calls::*;
+pub use virtuals::*;
+pub use writes::*;

@@ -9,8 +9,9 @@ use anyhow::{Context, Result};
 use cplusp_core::companion::CompanionRefusal;
 use cplusp_core::contract::{LexKind, NumberFault};
 use cplusp_core::model::{
-    globalize, parse_contract, translate_overrides, translate_file, translate_structs, Args, BinOp, CastKind, CondKind, Conds, DArgs, DConds, DExpr, DOverride, DParams, DPre, DStmt, DStmts, DTy, DUpcast, Expr, Extent, Fns,
-    Function, List, Members, Method, Model, Names as CNames, Obj, Objs, Params, Refusal, Scalar, Stmt, Stmts, Structs, Tok, Ty,
+    globalize, parse_contract, translate_file, translate_overrides, translate_structs, Args, BinOp, CastKind, CondKind, Conds, DArgs,
+    DConds, DExpr, DOverride, DParams, DPre, DStmt, DStmts, DTy, DUpcast, Expr, Extent, Fns, Function, List, Members, Method, Model,
+    Names as CNames, Obj, Objs, Params, Refusal, Scalar, Stmt, Stmts, Structs, Tok, Ty,
 };
 use serde::Deserialize;
 
@@ -570,7 +571,8 @@ fn stmt(s: JStmt, names: &mut Names) -> Stmt {
         JStmt::Switch(e, k, cases, line) => {
             let place = names.here(line);
             let key = names.id(&k);
-            let cases = cases.into_iter().rev().fold(List::Nil, |rest, (i, body)| List::Cons((i, Box::new(stmts(body, names))), Box::new(rest)));
+            let cases =
+                cases.into_iter().rev().fold(List::Nil, |rest, (i, body)| List::Cons((i, Box::new(stmts(body, names))), Box::new(rest)));
             Stmt::Switch(expr(e, names), key, Box::new(cases), place)
         }
         JStmt::SetRefField(p, f, e, line) => Stmt::SetRefField(names.id(&p), names.id(&f), expr(e, names), names.here(line)),
@@ -585,7 +587,9 @@ fn stmt(s: JStmt, names: &mut Names) -> Stmt {
         JStmt::Block(body, line) => Stmt::Block(Box::new(stmts(body, names)), names.here(line)),
         JStmt::Assert(c) => body_line(c, false, names),
         JStmt::Apply(c) => body_line(c, true, names),
-        JStmt::While(c, cs, body, line) => Stmt::While(expr(c, names), Box::new(conds(cs, names)), Box::new(stmts(body, names)), names.here(line)),
+        JStmt::While(c, cs, body, line) => {
+            Stmt::While(expr(c, names), Box::new(conds(cs, names)), Box::new(stmts(body, names)), names.here(line))
+        }
         JStmt::For(init, c, step, cs, body, line) => {
             let init = Box::new(stmt(*init, names));
             let c = expr(c, names);
@@ -698,12 +702,24 @@ fn lex(text: &str, line: u32, names: &mut Names) -> Vec<Tok> {
                     // A name followed by `(` is a call, and the companion file must declare it. A member name in a member function may be a call of
                     // the member, and the core decides, decision 0090. A member of two virtual functions of one name has the plain name before the `'`, decision 0217.
                     let listed = names.file_fns.iter().any(|d| d == word);
-                    if call && !member && !static_call && !listed && !names.declared.iter().any(|d| d == word) && !names.this_members.iter().any(|d| d == word) && !names.functors.iter().any(|d| d == word) {
+                    if call
+                        && !member
+                        && !static_call
+                        && !listed
+                        && !names.declared.iter().any(|d| d == word)
+                        && !names.this_members.iter().any(|d| d == word)
+                        && !names.functors.iter().any(|d| d == word)
+                    {
                         names.bad_calls.entry(line).or_insert_with(|| (word.to_string(), 0));
                     }
                     // A name that two virtual functions of the struct share is no function of a contract. Its members are in the table by the name and the
                     // parameter types, so the sentence is the one of a function that is not pure, decision 0217.
-                    if call && !member && !static_call && !names.this_members.iter().any(|d| d == word) && names.this_members.iter().any(|d| plain_member(d) == word) {
+                    if call
+                        && !member
+                        && !static_call
+                        && !names.this_members.iter().any(|d| d == word)
+                        && names.this_members.iter().any(|d| plain_member(d) == word)
+                    {
                         names.bad_calls.entry(line).or_insert_with(|| (word.to_string(), 0));
                         names.shared_calls.insert(line);
                     }
@@ -713,7 +729,11 @@ fn lex(text: &str, line: u32, names: &mut Names) -> Vec<Tok> {
                     }
                     // A static member function that the table of members leaves out has a name that two functions share, so a contract cannot call it, decision 0215.
                     if call && !member && static_call {
-                        let qualified = if chain == word { names.class.as_ref().map(|c| format!("{c}::{word}")).unwrap_or_default() } else { chain.clone() };
+                        let qualified = if chain == word {
+                            names.class.as_ref().map(|c| format!("{c}::{word}")).unwrap_or_default()
+                        } else {
+                            chain.clone()
+                        };
                         if !names.members.values().any(|list| list.contains(&qualified)) {
                             names.bad_calls.entry(line).or_insert_with(|| (qualified, 2));
                         }
@@ -751,7 +771,12 @@ fn lex(text: &str, line: u32, names: &mut Names) -> Vec<Tok> {
                 // An invisible character is named by its code point, decision 0125. A bot cannot see it in quotes.
                 LexKind::BadChar => match word.chars().next() {
                     // ponytail: the four Hangul fillers are letters that print as nothing. Upgrade: a table of the default-ignorable code points.
-                    Some(ch) if !(ch.is_ascii_graphic() || ch.is_alphanumeric()) || matches!(ch, '\u{115F}' | '\u{1160}' | '\u{3164}' | '\u{FFA0}') => Tok::Unknown(names.id(&format!("U+{:04X} in a contract", ch as u32)), line),
+                    Some(ch)
+                        if !(ch.is_ascii_graphic() || ch.is_alphanumeric())
+                            || matches!(ch, '\u{115F}' | '\u{1160}' | '\u{3164}' | '\u{FFA0}') =>
+                    {
+                        Tok::Unknown(names.id(&format!("U+{:04X} in a contract", ch as u32)), line)
+                    }
                     _ => Tok::Unknown(names.id(&format!("'{word}' in a contract")), line),
                 },
             }
@@ -768,7 +793,8 @@ fn fold_names(toks: Vec<Tok>, names: &Names) -> Vec<Tok> {
     let mut at = 0;
     while at < toks.len() {
         if let (Tok::Ident(a), Some(Tok::ColonColon), Some(Tok::Ident(b))) = (toks[at], toks.get(at + 1), toks.get(at + 2)) {
-            let value = names.valued.iter().find(|(n, _)| n == names.text(a)).and_then(|(_, vs)| vs.iter().find(|(m, _)| m == names.text(*b)));
+            let value =
+                names.valued.iter().find(|(n, _)| n == names.text(a)).and_then(|(_, vs)| vs.iter().find(|(m, _)| m == names.text(*b)));
             if let Some((_, v)) = value {
                 valued.push(Tok::Int(*v));
                 at += 3;
@@ -780,17 +806,26 @@ fn fold_names(toks: Vec<Tok>, names: &Names) -> Vec<Tok> {
     }
     let toks = valued;
     let mut missing = u32::MAX;
-    let mut folds = cplusp_core::fold::Folds { constants: Vec::new(), reals: Vec::new(), shadow: Vec::new(), enums: Vec::new(), enumerators: Vec::new() };
+    let mut folds = cplusp_core::fold::Folds {
+        constants: Vec::new(),
+        reals: Vec::new(),
+        shadow: Vec::new(),
+        enums: Vec::new(),
+        enumerators: Vec::new(),
+    };
     folds.constants = names.constants.iter().filter_map(|(c, v)| Some((names.find(c)?, *v))).collect();
     folds.reals = names.reals.iter().filter_map(|(c, negative, m, q)| Some((names.find(c)?, *negative, *m, *q))).collect();
     folds.shadow = names.shadow.iter().filter_map(|n| names.find(n)).collect();
     for (plain, key, list) in &names.enums {
         folds.enums.extend(names.find(plain).map(|id| (id, *key)));
         for member in list {
-            folds.enumerators.push((*key, names.find(member).unwrap_or_else(|| {
-                missing -= 1;
-                missing
-            })));
+            folds.enumerators.push((
+                *key,
+                names.find(member).unwrap_or_else(|| {
+                    missing -= 1;
+                    missing
+                }),
+            ));
         }
     }
     let folded = cplusp_core::fold::fold(&toks, &folds);
@@ -875,7 +910,10 @@ fn conds(v: Vec<JCond>, names: &mut Names) -> Conds {
             // `//@ reads a, b` is the same, one line for each global, decision 0173.
             // `//@ modifies a, b` is one line for each name, decision 0108. A name may have parts, `Tally::count_`, and the core refuses it as no reference
             // parameter, decision 0110. A line of any other form is one that names no name, and the core refuses it as a form it cannot read.
-            let word = |w: &str| w.starts_with(|ch: char| ch.is_ascii_alphabetic() || ch == '_') && w.chars().all(|ch| ch.is_ascii_alphanumeric() || ch == '_');
+            let word = |w: &str| {
+                w.starts_with(|ch: char| ch.is_ascii_alphabetic() || ch == '_')
+                    && w.chars().all(|ch| ch.is_ascii_alphanumeric() || ch == '_')
+            };
             let listed: Vec<&str> = c.text.split(',').map(str::trim).collect();
             let kind = if c.kind == "reads" { CondKind::Reads } else { CondKind::Modifies };
             if listed.iter().all(|n| n.split("::").all(word)) {
@@ -914,7 +952,8 @@ fn conds(v: Vec<JCond>, names: &mut Names) -> Conds {
                     let name = c.text.trim();
                     if name.starts_with(|ch: char| ch.is_ascii_alphabetic() || ch == '_') && readable(name) {
                         // The shell folds a constant and an enumerator before the core sees them, so a name of one is not new, decision 0144.
-                        let taken = names.constants.iter().any(|(k, _)| k == name) || names.enums.iter().any(|e| e.2.iter().any(|m| m == name));
+                        let taken =
+                            names.constants.iter().any(|(k, _)| k == name) || names.enums.iter().any(|e| e.2.iter().any(|m| m == name));
                         if taken {
                             (CondKind::Bad(Refusal::IndexName(names.id(name), line)), Expr::Int(0))
                         } else {
@@ -982,7 +1021,13 @@ fn scan_companion(text: &str) -> (Vec<(u32, String)>, Vec<Declared>) {
 fn expr_names<'a>(e: &'a JExpr, out: &mut Vec<&'a str>) {
     match e {
         JExpr::Var(v, _) | JExpr::Move(v, _) | JExpr::Step(v, ..) => out.push(v),
-        JExpr::Bin(_, a, b) | JExpr::Divide(_, a, b, _) | JExpr::Shr(a, b, _) | JExpr::Bits(_, a, b, _) | JExpr::Index(a, b) | JExpr::Subspan(a, b) | JExpr::Fill(a, b) => {
+        JExpr::Bin(_, a, b)
+        | JExpr::Divide(_, a, b, _)
+        | JExpr::Shr(a, b, _)
+        | JExpr::Bits(_, a, b, _)
+        | JExpr::Index(a, b)
+        | JExpr::Subspan(a, b)
+        | JExpr::Fill(a, b) => {
             expr_names(a, out);
             expr_names(b, out);
         }
@@ -996,9 +1041,30 @@ fn expr_names<'a>(e: &'a JExpr, out: &mut Vec<&'a str>) {
             expr_names(a, out);
             expr_names(b, out);
         }
-        JExpr::Not(a) | JExpr::Neg(a) | JExpr::Cast(_, a) | JExpr::Paren(a) | JExpr::Brace(a) | JExpr::Size(a) | JExpr::Back(a) | JExpr::Empty(a) | JExpr::Copy(a, ..) | JExpr::Field(a, _) | JExpr::HasValue(a) | JExpr::Value(a) | JExpr::Holds(_, a) | JExpr::GetAlt(_, a) | JExpr::Wrap(a) => expr_names(a, out),
+        JExpr::Not(a)
+        | JExpr::Neg(a)
+        | JExpr::Cast(_, a)
+        | JExpr::Paren(a)
+        | JExpr::Brace(a)
+        | JExpr::Size(a)
+        | JExpr::Back(a)
+        | JExpr::Empty(a)
+        | JExpr::Copy(a, ..)
+        | JExpr::Field(a, _)
+        | JExpr::HasValue(a)
+        | JExpr::Value(a)
+        | JExpr::Holds(_, a)
+        | JExpr::GetAlt(_, a)
+        | JExpr::Wrap(a) => expr_names(a, out),
         JExpr::Call(_, _, args, _) | JExpr::Construct(_, args) | JExpr::List(args) => args.iter().for_each(|a| expr_names(a, out)),
-        JExpr::Lit(..) | JExpr::Bool(_) | JExpr::RealLit(..) | JExpr::Ratio(..) | JExpr::Nullopt | JExpr::EmptyVec | JExpr::Enumerator(..) | JExpr::Unknown(..) => {}
+        JExpr::Lit(..)
+        | JExpr::Bool(_)
+        | JExpr::RealLit(..)
+        | JExpr::Ratio(..)
+        | JExpr::Nullopt
+        | JExpr::EmptyVec
+        | JExpr::Enumerator(..)
+        | JExpr::Unknown(..) => {}
     }
 }
 
@@ -1025,7 +1091,9 @@ fn stmt_conds<'a>(s: &'a JStmt, out: &mut Vec<&'a str>) {
 
 /// Whether a contract text calls the name: the name, not part of a longer name, then `(`.
 fn calls_name(text: &str, name: &str) -> bool {
-    text.match_indices(name).any(|(i, _)| !text[..i].ends_with(|c: char| c.is_ascii_alphanumeric() || c == '_') && text[i + name.len()..].trim_start().starts_with('('))
+    text.match_indices(name).any(|(i, _)| {
+        !text[..i].ends_with(|c: char| c.is_ascii_alphanumeric() || c == '_') && text[i + name.len()..].trim_start().starts_with('(')
+    })
 }
 
 fn stmt_names<'a>(s: &'a JStmt, out: &mut Vec<&'a str>) {
@@ -1159,7 +1227,21 @@ fn type_word(t: &JTy, struct_name: &dyn Fn(&str) -> String, enum_name: &dyn Fn(&
 
 /// Whether a type argument has a word in the model, decision 0180. ponytail: a scalar, a struct or an enum. Upgrade: a word for a sequence, an optional.
 fn has_word(t: &JTy) -> bool {
-    matches!(t, JTy::I8 | JTy::I16 | JTy::I32 | JTy::I64 | JTy::U8 | JTy::U16 | JTy::U32 | JTy::U64 | JTy::Bool | JTy::F64 | JTy::Struct(_) | JTy::Enum(_))
+    matches!(
+        t,
+        JTy::I8
+            | JTy::I16
+            | JTy::I32
+            | JTy::I64
+            | JTy::U8
+            | JTy::U16
+            | JTy::U32
+            | JTy::U64
+            | JTy::Bool
+            | JTy::F64
+            | JTy::Struct(_)
+            | JTy::Enum(_)
+    )
 }
 
 /// Whether an instance of a class template has a type argument with no Dafny name, decision 0188.
@@ -1181,11 +1263,25 @@ fn set_full_names(items: &mut [(Item, &str)]) {
         if st.of.is_empty() {
             return st.name.clone();
         }
-        let struct_name = |k: &str| items.iter().find_map(|(i, _)| match i { Item::Struct(g) if g.key == k => Some(full(g, items, enums)), _ => None }).unwrap_or_default();
+        let struct_name = |k: &str| {
+            items
+                .iter()
+                .find_map(|(i, _)| match i {
+                    Item::Struct(g) if g.key == k => Some(full(g, items, enums)),
+                    _ => None,
+                })
+                .unwrap_or_default()
+        };
         let enum_name = |k: &str| enums.iter().find(|(key, _)| key == k).map(|(_, n)| n.clone()).unwrap_or_default();
         format!("{}'of'{}", st.name, st.of.iter().map(|t| type_word(t, &struct_name, &enum_name)).collect::<Vec<_>>().join("'"))
     }
-    let fulls: Vec<(String, String)> = items.iter().filter_map(|(i, _)| match i { Item::Struct(st) => Some((st.key.clone(), full(st, items, &enums))), _ => None }).collect();
+    let fulls: Vec<(String, String)> = items
+        .iter()
+        .filter_map(|(i, _)| match i {
+            Item::Struct(st) => Some((st.key.clone(), full(st, items, &enums))),
+            _ => None,
+        })
+        .collect();
     for (item, _) in items.iter_mut() {
         if let Item::Struct(st) = item {
             st.full = fulls.iter().find(|(k, _)| *k == st.key).map(|(_, f)| f.clone()).unwrap_or_default();
@@ -1213,12 +1309,16 @@ fn function(f: JFunction, names: &mut Names) -> Function {
     names.shadow.extend(used.into_iter().map(str::to_string));
     // The names that a contract may call as a functor, decision 0098.
     names.functors = f.params.iter().filter(|(_, t)| matches!(t, JTy::Struct(_))).map(|(n, _)| n.clone()).collect();
-    if let (Some((_, JTy::This(k) | JTy::ThisMut(k) | JTy::Iface(k) | JTy::IfaceMut(k))), _) | (_, JTy::This(k)) = (f.params.first(), &f.ret) {
+    if let (Some((_, JTy::This(k) | JTy::ThisMut(k) | JTy::Iface(k) | JTy::IfaceMut(k))), _) | (_, JTy::This(k)) =
+        (f.params.first(), &f.ret)
+    {
         names.functors.extend(names.struct_fields.get(k).cloned().unwrap_or_default());
     }
     // A constructor reads the members of the value it builds, decision 0094.
     names.this_members = match (f.params.first(), &f.ret) {
-        (Some((_, JTy::This(k) | JTy::ThisMut(k) | JTy::Iface(k) | JTy::IfaceMut(k))), _) | (_, JTy::This(k)) => names.members.get(k).cloned().unwrap_or_default(),
+        (Some((_, JTy::This(k) | JTy::ThisMut(k) | JTy::Iface(k) | JTy::IfaceMut(k))), _) | (_, JTy::This(k)) => {
+            names.members.get(k).cloned().unwrap_or_default()
+        }
         _ => Vec::new(),
     };
     // A parameter with no name is named by its position, as `'N`. C++ cannot write that, so it clashes with no name. The mangling makes it `v_'N`.
@@ -1231,7 +1331,15 @@ fn function(f: JFunction, names: &mut Names) -> Function {
     let params = ps.into_iter().rev().fold(Params::Nil, |rest, (n, t)| Params::Cons((n, t), Box::new(rest)));
     let ret = ty(f.ret, names);
     let line = names.here(f.line);
-    Function { name, line, params, ret, trusted: f.trusted.is_some() || f.interface, conds: conds(f.conds, names), body: stmts(f.body, names) }
+    Function {
+        name,
+        line,
+        params,
+        ret,
+        trusted: f.trusted.is_some() || f.interface,
+        conds: conds(f.conds, names),
+        body: stmts(f.body, names),
+    }
 }
 
 // ------------------------------------------------------------------ the Dafny text
@@ -1488,7 +1596,11 @@ fn dexpr(e: &DExpr, names: &Names) -> String {
         DExpr::Nothing => "None".to_string(),
         DExpr::EmptySeq => "[]".to_string(),
         DExpr::Just(a) => format!("Some({})", dexpr(a, names)),
-        DExpr::Enumerator(k, i) => format!("{}'{}", names.datatypes[k], names.enums.iter().find(|e| e.1 == *k).and_then(|e| e.2.get(*i as usize)).map_or("'unknown", String::as_str)),
+        DExpr::Enumerator(k, i) => format!(
+            "{}'{}",
+            names.datatypes[k],
+            names.enums.iter().find(|e| e.1 == *k).and_then(|e| e.2.get(*i as usize)).map_or("'unknown", String::as_str)
+        ),
         DExpr::Ctor(k, args) => format!("{}({})", names.datatypes[k], dargs(args, names).join(", ")),
         DExpr::BitOp(o, a, b) => format!("{}({}, {})", dop(*o), dexpr(a, names), dexpr(b, names)),
         DExpr::SeqLit(args) => format!("[{}]", dargs(args, names).join(", ")),
@@ -1498,7 +1610,9 @@ fn dexpr(e: &DExpr, names: &Names) -> String {
         DExpr::PopBack(a) => format!("PopBack({})", dexpr(a, names)),
         DExpr::Index(a, i) => format!("{}[{}]", dexpr(a, names), dexpr(i, names)),
         DExpr::Append(a, e) => format!("({} + [{}])", dexpr(a, names), dexpr(e, names)),
-        DExpr::CountIf(s, x, t, e) => format!("CountIf({}, ({}: {}) => {})", dexpr(s, names), mangle(names.text(*x)), dty(*t, names), dexpr(e, names)),
+        DExpr::CountIf(s, x, t, e) => {
+            format!("CountIf({}, ({}: {}) => {})", dexpr(s, names), mangle(names.text(*x)), dty(*t, names), dexpr(e, names))
+        }
         // The exact decimal: the digits `d`, with `k` of them after the point and at least one.
         DExpr::RealLit(d, k) => {
             let digits = format!("{:0>width$}", d, width = *k as usize + 1);
@@ -1543,7 +1657,9 @@ fn dexpr(e: &DExpr, names: &Names) -> String {
         // The value after a call of a lemma, decision 0167. A lemma is called before the value in the body of a function.
         DExpr::Lemma(l, args, e) => format!("{}({}); {}", names.text(*l), dargs(args, names).join(", "), dexpr(e, names)),
         // A local of a pure body, decision 0172. It stands at the head of a function body, so it needs no parentheses.
-        DExpr::Let(x, t, v, b) => format!("var {}: {} := {}; {}", mangle(names.text(*x)), local_ty(*t, names), dexpr(v, names), dexpr(b, names)),
+        DExpr::Let(x, t, v, b) => {
+            format!("var {}: {} := {}; {}", mangle(names.text(*x)), local_ty(*t, names), dexpr(v, names), dexpr(b, names))
+        }
         DExpr::SetAt(a, i, e) => format!("{}[{} := {}]", dexpr(a, names), dexpr(i, names), dexpr(e, names)),
         DExpr::Drop(a, k) => format!("{}[{}..]", dexpr(a, names), dexpr(k, names)),
         DExpr::Take(a, j) => format!("{}[..{}]", dexpr(a, names), dexpr(j, names)),
@@ -1724,7 +1840,10 @@ impl Printer<'_> {
                     let temp = format!("v_'d{}", self.fresh);
                     let (local, up) = (mangle(self.names.text(*v)), upcast_name(*dk, *bk, self.names));
                     before.push_str(&format!("var {temp}: {}; ", self.names.datatypes[bk]));
-                    after.push_str(&format!(" assume {{:axiom}} exists v_'q: {} :: {up}(v_'q) == {temp}; {local} :| {up}({local}) == {temp};", self.names.datatypes[dk]));
+                    after.push_str(&format!(
+                        " assume {{:axiom}} exists v_'q: {} :: {up}(v_'q) == {temp}; {local} :| {up}({local}) == {temp};",
+                        self.names.datatypes[dk]
+                    ));
                     self.downs.insert((*dk, *bk));
                     temp
                 }
@@ -1813,7 +1932,11 @@ impl Printer<'_> {
             // Decision 0197: the field holds a pointer, and the write keeps the other fields of what it owns.
             DStmt::SetThroughField(f, g, e) => {
                 let f = names.text(*f);
-                self.put(depth, format!("v_this' := v_this'.(f_{f} := Some(v_this'.f_{f}.value.(f_{} := {})));", names.text(*g), dexpr(e, names)), place);
+                self.put(
+                    depth,
+                    format!("v_this' := v_this'.(f_{f} := Some(v_this'.f_{f}.value.(f_{} := {})));", names.text(*g), dexpr(e, names)),
+                    place,
+                );
             }
             DStmt::Update(objs, m, args) => {
                 let (object, call, before, after) = self.update(objs, *m, args);
@@ -1863,7 +1986,11 @@ impl Printer<'_> {
                 };
                 self.put(
                     depth,
-                    format!("{before}{result}var {temp}: {pointed}; {} := {call}; {} := {update};{after}", gives.join(", "), if matches!(vec, Obj::Field(_)) { "v_this'" } else { &written }),
+                    format!(
+                        "{before}{result}var {temp}: {pointed}; {} := {call}; {} := {update};{after}",
+                        gives.join(", "),
+                        if matches!(vec, Obj::Field(_)) { "v_this'" } else { &written }
+                    ),
                     place,
                 );
             }
@@ -2098,7 +2225,11 @@ impl Printer<'_> {
         self.out.push('\n');
         self.lines.push(None);
         let start = self.lines.len() + 1;
-        self.put(0, format!("function {}({}): (result: {})", self.names.functions[&m.name], shown.join(", "), dty(m.ret, self.names)), place);
+        self.put(
+            0,
+            format!("function {}({}): (result: {})", self.names.functions[&m.name], shown.join(", "), dty(m.ret, self.names)),
+            place,
+        );
         let mut cs = &m.requires;
         while let List::Cons((e, line), next) = cs {
             self.put(1, format!("requires {}", dexpr(e, self.names)), *line);
@@ -2211,7 +2342,17 @@ impl Printer<'_> {
             own_places.push(*line);
             cs = next;
         }
-        LemmaMap { lines: start..self.lines.len() + 1, place, own, requires, requires_lines, body, method: self.method_lines.get(&o.derived).cloned().unwrap_or(0..0), own_places, of }
+        LemmaMap {
+            lines: start..self.lines.len() + 1,
+            place,
+            own,
+            requires,
+            requires_lines,
+            body,
+            method: self.method_lines.get(&o.derived).cloned().unwrap_or(0..0),
+            own_places,
+            of,
+        }
     }
 
     fn axiom_function(&mut self, m: &Method, place: u32) {
@@ -2225,7 +2366,11 @@ impl Printer<'_> {
         self.out.push('\n');
         self.lines.push(None);
         let start = self.lines.len() + 1;
-        self.put(0, format!("function {{:axiom}} {}({}): (result: {})", names.functions[&m.name], shown.join(", "), dty(m.ret, names)), place);
+        self.put(
+            0,
+            format!("function {{:axiom}} {}({}): (result: {})", names.functions[&m.name], shown.join(", "), dty(m.ret, names)),
+            place,
+        );
         let mut cs = &m.requires;
         while let List::Cons((e, line), next) = cs {
             self.put(1, format!("requires {}", dexpr(e, names)), *line);
@@ -2282,7 +2427,13 @@ impl Printer<'_> {
                 }
             }
             let tail = |this: &str| if args.is_empty() { this.to_string() } else { format!("{this}, {}", args.join(", ")) };
-            let equal = format!("{}({}) == {}({})", names.functions[&o.base], tail(&format!("{f}(v_this)")), names.functions[&o.derived], tail("v_this"));
+            let equal = format!(
+                "{}({}) == {}({})",
+                names.functions[&o.base],
+                tail(&format!("{f}(v_this)")),
+                names.functions[&o.derived],
+                tail("v_this")
+            );
             let body = if guards.is_empty() { equal } else { format!("({}) ==> {equal}", guards.join(") && (")) };
             let line = if binders.is_empty() { body } else { format!("forall {} :: {body}", binders.join(", ")) };
             self.put(1, format!("ensures {line}"), place);
@@ -2306,7 +2457,11 @@ impl Printer<'_> {
         }
         // A pure virtual function of an interface is also a function of the model, with its contract and no body, which Dafny takes as given, decision 0166. The
         // method says that its result is the value of the function, and that link is the last ensures line.
-        if m.trusted && !m.writes && m.ret != DTy::Void && matches!(m.params, List::Cons((n, DTy::Iface(_)), _) if self.names.text(n) == "this") {
+        if m.trusted
+            && !m.writes
+            && m.ret != DTy::Void
+            && matches!(m.params, List::Cons((n, DTy::Iface(_)), _) if self.names.text(n) == "this")
+        {
             self.axiom_function(m, place);
         }
         let outs = dparams(&m.outs);
@@ -2487,7 +2642,10 @@ fn dparams(ps: &DParams) -> Vec<(u32, DTy)> {
 pub fn translate(lines: &str, companion: Option<(&str, &str)>) -> Result<Translation> {
     // The text `operator()` is the first word, so its id is `CALL_OP`, the id that the core uses, decision 0098. The text `value` is the second, so its id is
     // `VALUE_NAME`, the member that `x.value()` calls on a struct, decision 0169. The text `reads` is the third, so its id is `READS_NAME`, decision 0173. The text `count` is the fourth, so its id is `COUNT_NAME`, decision 0175. The text `~` is the fifth, so its id is `DTOR_NAME`, decision 0178.
-    let mut names = Names { words: vec!["operator()".to_string(), "value".to_string(), "reads".to_string(), "count".to_string(), "~".to_string()], ..Default::default() };
+    let mut names = Names {
+        words: vec!["operator()".to_string(), "value".to_string(), "reads".to_string(), "count".to_string(), "~".to_string()],
+        ..Default::default()
+    };
     let mut refusals = Vec::new();
     let mut funcs = Vec::new();
     let mut structs = Vec::new();
@@ -2549,7 +2707,11 @@ pub fn translate(lines: &str, companion: Option<(&str, &str)>) -> Result<Transla
     for (item, l) in items {
         match item {
             Item::Orphan { orphan, file, word } => {
-                let said = if word == "assert" || word == "apply" { "an assert or apply line needs a statement below it in its block." } else { "a contract line that belongs to no function." };
+                let said = if word == "assert" || word == "apply" {
+                    "an assert or apply line needs a statement below it in its block."
+                } else {
+                    "a contract line that belongs to no function."
+                };
                 refusals.push((file, orphan, said.to_string()));
             }
             Item::Global { global, ty } => {
@@ -2566,9 +2728,11 @@ pub fn translate(lines: &str, companion: Option<(&str, &str)>) -> Result<Transla
                 None => enums.push(en),
             },
             // An instance of a class template with a type argument that has no Dafny name, decision 0188.
-            Item::Struct(st) if unnamed_arguments(&st) => {
-                refusals.push((st.file.clone(), st.line, "a type argument with no Dafny name: the translator has no rule for it yet.".to_string()))
-            }
+            Item::Struct(st) if unnamed_arguments(&st) => refusals.push((
+                st.file.clone(),
+                st.line,
+                "a type argument with no Dafny name: the translator has no rule for it yet.".to_string(),
+            )),
             Item::Struct(st) if dropped.contains(&st.key) => {
                 first_dropped.get_or_insert((st.file.clone(), st.line));
             }
@@ -2578,8 +2742,16 @@ pub fn translate(lines: &str, companion: Option<(&str, &str)>) -> Result<Transla
             }
             // A type argument with no word has no name in the model, decision 0180. ponytail: a scalar, a struct or an enum. Upgrade: a word for a sequence, an optional.
             // A signature the core refuses is reported by its own type first.
-            Item::Function(f) if !matches!(f.ret, JTy::Other(_)) && !f.params.iter().any(|(_, t)| matches!(t, JTy::Other(_))) && f.of.iter().any(|t| !has_word(t)) => {
-                refusals.push((f.file.clone(), f.line, "a type argument with no Dafny name: the translator has no rule for it yet.".to_string()))
+            Item::Function(f)
+                if !matches!(f.ret, JTy::Other(_))
+                    && !f.params.iter().any(|(_, t)| matches!(t, JTy::Other(_)))
+                    && f.of.iter().any(|t| !has_word(t)) =>
+            {
+                refusals.push((
+                    f.file.clone(),
+                    f.line,
+                    "a type argument with no Dafny name: the translator has no rule for it yet.".to_string(),
+                ))
             }
             Item::Function(f) => match unreadable_name(&f) {
                 Some(n) => refusals.push((f.file.clone(), f.line, format!("{n}: a name with a character Dafny cannot read."))),
@@ -2604,13 +2776,23 @@ pub fn translate(lines: &str, companion: Option<(&str, &str)>) -> Result<Transla
     // 0094. C++ cannot write `'`, so it clashes with no name.
     let plain = |f: &JFunction| match (f.params.first(), &f.ret) {
         // `this` of a virtual function of an interface names it too, decision 0165.
-        (Some((_, JTy::This(k) | JTy::ThisMut(k) | JTy::Iface(k) | JTy::IfaceMut(k))), _) | (_, JTy::This(k)) => format!("{}'{}", structs.iter().find(|s| s.key == *k).map_or("", |s| s.full.as_str()), dafny_word(&f.name)),
+        (Some((_, JTy::This(k) | JTy::ThisMut(k) | JTy::Iface(k) | JTy::IfaceMut(k))), _) | (_, JTy::This(k)) => {
+            format!("{}'{}", structs.iter().find(|s| s.key == *k).map_or("", |s| s.full.as_str()), dafny_word(&f.name))
+        }
         // A static member function has the name of its class, `Tally::bump` is `Tally'bump`, decision 0174.
         // An instance of a function template is the template, `'of'`, and the Dafny type of each argument, joined by `'`, decision 0180. A `'` never clashes.
         _ => {
             let base = operator_word(&f.name).map_or_else(|| f.name.replace("::", "'"), str::to_string);
-            let word = |t: &JTy| type_word(t, &|k| structs.iter().find(|s| s.key == *k).map_or("", |s| s.full.as_str()).to_string(), &|k| enums.iter().find(|e| e.key == *k).map_or("", |e| e.name.as_str()).to_string());
-            if f.of.is_empty() { base } else { format!("{base}'of'{}", f.of.iter().map(word).collect::<Vec<_>>().join("'")) }
+            let word = |t: &JTy| {
+                type_word(t, &|k| structs.iter().find(|s| s.key == *k).map_or("", |s| s.full.as_str()).to_string(), &|k| {
+                    enums.iter().find(|e| e.key == *k).map_or("", |e| e.name.as_str()).to_string()
+                })
+            };
+            if f.of.is_empty() {
+                base
+            } else {
+                format!("{base}'of'{}", f.of.iter().map(word).collect::<Vec<_>>().join("'"))
+            }
         }
     };
     for (i, f) in funcs.iter().enumerate() {
@@ -2665,11 +2847,16 @@ pub fn translate(lines: &str, companion: Option<(&str, &str)>) -> Result<Transla
         names.datatypes.insert(key, if same == 1 { format!("S_{}", st.full) } else { format!("S_{}'{k}", st.full) });
         names.class_names.insert(key, st.name.clone());
         names.members.insert(st.key.clone(), st.members.iter().map(|(n, _)| n.clone()).collect());
-        names.struct_fields.insert(st.key.clone(), st.fields.iter().filter(|(_, t)| matches!(t, JTy::Struct(_))).map(|(n, _)| n.clone()).collect());
+        names
+            .struct_fields
+            .insert(st.key.clone(), st.fields.iter().filter(|(_, t)| matches!(t, JTy::Struct(_))).map(|(n, _)| n.clone()).collect());
     }
     // The classes over interfaces, by key, for the check of each override, and the interfaces of the table, decision 0165.
-    let base_rows: Vec<(u32, Vec<u32>, bool)> =
-        structs.iter().filter(|st| !st.bases.is_empty()).map(|st| (names.id(&st.key), st.bases.iter().map(|b| names.id(b)).collect(), st.is_final)).collect();
+    let base_rows: Vec<(u32, Vec<u32>, bool)> = structs
+        .iter()
+        .filter(|st| !st.bases.is_empty())
+        .map(|st| (names.id(&st.key), st.bases.iter().map(|b| names.id(b)).collect(), st.is_final))
+        .collect();
     let interface_flags: Vec<bool> = structs.iter().map(|st| st.interface).collect();
     // A class over an interface that is not final is no type of the model, so it has no datatype, decision 0165.
     let open_flags: Vec<bool> = structs.iter().map(|st| !st.bases.is_empty() && !st.is_final).collect();
@@ -2677,27 +2864,44 @@ pub fn translate(lines: &str, companion: Option<(&str, &str)>) -> Result<Transla
     let interface_names: Vec<String> = structs
         .iter()
         .filter(|st| st.interface)
-        .map(|st| if structs.iter().filter(|g| g.name == st.name).count() > 1 && !st.qualified.is_empty() { st.qualified.clone() } else { st.name.clone() })
+        .map(|st| {
+            if structs.iter().filter(|g| g.name == st.name).count() > 1 && !st.qualified.is_empty() {
+                st.qualified.clone()
+            } else {
+                st.name.clone()
+            }
+        })
         .collect();
     for (st, name) in structs.iter().filter(|st| st.interface).zip(&interface_names) {
         let key = names.id(&st.key);
         names.interface_names.insert(key, name.clone());
     }
-    let struct_places: Vec<(u32, Option<String>)> = structs.iter().map(|st| (names.place(&st.file, st.line), unreadable_struct_name(st).map(String::from))).collect();
+    let struct_places: Vec<(u32, Option<String>)> =
+        structs.iter().map(|st| (names.place(&st.file, st.line), unreadable_struct_name(st).map(String::from))).collect();
     for st in structs.into_iter().rev() {
         let key = names.id(&st.key);
         let place = names.place(&st.file, st.line);
         names.file = st.file;
-        let fields = st.fields.into_iter().rev().fold(Params::Nil, |rest, (n, t)| Params::Cons((names.id(&n), ty(t, &mut names)), Box::new(rest)));
+        let fields =
+            st.fields.into_iter().rev().fold(Params::Nil, |rest, (n, t)| Params::Cons((names.id(&n), ty(t, &mut names)), Box::new(rest)));
         // The core marks which members are pure and their types, so the shell writes `None`.
-        let members = st.members.into_iter().rev().fold(Members::Nil, |rest, (n, k)| Members::Cons((names.id(&n), (names.id(&k), None)), Box::new(rest)));
+        let members = st
+            .members
+            .into_iter()
+            .rev()
+            .fold(Members::Nil, |rest, (n, k)| Members::Cons((names.id(&n), (names.id(&k), None)), Box::new(rest)));
         table = Structs::Cons((key, (place, fields, members)), Box::new(table));
     }
     // The free functions with a contract are one entry of the table, under a key that no C++ name can spell, decision 0176. The core marks the pure ones
     // and finds them by name, as it finds a static. A name that two of them share is left out: a contract cannot tell the overloads apart.
     let free: Vec<&JFunction> = funcs
         .iter()
-        .filter(|f| f.class.is_none() && !f.conds.is_empty() && !matches!(f.params.first(), Some((n, _)) if n == "this") && !matches!(f.ret, JTy::This(_)))
+        .filter(|f| {
+            f.class.is_none()
+                && !f.conds.is_empty()
+                && !matches!(f.params.first(), Some((n, _)) if n == "this")
+                && !matches!(f.ret, JTy::This(_))
+        })
         .filter(|f| funcs.iter().filter(|g| g.name == f.name).count() == 1)
         // ponytail: only a function that a contract of the file calls is listed. Decision 0176 lists each free function with a contract, but a twin and its link
         // line show the body to every caller, so each function with a contract would move the verdicts of files that never call it in a contract. Upgrade: list them all.
@@ -2713,7 +2917,8 @@ pub fn translate(lines: &str, companion: Option<(&str, &str)>) -> Result<Transla
     let file_entry = !free.is_empty();
     if file_entry {
         names.file_fns = free.iter().map(|f| f.name.clone()).collect();
-        let members = free.iter().rev().fold(Members::Nil, |rest, f| Members::Cons((names.id(&f.name), (names.id(&f.key), None)), Box::new(rest)));
+        let members =
+            free.iter().rev().fold(Members::Nil, |rest, f| Members::Cons((names.id(&f.name), (names.id(&f.key), None)), Box::new(rest)));
         table = Structs::Cons((names.id("'file"), (0, Params::Nil, members)), Box::new(table));
     }
     let count = funcs.len();
@@ -2735,10 +2940,9 @@ pub fn translate(lines: &str, companion: Option<(&str, &str)>) -> Result<Transla
         refs.insert(f.name, mutable);
         seen_fns = next;
     }
-    let bases = base_rows
-        .iter()
-        .rev()
-        .fold(List::Nil, |rest, (d, bs, fin)| List::Cons((*d, (bs.iter().rev().fold(List::Nil, |r, b| List::Cons(*b, Box::new(r))), *fin)), Box::new(rest)));
+    let bases = base_rows.iter().rev().fold(List::Nil, |rest, (d, bs, fin)| {
+        List::Cons((*d, (bs.iter().rev().fold(List::Nil, |r, b| List::Cons(*b, Box::new(r))), *fin)), Box::new(rest))
+    });
     let mut models = translate_file(&fns, &table, &bases);
     let overrides = translate_overrides(&bases, &fns, &table);
     let mut smodels = translate_structs(&table);
@@ -2750,7 +2954,9 @@ pub fn translate(lines: &str, companion: Option<(&str, &str)>) -> Result<Transla
     // The companion file, when the scan passed it, goes after the methods. Each of its lines is a place in its own file.
     let (mut companion_text, mut companion_places) = (String::new(), Vec::new());
     if let Some((path, text)) = companion.filter(|(_, text)| companion_ok && !text.is_empty()) {
-        companion_places = (1..=text.lines().count()).map(|n| Some(Line { place: names.place(path, n as u32), scope: Vec::new(), own: Vec::new() })).collect();
+        companion_places = (1..=text.lines().count())
+            .map(|n| Some(Line { place: names.place(path, n as u32), scope: Vec::new(), own: Vec::new() }))
+            .collect();
         companion_text = if text.ends_with('\n') { text.to_string() } else { format!("{text}\n") };
     }
     // The result type of each method, so a call that writes its object can drop the value.
@@ -2764,7 +2970,29 @@ pub fn translate(lines: &str, companion: Option<(&str, &str)>) -> Result<Transla
         };
         seen = next;
     }
-    let mut p = Printer { copies: Vec::new(), pending: Vec::new(), method_lines: HashMap::new(), calls: HashMap::new(), owned: HashMap::new(), writing: writing_virtual, const_void, refs: refs.clone(), downs: Default::default(), names: &names, methods: &methods, rets: &rets, out: PRELUDE.to_string(), lines: Vec::new(), scope: Vec::new(), own: Vec::new(), writes: false, fresh: 0, temps: 0, in_block: false, laws: format!("{models:?}").contains("BitOp(") };
+    let mut p = Printer {
+        copies: Vec::new(),
+        pending: Vec::new(),
+        method_lines: HashMap::new(),
+        calls: HashMap::new(),
+        owned: HashMap::new(),
+        writing: writing_virtual,
+        const_void,
+        refs: refs.clone(),
+        downs: Default::default(),
+        names: &names,
+        methods: &methods,
+        rets: &rets,
+        out: PRELUDE.to_string(),
+        lines: Vec::new(),
+        scope: Vec::new(),
+        own: Vec::new(),
+        writes: false,
+        fresh: 0,
+        temps: 0,
+        in_block: false,
+        laws: format!("{models:?}").contains("BitOp("),
+    };
     p.lines.extend(PRELUDE.lines().map(|_| None));
     let mut refused_at = Vec::new();
     for (en, (place, key)) in enums.iter().zip(enum_places) {
@@ -2795,7 +3023,9 @@ pub fn translate(lines: &str, companion: Option<(&str, &str)>) -> Result<Transla
         let List::Cons(model, rest) = smodels else { unreachable!("one model for each struct") };
         match model {
             // The struct is refused, and its callers keep the type. The refusal stands for the file.
-            Ok(_) if unreadable.is_some() => refused_at.push((place, format!("{}: a name with a character Dafny cannot read.", unreadable.unwrap_or_default()))),
+            Ok(_) if unreadable.is_some() => {
+                refused_at.push((place, format!("{}: a name with a character Dafny cannot read.", unreadable.unwrap_or_default())))
+            }
             Ok(_) if open => {}
             // An interface is a type with no value that the model can see, decision 0165.
             Ok((key, List::Nil)) if interface => p.put(0, format!("type {}(==)", names.datatypes[&key]), place),
@@ -2917,5 +3147,16 @@ pub fn translate(lines: &str, companion: Option<(&str, &str)>) -> Result<Transla
     }
     refusals.sort();
     refusals.dedup();
-    Ok(Translation { dafny, methods: printed, trusted, refusals, rounds, exact: names.exact.get(), sorted: names.sorted.get(), interfaces: interface_names, downs, map: Map { lines, companion: companion_lines, decls, places: names.places, contracts: names.contracts, lemmas, copies } })
+    Ok(Translation {
+        dafny,
+        methods: printed,
+        trusted,
+        refusals,
+        rounds,
+        exact: names.exact.get(),
+        sorted: names.sorted.get(),
+        interfaces: interface_names,
+        downs,
+        map: Map { lines, companion: companion_lines, decls, places: names.places, contracts: names.contracts, lemmas, copies },
+    })
 }

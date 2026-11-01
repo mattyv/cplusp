@@ -3,8 +3,13 @@
 
 use cplusp_core::companion::*;
 
-/// The refusals as (line, kind), with the word of a kind that has one, and the declarations as (name, line, lemma).
-fn scan(text: &str) -> (Vec<(u32, String)>, Vec<(String, u32, bool)>) {
+/// The refusals as (line, kind), with the word of a kind that has one.
+type Refusals = Vec<(u32, String)>;
+/// The declarations as (name, line, lemma).
+type Decls = Vec<(String, u32, bool)>;
+
+/// The refusals and the declarations of a companion file.
+fn scan(text: &str) -> (Refusals, Decls) {
     let bytes = text.as_bytes().to_vec();
     let s = scan_companion(&bytes);
     let word = |a: usize, b: usize| String::from_utf8(bytes[a..b].to_vec()).unwrap();
@@ -92,7 +97,9 @@ fn a_line_feed_after_a_carriage_return_ends_a_line_and_a_lone_one_at_the_end_is_
 
 #[test]
 fn a_declared_name_of_the_model_is_refused_and_a_comment_does_not_part_it_from_its_word() {
-    let (r, d) = scan("function Some(): int { 1 }\nfunction /* c */ v_x(): int { 1 }\npredicate Ok() { true }\nfunction // c\n  trunc_y(): int { 1 }\n");
+    let (r, d) = scan(
+        "function Some(): int { 1 }\nfunction /* c */ v_x(): int { 1 }\npredicate Ok() { true }\nfunction // c\n  trunc_y(): int { 1 }\n",
+    );
     assert_eq!(r, refused(&[(1, "name:Some"), (2, "name:v_x"), (5, "name:trunc_y")]));
     assert_eq!(d, vec![]);
 }

@@ -22,8 +22,21 @@ fn run(toks: &[Tok], constants: &[(u32, i128)], shadow: &[u32], enums: &[(u32, u
 }
 
 /// `reals` are the double constants, decision 0158: (name, negative, m, q) for the value `m / q`.
-fn reals(toks: &[Tok], constants: &[(u32, i128)], reals: &[(u32, bool, u64, u64)], shadow: &[u32], enums: &[(u32, u32)], enumerators: &[(u32, u32)]) -> Vec<Tok> {
-    let t = Folds { constants: constants.to_vec(), reals: reals.to_vec(), shadow: shadow.to_vec(), enums: enums.to_vec(), enumerators: enumerators.to_vec() };
+fn reals(
+    toks: &[Tok],
+    constants: &[(u32, i128)],
+    reals: &[(u32, bool, u64, u64)],
+    shadow: &[u32],
+    enums: &[(u32, u32)],
+    enumerators: &[(u32, u32)],
+) -> Vec<Tok> {
+    let t = Folds {
+        constants: constants.to_vec(),
+        reals: reals.to_vec(),
+        shadow: shadow.to_vec(),
+        enums: enums.to_vec(),
+        enumerators: enumerators.to_vec(),
+    };
     fold(&toks.to_vec(), &t)
 }
 
@@ -42,7 +55,13 @@ fn the_most_negative_constant_has_its_exact_magnitude() {
 /// A constant holds the full range of uint64_t, decision 0063. A magnitude above it does not fold, and the name stays.
 #[test]
 fn a_constant_up_to_the_largest_u64_folds_and_a_larger_one_stays_a_name() {
-    let out = run(&[Tok::Ident(N), Tok::Ident(M), Tok::Ident(I)], &[(N, u64::MAX as i128), (M, -(u64::MAX as i128)), (I, (u64::MAX as i128) + 1)], &[], &[], &[]);
+    let out = run(
+        &[Tok::Ident(N), Tok::Ident(M), Tok::Ident(I)],
+        &[(N, u64::MAX as i128), (M, -(u64::MAX as i128)), (I, (u64::MAX as i128) + 1)],
+        &[],
+        &[],
+        &[],
+    );
     assert_eq!(out, vec![Tok::Int(u64::MAX), Tok::LParen, Tok::Op(BinOp::Sub), Tok::Int(u64::MAX), Tok::RParen, Tok::Ident(I)]);
 }
 
@@ -62,7 +81,17 @@ fn a_bound_name_hides_the_constant_on_the_whole_line() {
 
 #[test]
 fn a_call_and_a_path_keep_the_name() {
-    let toks = [Tok::Ident(N), Tok::LParen, Tok::RParen, Tok::Ident(A), Tok::ColonColon, Tok::Ident(N), Tok::Ident(N), Tok::ColonColon, Tok::Ident(B)];
+    let toks = [
+        Tok::Ident(N),
+        Tok::LParen,
+        Tok::RParen,
+        Tok::Ident(A),
+        Tok::ColonColon,
+        Tok::Ident(N),
+        Tok::Ident(N),
+        Tok::ColonColon,
+        Tok::Ident(B),
+    ];
     let out = run(&toks, &[(N, 7)], &[], &[], &[]);
     assert_eq!(out, toks.to_vec());
 }
@@ -75,7 +104,8 @@ fn the_first_constant_of_a_name_wins() {
 
 #[test]
 fn an_enumerator_of_one_enum_reads_as_its_index() {
-    let toks = [Tok::Ident(KIND), Tok::ColonColon, Tok::Ident(LARGE), Tok::Op(BinOp::Eq), Tok::Ident(KIND), Tok::ColonColon, Tok::Ident(SMALL)];
+    let toks =
+        [Tok::Ident(KIND), Tok::ColonColon, Tok::Ident(LARGE), Tok::Op(BinOp::Eq), Tok::Ident(KIND), Tok::ColonColon, Tok::Ident(SMALL)];
     let out = run(&toks, &[], &[], &[(KIND, 40)], &[(40, SMALL), (40, LARGE)]);
     assert_eq!(out, vec![Tok::Enumerator(40, 1), Tok::Op(BinOp::Eq), Tok::Enumerator(40, 0)]);
 }
@@ -86,7 +116,10 @@ fn an_enum_name_two_enums_share_bound_names_and_other_members_stay() {
     // Two enums of the name.
     assert_eq!(run(&toks, &[], &[], &[(KIND, 40), (KIND, 41)], &[(40, SMALL), (41, SMALL)]), toks.to_vec());
     // A member that is not an enumerator of it.
-    assert_eq!(run(&[Tok::Ident(KIND), Tok::ColonColon, Tok::Ident(OTHER)], &[], &[], &[(KIND, 40)], &[(40, SMALL)]), vec![Tok::Ident(KIND), Tok::ColonColon, Tok::Ident(OTHER)]);
+    assert_eq!(
+        run(&[Tok::Ident(KIND), Tok::ColonColon, Tok::Ident(OTHER)], &[], &[], &[(KIND, 40)], &[(40, SMALL)]),
+        vec![Tok::Ident(KIND), Tok::ColonColon, Tok::Ident(OTHER)]
+    );
     // A name that a quantifier binds.
     let bound = [Tok::Exists, Tok::Ident(KIND), Tok::ColonColon, Tok::Ident(KIND), Tok::ColonColon, Tok::Ident(SMALL)];
     assert_eq!(run(&bound, &[], &[], &[(KIND, 40)], &[(40, SMALL)]), bound.to_vec());
@@ -135,7 +168,18 @@ fn a_double_constant_reads_as_its_quotient_in_parentheses() {
     want.extend([Tok::LParen, Tok::Op(BinOp::Sub), Tok::Real(3, 0), Tok::Op(BinOp::Div), Tok::Real(4, 0), Tok::RParen]);
     assert_eq!(out, want);
     assert_eq!(reals(&[Tok::Ident(T)], &[], &rs, &[T], &[], &[]), vec![Tok::Ident(T)]);
-    let toks = [Tok::Ident(T), Tok::LParen, Tok::RParen, Tok::Ident(A), Tok::ColonColon, Tok::Ident(T), Tok::Exists, Tok::Ident(U), Tok::ColonColon, Tok::Ident(U)];
+    let toks = [
+        Tok::Ident(T),
+        Tok::LParen,
+        Tok::RParen,
+        Tok::Ident(A),
+        Tok::ColonColon,
+        Tok::Ident(T),
+        Tok::Exists,
+        Tok::Ident(U),
+        Tok::ColonColon,
+        Tok::Ident(U),
+    ];
     assert_eq!(reals(&toks, &[], &rs, &[], &[], &[]), toks.to_vec());
     // An integer constant of the name comes first, and the first double constant of a name wins.
     assert_eq!(reals(&[Tok::Ident(T)], &[(T, 7)], &rs, &[], &[], &[]), vec![Tok::Int(7)]);
