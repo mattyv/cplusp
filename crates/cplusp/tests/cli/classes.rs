@@ -1342,23 +1342,41 @@ fn a_static_member_function_in_a_contract_proves_in_each_place() {
     }
 }
 
-/// A short name of a static member function, such as `T::up`, resolves only through the class of the member function whose
-/// contract it is. A contract of a function that is in no class writes the full name. So a short name never names a function of
-/// another namespace, decision 0226.
+/// A short name of a static member function, such as `T::up`, names the static member function of the only class of that name in
+/// the file. When two classes have the name, or the class has no such static member function with a body, the name is refused.
+/// So a short name never names a function of another scope, decisions 0226 and 0227.
 #[test]
 fn a_short_static_name_outside_its_class_is_refused() {
     let Some(dafny) = dafny() else { return };
     if !clang_tidy_available() {
         return;
     }
-    for (name, line) in [("model-static-short-name-other-namespace.cpp", 6), ("model-static-short-name-free.cpp", 14)] {
+    for (name, line) in [
+        ("model-static-short-name-other-namespace.cpp", 6),
+        ("model-static-short-name-free.cpp", 14),
+        ("model-static-short-name-declared-only.cpp", 10),
+    ] {
         let o = prove(name, &[], &dafny);
         let text = stdout(&o);
         assert_eq!(o.status.code(), Some(1), "{name}: stdout: {text} stderr: {}", stderr(&o));
-        let want = format!("{line}: T::up names no static member function from here. Write the name with its namespace.");
+        let want = format!("{line}: T::up names no static member function from here. Write the full name.");
         let got: Vec<&str> = text.lines().filter(|l| l.starts_with("Not prov")).map(|l| l.rsplit_once(".cpp:").unwrap().1).collect();
         assert_eq!(got, vec![want.as_str()], "{name}: {text}");
     }
+}
+
+/// A short name of a static member function of the only class of that name in the file proves, also for a class inside a class,
+/// decision 0227.
+#[test]
+fn a_short_static_name_of_the_only_class_of_that_name_proves() {
+    let Some(dafny) = dafny() else { return };
+    if !clang_tidy_available() {
+        return;
+    }
+    let o = prove("model-static-short-name-nested-class.cpp", &[], &dafny);
+    let text = stdout(&o);
+    assert_eq!(o.status.code(), Some(0), "stdout: {text} stderr: {}", stderr(&o));
+    assert_eq!(text.lines().last(), Some("ok: proved"), "{text}");
 }
 
 /// A bare call in a contract of a member function of a name that two member functions share is no pure function, decision 0225.

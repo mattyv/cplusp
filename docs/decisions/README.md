@@ -232,3 +232,4 @@ Status is `decided`, `proposed`, `superseded by NNNN`, or a short note that name
 | [0224](0224-a-test-fails-when-its-tool-is-missing.md) | A test fails when its tool is missing | decided |
 | [0225](0225-fixes-from-the-pre-review.md) | Fixes from the pre-review | decided |
 | [0226](0226-fixes-from-the-review-of-0225.md) | Fixes from the review of 0225 | decided |
+| [0227](0227-a-short-static-name-names-the-only-class-of-that-name.md) | A short static name names the only class of that name | decided |

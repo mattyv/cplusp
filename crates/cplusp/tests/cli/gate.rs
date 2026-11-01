@@ -1381,3 +1381,15 @@ fn a_pointer_to_a_global_that_is_no_constant_is_a_change_under_a_loosened_pointe
         assert!(text.lines().any(|l| l.ends_with("g_total changes, and the modifies line does not list it.")), "{name}: {text}");
     }
 }
+
+/// A const reference to a field of a struct global in a call into std is a read of the global. The check of a stored address does
+/// not make it a change, decision 0227.
+#[test]
+fn a_field_of_a_global_in_a_call_into_std_is_a_read() {
+    if !clang_tidy_available() {
+        return;
+    }
+    let f = fixture("global-field-to-std-call.cpp");
+    let o = gated(&[f.to_str().unwrap(), "--", "-std=c++23", "-ffp-contract=off"]);
+    assert_eq!(o.status.code(), Some(0), "stdout: {} stderr: {}", stdout(&o), stderr(&o));
+}
