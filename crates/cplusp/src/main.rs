@@ -132,7 +132,7 @@ enum Cli {
         #[arg(long)]
         plugin: Option<PathBuf>,
         /// Seconds for each method.
-        #[arg(long, default_value_t = 20)]
+        #[arg(long, default_value_t = 20, value_parser = clap::value_parser!(u32).range(1..))]
         time_limit: u32,
         file: PathBuf,
         /// Compiler arguments, after `--`.

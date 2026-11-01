@@ -1,7 +1,7 @@
 # C+P end-to-end validation plan
 
 Date: 2026-10-09. Status: planned. Tests application scale and the skill's complete development process, as in decisions 0092 and 0093.
-It does not record completed program runs.
+It does not record completed program runs. The runs so far are the larger examples under `examples/` and the trial in `docs/trial-flashradixtree.md`.
 Capability review: commit `7bbdc9201eebc9eb23b43900f1f1a7b8361a5aea`.
 
 ## What we are testing

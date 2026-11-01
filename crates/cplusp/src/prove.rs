@@ -23,13 +23,23 @@ struct Error {
     related: Vec<usize>,
 }
 
-/// The first Dafny that runs: the env var `DAFNY`, the install path, then `dafny` on the PATH.
+/// The Dafny that `DAFNY` names, or when it is not set, the install path, then `dafny` on the PATH. A `DAFNY` that does not run stops `prove`: no
+/// other Dafny takes its place, decision 0225.
 fn find_dafny() -> Result<String> {
-    let found = std::env::var("DAFNY")
+    let runs = |c: &str| Command::new(c).arg("--version").stdin(Stdio::null()).output().is_ok_and(|o| o.status.success());
+    // An empty `DAFNY` is a `DAFNY` that is not set, decision 0226.
+    if let Some(named) = std::env::var("DAFNY").ok().filter(|v| !v.is_empty()) {
+        return if runs(&named) {
+            Ok(named)
+        } else {
+            anyhow::bail!("DAFNY names {named}, and it does not run. Fix the path or unset DAFNY.")
+        };
+    }
+    [INSTALLED, "dafny"]
         .into_iter()
-        .chain([INSTALLED.to_string(), "dafny".to_string()])
-        .find(|c| Command::new(c).arg("--version").stdin(Stdio::null()).output().is_ok_and(|o| o.status.success()));
-    found.with_context(|| format!("dafny not found. Set DAFNY, install it at {INSTALLED}, or put dafny on the PATH."))
+        .find(|c| runs(c))
+        .map(str::to_string)
+        .with_context(|| format!("dafny not found. Set DAFNY, install it at {INSTALLED}, or put dafny on the PATH."))
 }
 
 /// The type between the quotes at the end of a message, as C++ writes it.
@@ -361,8 +371,21 @@ pub fn run(t: &Translation, limit: u32, refused: bool, source: &str, shown: &dyn
         emit(e, block);
     }
     // The count of verified items is the only fault, decision 0083.
+    let mut spoke = !seen.is_empty();
     if let (Some((v, 0, 0)), true) = (reading.summary, found.is_empty() && !refused && axioms.is_empty() && verdict == Verdict::NotProved) {
         println!("Not provable: {source}: Dafny verified fewer items than the model has methods: {v} for {}.", t.methods);
+        spoke = true;
+    }
+    // A run that is not proved has a sentence. If no error got one, each error of Dafny is named in Dafny's words at its line, decision 0225.
+    if verdict == Verdict::NotProved && !refused && axioms.is_empty() && !spoke {
+        for e in &found {
+            let (path, line) =
+                here(e.line).map_or_else(|| ("model.dfy".to_string(), e.line as u32), |l| map.places[l.place as usize].clone());
+            println!("Not proved: {}:{line}: Dafny says: {}.", shown(&path), e.message.trim().trim_end_matches('.'));
+        }
+        if found.is_empty() {
+            println!("Not provable: {source}: Dafny did not prove the model, and it gave no error that can be read.");
+        }
     }
     // The proof rests on the rounding axiom when the model calls an operation of `Double`, decision 0154.
     if t.rounds {

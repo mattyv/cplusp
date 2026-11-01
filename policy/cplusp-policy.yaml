@@ -786,7 +786,7 @@ rules:
     area: control
     canonical: New in C++23
     decision: ban
-    why: UB if the claim is false. Claims belong in the contract, where the prover checks them. The C++23 `[[assume]]` attribute is not caught yet.
+    why: UB if the claim is false. Claims belong in the contract, where the prover checks them.
     use_instead: a precondition or an assertion in the contract.
     stage: gate
     detect:

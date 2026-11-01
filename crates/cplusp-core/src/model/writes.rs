@@ -19,16 +19,6 @@ pub fn pre_writes(p: &DPre) -> (r: bool)
     matches!(p, DPre::Update(..) | DPre::Step(..))
 }
 
-/// The count of the steps that write.
-pub open spec fn spec_count_writes(c: DCalls) -> nat
-    decreases c,
-{
-    match c {
-        List::Nil => 0,
-        List::Cons(p, rest) => (if spec_pre_writes(p) { 1nat } else { 0nat }) + spec_count_writes(*rest),
-    }
-}
-
 /// More than one step writes.
 pub open spec fn spec_writes_twice(c: DCalls) -> bool
     decreases c,

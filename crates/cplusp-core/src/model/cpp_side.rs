@@ -40,7 +40,8 @@ pub enum Extent {
 /// `std::vector` that the function owns, a copy, decision 0160. `Enum` is an enum class of
 /// the file by its key, decision 0109. `Iface` is `this` of a virtual function of the interface `k`, and `IfaceRef` is a parameter
 /// `const B&` of it, through which a call runs an override, decision 0165. `IfaceMut` is `this` of a virtual function that writes
-/// its object, decision 0169. `Variant` is a `std::variant` of two different element types, decision 0202. `Void` is the result type
+/// its object, decision 0169. `Ptr` is a raw pointer parameter to one object, decisions 0140 and 0141, and `Own` is a
+/// `std::unique_ptr`, decision 0142. `Variant` is a `std::variant` of two different element types, decision 0202. `Void` is the result type
 /// of a function that gives no value. `Other` is a type the translator has no rule for, by the id of its name.
 #[derive(Structural, PartialEq, Eq, Clone, Copy, Debug)]
 pub enum Ty {
@@ -134,7 +135,8 @@ pub enum CastKind {
 /// contract, and `List` is a braced list `{a, b, c}` in code, decision 0175. `Step` is `x++`, `x--`, `++x` or `--x` inside an
 /// expression, by the name and type of `x`, whether it adds one, and whether it is a prefix, decision 0177. `Fill` is the start
 /// value `v(n, x)` of a local vector, by the count and the value, decision 0185. `Either` is `o.size()`, `o.empty()` or `o.back()` in a contract, as the form of a sequence and the id of the name of a
-/// member, and the translator picks one by the type of `o`, decision 0200. `Holds`
+/// member, and the translator picks one by the type of `o`, decision 0200. `Back` is `v.back()` of a vector in code, decision 0191, and `EmptyVec` is an empty
+/// vector `{}` in code. `Holds`
 /// is `std::holds_alternative<T>(v)` and `GetAlt` is `std::get<T>(v)` of a variant, by the type `T`, decision 0202. `Unknown` is a construct with no rule, by the id of
 /// its kind and its line.
 #[derive(PartialEq, Eq, Debug)]
@@ -208,7 +210,8 @@ pub type Args = List<Box<Expr>>;
 /// name and its arguments. `Exit` is `return;`, decision 0096. `Assert` is a `//@ assert` line in the body, and `Apply` is a
 /// `//@ apply` line that calls a lemma of the companion file by the id of its name, decision 0099. `RangeFor` is a range-for, decision
 /// 0143. `SetIndex` is `v[i] = e` of a vector by reference, decision 0145, of a local vector, decision 0160, or of a local
-/// std::array, decision 0184. `PushBack` is `v.push_back(e)`, decision 0148.
+/// std::array, decision 0184. `PushBack` is `v.push_back(e)`, decision 0148. `PushField` and `PopField`
+/// are `f.push_back(e)` and `f.pop_back()` of a sequence field of the object, decision 0191.
 /// `Sort` is `std::sort(v.begin(), v.end())`, decision 0161, and `SortBy` is the same with a comparator lambda, by the names and the
 /// type of its two parameters and the expression of its one `return`, decision 0162. `Block` is a bare block `{ ... }`, a scope of
 /// its own, decision 0178. `SetOwnField` is `n->f = e` of a local `std::unique_ptr` of a plain struct, decision 0186. `SetFieldAt` is
@@ -254,7 +257,7 @@ pub type Cases = List<(u32, Box<Stmts>)>;
 pub type Params = List<(u32, Ty)>;
 
 /// What a contract line says. `Modifies` names one reference parameter that the function writes, decision 0108. `Reads` names one
-/// global that the function reads, decision 0173. `Other` is a word
+/// global that the function reads, decision 0173. `Index` names the index of a range-for, decision 0143. `Other` is a word
 /// the translator has no rule for yet, by the id of the word. `Bad` is a line that the shell could not cut or parse, with the refusal
 /// it got.
 #[derive(Structural, PartialEq, Eq, Clone, Copy, Debug)]

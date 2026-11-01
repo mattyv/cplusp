@@ -11,6 +11,12 @@
 //! - a translated body has one Dafny statement for each C++ statement: `lemma_statements_kept`.
 //! - each call in a method names a function that has a method in the model: `lemma_calls_resolve`.
 //! - `parse_contract`: it ends, it reads every token or refuses the line, and an expression it gives holds no unknown node.
+//! - an upcast holds only with a check of each virtual function of the interface: `lemma_each_virtual_function_is_checked`.
+//! - the pass of globals leaves no reads line that names a global: `lemma_globalize_consumes_reads`.
+//! - when an interface of the file has no final class over it, the upcasts give a refusal: `lemma_unbacked`, decision 0220.
+//!
+//! The predicates of `properties.rs`, such as `has_method` and `calls_resolve`, carry no `spec_` prefix, since no exec function
+//! mirrors them.
 //!
 //! A Dafny expression has no call, so a call in a method stands alone by the shape of the types.
 //! The lists are cons lists, so that each rule and each proof is one structural recursion.

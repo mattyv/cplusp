@@ -9,6 +9,11 @@ if(NOT Clang_DIR)
 endif()
 find_package(Clang REQUIRED CONFIG)
 
+# A plain build is a release build: the plugin runs inside every gate and prove run.
+if(NOT CMAKE_BUILD_TYPE)
+  set(CMAKE_BUILD_TYPE Release CACHE STRING "The build type." FORCE)
+endif()
+
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)

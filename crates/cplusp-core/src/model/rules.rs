@@ -390,8 +390,6 @@ pub open spec fn spec_bits(op: BinOp, da: DExpr, db: DExpr, t: Ty, line: u32) ->
     }
 }
 
-/// An integral cast, decision 0058. Both types must be in the subset, and neither may be `bool`. The cast is `(e as T)`, so Dafny
-/// proves that the value fits `T`, and the model never wraps.
 /// A callee of the file that gives a double.
 pub open spec fn spec_callee_real(all: Fns, k: u32) -> bool {
     match spec_find(all, k) {
@@ -485,6 +483,8 @@ pub fn real(e: &Expr, all: &Fns) -> (r: bool)
     }
 }
 
+/// An integral cast, decision 0058. Both types must be in the subset, and neither may be `bool`. The cast is `(e as T)`, so Dafny
+/// proves that the value fits `T`, and the model never wraps.
 pub open spec fn spec_integral(from: Ty, to: Ty, d: DExpr, line: u32) -> Result<DExpr, Refusal> {
     match spec_ty(from, line) {
         Err(r) => Err(r),
@@ -519,7 +519,6 @@ pub open spec fn spec_loop_test(e: Expr, all: Fns, line: u32, sd: Structs) -> Re
     }
 }
 
-/// A statement with the calls that run before it. With no call it is the statement alone.
 /// The value of a push_back. A value that the compiler turns into an optional, as `std::make_unique<D>(a)`, runs its calls before it,
 /// decision 0170. Any other value is code with no call, decision 0148.
 pub open spec fn spec_push_value(e: Expr, all: Fns, line: u32, sd: Structs) -> Result<(DCalls, DExpr), Refusal> {
@@ -535,6 +534,7 @@ pub open spec fn spec_push_value(e: Expr, all: Fns, line: u32, sd: Structs) -> R
     }
 }
 
+/// A statement with the calls that run before it. With no call it is the statement alone.
 pub open spec fn spec_pre(c: DCalls, s: DStmt) -> DStmt {
     match c {
         List::Nil => s,
@@ -668,8 +668,8 @@ pub fn members_key_pure(ms: &Members, key: u32) -> (r: bool)
 
 /// An expression of code, decision 0058. Each call that C++ evaluates once runs before the statement and sets a temporary,
 /// numbered from `n`, which the expression reads, decision 0104. Where `open` is false, a call has no place: on the right of `&&`
-/// or `||`, in a branch of `?:`, and in a loop condition. A call of a function that writes its object has no place in an
-/// expression. The operators stay the machine operators of their newtype, so Dafny checks each step for overflow, the battery case
+/// or `||`, in a branch of `?:`, and in a loop condition. A call of a function that writes its object runs as an update into a
+/// temporary, decision 0177. The operators stay the machine operators of their newtype, so Dafny checks each step for overflow, the battery case
 /// signed_overflow. A contract name or `result` has no place in code. The result is the calls, the expression and the next number.
 pub open spec fn spec_lift(e: Expr, all: Fns, line: u32, sd: Structs, n: u32, open: bool) -> Result<(DCalls, DExpr, u32), Refusal>
     decreases e,
@@ -1503,7 +1503,6 @@ pub open spec fn spec_rebind(decl: Names, ps: Params, name: u32) -> Option<(u32,
     }
 }
 
-/// A binary operator of a contract on the exact integers. `/` and `%` truncate as in C++, decision 0088.
 /// An expression of a contract with a real in it: a double parameter or result, a decimal with a point, a word of a double bound,
 /// an absolute value, or arithmetic on one of them, decision 0154. It is never true of an expression of integers alone, so `/` on
 /// integers keeps the division of C++, decision 0088.
@@ -1557,6 +1556,7 @@ pub fn creal(e: &Expr, decl: &Names, ps: &Params, ret: Option<Ty>, bound: &Names
     }
 }
 
+/// A binary operator of a contract on the exact integers. `/` and `%` truncate as in C++, decision 0088.
 pub open spec fn spec_binary(op: BinOp, da: DExpr, db: DExpr) -> DExpr {
     if op == BinOp::Div {
         DExpr::TDiv(Box::new(da), Box::new(db))
@@ -2042,8 +2042,6 @@ pub open spec fn spec_field_ty(sd: Structs, k: u32, f: u32) -> Option<Ty> {
     }
 }
 
-/// A path of a contract that a field reads: a parameter, `result` or a field of a path, with its Dafny form and its type, decision
-/// 0073. A bound name is an integer, so it has no field.
 /// An order: `<`, `<=`, `>` or `>=`.
 pub open spec fn spec_ordered(op: BinOp) -> bool {
     op == BinOp::Lt || op == BinOp::Le || op == BinOp::Gt || op == BinOp::Ge
@@ -2133,6 +2131,8 @@ pub open spec fn spec_fits(from: Ty, to: Ty) -> bool {
     }
 }
 
+/// A path of a contract that a field reads: a parameter, `result` or a field of a path, with its Dafny form and its type, decision
+/// 0073. A bound name is an integer, so it has no field.
 pub open spec fn spec_path(e: Expr, decl: Names, ps: Params, ret: Option<Ty>, bound: Names, line: u32, sd: Structs) -> Result<
     (DExpr, Ty),
     Refusal,
@@ -2969,8 +2969,6 @@ pub open spec fn spec_step_ty(t: Ty) -> Option<DTy> {
     }
 }
 
-/// A call that stands alone as a statement, decision 0096. A call of a function that gives back a value of a parameter writes each
-/// such argument back, decision 0108. A call of any other function must give no value.
 /// The element of a vector of unique_ptr that is the object of a call: `v[i]->f(a)`, by the name and type of the vector and the
 /// index, decision 0170.
 pub open spec fn spec_elem_object(o: Expr) -> Option<(u32, Ty, Expr)>
@@ -3143,6 +3141,8 @@ pub open spec fn spec_call_elem(key: u32, name: u32, args: Args, line: u32, all:
     }
 }
 
+/// A call that stands alone as a statement, decision 0096. A call of a function that gives back a value of a parameter writes each
+/// such argument back, decision 0108. A call of any other function must give no value.
 pub open spec fn spec_call_stmt(key: u32, name: u32, args: Args, line: u32, all: Fns, ps: Params, sd: Structs) -> Result<DStmt, Refusal> {
     // The value of the call is a temporary of a struct with a destructor, decision 0178.
     if spec_callee_dtor(all, key, sd) {
@@ -3457,6 +3457,7 @@ pub open spec fn spec_brace_stmt(s: Stmt, n: Option<u64>) -> Option<Refusal>
         Stmt::For(_, _, _, _, body, _) => spec_braces(*body, n),
         Stmt::RangeFor(_, _, _, _, _, body, _) => spec_braces(*body, n),
         Stmt::Switch(_, _, cs, _) => spec_brace_cases(*cs, n),
+        Stmt::Block(b, _) => spec_braces(*b, n),
         _ => None,
     }
 }
@@ -3507,6 +3508,7 @@ pub fn brace_stmt(s: &Stmt, n: Option<u64>) -> (r: Option<Refusal>)
         Stmt::For(_, _, _, _, body, _) => braces(body, n),
         Stmt::RangeFor(_, _, _, _, _, body, _) => braces(body, n),
         Stmt::Switch(_, _, cs, _) => brace_cases(cs, n),
+        Stmt::Block(b, _) => braces(b, n),
         _ => None,
     }
 }

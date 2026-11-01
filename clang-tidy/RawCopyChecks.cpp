@@ -166,12 +166,9 @@ public:
                            .bind("bit"),
                        this);
     Finder->addMatcher(declRefExpr(to(functionDecl(hasName("::std::as_writable_bytes"))), unless(isExpansionInSystemHeader())).bind("view"), this);
-    std::vector<std::string> Names;
-    for (const char *Name : RawCopyNames) {
-      Names.push_back(Name);
-    }
     // The name of a copy function, called or not. A call is judged by its arguments, and the name that is not called fails closed.
-    Finder->addMatcher(declRefExpr(to(functionDecl(hasAnyName(std::vector<StringRef>(Names.begin(), Names.end())))), unless(isExpansionInSystemHeader())).bind("name"), this);
+    const std::vector<StringRef> Names(std::begin(RawCopyNames), std::end(RawCopyNames));
+    Finder->addMatcher(declRefExpr(to(functionDecl(hasAnyName(Names))), unless(isExpansionInSystemHeader())).bind("name"), this);
     Finder->addMatcher(explicitCastExpr(anyOf(hasCastKind(CK_BitCast), hasCastKind(CK_LValueBitCast), hasCastKind(CK_IntegralToPointer)), unless(isExpansionInSystemHeader())).bind("cast"), this);
     Finder->addMatcher(explicitCastExpr(anyOf(cxxConstCastExpr(), cStyleCastExpr(hasCastKind(CK_NoOp)), cxxFunctionalCastExpr(hasCastKind(CK_NoOp))), unless(isExpansionInSystemHeader())).bind("unconst"), this);
   }

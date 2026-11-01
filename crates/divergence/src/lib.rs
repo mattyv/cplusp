@@ -238,9 +238,16 @@ pub const UBSAN: &[&str] = &["-fsanitize=undefined,float-divide-by-zero", "-fno-
 /// AddressSanitizer, with sized deallocation so a delete through the wrong type is caught.
 pub const ASAN: &[&str] = &["-fsanitize=address", "-fsized-deallocation"];
 
-/// Dafny at `$DAFNY`, else `/opt/dafny/dafny/dafny`, else `dafny` on PATH.
+/// The first of `clang++-18` and `clang++` that runs, as the shell finds it. When neither runs, `clang++-18`, so the error names it.
+fn clang() -> String {
+    let runs = |bin: &str| Command::new(bin).arg("--version").output().is_ok_and(|o| o.status.success());
+    ["clang++-18", "clang++"].into_iter().find(|b| runs(b)).unwrap_or("clang++-18").to_string()
+}
+
+/// Dafny at `$DAFNY` and nowhere else when it is set, as `prove` does, decision 0225. A `DAFNY` that does not run fails the run, and the error names it. When it is not set,
+/// `/opt/dafny/dafny/dafny`, else `dafny` on PATH.
 pub fn dafny_path() -> std::ffi::OsString {
-    if let Some(d) = std::env::var_os("DAFNY") {
+    if let Some(d) = std::env::var_os("DAFNY").filter(|d| !d.is_empty()) {
         return d;
     }
     if Path::new("/opt/dafny/dafny/dafny").exists() {
@@ -278,12 +285,9 @@ pub fn differential(case_dir: &Path, naive: bool) -> Result<Outcome, Box<dyn Err
         .map(|a| generate(a, naive, spec.runs, &mut seed).map_err(|e| format!("{id}: {e}")))
         .collect::<Result<Vec<_>, _>>()?;
 
-    let tmp = std::env::temp_dir().join(format!("divergence-{id}-{}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&tmp);
-    std::fs::create_dir_all(&tmp)?;
-    let result = compare(case_dir, naive, &spec, &inputs, &tmp, &id);
-    let _ = std::fs::remove_dir_all(&tmp);
-    result
+    // The directory goes when `tmp` drops, also when a run fails.
+    let tmp = tempfile::tempdir()?;
+    compare(case_dir, naive, &spec, &inputs, tmp.path(), &id)
 }
 
 /// The two runs and the comparison, with the files in `tmp`.
@@ -347,7 +351,8 @@ fn compare(
     let fixed = case_dir.join("fixed.cpp");
     let cpp = if fixed.exists() && !naive { fixed } else { case_dir.join("code.cpp") };
     let exe = tmp.join("drive");
-    let o = Command::new("clang++-18")
+    let clang = clang();
+    let o = Command::new(&clang)
         .args(["-std=c++23", "-ffp-contract=off", "-O0"])
         .args(UBSAN)
         .args(ASAN)
@@ -358,7 +363,7 @@ fn compare(
         .arg("-o")
         .arg(&exe)
         .output();
-    let o = named("clang++-18", o)?;
+    let o = named(&clang, o)?;
     if !o.status.success() {
         return Err(first_error(&String::from_utf8_lossy(&o.stderr)).into());
     }

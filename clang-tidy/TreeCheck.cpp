@@ -5,10 +5,11 @@ namespace cplusp::detail {
 namespace {
 // cplusp-tree: decisions 0056 and 0057. The plugin writes the tree of each function the file defines as data, and the core decides
 // what it means. One JSON object on one line, appended to the file of the option `Output`, in the shape of the core's types, with names
-// as strings. The shell numbers them. This check decides nothing. It keeps every implicit node, and it looks through no cast and no
-// parenthesis. A node it has no name for is `{"Unknown": [class, line]}`, and the core refuses it.
-// ponytail: a qualified type, a `const int` for one, is `Other`, so the translator refuses it. The slice has no const yet.
-// Upgrade: drop the qualifiers that keep the value, once the core has a rule for them.
+// as strings. The shell numbers them. This check decides the shape of the tree and nothing about the rules: which node class gets which
+// form, which functions and classes the table of the model lists (a member, a static member, an interface, a final class over one, a
+// function with a mangled name), and which node it has no name for. Whether a construct is allowed, proved or refused is for the core.
+// It keeps every implicit node, and it looks through no cast and no parenthesis. A node it has no name for is
+// `{"Unknown": [class, line]}`, and the core refuses it.
 class TreeWriter {
 public:
   // `Claimed` takes the `//@` lines that a loop owns, so the orphan scan skips them.
@@ -32,6 +33,36 @@ public:
     const SourceLocation Loc = SM.getFileLoc(At->getLocation());
     return name(FD) + "@" + file(Loc) + ":" + std::to_string(line(Loc)) + ":" + std::to_string(SM.getExpansionColumnNumber(Loc));
   }
+  // A call of the function `Name` of namespace std, or null. The standard library is the only place such a name means what it says, decision 0171.
+  static const CallExpr *isStdCall(const Stmt *S, StringRef Name) {
+    const auto *Call = dyn_cast_or_null<CallExpr>(S);
+    return Call && isStdFunction(Call->getDirectCallee(), Name) ? Call : nullptr;
+  }
+  static bool isStdFunction(const FunctionDecl *F, StringRef Name) {
+    return F && F->isInStdNamespace() && F->getDeclName().isIdentifier() && F->getName() == Name;
+  }
+  // The expression behind the temporaries that the compiler adds: a cleanup, a materialized temporary and a bound temporary, with the casts and
+  // parentheses between them.
+  static const Expr *peelTemporaries(const Expr *E) {
+    for (;;) {
+      E = E->IgnoreParenImpCasts();
+      if (const auto *Wrapper = dyn_cast<ExprWithCleanups>(E))
+        E = Wrapper->getSubExpr();
+      else if (const auto *Temporary = dyn_cast<MaterializeTemporaryExpr>(E))
+        E = Temporary->getSubExpr();
+      else if (const auto *Bound = dyn_cast<CXXBindTemporaryExpr>(E))
+        E = Bound->getSubExpr();
+      else
+        return E;
+    }
+  }
+  // The expression of a reference parameter's temporary: one materialized temporary taken off, as a computed argument sits in one.
+  static const Expr *peelMaterialized(const Expr *E) {
+    if (const auto *Temporary = dyn_cast<MaterializeTemporaryExpr>(E))
+      return Temporary->getSubExpr();
+    return E;
+  }
+
   std::string name(const FunctionDecl *FD) const {
     std::string Out;
     llvm::raw_string_ostream OS(Out);
@@ -39,10 +70,12 @@ public:
     return Out;
   }
 
-  // ponytail: a function the translator cannot read, a template, a member or one with no body, is written with no signature and no
-  // contract, only a body of one `Unknown`. Its return type is `Other` with the opaque kind, so the core refuses its signature by that
-  // kind, and a caller sees a callee with no method. Its contract lines still count as claimed.
-  // Upgrade: a core rule for these, and their real signature.
+  // ponytail: a function the translator cannot read is written with no signature and no contract, only a body of one `Unknown`. Its return type is
+  // `Other` with the reason, so the core refuses its signature by that reason, and a caller sees a callee with no method. Its contract lines still count
+  // as claimed. The reasons are: a body of a pure virtual function, a member function template, a function template with no instance, a template,
+  // a move constructor in a struct with no destructor, a std::array field with no start value, a constructor with no rule, a reference result
+  // that is not `*this`, a member function with no rule, and a function without a body.
+  // Upgrade: a core rule for each, and the real signature.
   llvm::json::Value function(const FunctionDecl *FD, const Contract &C) const {
     // A trusted function is written with its contract and no body, whatever body it has, decision 0102. `trusted` holds its reason.
     // It is the reason, the file and the line of the declaration with the marker, for the report of prove.
@@ -73,6 +106,7 @@ public:
     const QualType ValueResult = valueResult(FD);
     llvm::json::Array Params, Conds;
     Enclosing = FD;
+    Chains = 0;  // the names of the fresh locals count from zero in each function
     llvm::json::Value Hidden = hiddenConstants(FD);
     if (!Opaque) {
       // A member function takes its object as a parameter `this` by value, first, decision 0089. Its contract lines name it first too.
@@ -164,6 +198,7 @@ public:
   // an orphan. Upgrade: claim each `//@` line in the source range of the body.
   void claimBody(const FunctionDecl *FD) const {
     Enclosing = FD;
+    Chains = 0;
     (void)stmts(FD->getBody());
   }
 
@@ -352,7 +387,7 @@ private:
   llvm::json::Array loopConds(const Stmt *Loop) const {
     Contract C = linesAbove(Loop);
     for (const Contract::Line &L : C.Lines)
-      Claimed.insert({L.File, L.Number});
+      Claimed.insert({L.Id.getHashValue(), L.Number});
     // An assert or apply line above a loop is a statement before it, `bodyLines`. The loop keeps its invariant and decreases lines.
     C.Lines.erase(std::remove_if(C.Lines.begin(), C.Lines.end(), isBodyLine), C.Lines.end());
     return conds(C);
@@ -387,7 +422,7 @@ private:
       return;
     Contract C = linesAbove(S, true);
     // A line that is no assert or apply line is dropped, and so is one that was taken already.
-    C.Lines.erase(std::remove_if(C.Lines.begin(), C.Lines.end(), [&](const Contract::Line &L) { return !isBodyLine(L) || !Claimed.insert({L.File, L.Number}).second; }),
+    C.Lines.erase(std::remove_if(C.Lines.begin(), C.Lines.end(), [&](const Contract::Line &L) { return !isBodyLine(L) || !Claimed.insert({L.Id.getHashValue(), L.Number}).second; }),
                   C.Lines.end());
     for (const Contract::Line &L : C.Lines) {
       Contract One;
@@ -693,7 +728,7 @@ private:
     // An instance of a class template keeps its member template, which is refused at the template, decision 0188.
     // A member template that the file makes an instance of is no obstacle: each instance is a member function of the struct, decision 0212.
     for (const Decl *D : RD->decls())
-      if (const auto *T = dyn_cast<FunctionTemplateDecl>(D); T && !isa<ClassTemplateSpecializationDecl>(RD) && !(typeOnlyTemplate(T) && !noInstance(T->getTemplatedDecl())))
+      if (const auto *Template = dyn_cast<FunctionTemplateDecl>(D); Template && !isa<ClassTemplateSpecializationDecl>(RD) && !(typeOnlyTemplate(Template) && !noInstance(Template->getTemplatedDecl())))
         return nullptr;
     // A struct that holds a sequence of itself is in its own fields: assume it is plain there, decision 0076.
     if (!Visiting.insert(RD).second)
@@ -758,9 +793,8 @@ private:
     const auto *Construct = dyn_cast<CXXConstructExpr>(Init->IgnoreParenImpCasts());
     if (!C->isMoveConstructor() || C->getNumParams() != 1 || !Construct || Construct->getNumArgs() != 1 || !Construct->getConstructor()->isMoveConstructor() || ownVecElement(F->getType()).isNull())
       return nullptr;
-    const auto *Move = dyn_cast<CallExpr>(Construct->getArg(0)->IgnoreParenImpCasts());
-    if (!Move || Move->getNumArgs() != 1 || !Move->getDirectCallee() || !Move->getDirectCallee()->isInStdNamespace() || !Move->getDirectCallee()->getDeclName().isIdentifier() ||
-        Move->getDirectCallee()->getName() != "move")
+    const auto *Move = isStdCall(Construct->getArg(0)->IgnoreParenImpCasts(), "move");
+    if (!Move || Move->getNumArgs() != 1)
       return nullptr;
     const auto *Member = dyn_cast<MemberExpr>(Move->getArg(0)->IgnoreParenImpCasts());
     const auto *Base = Member && !Member->isArrow() ? dyn_cast<DeclRefExpr>(Member->getBase()->IgnoreParenImpCasts()) : nullptr;
@@ -1580,9 +1614,8 @@ private:
   }
   // `std::move(v)` of a local vector or of a vector parameter by value `v`, of the element `Element`, as `Move(v, type)`, decision 0194. Null for any other form.
   llvm::json::Value vecMoveOf(const Expr *E, QualType Element) const {
-    const auto *Move = dyn_cast<CallExpr>(E->IgnoreParenImpCasts());
-    if (!Move || Move->getNumArgs() != 1 || !Move->getDirectCallee() || !Move->getDirectCallee()->isInStdNamespace() || !Move->getDirectCallee()->getDeclName().isIdentifier() ||
-        Move->getDirectCallee()->getName() != "move")
+    const auto *Move = isStdCall(E->IgnoreParenImpCasts(), "move");
+    if (!Move || Move->getNumArgs() != 1)
       return nullptr;
     const auto *Ref = dyn_cast<DeclRefExpr>(Move->getArg(0)->IgnoreParenImpCasts());
     const auto *Var = Ref ? dyn_cast<VarDecl>(Ref->getDecl()) : nullptr;
@@ -1596,9 +1629,8 @@ private:
     const auto *Construct = dyn_cast<CXXConstructExpr>(Init->IgnoreParenImpCasts());
     if (!Construct || Construct->getNumArgs() != 1 || !Construct->getConstructor()->isMoveConstructor() || localVec(Target).isNull())
       return nullptr;
-    const auto *Move = dyn_cast<CallExpr>(Construct->getArg(0)->IgnoreParenImpCasts());
-    if (!Move || Move->getNumArgs() != 1 || !Move->getDirectCallee() || !Move->getDirectCallee()->isInStdNamespace() || !Move->getDirectCallee()->getDeclName().isIdentifier() ||
-        Move->getDirectCallee()->getName() != "move")
+    const auto *Move = isStdCall(Construct->getArg(0)->IgnoreParenImpCasts(), "move");
+    if (!Move || Move->getNumArgs() != 1)
       return nullptr;
     const auto *Ref = dyn_cast<DeclRefExpr>(Move->getArg(0)->IgnoreParenImpCasts());
     if (!Ref || !sameElement(sourceVec(Ref->getDecl()), localVec(Target)))
@@ -1774,8 +1806,8 @@ public:
             bool Shared = false;
             for (const Decl *Other : RD->decls()) {
               const auto *O = dyn_cast<CXXMethodDecl>(Other);
-              if (const auto *T = dyn_cast<FunctionTemplateDecl>(Other))
-                O = dyn_cast<CXXMethodDecl>(T->getTemplatedDecl());
+              if (const auto *Template = dyn_cast<FunctionTemplateDecl>(Other))
+                O = dyn_cast<CXXMethodDecl>(Template->getTemplatedDecl());
               Shared |= O && !O->isStatic() && !isa<CXXConstructorDecl>(O) && !isa<CXXDestructorDecl>(O) && O->getDeclName() == M->getDeclName();
             }
             if (Shared) {
@@ -1786,11 +1818,11 @@ public:
           }
         // A member function template counts as one more function of its name, so a name that a member function and a template share is an overload, decision 0215.
         for (const Decl *D : RD->decls())
-          if (const auto *T = dyn_cast<FunctionTemplateDecl>(D); T && isa<CXXMethodDecl>(T->getTemplatedDecl()))
+          if (const auto *Template = dyn_cast<FunctionTemplateDecl>(D); Template && isa<CXXMethodDecl>(Template->getTemplatedDecl()))
             // The plain name, and the qualified name that a static member function of the same name has, decision 0215.
-            for (const std::string &Under : {T->getNameAsString(), name(T->getTemplatedDecl())})
+            for (const std::string &Under : {Template->getNameAsString(), name(Template->getTemplatedDecl())})
               if (auto At = Named.find(Under); At != Named.end())
-                At->second.push_back(key(T->getTemplatedDecl()));
+                At->second.push_back(key(Template->getTemplatedDecl()));
         llvm::json::Array Members;
         for (const auto &[Name, Keys] : Named)
           if (Keys.size() == 1)
@@ -1798,6 +1830,20 @@ public:
         const SourceLocation Loc = structLoc(RD);
         llvm::json::Object Entry{{"struct", Key}, {"name", RD->getNameAsString()}, {"file", file(Loc)}, {"line", number(line(Loc))},
                                  {"fields", std::move(Fields)}, {"members", std::move(Members)}};
+        // The names of two member functions that are not static, which the table leaves out. A contract that calls one by its name gets the sentence of a
+        // function that is not pure, decision 0225.
+        {
+          std::map<std::string, unsigned> Count;
+          for (const Decl *D : RD->decls())
+            if (const auto *M = dyn_cast<CXXMethodDecl>(D); M && !M->isStatic() && !isa<CXXConstructorDecl>(M) && !isa<CXXDestructorDecl>(M) && !M->isOverloadedOperator() &&
+                                                           M->getDeclName().isIdentifier())
+              ++Count[M->getNameAsString()];
+          llvm::json::Array Shared;
+          for (const auto &[Name, N] : Count)
+            if (N > 1)
+              Shared.push_back(Name);
+          Entry["shared"] = std::move(Shared);
+        }
         // An instance of a class template names its type arguments, and the shell makes `Box'of'int32` of them, decision 0188.
         if (const ClassTemplateSpecializationDecl *Spec = classInstance(RD)) {
           llvm::json::Array Of;
@@ -2129,8 +2175,7 @@ private:
                                                            isMutSeq(Push->getImplicitObjectArgument())) {
       // The argument is bound to a reference, so a computed value sits in a temporary that is not the value.
       const Expr *Arg = Push->getArg(0);
-      if (const auto *Temporary = dyn_cast<MaterializeTemporaryExpr>(Arg))
-        Arg = Temporary->getSubExpr();
+      Arg = peelMaterialized(Arg);
       // `std::move(o)` of a unique_ptr local or parameter `o` is the move of `o`, decision 0204.
       llvm::json::Value Pushed = moveOfLocal(Arg, Push->getMethodDecl()->getParamDecl(0)->getType().getNonReferenceType());
       if (Pushed.getAsNull())
@@ -2151,8 +2196,7 @@ private:
       const FieldDecl *Field = objectField(Call->getImplicitObjectArgument()->IgnoreParenImpCasts());
       if (Call->getNumArgs() == 1 && Call->getMethodDecl()->getName() == "push_back") {
         const Expr *Arg = Call->getArg(0);
-        if (const auto *Temporary = dyn_cast<MaterializeTemporaryExpr>(Arg))
-          Arg = Temporary->getSubExpr();
+        Arg = peelMaterialized(Arg);
         llvm::json::Value Pushed = moveOfLocal(Arg, Call->getMethodDecl()->getParamDecl(0)->getType().getNonReferenceType());
         if (Pushed.getAsNull())
           Pushed = expr(Arg, line(S->getBeginLoc()));
@@ -2165,9 +2209,7 @@ private:
     // `std::sort(v.begin(), v.end())` of a vector that the function writes is a sort of the whole of `v`, decision 0161. A comparator lambda of the element type
     // with one return is `SortBy`, decision 0162. Any other call of `std::sort`, a part of a range, another comparator, a policy or two vectors, is named by
     // what it is.
-    if (const auto *Sort = dyn_cast<CallExpr>(Inner); Sort && Sort->getStmtClass() == Stmt::CallExprClass && Sort->getDirectCallee() &&
-                                                       Sort->getDirectCallee()->isInStdNamespace() && Sort->getDirectCallee()->getDeclName().isIdentifier() &&
-                                                       Sort->getDirectCallee()->getName() == "sort" && SM.isInSystemHeader(Sort->getDirectCallee()->getLocation())) {
+    if (const auto *Sort = isStdCall(Inner, "sort"); Sort && Sort->getStmtClass() == Stmt::CallExprClass && SM.isInSystemHeader(Sort->getDirectCallee()->getLocation())) {
       const VarDecl *Whole = nullptr;
       bool Same = Sort->getNumArgs() == 2 || Sort->getNumArgs() == 3;
       for (unsigned I = 0; Same && I < 2; ++I) {
@@ -2407,10 +2449,8 @@ private:
     splitDouble(Value, Mantissa, Power);
     if (!Mantissa)
       return M = 0, Q = 1, true;
-    if (Power >= 0) {
-      const unsigned __int128 Whole = static_cast<unsigned __int128>(Mantissa) << (Power < 64 ? Power : 64);
-      return Power < 64 && Whole <= UINT64_MAX ? (M = static_cast<uint64_t>(Whole), Q = 1, true) : false;
-    }
+    if (Power >= 0)
+      return Power < 64 && Mantissa <= (UINT64_MAX >> Power) ? (M = Mantissa << Power, Q = 1, true) : false;
     return -Power <= 63 ? (M = Mantissa, Q = uint64_t(1) << -Power, true) : false;
   }
   // The expression of a double value, or null when no form fits: `RealLit` for `d / 10^k` with `k` up to 19 and `d` in 64 bits, decision 0150, else
@@ -2427,17 +2467,18 @@ private:
     splitDouble(Value, Mantissa, Power);
     if (!Mantissa)
       return tag("RealLit", llvm::json::Array{number(0), number(0)});
-    unsigned __int128 Digits = Mantissa;
     if (Power >= 0) {
-      if (Power < 64 && (Digits << Power) <= UINT64_MAX)
-        return tag("RealLit", llvm::json::Array{number(static_cast<uint64_t>(Digits << Power)), number(0)});
+      if (Power < 64 && Mantissa <= (UINT64_MAX >> Power))
+        return tag("RealLit", llvm::json::Array{number(Mantissa << Power), number(0)});
       return nullptr;
     }
     if (-Power <= 19) {
-      for (int I = 0; I < -Power && Digits <= UINT64_MAX; ++I)
-        Digits *= 5;
-      if (Digits <= UINT64_MAX)
-        return tag("RealLit", llvm::json::Array{number(static_cast<uint64_t>(Digits)), number(-Power)});
+      uint64_t Digits = Mantissa;
+      bool Fits = true;
+      for (int I = 0; I < -Power && Fits; ++I)
+        Fits = !__builtin_mul_overflow(Digits, uint64_t(5), &Digits);
+      if (Fits)
+        return tag("RealLit", llvm::json::Array{number(Digits), number(-Power)});
     }
     uint64_t M, Q;
     return dyadic(Value, M, Q) ? tag("Ratio", llvm::json::Array{number(M), number(Q)}) : llvm::json::Value(nullptr);
@@ -2649,7 +2690,7 @@ private:
     const auto *Call = dyn_cast<CallExpr>(Moved->IgnoreParenImpCasts());
     const FunctionDecl *Callee = Call && Call->getNumArgs() == 1 ? Call->getDirectCallee() : nullptr;
     const auto *Implicit = dyn_cast<ImplicitCastExpr>(Moved->IgnoreParens());
-    const bool Moves = Callee && Callee->isInStdNamespace() && Callee->getDeclName().isIdentifier() && Callee->getName() == "move";
+    const bool Moves = isStdFunction(Callee, "move");
     const bool Returns = !Call && Implicit && Implicit->isXValue() && Implicit->getCastKind() == CK_NoOp;
     if (!Moves && !Returns)
       return nullptr;
@@ -2674,8 +2715,7 @@ private:
     llvm::json::Array Args;
     for (unsigned I = 0; I < Make->getNumArgs(); ++I) {
       const Expr *A = Make->getArg(I);
-      if (const auto *Temporary = dyn_cast<MaterializeTemporaryExpr>(A))
-        A = Temporary->getSubExpr();
+      A = peelMaterialized(A);
       if (A->getType().getUnqualifiedType().getCanonicalType() != Constructed->getConstructor()->getParamDecl(I)->getType().getNonReferenceType().getUnqualifiedType().getCanonicalType())
         return nullptr;
       // An argument `std::move(x)` of a local at a parameter by value of its own unique_ptr type is a move, decision 0171.
@@ -2710,21 +2750,10 @@ private:
     if (!Base || !isInterface(Base) || Convert->getNumArgs() != 1)
       return nullptr;
     // The argument is the unique_ptr<D> that a call of make_unique gives, behind the temporaries.
-    const Expr *Arg = Convert->getArg(0);
-    for (;;) {
-      Arg = Arg->IgnoreParenImpCasts();
-      if (const auto *Wrapper = dyn_cast<ExprWithCleanups>(Arg))
-        Arg = Wrapper->getSubExpr();
-      else if (const auto *Temporary = dyn_cast<MaterializeTemporaryExpr>(Arg))
-        Arg = Temporary->getSubExpr();
-      else if (const auto *Bound = dyn_cast<CXXBindTemporaryExpr>(Arg))
-        Arg = Bound->getSubExpr();
-      else
-        break;
-    }
+    const Expr *Arg = peelTemporaries(Convert->getArg(0));
     const auto *Make = dyn_cast<CallExpr>(Arg);
     const FunctionDecl *Callee = Make ? Make->getDirectCallee() : nullptr;
-    if (!Callee || !Callee->isInStdNamespace() || !Callee->getDeclName().isIdentifier() || Callee->getName() != "make_unique" || !SM.isInSystemHeader(Callee->getLocation()))
+    if (!isStdFunction(Callee, "make_unique") || !SM.isInSystemHeader(Callee->getLocation()))
       return nullptr;
     const QualType Made = ownElement(Make->getType());
     const CXXRecordDecl *Derived = Made.isNull() ? nullptr : Made->getAsCXXRecordDecl();
@@ -2751,7 +2780,7 @@ private:
   llvm::json::Value countIf(const Expr *E, unsigned Near, std::string &Limit) const {
     const auto *Call = dyn_cast<CallExpr>(E);
     const FunctionDecl *Callee = Call && Call->getStmtClass() == Stmt::CallExprClass ? Call->getDirectCallee() : nullptr;
-    if (!Callee || !Callee->isInStdNamespace() || !Callee->getDeclName().isIdentifier() || Callee->getName() != "count_if" || Call->getNumArgs() != 3 ||
+    if (!isStdFunction(Callee, "count_if") || Call->getNumArgs() != 3 ||
         !SM.isInSystemHeader(Callee->getLocation()))
       return nullptr;
     // Both ends come from one sequence parameter.
@@ -2858,9 +2887,7 @@ private:
       }
     if (Callee && I < Callee->getNumParams() && Callee->getParamDecl(I)->getType()->isRValueReferenceType() &&
         (!mutRef(Callee->getParamDecl(I)->getType()).getAsNull() || !mutSeq(Callee->getParamDecl(I)->getType()).isNull()))
-      if (const auto *Move = dyn_cast<CallExpr>(Arg->IgnoreParenImpCasts()); Move && Move->getNumArgs() == 1 && Move->getDirectCallee() &&
-                                                                              Move->getDirectCallee()->isInStdNamespace() && Move->getDirectCallee()->getDeclName().isIdentifier() &&
-                                                                              Move->getDirectCallee()->getName() == "move")
+      if (const auto *Move = isStdCall(Arg->IgnoreParenImpCasts(), "move"); Move && Move->getNumArgs() == 1)
         if (const auto *Ref = dyn_cast<DeclRefExpr>(Move->getArg(0)->IgnoreParenImpCasts());
             Ref && (isa<ParmVarDecl>(Ref->getDecl()) || (isa<VarDecl>(Ref->getDecl()) && cast<VarDecl>(Ref->getDecl())->hasLocalStorage())) &&
             (plainStruct(Ref->getType()) || sameElement(sourceVec(Ref->getDecl()), mutSeq(Callee->getParamDecl(I)->getType()))))
@@ -2881,7 +2908,8 @@ private:
     return expr(Arg, Near);
   }
 
-  llvm::json::Value expr(const Expr *E, unsigned Near) const {
+  // The part of `expr` for a wrapper or a temporary of a value. Nothing when the node is not one of them.
+  std::optional<llvm::json::Value> exprTemporary(const Expr *E, unsigned Near) const {
     if (InConstructorBody && readsObject(E))
       return unknown(E, "a field in the body of a constructor", Near);
     // A field of the base with data has no rule, in a read through `this`, `.`, `->`, an optional or a `std::unique_ptr`, decisions 0201 and 0203.
@@ -2909,6 +2937,11 @@ private:
       return expr(Bound->getSubExpr(), Near);
     if (const auto *Held = dyn_cast<MaterializeTemporaryExpr>(E); Held && isOwn(Held->getType()))
       return expr(Held->getSubExpr(), Near);
+    return std::nullopt;
+  }
+
+  // The part of `expr` for a unique_ptr and a call of std::make_unique, decisions 0142, 0168, 0171, 0186 and 0197. Nothing when the node is not one of them.
+  std::optional<llvm::json::Value> exprOwned(const Expr *E, unsigned Near) const {
     // `std::make_unique<D>(args)` of a final class over an interface, as a `std::unique_ptr<B>`, decision 0168.
     if (const auto *Convert = dyn_cast<CXXConstructExpr>(E))
       if (llvm::json::Value Made = makeUniqueUpcast(Convert, Near); !Made.getAsNull())
@@ -2922,26 +2955,14 @@ private:
     // The move constructor of a unique_ptr over any other `std::move` keeps the refusal of that call, decision 0171.
     if (const auto *Construct = dyn_cast<CXXConstructExpr>(E); Construct && Construct->getNumArgs() == 1 && Construct->getConstructor()->isMoveConstructor() &&
                                                                !ownVecElement(Construct->getType()).isNull())
-      if (const auto *Move = dyn_cast<CallExpr>(Construct->getArg(0)->IgnoreParenImpCasts()); Move && Move->getDirectCallee() && Move->getDirectCallee()->isInStdNamespace() &&
-                                                                                          Move->getDirectCallee()->getDeclName().isIdentifier() && Move->getDirectCallee()->getName() == "move")
+      if (const auto *Move = isStdCall(Construct->getArg(0)->IgnoreParenImpCasts(), "move"))
         return expr(Move, Near);
     // The converting constructor of a unique_ptr of an interface from a unique_ptr of another class keeps its argument: the call that gives it is refused, as it was
     // before, decision 0168.
     if (const auto *Convert = dyn_cast<CXXConstructExpr>(E); Convert && Convert->getNumArgs() == 1 && isOwn(Convert->getType()) && isUniquePtr(Convert->getArg(0)->getType()) &&
                                                              Convert->getArg(0)->getType().getUnqualifiedType().getCanonicalType() != Convert->getType().getUnqualifiedType().getCanonicalType())
     {
-      const Expr *Inner = Convert->getArg(0);
-      for (;;) {
-        Inner = Inner->IgnoreParenImpCasts();
-        if (const auto *Wrapper = dyn_cast<ExprWithCleanups>(Inner))
-          Inner = Wrapper->getSubExpr();
-        else if (const auto *Temporary = dyn_cast<MaterializeTemporaryExpr>(Inner))
-          Inner = Temporary->getSubExpr();
-        else if (const auto *Bound = dyn_cast<CXXBindTemporaryExpr>(Inner))
-          Inner = Bound->getSubExpr();
-        else
-          break;
-      }
+      const Expr *Inner = peelTemporaries(Convert->getArg(0));
       // Only a call of the library keeps its own refusal. A unique_ptr of a class that a function of the file gives would be a unique_ptr of the wrong type.
       const auto *Gives = dyn_cast<CallExpr>(Inner);
       if (Gives && Gives->getDirectCallee() && Gives->getDirectCallee()->isInStdNamespace())
@@ -2949,25 +2970,26 @@ private:
       return unknown(E, "a std::unique_ptr of a class as a std::unique_ptr of its interface", Near);
     }
     // `std::make_unique<S>()` of a plain struct is a new value with the start value of each field, decision 0186.
-    if (const auto *Make = dyn_cast<CallExpr>(E); Make && Make->getNumArgs() == 0 && Make->getDirectCallee() && Make->getDirectCallee()->isInStdNamespace() &&
-                                                  Make->getDirectCallee()->getDeclName().isIdentifier() && Make->getDirectCallee()->getName() == "make_unique")
+    if (const auto *Make = isStdCall(E, "make_unique"); Make && Make->getNumArgs() == 0)
       if (llvm::json::Value Made = makeUniqueNew(Make); !Made.getAsNull())
         return Made;
     // `std::make_unique<S>(args)` of a plain struct with a value constructor is the call of that constructor, decision 0197.
-    if (const auto *Make = dyn_cast<CallExpr>(E); Make && Make->getNumArgs() > 0 && Make->getDirectCallee() && Make->getDirectCallee()->isInStdNamespace() &&
-                                                  Make->getDirectCallee()->getDeclName().isIdentifier() && Make->getDirectCallee()->getName() == "make_unique")
+    if (const auto *Make = isStdCall(E, "make_unique"); Make && Make->getNumArgs() > 0)
       if (llvm::json::Value Made = makeUniqueCall(Make, Near); !Made.getAsNull())
         return Made;
     // `std::make_unique<T>(x)` of a scalar, with an argument of exactly that type, is a value of `x`, decision 0142.
-    if (const auto *Make = dyn_cast<CallExpr>(E); Make && Make->getNumArgs() == 1 && Make->getDirectCallee() && Make->getDirectCallee()->isInStdNamespace() &&
-                                                  Make->getDirectCallee()->getDeclName().isIdentifier() && Make->getDirectCallee()->getName() == "make_unique")
+    if (const auto *Make = isStdCall(E, "make_unique"); Make && Make->getNumArgs() == 1)
       if (const QualType Elem = ownElement(Make->getType()); !Elem.isNull() && scalar(Elem)) {
         const Expr *Arg = Make->getArg(0);
-        if (const auto *Temporary = dyn_cast<MaterializeTemporaryExpr>(Arg))
-          Arg = Temporary->getSubExpr();
+        Arg = peelMaterialized(Arg);
         if (Arg->getType().getUnqualifiedType().getCanonicalType() == Elem.getCanonicalType())
           return tag("Wrap", expr(Arg, Near));
       }
+    return std::nullopt;
+  }
+
+  // The part of `expr` for a test of a unique_ptr against null, decision 0142. Nothing when the node is not one of them.
+  std::optional<llvm::json::Value> exprNullTest(const Expr *E, unsigned Near) const {
     // `p == nullptr` and `p != nullptr` of a `unique_ptr` test for a value, also with the null on the left, decision 0142. Two `unique_ptr`s
     // have no rule. C++20 rewrites `p != nullptr`, `nullptr != p` and `nullptr == p` to a `CXXRewrittenBinaryOperator`, and the test reads its
     // decomposed form. `p == nullptr` is the operator call itself.
@@ -2992,6 +3014,11 @@ private:
         return tag("Bin", NullRight ? llvm::json::Array{Op, expr(optObject(Pointer), Near), "Nullopt"} : llvm::json::Array{Op, "Nullopt", expr(optObject(Pointer), Near)});
       }
     }
+    return std::nullopt;
+  }
+
+  // The part of `expr` for a literal, a name and a character. Nothing when the node is not one of them.
+  std::optional<llvm::json::Value> exprLeaf(const Expr *E, unsigned Near) const {
     if (const auto *Flag = dyn_cast<CXXBoolLiteralExpr>(E))
       return tag("Bool", Flag->getValue());
     // A literal of type double is `d / 10^k` of decision 0150, or `m / q` with `q` a power of two, decision 0158. Any other stays unknown.
@@ -3032,6 +3059,11 @@ private:
       if (const auto *Char = dyn_cast<CharacterLiteral>(Convert->getSubExpr()->IgnoreParens());
           Char && Char->getKind() == CharacterLiteralKind::Ascii && Char->getValue() < 0x80)
         return tag("Lit", llvm::json::Array{number(Char->getValue()), type(Convert->getType())});
+    return std::nullopt;
+  }
+
+  // The part of `expr` for a binary or a unary operator. Nothing when the node is not one of them.
+  std::optional<llvm::json::Value> exprOperator(const Expr *E, unsigned Near) const {
     if (const auto *Binary = dyn_cast<BinaryOperator>(E)) {
       const char *Op = nullptr;
       switch (Binary->getOpcode()) {
@@ -3102,6 +3134,11 @@ private:
         return tag("Neg", expr(Unary->getSubExpr(), Near));
       return unknown(E, describe(E), Near);
     }
+    return std::nullopt;
+  }
+
+  // The part of `expr` for a duration, a free operator, a list and a value constructor. Nothing when the node is not one of them.
+  std::optional<llvm::json::Value> exprDuration(const Expr *E, unsigned Near) const {
     // `std::chrono::milliseconds{n}` is `n` as an int64, and a copy of one is the value, decision 0175.
     {
       const Expr *Built = E;
@@ -3109,8 +3146,7 @@ private:
         Built = Cast->getSubExpr()->IgnoreParens();
       if (const auto *Construct = dyn_cast<CXXConstructExpr>(Built); Construct && Construct->getNumArgs() == 1 && isMillis(Construct->getType())) {
         const Expr *Arg = Construct->getArg(0);
-        if (const auto *Temporary = dyn_cast<MaterializeTemporaryExpr>(Arg))
-          Arg = Temporary->getSubExpr();
+        Arg = peelMaterialized(Arg);
         if (isMillis(Arg->getType()))
           return expr(Arg, Near);
         const QualType From = Arg->getType().getUnqualifiedType();
@@ -3158,6 +3194,11 @@ private:
         return tag("Call", llvm::json::Array{key(Construct->getConstructor()), name(Construct->getConstructor()), std::move(Args), number(line(E->getBeginLoc()))});
       }
     }
+    return std::nullopt;
+  }
+
+  // The part of `expr` for a cast, a parenthesis and a conditional. Nothing when the node is not one of them.
+  std::optional<llvm::json::Value> exprCast(const Expr *E, unsigned Near) const {
     if (const auto *Cast = dyn_cast<CastExpr>(E)) {
       // `nullptr` as an argument for a pointer to const is no value, decision 0140.
       if (Cast->getCastKind() == CK_NullToPointer && isa<CXXNullPtrLiteralExpr>(Cast->getSubExpr()->IgnoreParens()))
@@ -3189,6 +3230,11 @@ private:
     // `c ? a : b`, decision 0098. The GNU form `c ?: b` stays unknown.
     if (const auto *Choice = dyn_cast<ConditionalOperator>(E))
       return tag("Cond", llvm::json::Array{expr(Choice->getCond(), Near), expr(Choice->getTrueExpr(), Near), expr(Choice->getFalseExpr(), Near)});
+    return std::nullopt;
+  }
+
+  // The part of `expr` for the construction of a vector, a struct, an optional or a variant. Nothing when the node is not one of them.
+  std::optional<llvm::json::Value> exprConstruct(const Expr *E, unsigned Near) const {
     // A local vector made from a sequence in scope is a copy, decision 0160: a parameter or another local vector. A copy from any other expression, a call or
     // a list, stays unknown, and the core refuses the local.
     if (const auto *Construct = dyn_cast<CXXConstructExpr>(E); Construct && Construct->getNumArgs() == 1 && !localVec(Construct->getType()).isNull()) {
@@ -3254,11 +3300,15 @@ private:
         return tag("Copy", llvm::json::Array{expr(Arg, Near), type(Arg->getType()), type(Construct->getType())});
       if (From == optType(Construct->getType()).getCanonicalType()) {
         // A computed value, `x + 1`, is held in a temporary for the reference parameter of the constructor. The temporary is not the value.
-        if (const auto *Temporary = dyn_cast<MaterializeTemporaryExpr>(Arg))
-          Arg = Temporary->getSubExpr();
+        Arg = peelMaterialized(Arg);
         return tag("Wrap", expr(Arg, Near));
       }
     }
+    return std::nullopt;
+  }
+
+  // The part of `expr` for a member, a field and the functions of a sequence or an optional. Nothing when the node is not one of them.
+  std::optional<llvm::json::Value> exprMember(const Expr *E, unsigned Near) const {
     // `o.has_value()` and `o.value()`.
     if (const auto *Member = dyn_cast<CXXMemberCallExpr>(E); Member && Member->getNumArgs() == 0 && Member->getMethodDecl())
       if (const Expr *Object = Member->getImplicitObjectArgument(); Object && isOpt(Object->getType())) {
@@ -3333,6 +3383,11 @@ private:
     if (const auto *Member = dyn_cast<CXXMemberCallExpr>(E); Member && Member->getNumArgs() == 1 && Member->getMethodDecl() && Member->getMethodDecl()->getNameAsString() == "at")
       if (const Expr *Object = Member->getImplicitObjectArgument(); Object && (isSeq(Object->getType()) || isFieldVec(Object)))
         return tag("Index", llvm::json::Array{expr(Object, Near), expr(Member->getArg(0), Near)});
+    return std::nullopt;
+  }
+
+  // The part of `expr` for a call of a member function or of an object. Nothing when the node is not one of them.
+  std::optional<llvm::json::Value> exprCall(const Expr *E, unsigned Near) const {
     // `p->f(a)` on a unique_ptr of an interface is a call of the function of the interface on the value of `p`, decision 0168.
     if (const auto *Call = dyn_cast<CXXMemberCallExpr>(E); Call && Call->getDirectCallee() && ifaceMethod(Call->getDirectCallee()))
       if (const auto *Arrow = dyn_cast<CXXOperatorCallExpr>(Call->getImplicitObjectArgument()->IgnoreParenImpCasts());
@@ -3415,6 +3470,16 @@ private:
       }
       return tag("Call", llvm::json::Array{key(Call->getDirectCallee()), name(Call->getDirectCallee()), std::move(Args), number(line(E->getBeginLoc()))});
     }
+    return std::nullopt;
+  }
+
+  llvm::json::Value expr(const Expr *E, unsigned Near) const {
+    // The parts run in this order, and the first that knows the node writes it.
+    using Part = std::optional<llvm::json::Value> (TreeWriter::*)(const Expr *, unsigned) const;
+    static constexpr Part Parts[] = {&TreeWriter::exprTemporary, &TreeWriter::exprOwned, &TreeWriter::exprNullTest, &TreeWriter::exprLeaf, &TreeWriter::exprOperator, &TreeWriter::exprDuration, &TreeWriter::exprCast, &TreeWriter::exprConstruct, &TreeWriter::exprMember, &TreeWriter::exprCall};
+    for (const Part Try : Parts)
+      if (std::optional<llvm::json::Value> Written = (this->*Try)(E, Near))
+        return std::move(*Written);
     // `std::count_if(v.begin(), v.end(), [captures](T x) { return e; })` over a sequence parameter, decision 0149. The captures are by copy and the
     // body is one `return`. Anything else stays a call, which has no model, and is refused.
     std::string Limit;
@@ -3429,7 +3494,7 @@ private:
       const FunctionDecl *Callee = Call->getDirectCallee();
       const auto *Ref = dyn_cast<DeclRefExpr>(Call->getArg(0)->IgnoreParenImpCasts());
       const auto *Var = Ref ? dyn_cast<VarDecl>(Ref->getDecl()) : nullptr;
-      if (Callee->isInStdNamespace() && Callee->getDeclName().isIdentifier() && Callee->getName() == "move" && Var && Var->hasLocalStorage() &&
+      if (isStdFunction(Callee, "move") && Var && Var->hasLocalStorage() &&
           !Var->getType()->isReferenceType() && Var->getType().isTriviallyCopyableType(Context))
         return expr(Ref, Near);
     }
@@ -3472,43 +3537,53 @@ public:
     Finder->addMatcher(varDecl(isConstexpr(), unless(isExpansionInSystemHeader())).bind("constant"), this);
     Finder->addMatcher(varDecl(hasGlobalStorage(), unless(isConstexpr()), unless(isExpansionInSystemHeader())).bind("global"), this);
     Finder->addMatcher(enumDecl(isDefinition(), unless(isExpansionInSystemHeader())).bind("enum"), this);
-    Finder->addMatcher(cxxRecordDecl(isDefinition(), unless(isImplicit()), unless(isExpansionInSystemHeader())).bind("class"), this);
+    Finder->addMatcher(cxxRecordDecl(unless(isImplicit()), unless(isExpansionInSystemHeader())).bind("class"), this);
     Finder->addMatcher(translationUnitDecl(), this);
   }
   void check(const MatchFinder::MatchResult &Result) override {
-    Context = Result.Context;
+    // One writer for the translation unit: a check lives for one unit, and its writer reads that unit's context.
+    if (!Writer) {
+      Context = Result.Context;
+      Writer.emplace(*Context, Claimed, Structs);
+    }
+    TreeWriter &W = *Writer;
     // The named constants of the file, decision 0106. A contract reads them by name.
     if (const auto *Var = Result.Nodes.getNodeAs<VarDecl>("constant")) {
-      llvm::json::Value Line = TreeWriter(*Context, Claimed, Structs).constantLine(Var);
+      llvm::json::Value Line = W.constantLine(Var);
       if (Line.kind() != llvm::json::Value::Null)
         append(Line);
       return;
     }
     // The mutable globals and static data members of the file, in the order of their definitions, decision 0173.
     if (const auto *Var = Result.Nodes.getNodeAs<VarDecl>("global")) {
-      llvm::json::Value Line = TreeWriter(*Context, Claimed, Structs).globalLine(Var);
+      llvm::json::Value Line = W.globalLine(Var);
       if (Line.kind() != llvm::json::Value::Null)
         append(Line);
       return;
     }
     // Each enum class of the file is written, whether or not a type names it, decision 0114.
     if (const auto *ED = Result.Nodes.getNodeAs<EnumDecl>("enum")) {
-      TreeWriter(*Context, Claimed, Structs).writeEnum(ED);
+      W.writeEnum(ED);
       return;
     }
     // A class over interfaces is written in the table of structs for its line, decision 0165.
     if (const auto *RD = Result.Nodes.getNodeAs<CXXRecordDecl>("class")) {
-      TreeWriter Writer(*Context, Claimed, Structs);
+      // The name of every class of the file, declared or defined, with the classes it sits in and its namespaces, so the shell counts the classes of a short name, decision 0227.
+      if (RD->getIdentifier() && !isa<ClassTemplateSpecializationDecl>(RD))
+        append(llvm::json::Object{{"class", RD->getQualifiedNameAsString()}});
+      // A class that the file only declares counts as a class of its name, and has nothing else to write, decision 0228. The shell counts each name once.
+      if (!RD->isThisDeclarationADefinition())
+        return;
       // A class template with no instance is refused at its class. An instance of one is a struct of the model, whether or not a type names it, decision 0188.
-      Writer.refuseUnnamedInstances(RD);
-      if (Writer.noInstanceClass(RD))
-        append(Writer.noInstanceEntry(RD->getName(), Writer.structKey(RD), RD->getLocation(), "a class template with no instance"));
-      else if (Writer.classInstance(RD))
-        (void)Writer.type(Context->getRecordType(RD));
-      TreeWriter(*Context, Claimed, Structs).classEntry(RD);
-      TreeWriter(*Context, Claimed, Structs).staticEntry(RD);
-      TreeWriter(*Context, Claimed, Structs).holderEntry(RD);
-      for (const llvm::json::Value &F : Writer.baseFunctions(RD))
+      W.refuseUnnamedInstances(RD);
+      if (W.noInstanceClass(RD))
+        append(W.noInstanceEntry(RD->getName(), W.structKey(RD), RD->getLocation(), "a class template with no instance"));
+      else if (W.classInstance(RD))
+        (void)W.type(Context->getRecordType(RD));
+      W.classEntry(RD);
+      W.staticEntry(RD);
+      W.holderEntry(RD);
+      for (const llvm::json::Value &F : W.baseFunctions(RD))
         append(F);
       return;
     }
@@ -3519,7 +3594,7 @@ public:
     // The call operator of a lambda is no function of its own, decision 0149. The call that takes the lambda reads its body, or is refused.
     if (const auto *Method = dyn_cast<CXXMethodDecl>(FD); Method && Method->getParent()->isLambda())
       return;
-    const TreeWriter Reader(*Context, Claimed, Structs);
+    const TreeWriter &Reader = W;
     // An instance of a function template is a function of the model, decision 0180. So is a member function of an instance of a class template, decision 0188.
     // Any other instance is the template, which is refused once.
     if (FD->isTemplateInstantiation() && !Reader.instanceMember(FD) &&
@@ -3527,11 +3602,11 @@ public:
       return;
     const Contract C = contractOf(Context->getSourceManager(), FD);
     for (const Contract::Line &L : C.Lines)
-      Claimed.insert({L.File, L.Number});
+      Claimed.insert({L.Id.getHashValue(), L.Number});
     // The member function of a class template is written for each instance and not alone, decision 0188. The class is refused where it has no instance.
     if (Reader.inClassTemplate(FD)) {
       if (FD->getBody())
-        TreeWriter(*Context, Claimed, Structs).claimBody(FD);
+        W.claimBody(FD);
       // A member function with a contract that no instance makes is refused at its line. A class with no instance is refused at its class.
       const CXXRecordDecl *Parent = cast<CXXMethodDecl>(FD)->getParent();
       if (FD->isThisDeclarationADefinition() && !C.Lines.empty() && !Reader.noInstanceClass(Parent) && !Reader.memberHasInstance(FD))
@@ -3544,20 +3619,20 @@ public:
     // The template itself is written for each instance and not alone. One with no instance has no model, decision 0180.
     if (TreeWriter::typeOnlyTemplate(FD->getDescribedFunctionTemplate())) {
       if (FD->getBody())
-        TreeWriter(*Context, Claimed, Structs).claimBody(FD);
+        W.claimBody(FD);
       // One with no instance in the main file is refused at its line.
       if (!TreeWriter::noInstance(FD))
         return;
     }
     // The member functions of a class over an interface that is not final, and the defaulted destructor of an interface, are left out, decision 0165.
-    if (TreeWriter(*Context, Claimed, Structs).leftOut(FD))
+    if (W.leftOut(FD))
       return;
     // A trusted function with no definition here is written once, at its first declaration. Its contract lines come from all of them.
     // ponytail: a trusted template is not written. A trusted constructor with no body here is written and refused as CXXConstructorDecl, and
     // one with a body is refused by valueConstructor unless its body is empty and it gives each field a value. Upgrade: their signatures.
-    if (FD->isThisDeclarationADefinition() || (TreeWriter(*Context, Claimed, Structs).ifaceMethod(FD) && !FD->getDefinition()) ||
+    if (FD->isThisDeclarationADefinition() || (W.ifaceMethod(FD) && !FD->getDefinition()) ||
         (!FD->getDefinition() && FD == FD->getCanonicalDecl() && !FD->isTemplated() && trustedReason(FD)))
-      append(TreeWriter(*Context, Claimed, Structs).function(FD, C));
+      append(W.function(FD, C));
   }
   void onEndOfTranslationUnit() override {
     if (!Context)
@@ -3583,6 +3658,9 @@ public:
           append(llvm::json::Object{{"orphan", static_cast<int64_t>(Number)}, {"file", SM.getFilename(Start).str()}, {"word", orphanWord(Line)}});
       }
     }
+    // One write for the unit, so a line of another process never lands in the middle of ours.
+    if (Stream)
+      Stream->flush();
   }
 
 private:
@@ -3599,15 +3677,22 @@ private:
   ASTContext *Context = nullptr;
   std::set<std::pair<unsigned, unsigned>> Claimed;
   std::map<std::string, llvm::json::Value> Structs;  // each plain struct that a function names, by key
+  std::optional<TreeWriter> Writer;                  // the one writer of the unit
+  std::unique_ptr<llvm::raw_fd_ostream> Stream;      // the output file, opened once for the unit, in append mode
+  bool Failed = false;                               // the file could not be opened, and the diagnostic has been given
 
   void append(const llvm::json::Value &V) {
-    std::error_code EC;
-    llvm::raw_fd_ostream OS(Output, EC, llvm::sys::fs::OF_Append | llvm::sys::fs::OF_Text);
-    if (EC) {
-      configurationDiag("cplusp-tree cannot write %0: %1") << Output << EC.message();
-      return;
+    if (!Stream && !Failed) {
+      std::error_code EC;
+      Stream = std::make_unique<llvm::raw_fd_ostream>(Output, EC, llvm::sys::fs::OF_Append | llvm::sys::fs::OF_Text);
+      if (EC) {
+        Stream.reset();
+        Failed = true;
+        configurationDiag("cplusp-tree cannot write %0: %1") << Output << EC.message();
+      }
     }
-    OS << llvm::formatv("{0}", V) << "\n";
+    if (Stream)
+      *Stream << llvm::formatv("{0}", V) << "\n";
   }
 };
 } // namespace

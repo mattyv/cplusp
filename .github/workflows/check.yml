@@ -5,7 +5,7 @@ name: Checks
 on:
   pull_request:
   push:
-    branches: ["claude/kind-ramanujan-0mec19"]
+    branches: ["main", "claude/kind-ramanujan-0mec19"]
   workflow_dispatch:
 
 permissions:

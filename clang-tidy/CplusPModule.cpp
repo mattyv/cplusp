@@ -5,7 +5,7 @@
 // The check compiles the pattern and reports every match with the rule id as its message.
 // The Rust side turns the rule id into the message for the bot.
 //
-// Twelve hand-written checks, for the rules that a pattern cannot say. The gate maps a finding to its rule by
+// Seventeen hand-written checks and the translator cplusp-tree. The checks are for the rules that a pattern cannot say. The gate maps a finding to its rule by
 // the name of the check, so their messages are short and plain. The sample pair of each rule is the evidence.
 
 #include "CplusPChecks.h"

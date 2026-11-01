@@ -973,7 +973,6 @@ pub fn glisted(cs: &Conds, todo: &Params) -> (r: Option<u32>)
     }
 }
 
-/// A member function: its first parameter is an object, or it is a constructor.
 /// A member that cannot list a global yet: a `const` member function, whose function twin would take no global, or a virtual
 /// function. A member that writes its object, a constructor and a destructor can list one, decision 0178.
 pub open spec fn spec_gmember(f: Function) -> bool {

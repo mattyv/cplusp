@@ -282,7 +282,8 @@ pub type Models = List<Model>;
 /// the line, decision 0178. `Unbacked` is a call that writes a local back through its interface in a file where an interface has no
 /// final class over it, by the line of the call, decision 0217. `Loop` is a call through an interface that can run an override of
 /// it again before it returns, by the key of the callee and the line, decision 0218. `NoClass` is an interface with no final class over it
-/// in the file, by its key and the line of its first virtual function, decision 0220.
+/// in the file, by its key and the line of its first virtual function, decision 0220. `ValueWrites` is a `const` virtual function that gives a value and
+/// writes a parameter, by its line, decision 0225.
 #[derive(Structural, PartialEq, Eq, Clone, Copy, Debug)]
 pub enum Refusal {
     Construct(u32, u32),
@@ -339,6 +340,7 @@ pub enum Refusal {
     Unbacked(u32),
     Loop(u32, u32),
     NoClass(u32, u32),
+    ValueWrites(u32),
 }
 
 } // verus!

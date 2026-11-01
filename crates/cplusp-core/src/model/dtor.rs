@@ -329,6 +329,8 @@ pub open spec fn spec_dtor_copy(e: Expr, sd: Structs) -> bool
         },
         Expr::Cast(c, a) => (c == CastKind::Read || c == CastKind::NoOp) && spec_dtor_copy(*a, sd),
         Expr::Paren(a) => spec_dtor_copy(*a, sd),
+        // Each arm of a conditional is a place, so the value is a copy of one of them, decision 0225.
+        Expr::Cond(_, a, b) => spec_dtor_copy(*a, sd) || spec_dtor_copy(*b, sd),
         _ => false,
     }
 }
@@ -345,6 +347,7 @@ pub fn dtor_copy(e: &Expr, sd: &Structs) -> (r: bool)
         },
         Expr::Cast(c, a) => (*c == CastKind::Read || *c == CastKind::NoOp) && dtor_copy(a, sd),
         Expr::Paren(a) => dtor_copy(a, sd),
+        Expr::Cond(_, a, b) => dtor_copy(a, sd) || dtor_copy(b, sd),
         _ => false,
     }
 }
@@ -717,7 +720,11 @@ pub open spec fn spec_assign_stmt(n: u32, e: Expr, l: u32, all: Fns, ps: Params,
             Expr::Call(k, nm, args, at) => if spec_callee_dtor(all, k, sd) {
                 Err(Refusal::Copy(l))
             } else if spec_callee_writes(all, k) {
-                Err(Refusal::Place(at))
+                // A call that writes its object runs into a temporary first, as in any other place, decision 0225.
+                match spec_lift(e, all, l, sd, 0, true) {
+                    Ok((c, d, _)) => Ok(spec_pre(c, DStmt::Assign(n, d))),
+                    Err(r) => Err(r),
+                }
             } else {
                 match spec_call_lift(k, nm, *args, at, all, l, sd) {
                     Ok((c, da)) => Ok(spec_pre(c, DStmt::AssignCall(n, k, da))),
@@ -791,8 +798,6 @@ pub open spec fn spec_push_back(v: u32, e: Expr, l: u32, all: Fns, env: Params, 
 /// statement where C++ runs it once, decision 0104, and a call of a function that writes its object or gives no value stands
 /// alone. A write is to a local, never to a parameter, or to a field of the object of a member function that writes it, decision
 /// 0096.
-// ponytail: `x = o.f();` of a function that writes its object is refused as a call out of place. Upgrade: an update to a fresh
-// local, then the write. `return o.f();` writes back and returns, decision 0174.
 pub open spec fn spec_stmt(s: Stmt, all: Fns, env: Params, ps: Params, sd: Structs) -> Result<DStmt, Refusal>
     decreases s, 0nat,
 {
@@ -1038,9 +1043,6 @@ pub open spec fn spec_stmt(s: Stmt, all: Fns, env: Params, ps: Params, sd: Struc
             },
             None => Err(Refusal::Syntax(l)),
         },
-        // `f.push_back(e)` and `f.pop_back()` of a sequence field in a member function that writes its object are new values of the
-        // field, decision 0191. A pop is PopBack of the prelude, whose requires line Dafny checks.
-        // ponytail: the value of a push is code with no call. Upgrade: run its calls before it, as PushBack does, decision 0170.
         // `f->g = e` writes the field `g` of the struct that the unique_ptr field `f` of the object owns, decision 0197. Dafny proves
         // that `f` holds a value.
         // ponytail: the value is code with no call. Upgrade: run its calls before it, as for SetOwnField, decision 0186.
@@ -1062,6 +1064,9 @@ pub open spec fn spec_stmt(s: Stmt, all: Fns, env: Params, ps: Params, sd: Struc
             },
             None => Err(Refusal::Syntax(l)),
         },
+        // `f.push_back(e)` and `f.pop_back()` of a sequence field in a member function that writes its object are new values of the
+        // field, decision 0191. A pop is PopBack of the prelude, whose requires line Dafny checks.
+        // ponytail: the value of a push is code with no call. Upgrade: run its calls before it, as PushBack does, decision 0170.
         Stmt::PushField(f, e, l) => spec_push_field(f, e, l, ps, sd),
         Stmt::PopField(f, l) => match spec_self(ps) {
             Some((p, t)) => match t {
@@ -1769,7 +1774,7 @@ pub open spec fn spec_virtual(f: Function) -> Option<u32> {
 /// A virtual function that does not write its object and gives a value: a function of the model, decision 0166. One that gives no
 /// value is a method, as one that writes its object is, decision 0209.
 pub open spec fn spec_const_virtual(f: Function) -> bool {
-    spec_head_ty(f.params) is Some && spec_head_ty(f.params)->Some_0 is Iface && f.ret != Ty::Void
+    spec_head_ty(f.params) is Some && spec_head_ty(f.params)->Some_0 is Iface && f.ret != Ty::Void && !spec_mutates(spec_tail(f.params))
 }
 
 /// Each member marked as no function in the model.

@@ -2491,7 +2491,10 @@ pub fn translate_stmt(s: &Stmt, all: &Fns, env: &Params, ps: &Params, sd: &Struc
                 Expr::Call(k, nm, args, at) => if callee_dtor(all, *k, sd) {
                     Err(Refusal::Copy(*l))
                 } else if callee_writes(all, *k) {
-                    Err(Refusal::Place(*at))
+                    match lift(e, all, *l, sd, 0, true) {
+                        Ok((c, d, _)) => Ok(pre(c, DStmt::Assign(*n, d))),
+                        Err(r) => Err(r),
+                    }
                 } else {
                     match call_lift(*k, *nm, args, *at, all, *l, sd) {
                         Ok((c, da)) => Ok(pre(c, DStmt::AssignCall(*n, *k, da))),
@@ -3524,7 +3527,7 @@ pub fn const_virtual(f: &Function) -> (r: bool)
     ensures
         r == spec_const_virtual(*f),
 {
-    matches!(head_ty(&f.params), Some(Ty::Iface(_))) && f.ret != Ty::Void
+    matches!(head_ty(&f.params), Some(Ty::Iface(_))) && f.ret != Ty::Void && !mutates(&tail(&f.params))
 }
 
 pub fn unmark(ms: &Members) -> (r: Members)
@@ -4374,6 +4377,9 @@ pub fn check(fb: &Function, fd: &Function, sd: &Structs) -> (r: Result<DOverride
     ensures
         r == spec_check(*fb, *fd, *sd),
 {
+    if value_writes(fb) {
+        return Err(Refusal::ValueWrites(fb.line));
+    }
     match translate_params(&tail(&fd.params), fd.line, sd) {
         Err(r) => Err(r),
         Ok(ps) => match ret_ty(fd.ret, fd.line, sd) {

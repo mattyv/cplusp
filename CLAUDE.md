@@ -29,7 +29,7 @@ Write the failing test first. Watch it fail and read the message. If the message
 - Assert the observable outcome, not the shape of the output. For the gate that means the message a bot would read, word for word.
 - Prefer one invariant test over a pile of spot checks.
 - Goldens are reviewed, never blind-accepted. When one changes, say why in the commit.
-- Every rule in the policy has a sample pair under `rules/<id>/`: `allowed.cpp` passes the gate, `banned.cpp` fails on the marked lines. The pair is the proof that the check means what the row says.
+- Every rule that the gate enforces has a sample pair under `rules/<id>/`: `allowed.cpp` passes the gate, `banned.cpp` fails on the marked lines. The pair is the proof that the check means what the row says.
 
 ## Lazy, in the senior-developer sense
 
@@ -50,7 +50,7 @@ The user vibe codes. The user does not read the code. Follow `.claude/skills/vib
 
 ## Messages
 
-Everything the bot reads follows Simplified Technical English: short sentences, one meaning per word, no semicolons. The prefixes are fixed: `Not provable:` from the gate, `Not proved:` from the prover. Lint the docs with `ste-lint.py` from the asd-ste100 skill before committing them.
+Everything the bot reads follows Simplified Technical English: short sentences, one meaning per word, no semicolons. The prefixes are fixed: `Not provable:` from the gate, `Not proved:` from the prover. Lint the docs with `scripts/ste-lint.py` from the asd-ste100 skill (github.com/mattyv/asd-ste100-skill) before committing them.
 
 ## Toolchain
 

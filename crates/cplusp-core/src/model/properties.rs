@@ -527,7 +527,32 @@ pub open spec fn count_dstmt(s: DStmt) -> nat
         // A bare block is a statement with its statements, and the destructors that run at the end of a block are none, decision 0178.
         DStmt::Scope(b) => 1 + count_dstmts(*b),
         DStmt::Dtors(_) => 0,
-        _ => 1,
+        // Each other statement is one Dafny statement. They are listed, so that a new statement needs its own arm.
+        DStmt::Return(_) => 1,
+        DStmt::Local(_, _, _) => 1,
+        DStmt::LocalCall(_, _, _, _) => 1,
+        DStmt::ReturnCall(_, _) => 1,
+        DStmt::ReturnUpdate(_, _, _) => 1,
+        DStmt::Assign(_, _) => 1,
+        DStmt::AssignCall(_, _, _) => 1,
+        DStmt::SetField(_, _) => 1,
+        DStmt::SetOut(_, _) => 1,
+        DStmt::SetOutField(_, _, _) => 1,
+        DStmt::SetOwnField(_, _, _) => 1,
+        DStmt::SetThroughField(_, _, _) => 1,
+        DStmt::Update(_, _, _) => 1,
+        DStmt::UpdateAt(_, _, _, _, _) => 1,
+        DStmt::LocalUpdate(_, _, _, _, _) => 1,
+        DStmt::CallStmt(_, _) => 1,
+        DStmt::Exit => 1,
+        DStmt::Assert(_) => 1,
+        DStmt::Apply(_, _) => 1,
+        DStmt::Sort(_, _) => 1,
+        DStmt::SortBy(_, _, _, _, _) => 1,
+        DStmt::Block(_) => 1,
+        DStmt::DeclTemp(_, _) => 1,
+        DStmt::AssignTemp(_, _) => 1,
+        DStmt::SetResult(_) => 1,
     }
 }
 
@@ -1007,7 +1032,23 @@ pub open spec fn calls_resolve_stmt(s: DStmt, all: Fns, sd: Structs) -> bool
         DStmt::Dtors(b) => calls_resolve(*b, all, sd),
         DStmt::While(_, _, _, body) => calls_resolve(*body, all, sd),
         DStmt::For(init, _, _, _, _, body, step, _) => calls_resolve_stmt(*init, all, sd) && calls_resolve(*body, all, sd) && calls_resolve_stmt(*step, all, sd),
-        _ => true,
+        // Each other statement calls no method. They are listed, so that a new statement needs its own arm.
+        DStmt::Return(_) => true,
+        DStmt::Local(_, _, _) => true,
+        DStmt::Assign(_, _) => true,
+        DStmt::SetField(_, _) => true,
+        DStmt::SetOut(_, _) => true,
+        DStmt::SetOutField(_, _, _) => true,
+        DStmt::SetOwnField(_, _, _) => true,
+        DStmt::SetThroughField(_, _, _) => true,
+        DStmt::Exit => true,
+        DStmt::Assert(_) => true,
+        DStmt::Apply(_, _) => true,
+        DStmt::Sort(_, _) => true,
+        DStmt::SortBy(_, _, _, _, _) => true,
+        DStmt::DeclTemp(_, _) => true,
+        DStmt::AssignTemp(_, _) => true,
+        DStmt::SetResult(_) => true,
     }
 }
 
@@ -1477,6 +1518,13 @@ pub proof fn lemma_resolves_assign(s: Stmt, all: Fns, env: Params, ps: Params, s
         lemma_lift_resolves(e, all, l, sd, 0, true);
         let (c, d, _) = spec_lift(e, all, l, sd, 0, true).unwrap();
         lemma_pre_resolves(c, DStmt::SetOut(s->Assign_0, d), all, sd);
+    } else if e is Call && !spec_callee_dtor(all, e->Call_0, sd) && spec_callee_writes(all, e->Call_0) {
+        // A call that writes its object runs into a temporary first, decision 0225.
+        lemma_lift_resolves(e, all, l, sd, 0, true);
+        if spec_lift(e, all, l, sd, 0, true).is_ok() {
+            let (c, d, _) = spec_lift(e, all, l, sd, 0, true).unwrap();
+            lemma_pre_resolves(c, DStmt::Assign(s->Assign_0, d), all, sd);
+        }
     } else {
         lemma_value_resolves(e, all, l, sd);
     }

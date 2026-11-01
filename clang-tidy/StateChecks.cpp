@@ -1,5 +1,19 @@
 #include "CplusPChecks.h"
 
+#include "clang/Basic/CodeGenOptions.h"
+#include "clang/CodeGen/ModuleBuilder.h"
+#include "clang/Lex/HeaderSearchOptions.h"
+#include "clang/Lex/PreprocessorOptions.h"
+#include "clang/Serialization/ASTReader.h"
+#include "clang/Serialization/ModuleManager.h"
+#include "llvm/Analysis/ValueTracking.h"
+#include "llvm/IR/DebugInfoMetadata.h"
+#include "llvm/IR/Instructions.h"
+#include "llvm/IR/IntrinsicInst.h"
+#include "llvm/IR/Module.h"
+#include "llvm/Passes/PassBuilder.h"
+#include "llvm/Transforms/Scalar/SROA.h"
+
 namespace cplusp::detail {
 
 namespace {
@@ -17,7 +31,7 @@ namespace {
 // `SkipComments` steps over a whole-line `//` comment that is no `//@` line, and over a one-line `/* */` comment, decision 0099. Only the lines
 // of a body use it.
 // ponytail: a block comment over several lines ends the walk. Upgrade: the lexer's comment tokens.
-Contract contractAbove(const SourceManager &SM, SourceLocation First, SourceLocation Floor = SourceLocation(), bool SkipComments = false) {
+Contract contractAbove(const SourceManager &SM, SourceLocation First, SourceLocation Floor, bool SkipComments) {
   Contract C;
   First = SM.getExpansionLoc(First);
   if (First.isInvalid())
@@ -67,7 +81,7 @@ Contract contractAbove(const SourceManager &SM, SourceLocation First, SourceLoca
     if (!Line.consume_front("//@"))
       break;
     Line = Line.ltrim();
-    C.Lines.push_back({File.getHashValue(), SM.getLineNumber(File, Begin), Line.str(), {}, File});
+    C.Lines.push_back({SM.getLineNumber(File, static_cast<unsigned>(Begin)), Line.str(), {}, File});
     if (Spliced)
       continue;
     C.Any = true;
@@ -875,6 +889,57 @@ private:
       bring(F, E, D);
   }
 
+  // The address of a global that is put into an object lets whoever holds the object write the global, decisions 0225 and 0226. The gate does not follow
+  // the object, so the store counts as a change of the global. This holds for a constant address, for a pointer that is no constant, such as a select of two
+  // addresses, and for a constant array of the compiler that holds an address, such as the elements of a braced list.
+  // ponytail: a store into a global is left out, and so is a pointer that a call gives back into a call that the gate can follow. A write through the
+  // pointer is not told apart from a read, so any such store counts as a change. Upgrade: follow the object that holds the pointer.
+  void stored(const llvm::Value *Into, const llvm::Value *V, Effect &E) {
+    llvm::SmallVector<const llvm::Value *, 4> Objects;
+    llvm::getUnderlyingObjects(Into, Objects, nullptr, 0);
+    // The address of a thread_local global is the result of an intrinsic call.
+    if (llvm::any_of(Objects, [](const llvm::Value *O) {
+          const auto *Call = dyn_cast<llvm::IntrinsicInst>(O);
+          return isa<llvm::GlobalVariable>(O) || (Call && Call->getIntrinsicID() == llvm::Intrinsic::threadlocal_address);
+        }))
+      return;
+    // A pointer that is no constant is followed to its roots: a global counts as a change, and a pointer that the gate cannot follow is refused.
+    if (const auto *C = dyn_cast<llvm::Constant>(V))
+      addresses(C, true, E);
+    else if (V->getType()->isPointerTy())
+      access(V, true, E);
+  }
+
+  // The state globals whose address a constant holds. `CountTop` says whether the constant being a global of the state counts: a global that is the argument
+  // of a call is judged by the parameter that it binds to, and a global inside a constant array or a struct is not. A pointer into a struct or an array that is
+  // a global, such as `&g_s.y`, is that global, decision 0227. A constant global with a start value, of the compiler or of the file, is read for the addresses
+  // in its start value, decision 0228.
+  // ponytail: any address in the start value of a constant global that is the argument of a call counts as a change, whatever the call does with it. A read
+  // through the constant would count too. Upgrade: judge the call by the parameter that binds the constant, as for a state global.
+  void addresses(const llvm::Constant *Start, bool CountTop, Effect &E) {
+    llvm::SmallPtrSet<const llvm::Constant *, 8> Done;
+    llvm::SmallVector<std::pair<const llvm::Constant *, bool>, 8> Work{{Start, CountTop}};
+    while (!Work.empty()) {
+      auto [C, Counts] = Work.pop_back_val();
+      if (C->getType()->isPointerTy())
+        C = cast<llvm::Constant>(C->stripInBoundsConstantOffsets());
+      if (!Done.insert(C).second)
+        continue;
+      if (const auto *G = dyn_cast<llvm::GlobalVariable>(C)) {
+        if (const auto Name = StateOf.find(G); Name != StateOf.end()) {
+          if (Counts)
+            E.Writes.insert(Name->second);
+        } else if (G->isConstant() && G->hasInitializer()) {
+          Work.push_back({G->getInitializer(), true});
+        }
+        continue;
+      }
+      for (const llvm::Use &U : C->operands())
+        if (const auto *Inner = dyn_cast<llvm::Constant>(U.get()))
+          Work.push_back({Inner, true});
+    }
+  }
+
   void instruction(const llvm::Instruction &I, Effect &E, Calls *D) {
     llvm::SmallPtrSet<const llvm::Constant *, 8> Done;
     for (const llvm::Use &U : I.operands()) {
@@ -882,9 +947,21 @@ private:
       if (const auto *C = dyn_cast<llvm::Constant>(U.get()); C && !(CB && &U == &CB->getCalledOperandUse() && calleeOf(*CB)))
         named(C, E, D, Done);
     }
-    if (const auto *Store = dyn_cast<llvm::StoreInst>(&I))
+    // A constant array that a call is given holds the addresses it holds, decision 0226.
+    if (const auto *CB = dyn_cast<llvm::CallBase>(&I); CB && !isa<llvm::MemIntrinsic>(CB))
+      for (const llvm::Value *Arg : CB->args())
+        if (const auto *C = dyn_cast<llvm::Constant>(Arg); C && C->getType()->isPointerTy())
+          addresses(C, false, E);
+    if (const auto *Store = dyn_cast<llvm::StoreInst>(&I)) {
       access(Store->getPointerOperand(), true, E);
-    else if (const auto *Load = dyn_cast<llvm::LoadInst>(&I)) {
+      stored(Store->getPointerOperand(), Store->getValueOperand(), E);
+    } else if (const auto *Copy = dyn_cast<llvm::MemTransferInst>(&I)) {
+      access(Copy->getRawDest(), true, E);
+      access(Copy->getRawSource(), false, E);
+      // A copy from a constant, such as the start value of `P x{&g_total, 2}`, stores what the constant holds.
+      if (const auto *Source = dyn_cast<llvm::GlobalVariable>(Copy->getRawSource()->stripPointerCasts()); Source && Source->isConstant() && Source->hasInitializer())
+        stored(Copy->getRawDest(), Source->getInitializer(), E);
+    } else if (const auto *Load = dyn_cast<llvm::LoadInst>(&I)) {
       if (!Dispatch.count(Load))
         access(Load->getPointerOperand(), false, E);
     }
@@ -945,10 +1022,12 @@ private:
   // A pointer that is loaded from memory points where the object that holds it says.
   // The gate follows it to the parameter or local that holds it, as the pointer in a std::vector or a vtable.
   // If a global that the file declares holds it, the pointee is not the global, and nothing can name it.
-  // ponytail: a parameter that holds a pointer to a global hides the global. A struct with a raw pointer member is one.
-  // The rows raw_pointer, lvalue_references and array_span ban such a pointer in the code that is judged.
-  // A span over a global array is included. The row aliasing refuses a global that is passed to a call.
-  // Upgrade: follow the stores into the object that holds the pointer.
+  // ponytail: a parameter that holds a pointer to a global hides the global from a read or a write through it. What the gate does count is the way in: a
+  // store or a copy that puts the address of a global into memory is a change of the global, whether the address is a constant, a select or a phi of
+  // addresses, or an element of a constant array of the compiler that a call is given (`stored` and `addresses`, decisions 0225 and 0226). A pointer
+  // that comes from a call the gate cannot read is refused. A read of the global through such a pointer is not counted as a read. The rows raw_pointer,
+  // lvalue_references and array_span ban such a pointer in the code that is judged. The row aliasing refuses a global that is passed to a call.
+  // Upgrade: follow the object that holds the pointer, and count a write only for a write through it.
   // `Via` is the function that does the load, when the pointer was loaded.
   void roots(const llvm::Value *V, std::vector<Root> &Out, Seen &S, bool Loaded = false, const llvm::Function *Via = nullptr) {
     llvm::SmallVector<const llvm::Value *, 4> Objects;
@@ -980,10 +1059,10 @@ private:
         const FunctionDecl *FD = F ? Fns.find(F)->second.FD : nullptr;
         // A function that the compiler wrote and a runtime function with no declaration are known.
         // So is an allocation function, which returns new memory that no other name reaches.
-        const bool Known = !F || !FD || !F->isDeclaration() || F->isIntrinsic() || F->returnDoesNotAlias() ||
+        const bool Readable = !F || !FD || !F->isDeclaration() || F->isIntrinsic() || F->returnDoesNotAlias() ||
                            FD->isReplaceableGlobalAllocationFunction() ||
                            ((inStdNamespace(FD) || inAbiNamespace(FD)) && Ctx->getSourceManager().isInSystemHeader(FD->getLocation()));
-        if (!Known) {
+        if (!Readable) {
           Out.push_back({Root::Refuse, O,
                          "global_state: a reference from " + (FD ? FD->getNameAsString() : F->getName().str()) +
                              " may reach any global, and no line can list it."});
@@ -1019,13 +1098,13 @@ private:
     // ponytail: a virtual call brings the lines of the method that the source names.
     // The checks of overrides hold the overrides of this file to them, the ones with lines and the ones that nobody wrote.
     // An override in another file is not read. Upgrade: read every override of the hierarchy that the file can see.
-    const auto &Calls = matched(CB);
-    for (const VirtualCall *V : Calls) {
+    const auto &Virtuals = matched(CB);
+    for (const VirtualCall *V : Virtuals) {
       arguments(V->Method, CB, E);
       E.add(hasBody(V->Method) ? linesOf(V->Method) : edge(V->Method));
       overridden(V->Method, E, D);
     }
-    if (!Calls.empty())
+    if (!Virtuals.empty())
       return;
     // A dispatch through a table that no virtual call of the tree explains has no callee that the gate can read.
     // A call through a pointer to a member function is one.
@@ -1703,6 +1782,8 @@ public:
   }
   void check(const MatchFinder::MatchResult &Result) override { SM = Result.SourceManager; }
   void onEndOfTranslationUnit() override {
+    if (!SM)
+      return;
     LineTableInfo &Lines = SM->getLineTable();
     for (const auto &[File, Entries] : Lines) {
       // The predefined macros are a buffer that holds line markers of its own, and no file of the user's.

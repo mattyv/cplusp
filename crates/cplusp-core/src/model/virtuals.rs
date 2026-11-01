@@ -66,6 +66,10 @@ pub open spec fn spec_overrides_fn(fb: Function, fd: Function, d: u32, b: u32) -
 /// The check of the function `fb` of the interface on its override `fd`. The contract of `fb` reads the parameters of `fd` by their
 /// place, decision 0060.
 pub open spec fn spec_check(fb: Function, fd: Function, sd: Structs) -> Result<DOverride, Refusal> {
+    // A function of the interface that has no rule has no check either, decision 0225.
+    if spec_value_writes(fb) {
+        Err(Refusal::ValueWrites(fb.line))
+    } else {
     match spec_params(spec_tail(fd.params), fd.line, sd) {
         Err(r) => Err(r),
         Ok(ps) => match spec_ret_ty(fd.ret, fd.line, sd) {
@@ -84,6 +88,7 @@ pub open spec fn spec_check(fb: Function, fd: Function, sd: Structs) -> Result<D
                 },
             },
         },
+    }
     }
 }
 
@@ -459,12 +464,27 @@ pub open spec fn spec_checks(f: Function) -> Option<Refusal> {
     // refusal on such a line.
     if spec_any_bad(f.conds) {
         None
+    } else if spec_value_writes(f) {
+        Some(Refusal::ValueWrites(f.line))
     } else {
         match spec_modifies(f.params, f.conds, f.line) {
             Some(r) => Some(r),
             None => spec_finite(f.params, f.conds, f.trusted, f.ret, f.line),
         }
     }
+}
+
+/// A `const` virtual function that gives a value and writes a parameter. It is neither a function nor a method of 0209, so it has no
+/// rule yet, decision 0225.
+pub open spec fn spec_value_writes(f: Function) -> bool {
+    spec_head_ty(f.params) is Some && spec_head_ty(f.params)->Some_0 is Iface && f.ret != Ty::Void && spec_mutates(spec_tail(f.params))
+}
+
+pub fn value_writes(f: &Function) -> (r: bool)
+    ensures
+        r == spec_value_writes(*f),
+{
+    matches!(head_ty(&f.params), Some(Ty::Iface(_))) && f.ret != Ty::Void && mutates(&tail(&f.params))
 }
 
 /// The model holds no NaN and no infinity. So each double parameter needs `std::isfinite` of it in a requires line, and a trusted
@@ -579,6 +599,8 @@ pub fn checks(f: &Function) -> (r: Option<Refusal>)
 {
     if any_bad(&f.conds) {
         None
+    } else if value_writes(f) {
+        Some(Refusal::ValueWrites(f.line))
     } else {
         match modifies(&f.params, &f.conds, f.line) {
             Some(r) => Some(r),

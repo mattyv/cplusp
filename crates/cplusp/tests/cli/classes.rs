@@ -1352,17 +1352,17 @@ fn a_short_static_name_outside_its_class_is_refused() {
     if !clang_tidy_available() {
         return;
     }
-    for (name, line) in [
-        ("model-static-short-name-other-namespace.cpp", 6),
-        ("model-static-short-name-free.cpp", 14),
-        ("model-static-short-name-declared-only.cpp", 10),
-        ("model-static-short-name-qualified.cpp", 8),
-        ("model-static-short-name-declared-class.cpp", 8),
+    for (name, line, call) in [
+        ("model-static-short-name-other-namespace.cpp", 6, "T::up"),
+        ("model-static-short-name-free.cpp", 14, "T::up"),
+        ("model-static-short-name-declared-only.cpp", 10, "T::up"),
+        ("model-static-short-name-qualified.cpp", 8, "a::T::up"),
+        ("model-static-short-name-declared-class.cpp", 8, "T::up"),
     ] {
         let o = prove(name, &[], &dafny);
         let text = stdout(&o);
         assert_eq!(o.status.code(), Some(1), "{name}: stdout: {text} stderr: {}", stderr(&o));
-        let want = format!("{line}: T::up names no static member function from here. Write the full name.");
+        let want = format!("{line}: {call} names no static member function from here. Write the full name.");
         let got: Vec<&str> = text.lines().filter(|l| l.starts_with("Not prov")).map(|l| l.rsplit_once(".cpp:").unwrap().1).collect();
         assert_eq!(got, vec![want.as_str()], "{name}: {text}");
     }
