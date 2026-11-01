@@ -2,6 +2,7 @@
 name = "divergence"
 version.workspace = true
 edition.workspace = true
+license.workspace = true
 description = "Runs the divergence battery: every case's Dafny verdicts, witness, and skill rule"
 
 [dependencies]
