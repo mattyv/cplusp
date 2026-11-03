@@ -856,8 +856,8 @@ fn gate(
     found.sort_by(|a, b| (&a.path, a.line, &a.rule, &a.message).cmp(&(&b.path, b.line, &b.rule, &b.message)));
     found.dedup_by(|a, b| (&a.path, a.line, &a.rule, &a.message) == (&b.path, b.line, &b.rule, &b.message));
 
-    for f in &found {
-        if json {
+    if json {
+        for f in &found {
             println!(
                 r#"{{"rule":{},"check":{},"file":{},"line":{},"decision":"{}","message":{}}}"#,
                 quote(&f.rule),
@@ -867,8 +867,32 @@ fn gate(
                 decision_word(f.decision),
                 quote(&f.message)
             );
-        } else {
+        }
+    } else {
+        // Group only the presentation. The complete findings still determine the verdict and JSON output.
+        let mut groups: Vec<Vec<&Finding>> = Vec::new();
+        let mut by_message = BTreeMap::new();
+        for f in &found {
+            let group = *by_message.entry((&f.rule, &f.message)).or_insert_with(|| {
+                groups.push(Vec::new());
+                groups.len() - 1
+            });
+            groups[group].push(f);
+        }
+        let mut omitted = false;
+        for group in groups {
+            let f = group[0];
             println!("Not provable: {}:{}: {}", shown(&f.path), f.line, f.message);
+            for other in group.iter().skip(1).take(2) {
+                println!("  Also at: {}:{}", shown(&other.path), other.line);
+            }
+            if group.len() > 3 {
+                println!("  {} more locations.", group.len() - 3);
+                omitted = true;
+            }
+        }
+        if omitted {
+            println!("All findings: run cplusp gate --json with the same inputs, policy, plugin and compiler flags.");
         }
     }
     if found.is_empty() && !json {

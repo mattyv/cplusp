@@ -474,8 +474,8 @@ fn a_ban_of_variable_index_covers_vectors_spans_and_at() {
     }
     let team = fixture("team-tighten.yaml");
     let f = fixture("variable-index-ban.cpp");
-    let o = gated(&["--policy", team.to_str().unwrap(), f.to_str().unwrap(), "--", "-std=c++23", "-ffp-contract=off"]);
-    let text = stdout(&o);
+    let o = gated(&["--json", "--policy", team.to_str().unwrap(), f.to_str().unwrap(), "--", "-std=c++23", "-ffp-contract=off"]);
+    let text = complete_gate_findings(&o);
     assert_eq!(o.status.code(), Some(1), "stdout: {text} stderr: {}", stderr(&o));
     let lines: BTreeSet<&str> = text
         .lines()

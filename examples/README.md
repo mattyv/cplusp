@@ -24,6 +24,7 @@ Run that command from the repository root with `DAFNY` configured. A successful
 handwritten model alone does not establish that `prove` accepts the C++.
 The [divergence battery](../divergence/README.md) examines cases where a naive
 model disagrees with C++.
+The [ilp_for trial](../docs/trial-ilp-for.md) records gaps found when checking an existing generic C++ library.
 
 Each folder has:
 

@@ -237,3 +237,4 @@ Status is `decided`, `proposed`, `superseded by NNNN`, or a short note that name
 | [0229](0229-the-gate-keeps-tool-failures-and-plugin-paths.md) | The gate keeps tool failures and plugin paths | decided |
 | [0230](0230-a-source-name-can-also-be-an-option-value.md) | A source name can also be an option value | decided |
 | [0231](0231-separate-guides-for-users-and-contributors.md) | Separate guides for users and contributors | decided |
+| [0232](0232-repeated-findings-share-their-message.md) | Repeated findings share their message | decided |

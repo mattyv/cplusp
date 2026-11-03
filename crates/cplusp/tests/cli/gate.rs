@@ -276,9 +276,9 @@ fn gate_treats_a_diagnostic_pragma_as_a_finding() {
         return;
     }
     let f = fixture("pragma.cpp");
-    let o = gated(&[f.to_str().unwrap(), "--", "-std=c++23", "-ffp-contract=off"]);
-    assert_eq!(o.status.code(), Some(1), "stdout: {} stderr: {}", stdout(&o), stderr(&o));
-    let out = stdout(&o);
+    let o = gated(&["--json", f.to_str().unwrap(), "--", "-std=c++23", "-ffp-contract=off"]);
+    assert_eq!(o.status.code(), Some(1), "stdout: {} stderr: {}", complete_gate_findings(&o), stderr(&o));
+    let out = complete_gate_findings(&o);
     for line in [2, 3, 4] {
         let expected = format!("pragma.cpp:{line}: pragma diagnostic: not allowed in verified code. It silences the gate.");
         assert!(out.lines().any(|l| l.starts_with("Not provable: ") && l.ends_with(&expected)), "{out}");
@@ -294,40 +294,49 @@ fn gate_sees_every_spelling_of_a_diagnostic_pragma() {
     }
     let pragma = "pragma diagnostic: not allowed in verified code. It silences the gate.";
     let f = fixture("pragma-spellings.cpp");
-    let o = gated(&[f.to_str().unwrap(), "--", "-std=c++23", "-ffp-contract=off"]);
-    assert_eq!(o.status.code(), Some(1), "stdout: {} stderr: {}", stdout(&o), stderr(&o));
+    let o = gated(&["--json", f.to_str().unwrap(), "--", "-std=c++23", "-ffp-contract=off"]);
+    assert_eq!(o.status.code(), Some(1), "stdout: {} stderr: {}", complete_gate_findings(&o), stderr(&o));
     for line in [3, 4, 5] {
         let expected = format!("pragma-spellings.cpp:{line}: {pragma}");
-        assert!(stdout(&o).lines().any(|l| l.ends_with(&expected)), "{}", stdout(&o));
+        assert!(complete_gate_findings(&o).lines().any(|l| l.ends_with(&expected)), "{}", complete_gate_findings(&o));
     }
     let f = fixture("define-pragma.cpp");
     let o = gated(&[
+        "--json",
         f.to_str().unwrap(),
         "--",
         "-std=c++23",
         "-ffp-contract=off",
         r#"-DSILENCE=_Pragma("clang diagnostic ignored \"-Wreturn-stack-address\"")"#,
     ]);
-    assert_eq!(o.status.code(), Some(1), "stdout: {} stderr: {}", stdout(&o), stderr(&o));
-    assert!(stdout(&o).lines().any(|l| l.ends_with(&format!("define-pragma.cpp:2: {pragma}"))), "{}", stdout(&o));
-    let f = fixture("ms-pragma.cpp");
-    let o = gated(&[f.to_str().unwrap(), "--", "-std=c++23", "-ffp-contract=off", "-fms-extensions"]);
-    assert_eq!(o.status.code(), Some(1), "stdout: {} stderr: {}", stdout(&o), stderr(&o));
-    assert!(stdout(&o).lines().any(|l| l.ends_with(&format!("ms-pragma.cpp:2: {pragma}"))), "{}", stdout(&o));
-    let f = fixture("includes-spliced.cpp");
-    let o = gated(&[f.to_str().unwrap(), "--", "-std=c++23", "-ffp-contract=off"]);
-    assert_eq!(o.status.code(), Some(1), "stdout: {} stderr: {}", stdout(&o), stderr(&o));
+    assert_eq!(o.status.code(), Some(1), "stdout: {} stderr: {}", complete_gate_findings(&o), stderr(&o));
     assert!(
-        stdout(&o)
+        complete_gate_findings(&o).lines().any(|l| l.ends_with(&format!("define-pragma.cpp:2: {pragma}"))),
+        "{}",
+        complete_gate_findings(&o)
+    );
+    let f = fixture("ms-pragma.cpp");
+    let o = gated(&["--json", f.to_str().unwrap(), "--", "-std=c++23", "-ffp-contract=off", "-fms-extensions"]);
+    assert_eq!(o.status.code(), Some(1), "stdout: {} stderr: {}", complete_gate_findings(&o), stderr(&o));
+    assert!(
+        complete_gate_findings(&o).lines().any(|l| l.ends_with(&format!("ms-pragma.cpp:2: {pragma}"))),
+        "{}",
+        complete_gate_findings(&o)
+    );
+    let f = fixture("includes-spliced.cpp");
+    let o = gated(&["--json", f.to_str().unwrap(), "--", "-std=c++23", "-ffp-contract=off"]);
+    assert_eq!(o.status.code(), Some(1), "stdout: {} stderr: {}", complete_gate_findings(&o), stderr(&o));
+    assert!(
+        complete_gate_findings(&o)
             .lines()
             .any(|l| l.ends_with("spliced-system-header.h:2: pragma system_header: not allowed in verified code. It silences the gate.")),
         "{}",
-        stdout(&o)
+        complete_gate_findings(&o)
     );
     // A comment is not a pragma.
     let f = fixture("comment-mentions-pragma.cpp");
-    let o = gated(&[f.to_str().unwrap(), "--", "-std=c++23", "-ffp-contract=off"]);
-    assert_eq!(o.status.code(), Some(0), "stdout: {} stderr: {}", stdout(&o), stderr(&o));
+    let o = gated(&["--json", f.to_str().unwrap(), "--", "-std=c++23", "-ffp-contract=off"]);
+    assert_eq!(o.status.code(), Some(0), "stdout: {} stderr: {}", complete_gate_findings(&o), stderr(&o));
 }
 
 /// A `#line` directive moves the gate's view of file and line, and can name a pseudo-file to hide behind.
@@ -426,13 +435,13 @@ fn the_sequencing_check_reads_a_callees_body_under_a_loosened_state_row() {
     let team = fixture("team-loosen-state.yaml");
     let plugin = plugin();
     for policy in [None, Some(team.to_str().unwrap())] {
-        let mut args = vec!["gate", "--plugin", plugin.to_str().unwrap()];
+        let mut args = vec!["gate", "--json", "--plugin", plugin.to_str().unwrap()];
         if let Some(p) = policy {
             args.extend(["--policy", p]);
         }
         args.extend([f.to_str().unwrap(), "--", "-std=c++23", "-ffp-contract=off"]);
         let o = cplusp(&args);
-        let out = stdout(&o);
+        let out = complete_gate_findings(&o);
         assert_eq!(o.status.code(), Some(1), "{policy:?}: stdout: {out} stderr: {}", stderr(&o));
         assert!(
             out.lines().any(|l| l.contains("sequencing-through-bodies.cpp:21: Two changes of state in one expression")),
@@ -1309,8 +1318,8 @@ fn a_view_local_does_not_hide_a_local() {
     }
     let team = fixture("team-loosen-views.yaml");
     let f = fixture("return-local-view.cpp");
-    let o = gated(&["--policy", team.to_str().unwrap(), f.to_str().unwrap(), "--", "-std=c++23", "-ffp-contract=off"]);
-    let text = stdout(&o);
+    let o = gated(&["--json", "--policy", team.to_str().unwrap(), f.to_str().unwrap(), "--", "-std=c++23", "-ffp-contract=off"]);
+    let text = complete_gate_findings(&o);
     assert_eq!(o.status.code(), Some(1), "stdout: {text} stderr: {}", stderr(&o));
     let lines: BTreeSet<&str> = text
         .lines()
@@ -1511,4 +1520,101 @@ fn a_field_of_a_global_in_a_call_into_std_is_a_read() {
     let f = fixture("global-field-to-std-call.cpp");
     let o = gated(&[f.to_str().unwrap(), "--", "-std=c++23", "-ffp-contract=off"]);
     assert_eq!(o.status.code(), Some(0), "stdout: {} stderr: {}", stdout(&o), stderr(&o));
+}
+
+// Decision 0232: repeated gate findings keep each cause and summarize its locations.
+const GROUPED_CAST_MESSAGE: &str = "C-style casts: not allowed in verified code. Hides what kind of cast it is. All forms, including plain numeric narrowing. Use static_cast, or std::bit_cast for a byte view. The construct is CStyleCastExpr.";
+const GROUPED_EXCEPTION_MESSAGE: &str = "Exceptions: not allowed in verified code. Verified code is noexcept. Use a result struct with an error enum today, and std::expected when the toolchain compiles it. The construct is";
+
+fn grouped_findings_expected() -> String {
+    let f = "crates/cplusp/tests/fixtures/repeated-findings.cpp";
+    format!(
+        "Not provable: {f}:3: {GROUPED_CAST_MESSAGE}\n  Also at: {f}:4\n  Also at: {f}:5\n  2 more locations.\nNot provable: {f}:11: {GROUPED_EXCEPTION_MESSAGE} CXXTryStmt.\nNot provable: {f}:12: {GROUPED_EXCEPTION_MESSAGE} CXXThrowExpr.\n  Also at: {f}:13\nNot provable: {f}:15: {GROUPED_EXCEPTION_MESSAGE} CXXCatchStmt.\nAll findings: run cplusp gate --json with the same inputs, policy, plugin and compiler flags.\n"
+    )
+}
+
+#[test]
+fn diagnostic_grouping_keeps_distinct_messages_and_bounds_locations() {
+    if !clang_tidy_available() {
+        return;
+    }
+    let o = gated(&["crates/cplusp/tests/fixtures/repeated-findings.cpp", "--", "-std=c++23", "-ffp-contract=off"]);
+    assert_eq!(o.status.code(), Some(1), "stdout: {} stderr: {}", stdout(&o), stderr(&o));
+    assert_eq!(stdout(&o), grouped_findings_expected());
+}
+
+#[test]
+fn diagnostic_grouping_also_applies_to_the_gate_in_prove() {
+    if !clang_tidy_available() {
+        return;
+    }
+    let p = plugin();
+    let o = cplusp(&[
+        "prove",
+        "--plugin",
+        p.to_str().unwrap(),
+        "crates/cplusp/tests/fixtures/repeated-findings.cpp",
+        "--",
+        "-std=c++23",
+        "-ffp-contract=off",
+    ]);
+    assert_eq!(o.status.code(), Some(1), "stdout: {} stderr: {}", stdout(&o), stderr(&o));
+    assert_eq!(stdout(&o), grouped_findings_expected());
+}
+
+#[test]
+fn diagnostic_grouping_leaves_every_json_finding_unchanged() {
+    if !clang_tidy_available() {
+        return;
+    }
+    let p = plugin();
+    let file = "crates/cplusp/tests/fixtures/repeated-findings.cpp";
+    let o = cplusp(&["gate", "--json", "--plugin", p.to_str().unwrap(), file, "--", "-std=c++23", "-ffp-contract=off"]);
+    assert_eq!(o.status.code(), Some(1), "stdout: {} stderr: {}", stdout(&o), stderr(&o));
+    let mut expected = String::new();
+    for (line, rule, message) in (3..=7).map(|line| (line, "c_style_casts", GROUPED_CAST_MESSAGE.to_string())).chain([
+        (11, "exceptions", format!("{GROUPED_EXCEPTION_MESSAGE} CXXTryStmt.")),
+        (12, "exceptions", format!("{GROUPED_EXCEPTION_MESSAGE} CXXThrowExpr.")),
+        (13, "exceptions", format!("{GROUPED_EXCEPTION_MESSAGE} CXXThrowExpr.")),
+        (15, "exceptions", format!("{GROUPED_EXCEPTION_MESSAGE} CXXCatchStmt.")),
+    ]) {
+        expected.push_str(&format!(
+            "{{\"rule\":\"{rule}\",\"check\":\"cplusp-allowlist\",\"file\":\"{file}\",\"line\":{line},\"decision\":\"ban\",\"message\":{}}}\n",
+            serde_json::to_string(&message).unwrap()
+        ));
+    }
+    assert_eq!(stdout(&o), expected);
+}
+
+#[test]
+fn diagnostic_grouping_has_no_footer_when_no_location_is_omitted() {
+    if !clang_tidy_available() {
+        return;
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let file = dir.path().join("two-casts.cpp");
+    std::fs::write(&file, "#include <cstdint>\nint32_t f(int32_t x) {\n  x = (int32_t)x;\n  return (int32_t)x;\n}\n").unwrap();
+    let o = gated(&[file.to_str().unwrap(), "--", "-std=c++23", "-ffp-contract=off"]);
+    assert_eq!(o.status.code(), Some(1), "stdout: {} stderr: {}", stdout(&o), stderr(&o));
+    assert_eq!(stdout(&o), format!("Not provable: {}:3: {GROUPED_CAST_MESSAGE}\n  Also at: {}:4\n", file.display(), file.display()));
+}
+
+#[test]
+fn diagnostic_grouping_keeps_distinct_rules_with_the_same_message() {
+    if !clang_tidy_available() {
+        return;
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let policy = dir.path().join("two-rules.yaml");
+    let mut yaml = "version: 1\nrules:\n".to_string();
+    for rule in ["first_cast_rule", "second_cast_rule"] {
+        yaml.push_str(&format!(
+            "  - id: {rule}\n    construct: Cast\n    area: types\n    decision: ban\n    why: A cast needs review.\n    use_instead: a named conversion.\n    detect:\n      - matcher: cStyleCastExpr()\n"
+        ));
+    }
+    std::fs::write(&policy, yaml).unwrap();
+    let o = gated(&["--policy", policy.to_str().unwrap(), "rules/c_style_casts/banned.cpp", "--", "-std=c++23", "-ffp-contract=off"]);
+    assert_eq!(o.status.code(), Some(1), "stdout: {} stderr: {}", stdout(&o), stderr(&o));
+    let line = "Not provable: rules/c_style_casts/banned.cpp:4: Cast: not allowed in verified code. A cast needs review. Use a named conversion.\n";
+    assert_eq!(stdout(&o), line.repeat(2));
 }

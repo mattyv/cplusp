@@ -250,8 +250,8 @@ fn a_raw_copy_says_why_it_is_refused() {
         return;
     }
     let banned = root().join("rules/type_punning/banned.cpp");
-    let o = gated(&[banned.to_str().unwrap(), "--", "-std=c++23", "-ffp-contract=off"]);
-    let out = stdout(&o);
+    let o = gated(&["--json", banned.to_str().unwrap(), "--", "-std=c++23", "-ffp-contract=off"]);
+    let out = complete_gate_findings(&o);
     let wants = [
         (154, "The copy reads padding into a type that is not bytes."),
         (162, "The copy writes a type that holds a pointer, a reference, an enum or a bool."),
@@ -476,7 +476,9 @@ fn an_optional_of_a_struct_that_holds_a_sequence_is_refused() {
     assert_eq!(o.status.code(), Some(1), "stdout: {text} stderr: {}", stderr(&o));
     assert_eq!(
         text.lines().filter(|l| l.starts_with("Not provable: ")).map(|l| l.rsplit_once(".cpp:").unwrap().1).collect::<Vec<_>>(),
-        vec!["11: a struct that holds a sequence has no rule yet in an optional, a pointer, a unique_ptr, or a vector that the code makes or writes."],
+        vec![
+            "11: a struct that holds a sequence has no rule yet in an optional, a pointer, a unique_ptr, or a vector that the code makes or writes."
+        ],
         "{text}"
     );
 }

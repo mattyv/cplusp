@@ -149,6 +149,18 @@ fn under<'a>(text: &'a str, head: &str) -> Vec<&'a str> {
     lines.take_while(|l| l.starts_with("  ")).collect()
 }
 
+/// Complete per-location evidence for policy tests, independent of the compact human rendering.
+/// These callers request `gate --json`. Preserve each record's file, line and full message.
+fn complete_gate_findings(o: &Output) -> String {
+    stdout(o)
+        .lines()
+        .map(|line| {
+            let f: serde_json::Value = serde_json::from_str(line).expect("gate --json emits a finding per line");
+            format!("Not provable: {}:{}: {}\n", f["file"].as_str().unwrap(), f["line"].as_u64().unwrap(), f["message"].as_str().unwrap())
+        })
+        .collect()
+}
+
 /// Pull `"key":"value"` or `"key":123` out of one JSON line without a JSON library.
 fn field(line: &str, key: &str) -> String {
     let needle = format!("\"{key}\":");

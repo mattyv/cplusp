@@ -169,6 +169,11 @@ For `prove`, supply the relevant compile flags explicitly.
 
 ## Read the result
 
+The gate groups repeated findings with the same rule and message. It shows
+up to three locations for each group and counts any remaining locations.
+This also applies to the gate inside `prove`. Run `cplusp gate --json` with
+the same inputs and build settings to see every finding and its full message.
+
 For `prove`, exit 0 means success, exit 1 means the file was refused or did not
 prove, and exit 2 means the run could not produce a valid result.
 
