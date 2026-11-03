@@ -1042,6 +1042,34 @@ fn gate_judges_every_database_entry_and_refuses_what_it_cannot_read() {
     assert_eq!(o.status.code(), Some(0), "stdout: {} stderr: {}", stdout(&o), stderr(&o));
 }
 
+/// A dependency target can have the source file's name. It stays an option value, wherever the input appears.
+#[test]
+fn gate_keeps_database_option_values_that_name_the_source() {
+    if !clang_tidy_available() {
+        return;
+    }
+    let root = root();
+    let file = root.join("rules/goto/allowed.cpp");
+    for option in ["-MT", "-MQ"] {
+        for source_first in [false, true] {
+            let mut arguments = vec!["clang++", "-std=c++23", "-ffp-contract=off", "-MD", "-MF", "/dev/null"];
+            if source_first {
+                arguments.extend(["-c", file.to_str().unwrap()]);
+            }
+            arguments.extend([option, "rules/goto/../goto/allowed.cpp"]);
+            if !source_first {
+                arguments.extend(["-c", file.to_str().unwrap()]);
+            }
+            let build = tempfile::tempdir().unwrap();
+            let entry = serde_json::json!([{"directory": root, "file": file, "arguments": arguments}]);
+            std::fs::write(build.path().join("compile_commands.json"), entry.to_string()).unwrap();
+            let o = gated(&["-p", build.path().to_str().unwrap(), file.to_str().unwrap()]);
+            assert_eq!(o.status.code(), Some(0), "{option}, source_first={source_first}: stdout: {} stderr: {}", stdout(&o), stderr(&o));
+            assert_eq!(stdout(&o).trim(), "ok: no findings");
+        }
+    }
+}
+
 /// The gate judges the headers a file includes, outside the system paths, and scans them for suppressions too.
 #[test]
 fn gate_judges_and_scans_the_headers_a_file_includes() {
@@ -1075,6 +1103,92 @@ fn gate_refuses_a_plugin_that_does_not_load() {
     assert_eq!(o.status.code(), Some(2), "stdout: {} stderr: {}", stdout(&o), stderr(&o));
     assert!(stderr(&o).contains("plugin"), "{}", stderr(&o));
     assert_eq!(stdout(&o).trim(), "");
+}
+
+#[cfg(unix)]
+#[test]
+fn gate_keeps_a_relative_plugin_path_across_build_directories() {
+    if !clang_tidy_available() {
+        return;
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let build = dir.path().join("build");
+    std::fs::create_dir(&build).unwrap();
+    std::os::unix::fs::symlink(plugin().canonicalize().unwrap(), dir.path().join("plugin.so")).unwrap();
+    let file = root().join("rules/goto/allowed.cpp");
+    let entry = serde_json::json!([{
+        "directory": build,
+        "file": file,
+        "arguments": ["clang++", "-std=c++23", "-ffp-contract=off", "-c", file]
+    }]);
+    std::fs::write(build.join("compile_commands.json"), entry.to_string()).unwrap();
+    let o = Command::new(env!("CARGO_BIN_EXE_cplusp"))
+        .args(["gate", "--plugin", "./plugin.so", "-p", "build", file.to_str().unwrap()])
+        .current_dir(dir.path())
+        .output()
+        .unwrap();
+    assert_eq!(o.status.code(), Some(0), "stdout: {} stderr: {}", stdout(&o), stderr(&o));
+    assert_eq!(stdout(&o).trim(), "ok: no findings");
+}
+
+#[cfg(unix)]
+#[test]
+fn gate_refuses_abnormal_tool_exit_even_with_exported_markers() {
+    use std::os::unix::fs::PermissionsExt;
+
+    if !clang_tidy_available() {
+        return;
+    }
+    let tool = ["clang-tidy-18", "clang-tidy"]
+        .into_iter()
+        .find(|t| Command::new(t).arg("--version").output().is_ok_and(|o| o.status.success()))
+        .unwrap();
+    let path = std::env::var_os("PATH").unwrap();
+    let tool = std::env::split_paths(&path).map(|p| p.join(tool)).find(|p| p.is_file()).unwrap().canonicalize().unwrap();
+    let dir = tempfile::tempdir().unwrap();
+    let wrapper = dir.path().join("clang-tidy-18");
+    std::fs::write(
+        &wrapper,
+        r#"#!/bin/sh
+"$CPLUSP_TEST_TIDY" "$@"
+status=$?
+for arg in "$@"; do
+  case "$arg" in
+    --export-fixes=*)
+      cp "${arg#--export-fixes=}" "$CPLUSP_TEST_EXPORT" || exit 90
+      case "$CPLUSP_TEST_FAILURE" in
+        signal) kill -TERM $$ ;;
+        exit) exit 42 ;;
+      esac ;;
+  esac
+done
+exit "$status"
+"#,
+    )
+    .unwrap();
+    std::fs::set_permissions(&wrapper, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let search = std::env::join_paths(std::iter::once(dir.path().to_path_buf()).chain(std::env::split_paths(&path))).unwrap();
+    for failure in ["normal", "exit", "signal"] {
+        let exported = dir.path().join(format!("{failure}.yaml"));
+        let o = Command::new(env!("CARGO_BIN_EXE_cplusp"))
+            .args(["gate", "--plugin", plugin().to_str().unwrap(), "rules/goto/allowed.cpp", "--", "-std=c++23", "-ffp-contract=off"])
+            .env("PATH", &search)
+            .env("CPLUSP_TEST_TIDY", &tool)
+            .env("CPLUSP_TEST_FAILURE", failure)
+            .env("CPLUSP_TEST_EXPORT", &exported)
+            .current_dir(root())
+            .output()
+            .unwrap();
+        assert!(std::fs::read_to_string(exported).unwrap().contains("cplusp-markers"));
+        if failure == "normal" {
+            assert_eq!(o.status.code(), Some(0), "stdout: {} stderr: {}", stdout(&o), stderr(&o));
+            assert_eq!(stdout(&o).trim(), "ok: no findings");
+            continue;
+        }
+        assert_eq!(o.status.code(), Some(2), "{failure}: stdout: {} stderr: {}", stdout(&o), stderr(&o));
+        assert!(stderr(&o).contains("clang-tidy failed"), "{}", stderr(&o));
+        assert!(!stdout(&o).contains("ok:"), "{}", stdout(&o));
+    }
 }
 
 #[test]

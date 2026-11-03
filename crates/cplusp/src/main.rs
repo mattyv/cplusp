@@ -623,7 +623,20 @@ fn database_builds(dir: &Path, files: &[PathBuf], cwd: &Path) -> Result<Vec<Buil
                 (None, Some(command)) => command.split_whitespace().map(String::from).collect(),
                 (None, None) => Vec::new(),
             };
-            let flags = all.into_iter().skip(1).filter(|a| same_file(&e.directory.join(a)) != want).collect();
+            let mut flags = Vec::new();
+            let mut args = all.into_iter().skip(1);
+            while let Some(arg) = args.next() {
+                // An option's value may name the source too. Keep the pair intact so the compiler and the flag check
+                // see the original value. Use the core's list of options that consume the next argument.
+                if cplusp_core::flags::takes_value_exec(&arg.as_bytes().to_vec()) {
+                    flags.push(arg);
+                    if let Some(value) = args.next() {
+                        flags.push(value);
+                    }
+                } else if same_file(&e.directory.join(&arg)) != want {
+                    flags.push(arg);
+                }
+            }
             builds.push((file.clone(), e.directory.clone(), flags));
         }
         if builds.len() == found {
@@ -740,6 +753,10 @@ fn gate(
     files: &[PathBuf],
     clang_args: &[String],
 ) -> Result<ExitCode> {
+    let cwd = std::env::current_dir().context("cannot find the working directory")?;
+    // Resolve the plugin before a database entry changes the tool's working directory.
+    let plugin = plugin.map(|p| cwd.join(p));
+    let plugin = plugin.as_deref();
     if let Some(dir) = build_dir {
         if !clang_args.is_empty() {
             bail!("Use -p or --, not both.");
@@ -762,7 +779,6 @@ fn gate(
     config.checks.push(PRAGMA.to_string());
     config.checks.push(MARKERS.to_string());
     // The flags of each file, from after `--` or from the database. Judged before clang-tidy runs.
-    let cwd = std::env::current_dir().context("cannot find the working directory")?;
     let builds = match build_dir {
         Some(dir) => database_builds(dir, files, &cwd)?,
         None => files.iter().map(|f| (cwd.join(f), cwd.clone(), clang_args.to_vec())).collect(),
@@ -820,7 +836,11 @@ fn gate(
         cmd.arg(format!("--config-file={}", config_file.display())).arg(format!("--export-fixes={}", fixes_file.display())).arg("--quiet");
         cmd.arg(file).arg("--").args(flags);
         let out = cmd.stdin(Stdio::null()).output().with_context(|| format!("cannot run {tool}"))?;
-        // clang-tidy exits 1 whenever a finding exists, so only the fixes file tells. A clean run writes none.
+        // Exit 1 can report findings, including marker metadata. A signal or another exit code is a tool failure,
+        // even when the tool already wrote diagnostics. A clean run writes no fixes file.
+        if !matches!(out.status.code(), Some(0 | 1)) {
+            bail!("clang-tidy failed ({}):\n{}", out.status, String::from_utf8_lossy(&out.stderr));
+        }
         let fixes: Fixes = match fs::read_to_string(&fixes_file) {
             Ok(yaml) => parse(&yaml, "the clang-tidy fixes")?,
             Err(e) if e.kind() == ErrorKind::NotFound => Fixes::default(),

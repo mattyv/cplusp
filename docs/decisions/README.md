@@ -234,3 +234,5 @@ Status is `decided`, `proposed`, `superseded by NNNN`, or a short note that name
 | [0226](0226-fixes-from-the-review-of-0225.md) | Fixes from the review of 0225 | decided |
 | [0227](0227-a-short-static-name-names-the-only-class-of-that-name.md) | A short static name names the only class of that name | decided |
 | [0228](0228-one-class-of-the-name-also-for-a-qualified-name.md) | One class of the name, also for a qualified name | decided |
+| [0229](0229-the-gate-keeps-tool-failures-and-plugin-paths.md) | The gate keeps tool failures and plugin paths | decided |
+| [0230](0230-a-source-name-can-also-be-an-option-value.md) | A source name can also be an option value | decided |

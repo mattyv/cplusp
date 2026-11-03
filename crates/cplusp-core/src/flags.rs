@@ -505,7 +505,7 @@ fn names_warning_exec(cs: &Vec<Vec<u8>>, f: &Vec<u8>) -> (r: bool)
     false
 }
 
-fn takes_value_exec(f: &Vec<u8>) -> (r: bool)
+pub fn takes_value_exec(f: &Vec<u8>) -> (r: bool)
     ensures
         r == takes_value(f@),
 {
