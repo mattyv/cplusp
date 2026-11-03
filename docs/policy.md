@@ -1,93 +1,34 @@
 # Gate configuration: `cplusp-policy.yaml`
 
-This file is the rule list from the plan, in the form the gate reads.
+This reference explains the policy data the gate reads. Start with
+[Use cplusp](getting-started.md) for build and command instructions.
 
 ## One file, one entry per row
 
-The subset table in the plan and `cplusp-policy.yaml` are the same list. Every row is one entry. An entry says four things: what the construct is, what we decided, why, and how the gate detects it. The gate never has a rule that is not in this file.
+The [default policy](../policy/cplusp-policy.yaml) contains the shipped rules.
+The gate also enforces checks outside policy rows, such as marker validity and
+diagnostic suppression. Those checks are described below.
+
+This small standalone policy illustrates the required fields. It enforces only
+the `goto` row. To keep the shipped rules and change selected decisions, use
+the [team override format](#a-teams-own-policy) instead.
 
 ```yaml
-# cplusp-policy.yaml
 version: 1
-
-defaults:
-  new_functions: verified        # verified | plain
-  edited_functions: keep         # an edited function keeps its kind
-  exceptions:
-    reason_required: true        # trusted, plain and assume markers need a reason
-    approval: report             # report | require-human   (open question in the plan)
-
 rules:
   - id: goto
+    construct: Goto
     area: control
     decision: ban
-    why: No benefit.
+    why: Unstructured control flow.
     use_instead: A loop.
     detect:
       - check: cppcoreguidelines-avoid-goto
-
-  - id: c_style_casts
-    area: casts
-    decision: ban
-    why: Hides what kind of cast it is. All forms, including plain numeric narrowing.
-    use_instead: static_cast, or std::bit_cast for a byte view.
-    detect:
-      - check: google-readability-casting
-
-  - id: reinterpret_cast
-    area: casts
-    decision: trusted_only
-    why: Defeats the type model. Most forms are UB.
-    use_instead: std::bit_cast, or mark the function trusted with a reason.
-    detect:
-      - check: cppcoreguidelines-pro-type-reinterpret-cast
-
-  - id: unions
-    area: types
-    decision: ban
-    why: Type punning breaks the memory model.
-    use_instead: std::variant.
-    detect:
-      - check: cppcoreguidelines-pro-type-union-access     # fires on use
-      - matcher: recordDecl(isUnion(), isDefinition())     # fires on the declaration
-
-  - id: iterators
-    area: library
-    decision: restrict
-    limit: Range-for only. No iterator arithmetic, no stored iterators.
-    why: Iterator arithmetic is pointer arithmetic in disguise.
-    use_instead: A range-for loop, or an index the prover can check.
-    detect:
-      - check: cplusp-iterator-arithmetic
-
-  - id: uninitialised_variables
-    area: types
-    decision: ban
-    why: Reading them is UB.
-    use_instead: an initialiser on every declaration.
-    detect:
-      - check: cppcoreguidelines-init-variables
-      - check: cppcoreguidelines-pro-type-member-init
-        options:
-          IgnoreArrays: "true"
-
-  - id: global_state
-    area: state
-    decision: restrict
-    limit: Listed in the contract's reads or modifies clause. Constants exempt.
-    why: Hidden state breaks modular proofs.
-    use_instead: A reads or modifies clause naming the variable, or a parameter.
-    detect:
-      - matcher: 'varDecl(hasGlobalStorage(), unless(isConstexpr()))'
-
-  - id: variable_index
-    area: library
-    decision: allow
-    stage: prover
-    why: The prover proves the index is in range.
-    detect:                                              # dormant while the decision is allow
-      - check: cppcoreguidelines-pro-bounds-constant-array-index
 ```
+
+`construct` is required. A policy example that omits it does not load.
+The `defaults` block in the shipped file records design metadata. The current
+driver does not use it to change function classification or approval behavior.
 
 ## The fields
 
@@ -174,7 +115,8 @@ These findings come from the gate itself, not from a policy row:
 
 `cplusp policy show` prints one row per rule in file order: area, id, decision, stage, limit, note. The note column says `loosened` for a rule a team policy loosened. Every command also prints loosened rules on stderr, one line each: `loosened: {id}. {reason}`.
 
-The table in the plan is generated from the default policy by `cplusp policy doc`. Nobody edits it by hand. The file and the table cannot drift, because one is made from the other. Decided Oct 3, 2026.
+`cplusp policy doc` renders the active policy as a Markdown table. Regenerate a
+checked-in table after changing the policy. The command does not update documentation files.
 
 ## A team's own policy
 

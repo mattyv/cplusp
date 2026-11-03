@@ -1,10 +1,19 @@
-# cplusp: Verified C++ for LLM-Written Code — Implementation Plan
+# cplusp design notes
 
-Oct 3, 2026 · Matthew Varendorff. Revised through decision 0225. The last section lists the changes, and `docs/decisions/` holds each decision.
+Started Oct 3, 2026 by Matthew Varendorff. These notes combine the original
+design with later implementation details. Sections marked proposed, candidate
+or later describe design work, not a promise of current CLI support.
+
+For current commands, read [Use cplusp](getting-started.md). For code structure
+and checks, read [Contribute to cplusp](contributing.md). The
+[soundness document](soundness.md) records known gaps. Later
+[decisions](decisions/README.md) amend earlier proposals.
 
 ## Goal and scope
 
-The goal is that LLM-written C++ changes cannot introduce bugs. We prove the functions the LLM writes, not the codebase.
+The goal is to check LLM-written C++ functions against explicit contracts.
+The current tool proves a generated Dafny model. Its conclusions about C++
+depend on the translation and the assumptions recorded in [soundness](soundness.md).
 
 **Name:** we call the subset and its tooling **cplusp**, shown as **C+P** in prose: C++ with one plus removed, plus proof. Machines see `cplusp`: the repo, the CLI, `cplusp-*` checks, the `CPLUSP_*` markers and `cplusp-policy.yaml`.
 
@@ -35,8 +44,11 @@ Two words that sound alike and mean different things. The tool uses them literal
   2. Its body uses only C+P features.
   3. Everything it calls has a contract.
 
-  The gate knows this instantly.
-- **Proved.** The prover decides this after it runs. The function meets its contract. It cannot crash, overflow, index out of range or read uninitialised memory. The tool knows this only when the proof goes through.
+  The gate checks these conditions before translation. Its acceptance alone
+  does not establish that the translator supports every construct in the file.
+- **Proved.** Dafny establishes the generated model's obligations under its
+  preconditions and assumptions. These include the contract and modeled safety
+  checks. This is not an unconditional claim about every C++ execution or resource failure.
 - **Contract.** The `//@ requires`, `//@ ensures` and related lines on a function. Other tools call this a spec or a VeriFast definition. The core parses the grammar, decision 0124. `skills/cplusp-dafny/SKILL.md` lists the forms it reads. The examples below show the shape.
 
 Provable does not guarantee proved. A provable function can still fail its proof. Three causes:
@@ -56,7 +68,7 @@ Not proved:   cannot show a + b fits in int32_t. Add a precondition, widen the t
 
 | Kind | Gate | Proof | Contract | Callable from verified code |
 | --- | --- | --- | --- | --- |
-| **Verified** | Yes | Yes | Optional. Without one, the prover still checks the built-in promise: no crash, no overflow, no out-of-bounds, no uninitialised read | Yes |
+| **Verified** | Yes | Yes | Optional. Without a functional contract, the model still carries its safety obligations | Yes |
 | **Trusted** | Only the rows not marked Trusted only | No | Required, with a reason for skipping the proof | Yes |
 | **Plain** | No | No | None | **No** |
 
@@ -66,27 +78,36 @@ The last column is the rule that holds the design together: verified code may on
 
 ## Architecture
 
-The gate runs first and decides whether the prover may look at the code at all. The gate is syntactic and fast. The prover is semantic and slow. So the gate rejects cheaply, and the prover only ever sees code inside the subset.
+The gate runs first. It checks allowed constructs, types, calls, state access
+and build settings. The translator then checks whether it has a rule for each
+construct. A gate pass can still lead to a translation refusal.
 
 ```
 bot edits code
-  → cplusp gate     which functions are in the verified set?  are they provable?
-  → cplusp prove    for each provable function: translate, prove against its contract
-  → messages back   "Not provable: …" / "Not proved: …" / "verified: 3 functions"
+  → cplusp prove    gate, translate, prove against contracts
+  → messages back   "Not provable: …" / "Not proved: …" / "ok: proved"
   → bot fixes, reruns
-CI runs the same command on the PR and blocks on any verified function that is not proved.
+Project CI must run prove on the source files whose contracts it relies on.
 ```
 
-**Proofs chain through contracts.** The prover proves each function once, alone, against its own contract. When the function calls something, the proof uses only the callee's contract, never its body. The proof of a program is a chain of per-function proofs. Each link rests on the next one's contract. The chain ends at trusted contracts for the standard library and existing code. Two consequences:
+**Proofs use contracts.** Caller obligations use callee preconditions and
+guarantees. Some pure functions also expose their translated bodies. A trusted
+callee contributes a contract without a proof of its implementation.
 
-- "Prove the diff" comes for free. The prover proves the bot's new function alone. It re-proves nothing else.
-- Changing a contract is the expensive edit. If a function's contract changes, the prover must re-prove every caller. The verified region for that run grows to include them. The tool tracks this.
+**Current scope is a named source file.** The CLI does not inspect a Git diff,
+cache per-function proofs or discover affected callers across a project.
+Re-run affected files when their dependencies or contracts change. Incremental
+proofs and automatic caller tracking remain design goals.
 
-**Exceptions are visible, not blocked.** Every run lists the trusted and plain markers in the change, with their reasons. The PR summary shows the counts: "12 verified, 2 trusted, 1 plain". Whether new markers need a human approval before merge is an open question. The proposed default is report only.
+**Trusted code is visible.** `prove` reports trusted functions from the model
+with their reasons and prints selected model axioms. It does not produce the
+proposed PR-wide counts of verified, trusted and plain functions.
 
 ## Prover interface
 
-The prover is a plug-in. Any prover works as long as its adapter meets this interface. Decided Oct 3, 2026: design for several, build one first, add a second later as a cross-check.
+This section proposes an interface for multiple provers. The implemented CLI
+runs Dafny. It has no selectable second prover or two-prover cross-check.
+The requirements below describe the proposed interface.
 
 **What goes in**
 
@@ -115,7 +136,9 @@ The message layer above the interface does not change when the prover does. `Not
 
 ## No undefined behaviour in verified code
 
-A verified function has no undefined behaviour, ever. The two stages split the work:
+Absence of undefined behavior within the supported subset is a design goal.
+The gate and model divide the checks below. The claim depends on faithful
+translation and the documented build and trust assumptions.
 
 - **UB that lives in the construct** is the gate's job. The code is wrong whatever values flow through it. Or it blinds the prover so that nothing after it can be proved. Examples: reinterpret casts, unions used for punning, pointer arithmetic, C-style casts, `[[assume]]` and `unreachable`, reading a variable that was never initialised. The gate bans these or limits them to trusted code, and catches them instantly.
 - **UB that depends on values** is the prover's job. Examples: signed overflow, division by zero, shifting too far, indexing past the end, following a null or dangling reference. This is good-looking code that is only wrong for some inputs. The prover must prove the built-in promise for every verified function.
@@ -635,7 +658,9 @@ The Verus core proves each rule it holds. These parts are the trusted edges, and
 - `crates/cplusp/src/main.rs`: the command line, file I/O and YAML. It runs clang-tidy, clang and Dafny. The tests of `crates/cplusp/tests/cli/` are its evidence.
 - `crates/cplusp/src/model.rs` and `crates/cplusp/src/prove.rs`: they read the JSON of the plugin, print the Dafny text and write the sentences. The fixtures of the translator are their evidence.
 - `clang-tidy/`: the gate checks in `SyntaxChecks.cpp`, `RawCopyChecks.cpp` and `StateChecks.cpp`, the `cplusp-tree` check in `TreeCheck.cpp`, and the module in `CplusPModule.cpp`. The sample pairs in `rules/` and the fixtures are their evidence.
-- The prelude of the model and `divergence/dafny/*.dfy`: Dafny proves each function with a body. Each axiom has an `Axiom:` line when a model uses it.
+- The prelude of the model and `divergence/dafny/*.dfy`: Dafny checks functions
+  with bodies. The driver prints selected model assumptions as `Axiom:` lines.
+  Those lines do not enumerate every trusted component of the toolchain.
 
 The versions: Rust 1.98.1 from `rust-toolchain.toml`, Verus 0.2026.10.03 at the commit `11ed750` that `vstd` names in `crates/cplusp-core/Cargo.toml`, clang and clang-tidy 18, and Dafny 4.11.0.
 
@@ -643,28 +668,44 @@ The versions: Rust 1.98.1 from `rust-toolchain.toml`, Verus 0.2026.10.03 at the 
 
 Decided Oct 3, 2026: we prove as much of our own tooling as the tools allow. Fewer bugs in the gate means fewer silent holes in the subset.
 
-**We write the driver in Verus from day one.** Verus proves Rust code directly. The proved code is ordinary Rust after the annotations are stripped. Writing in Verus at the outset shapes the code so it can be proved. Retrofitting proofs onto plain Rust is harder. The specifications are light at first and deepen as each format settles.
+**The core uses Verus.** Verus checks the implementation in `crates/cplusp-core`
+against its specifications. The driver in `crates/cplusp` is ordinary Rust and
+remains trusted. The [contributor guide](contributing.md) maps these boundaries.
 
 **What we prove**
 
 - **Policy to config.** Every check of every rule whose decision is not `allow` is enabled, with its options. No other check is enabled. A team override changes only the entries it names. A loosened entry always carries its reason.
 - **Finding to rule.** Every finding from an enabled check maps to exactly one rule. A finding inside a trusted function is dropped only if its rule is Trusted only.
-- **The verified set.** Every edited function is classified, each into exactly one kind. Callers of a function whose contract changed are included. No function is counted twice.
+- **Function regions.** Core rules attribute a finding to the innermost region
+  supplied by the plugin. This does not establish completeness of the plugin's
+  output or discover callers of changed functions.
 - **The translator's shape.** Every function handed to the prover comes back with a verdict. Every contract line in the C++ appears in the prover input. Every location in a verdict maps back to a C++ line.
-- **The flags of the compiler.** A run with no refusal sets `-std` at C++23 or later, decision 0128. Its last contraction flag sets contraction off. No flag changes floating point, changes what the compiler reads or reports, or hides a warning of the policy.
-- **The verdict of `prove`.** `Proved` needs three facts in the output of Dafny, decision 0127. A clean summary line counts each method. No line is an error line. No line is an axiom on the companion file.
+- **The flags of the compiler.** Core rules check the supplied flag spellings,
+  including the language standard and contraction setting. The proof covers
+  the listed spellings, not every way a compiler option can affect a build.
+- **The verdict of `prove`.** Success requires a successful Dafny exit, a clean
+  summary with enough verified items, no parsed errors, no translation refusal,
+  and no disallowed companion warning. See `crates/cplusp-core/src/verdict.rs`
+  and `crates/cplusp-core/src/dafny.rs` for the precise rules.
 - **The contract lexer.** The lexer of a contract line drops no text except ASCII white space, decision 0124. A number is the value of its digits in its base. A name becomes a constant or an enumerator only by the rules of 0106 and 0109.
 - **The companion file.** A companion file passes only when four things are true, decision 0123. It holds no refused byte. Each comment ends. No token is a refused keyword, `"`, `@` or `{:`. No declared name is a name of the model. The proof holds under the spec of the lexer, and tests are its evidence.
 
 **What we cannot prove, and what we do instead**
 
-- **Meaning.** That the translated code means the same as the C++ needs a formal semantics of both languages. Out of reach. Instead: differential tests that compile the prover's version and run both on the same inputs, and the two-prover cross-check from Prover interface.
-- **The edges.** Reading files, running clang-tidy and git, parsing YAML, writing the report. Verus treats these as trusted functions with contracts, the same way cplusp treats `memcpy`. We keep them thin and list them. Every build prints the size of this trusted surface, exactly as the gate prints it for user code.
+- **Meaning.** The Verus proofs do not establish full semantic equivalence of
+  C++ and Dafny. Divergence cases, differential cases and translation regressions
+  supply evidence for individual rules. The proposed second-prover cross-check
+  is not implemented.
+- **The edges.** File access, process execution, parsing external data and
+  rendering output remain outside the Verus core. Tests cover these paths.
+  Builds do not currently measure or report the size of this trusted surface.
 - **The clang-tidy module.** C++ has no prover we would use on it. The sample pair of each rule covers the gate checks. The `cplusp-tree` check also decides the shape of the model for some constructs, each by its decision, and the fixtures of the translator are its evidence. It is about 8,000 lines. Keep each new rule in the core when the core can hold it.
 - **The trusted contract library.** Contracts for `vector`, `span` and the rest are axioms. Review and tests, not proofs.
 - **The variant of libstdc++.** The model of `std::variant` has a value in each state, decision 0206. That holds because libstdc++ never leaves such a variant without a value, decision 0207. Each alternative is trivially copyable, at most 256 bytes, move-constructible and move-assignable. The plugin checks these facts. Review and tests, not proofs.
 
-**Where this costs us.** Verus does not support all of Rust. No trait objects in proved code, limited closures, weak reasoning about string contents. So the proved core works on structured data. The final step that turns a structure into YAML text is one of the thin trusted edges. Verus also tracks a pinned Rust nightly, so the toolchain is pinned with it.
+**Where this costs us.** The core uses structured data that Verus can reason
+about. Rendering that data remains a trusted boundary. Rust is pinned to the
+version required by the selected Verus revision.
 
 ## Later phases and open questions
 

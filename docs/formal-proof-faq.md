@@ -2,6 +2,10 @@
 
 For C+P. Evidence and guidance checked on 8 October 2026.
 
+For build and command instructions, read [Use cplusp](getting-started.md).
+For the project's specific assumptions and gaps, read [soundness](soundness.md).
+This FAQ explains how to interpret proof claims.
+
 ## What does a formal proof establish?
 
 It establishes that a program or model satisfies specified properties under stated assumptions.

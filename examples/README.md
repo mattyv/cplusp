@@ -1,6 +1,29 @@
 # Examples
 
-One folder per row of the policy that verified code may use: every `allow`, `restrict` and `trusted_only` row. Each shows the C++ as the bot should write it under the row, and the Dafny the bot writes for it by hand, decision 0017. The battery under `divergence/` shows where a naive model goes wrong. This folder shows the right way, one row at a time.
+Start with [Use cplusp](../docs/getting-started.md) to build the tool and run a
+passing and failing proof. Then choose an example close to the code you want to write.
+
+| Topic | Example |
+| --- | --- |
+| Arithmetic preconditions | [arithmetic](arithmetic/example.cpp) |
+| Searching a sequence | [binary_search](binary_search/example.cpp) |
+| State transitions | [state_machine](state_machine/example.cpp) |
+| A class template with an invariant | [stack_template](stack_template/example.cpp) |
+| A container with several operations | [ring_buffer](ring_buffer/example.cpp) |
+
+The collection includes examples for policy rows and larger programs that
+combine constructs. Its checked-in Dafny files are handwritten models.
+Automatic translation is a separate check:
+
+```sh
+./target/debug/cplusp prove --plugin target/plugin/libcplusp.so \
+  examples/arithmetic/example.cpp -- -std=c++23 -ffp-contract=off
+```
+
+Run that command from the repository root with `DAFNY` configured. A successful
+handwritten model alone does not establish that `prove` accepts the C++.
+The [divergence battery](../divergence/README.md) examines cases where a naive
+model disagrees with C++.
 
 Each folder has:
 

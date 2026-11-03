@@ -1,8 +1,18 @@
 # Where meaning can be lost
 
-Oct 3, 2026, revised through decision 0225. Status: each gap has a section. Gaps 1 to 4 have results from the divergence battery. We fill a section only after we look at the gap, and where we can, run an experiment that shows it.
+This is the trust and gap register. Start with [Use cplusp](getting-started.md)
+for commands or the [proof FAQ](formal-proof-faq.md) for the meaning of a proof.
+The sections below include historical findings and open work. A passing command
+does not close every gap listed here.
 
-A proof is a statement about a model. It means something only if we can say exactly how the model relates to the bytes the compiler sees. This document lists every place on that path where meaning can leak, what we do about each, and what we still assume. Nothing in the proof layer is built until this document is complete.
+Started Oct 3, 2026. Documentation revised through decision 0231.
+Gaps 1 to 4 include results from the divergence battery. Each section separates
+the evidence collected so far from the work that remains open.
+
+A proof is a statement about a model. Applying it to C++ requires a faithful
+relationship between that model and the code the compiler reads. This document
+records known gaps along that path, the checks that address them, and the
+assumptions that remain. The proof layer exists while several gaps remain open.
 
 ## The path
 
@@ -42,7 +52,18 @@ Floating point has its model, a real after one rounding per operation, decisions
 
 ## Gap 4: the contract language
 
-First result, from case `signed_overflow` in the divergence battery. `a + b` in a contract is machine arithmetic. With `int32_t` modelled as Dafny's unbounded `int`, the function `add` verified. The C++ overflowed on INT32_MAX + 1 with undefined behaviour. With a bounded `int32`, Dafny refused the body and the contract. With the precondition the refusal demanded, it verified, and the caller carries the obligation. Rule: fixed-width types map to bounded types, never to `int`. Then Dafny checks every arithmetic step in a contract for overflow, as it checks the body.
+The `signed_overflow` divergence case shows why a C++ body cannot use an
+unbounded-integer model without range checks. A naive model of `add` verified,
+but C++ overflowed on `INT32_MAX + 1`.
+
+The current translator distinguishes body arithmetic from contract arithmetic.
+C++ integer operations carry the model's type and range obligations. Integer
+expressions in `//@` contracts use exact integers, as specified in decision
+[0057](decisions/0057-the-tree-crosses-as-json-in-the-cores-shape.md) and implemented
+in [model/rules.rs](../crates/cplusp-core/src/model/rules.rs). Contract `/` and `%`
+truncate toward zero and require a nonzero divisor, decision
+[0088](decisions/0088-division-truncates-as-in-cpp.md). A contract can state a
+mathematical bound beyond a machine type's range without overflowing itself.
 
 The differential run, decision 0034, is the first match check. It ties the model to the C++ by their outputs on the same inputs, and says nothing about the contract. Six cases carry it. The aliasing cases cannot, because no input reaches `f(x, x)`.
 
@@ -68,4 +89,8 @@ Open. The bot writes the contracts and can weaken them until the proof goes thro
 
 ## Principles that fall out
 
-We fill this as we close the gaps. Four candidates so far. The translator refuses what it does not model. Every proof must be able to fail, so every proved function gets a mutant the prover must reject. Contract arithmetic is machine arithmetic, with a range obligation on every operation. A mitigation that the C++ can carry becomes a gate row with a sample pair. Then the bot cannot write the divergent form at all.
+The translator must refuse what it does not model. Challenge each proved
+function with a wrong implementation that its contract must reject. Preserve
+the range obligations of C++ arithmetic while letting contract integer
+expressions state exact mathematical bounds. When a gate rule can exclude a
+divergent construct, give that rule an accepted and rejected sample.
